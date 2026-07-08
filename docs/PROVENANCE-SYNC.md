@@ -1,5 +1,11 @@
 # Provenance sync log — generic advances synced from the origin/reference target
 
+**Under the doctrine.** The canonical foundation these syncs serve is the doctrine in
+[`SOFTWARE-FACTORY.md`](./SOFTWARE-FACTORY.md) and its executable companion
+[`AGENT-DIRECTIVES.md`](./AGENT-DIRECTIVES.md). This log records how generic advances are
+extracted into `factory_core` so the code keeps implementing more of that doctrine without
+breaching the purity boundary; the doctrine is authoritative, the code implements pieces of it.
+
 **Purpose.** `factory_core` is the founder-owned, portable, generic software-factory
 core. The **origin/reference target** — the first consuming target the factory serves — is
 where new factory disciplines get proven under load before they are known to be generic.

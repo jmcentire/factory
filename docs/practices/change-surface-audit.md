@@ -1,5 +1,9 @@
 # Change-Surface Audit — a factory spec-phase requirement
 
+**Under the doctrine:** this is a practice under the canonical doctrine in
+[`../SOFTWARE-FACTORY.md`](../SOFTWARE-FACTORY.md) — it operationalizes the capability-flow
+Specification step ("shake the tree" at spec time) and rides the oracle-adequacy gate.
+
 **Status:** required spec-phase deliverable of the factory process. Target-agnostic:
 this discipline is authored at spec time for *any* target the factory serves; it names
 no target and depends on no target code.

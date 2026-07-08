@@ -5,6 +5,45 @@ software-delivery discipline — content-addressed evidence, human-approval gate
 segregation of duties, and a hard generic-core / target-as-data boundary — as a standalone,
 separately-shippable Python package that imports **nothing target-specific**.
 
+## The canonical doctrine
+
+The foundation of this repository is a written doctrine, and the code implements pieces of
+it. The doctrine is authoritative; `factory_core` is one (partial) implementation.
+
+- **[`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)** — the unified specification:
+  one foundation, two flows (capability + correction), the seven non-negotiables,
+  oracle-adequacy-not-blast-radius gating, the shared-vs-independent (spec-shared,
+  oracle-independent) rule, the two controls (negative/positive) that bound a correction
+  spec, the environment ladder, the content-addressed evidence plane, and the factory-is-
+  itself-a-regulated-system control plane.
+- **[`docs/AGENT-DIRECTIVES.md`](docs/AGENT-DIRECTIVES.md)** — the executable companion: the
+  ten role directives across the two flows (capability: PM Spec, Eng Spec, Validator, Test,
+  Code; correction: Triage/Root-Cause, Spec, Hidden-Test, Repair, Judge).
+
+The practices under `docs/practices/` and the sync log in `docs/PROVENANCE-SYNC.md` are
+disciplines and records **under** this doctrine.
+
+## Doctrine → code mapping
+
+Each `factory_core` module implements a specific concept from the doctrine. The doctrine
+demands this honesty (see the doctrine's "Status of this document": *a control specified is
+not a control running*), so the table marks what is **implemented** vs **doctrine-only**.
+
+| `factory_core` module / file | Doctrine concept it implements | Status |
+|---|---|---|
+| `manifest.py` | The evidence plane — the content-addressed, hash-chained, tamper-evident change-evidence manifest; write-time segregation of duties (implementer ≠ verifier ≠ approver). | **Implemented** |
+| `invariant_kernel.py` | The capability-delta IR + the composition gate — can individually-safe deltas compose into a forbidden configuration? (the platform-invariant side of the gate). | **Implemented** |
+| `contract.py` + `completeness.py` | Oracle adequacy + the FE↔BE contract discipline + launch-readiness — forward/reverse contract diff (every caller reaches a real provider; every provider is called or excused) and the falsifiable completeness lattice. | **Implemented** |
+| `adapters.py` + `target.py` | The target-as-data boundary + the environment-ladder dependency seams — the five `Protocol` seams for all target contact, resolved by name from a signed data-only `TargetManifest` (never a code import). | **Implemented** |
+| `roles.py` | The division of labor / role model — capabilities as the atomic unit, roles as named bundles, grants as per-target data (the RBAC schema, not the authority catalog). | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
+| `scripts/check_core_purity.py` + `core_purity_denylist.json` | "The factory is itself a regulated system" — the core is governed; target tokens are data, and an executable fail-closed guard proves the core imports nothing target-specific. | **Implemented** |
+
+**Honest split (implemented vs doctrine-only).** Phase 0 (the skeleton + purity guard) and
+the two extractions (the invariant kernel; the contract/completeness modules) are **real,
+tested code**. The **orchestration engine, the ten live agent lanes, RBAC/SSO enforcement,
+and the build/demo pipeline are doctrine/design, not running** — they are specified in the
+docs above and are not wired here. A control specified is not a control running.
+
 The defining constraint: `factory_core` is generic. Every per-target input — repo coordinates,
 working-agreement docs, compliance rules, role bindings, IdP config — is **data loaded at
 runtime through adapter seams**, never a code dependency. Point the factory at a new target by

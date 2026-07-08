@@ -1,5 +1,9 @@
 # Front-end architecture — a factory practice
 
+**Under the doctrine:** this is a practice under the canonical doctrine in
+[`../SOFTWARE-FACTORY.md`](../SOFTWARE-FACTORY.md); its progressive-enhancement gate is the
+front-end expression of the doctrine's live-verified, contract-backed completion path.
+
 **Status:** recommended architecture for any front-end the factory produces or reviews.
 Target-agnostic: it names no product, client, or domain; it describes *how* a front end is
 structured so that it stays legible, testable, and safe to change. It pairs with the FE↔BE
