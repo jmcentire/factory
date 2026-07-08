@@ -144,12 +144,13 @@ to "the sync record under `docs/`" instead of naming a file. `make ship`
 
 ---
 
-## Planned — not built this pass (extraction plan)
+## Historical extraction plans — now landed
 
-Per the conservative-sync rule (land the safe high-value pieces; plan the risky ones),
-the following remain planned. Each entry states the origin module studied for *shape
-only*, the proposed pure `factory_core` surface, the adapter seams it rides, the test
-shape, and the purity considerations.
+The plans below were the conservative-sync record for the risky work. They are retained as
+design history, not as open work. P1 landed in synced pass 2 and P2 landed in synced pass 3;
+current source of truth is the synced-pass tables above, the `factory_core` modules, and the
+tests. Future planned work belongs in a new section above this archive so stale plans do not
+look actionable.
 
 ### P1 — Invariant-kernel IR + composition-ledger + analyzer, as a pure core module
 
@@ -331,3 +332,14 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   capability-delta JSON Schema (+ tests), and this record; it plans P1 (invariant-kernel
   IR/analyzer as a pure module) and P2 (completeness-ledger + reverse-contract as
   adapter-driven generics).
+
+## Current state after P1/P2 extraction
+
+- `factory_core` now includes the Phase 0 skeleton plus the P1 invariant-kernel module and
+  the P2 contract/completeness modules. `RepoAdapter` and `KnowledgeAdapter` expose neutral
+  inventory-returning methods so target-coupled scanning stays in target adapters while the
+  core owns the generic diff/lattice logic.
+- `README.md` is the quick public map of implemented-vs-doctrine-only controls. The doctrine
+  remains authoritative, and a control specified there is still not a control running until a
+  module/test/gate implements it.
+- `make ship` is the closeout gate for this repo: purity first, then lint, typecheck, and test.

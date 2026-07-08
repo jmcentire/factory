@@ -10,8 +10,8 @@ the dependency arrow pointing consumer -> factory and never the reverse.
 The seams are the whole target surface. There is deliberately no sixth: anything a target
 needs the factory to do must fit one of these, or the boundary has been breached.
 
-Docstrings track the Factory Portal PRD v2 §6.2. Method sets are the minimal Phase 0 shape;
-they are versioned with the core so a target pack can declare the core version it targets.
+Docstrings track the Factory Portal PRD v2 §6.2. Method sets are versioned with the core so a
+target pack can declare the core version it targets.
 """
 
 from __future__ import annotations

@@ -50,11 +50,13 @@ runtime through adapter seams**, never a code dependency. Point the factory at a
 swapping a data-only target pack; the core does not change. Correctness test: delete every
 target pack and the core is still importable, testable, and green.
 
-This is **Phase 0** — the core skeleton and the purity guard. It is a real, tested foundation,
-not a running portal; the orchestration engine, authoring loops, RBAC/SSO, build/demo, and
+This repository has completed **Phase 0 plus the first two generic extractions**:
+the core skeleton and purity guard, the invariant-kernel composition gate, and the
+adapter-driven contract/completeness logic. It is a real, tested foundation, not a
+running portal; the orchestration engine, authoring loops, RBAC/SSO, build/demo, and
 affinity write-back are later phases (see the PRD).
 
-## What's here (Phase 0)
+## What's here
 
 | Module | What it is |
 |---|---|

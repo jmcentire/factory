@@ -6,7 +6,7 @@ is data loaded at runtime through the adapter seams, never a code dependency. De
 target pack leaves this package importable, testable, and green — that is the portability
 guarantee, enforced by ``scripts/check_core_purity.py``.
 
-Public surface (Phase 0):
+Public surface:
   * manifest — the content-addressed, hash-chained, SoD-enforcing evidence ledger
   * target   — the TargetManifest loader (data in, never code)
   * adapters — the five ``typing.Protocol`` seams for all target contact
