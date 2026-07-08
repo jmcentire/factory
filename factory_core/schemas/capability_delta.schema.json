@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.invalid/schemas/capability_delta.schema.json",
+  "title": "CapabilityDelta",
+  "description": "A neutral, target-agnostic capability delta in the invariant-kernel IR vocabulary. Every material spec for a change declares one; the analyzer composes it with the shipped baseline and every in-flight delta (the composition ledger) and checks the union against the signed invariant kernel. This schema names no target: nodes carry abstract roles, flows carry an abstract data-class label, and invariants are referenced by opaque id. The specific role names, data classes, and invariant ids are per-target DATA supplied through the kernel, never fixed in the core.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "factory-capability-delta/1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id of the feature/spec this delta belongs to."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Plain-language statement of the capability the change adds or removes."
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["candidate", "in_flight", "shipped", "cancelled", "runtime"],
+      "default": "candidate",
+      "description": "Where this delta sits in the composition ledger. 'cancelled' leaves a tombstone but contributes no active capability; 'runtime' is an observed-state delta for a conformance sweep."
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Nodes introduced (or re-declared) in the capability graph: actors, stores, channels, egress targets, persistence locations, etc. — each identified only by an opaque id plus abstract roles.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque node id, unique within the composed model."
+          },
+          "roles": {
+            "type": "array",
+            "description": "Abstract role labels this node bears (e.g. a sensitive-store role, an uncontrolled-egress role). Role vocabulary is per-target data defined by the kernel, not fixed here.",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "description": "Directed capability transfers introduced by the change. Each flow is a declared edge from a source node to a target node.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target"],
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "target": {"type": "string", "minLength": 1},
+          "relation": {
+            "type": "string",
+            "default": "flow",
+            "description": "Abstract relation label for the edge (e.g. read, write, export, link). Relation vocabulary is per-target data."
+          },
+          "data_class": {
+            "type": "string",
+            "description": "Abstract sensitivity class of the data on this edge (e.g. sensitive, restricted, metadata, non_sensitive). The concrete class set is per-target data, not fixed in the core."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why this flow exists — the purpose that justifies the edge."
+          }
+        }
+      }
+    },
+    "invariants_touched": {
+      "type": "array",
+      "description": "The kernel invariants this delta interacts with, referenced by opaque id and degree. The invariant catalog is per-target data owned by the signed kernel.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque invariant id as defined in the signed kernel."
+          },
+          "degree": {
+            "type": "string",
+            "enum": ["D0", "D1", "D2", "D3", "D4"],
+            "description": "Exception-tolerance degree. D0 = absolute law (no exceptions); D1 = emergency exception with human approval, expiry, audit; D2 = signed config-as-data variant; D3 = evidence-required directive; D4 = advisory/interpretive."
+          }
+        }
+      }
+    },
+    "implementation_surfaces": {
+      "type": "array",
+      "description": "The concrete code/component surfaces the delta expects to touch, each with the relation the implementation is expected to exhibit — the target of the source-derived delta-fidelity check.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path_or_component"],
+        "properties": {
+          "path_or_component": {"type": "string", "minLength": 1},
+          "expected_relation": {"type": "string"}
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional integrity metadata for the signed delta.",
+      "properties": {
+        "content_digest": {"type": "string"},
+        "signer": {"type": "string"},
+        "algorithm": {"type": "string"},
+        "value": {"type": "string"}
+      }
+    }
+  }
+}

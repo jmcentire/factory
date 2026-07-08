@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "description": "Target-token denylist for check_core_purity. The purity guard reads its token set FROM THIS FILE (it is not hardcoded in the script). In the generic, public factory_core this token set is EMPTY on purpose: a generic core names nothing target-specific, so there is nothing to catch. A consuming target fills in its OWN tokens here as part of its private configuration; the target's filled-in denylist is the TARGET's config and is not shipped in the public core.",
+
+  "shape": {
+    "tokens": "An array of lowercase, whole-word target-specific tokens that have no business appearing anywhere in a generic core (identifiers or string literals). Each token is a single alphanumeric run. Matching is COMPONENT EQUALITY, not substring: text is lowercased and split on every non-alphanumeric character into runs (snake_case, dotted, and punctuated names all split), and a token matches only if it EQUALS one of those runs. So a token 'acme' would trip 'ACME_KEY' (runs {acme, key}) and 'acme_county' (runs {acme, county}) but NEVER 'acmestone' or a longer word that merely contains it. Choose tokens that are distinctive to your target (a company codename, a jurisdiction, a vendor, a regulatory acronym) and unlikely to collide with ordinary English or common code identifiers. The guard scans factory_core/**/*.py via AST (comments are exempt); the sibling schema/module/fixture token tests apply the same list to non-.py data files."
+  },
+
+  "instructions": [
+    "To configure this for YOUR target: replace the empty 'tokens' array below with your target-specific tokens, lowercase and as single alphanumeric runs (e.g. a company codename, jurisdiction, vendor name, or regulatory acronym).",
+    "Keep the list distinctive and collision-free: prefer names that will never appear as ordinary English words or common code identifiers, since matching is whole-run equality.",
+    "Do NOT ship your filled-in denylist in the public core. It is your target's OWN config. The public factory_core ships this file with an EMPTY token set (the generic core has nothing to catch).",
+    "The 'examples' field below is illustrative only and is NEVER scanned by the guard. Delete or ignore it; do not treat its contents as an active denylist.",
+    "After editing, run `make check-purity` (or `make ship`) to confirm the core is clean against your configured tokens."
+  ],
+
+  "examples": {
+    "note": "ILLUSTRATIVE ONLY — replace with your own. These are fictional placeholders (a made-up company, product, and vendor), NOT any real target's terms. They are stored under 'examples' precisely so the guard does NOT read them as active tokens.",
+    "tokens": ["acme", "widget", "examplevendor"]
+  },
+
+  "tokens": []
+}

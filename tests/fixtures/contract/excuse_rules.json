@@ -1,0 +1,5 @@
+[
+  {"label": "internal-by-design", "excused": true, "path_prefix": "/internal/"},
+  {"label": "inbound-hook",        "excused": true, "tags": ["hook"]},
+  {"label": "surfaced-gap",        "excused": false, "path_prefix": "/api/orphaned"}
+]

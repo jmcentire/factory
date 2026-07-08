@@ -1,0 +1,1 @@
+{"audience": "team", "type": "concept", "title": "Synthetic empty target", "content": "This is a synthetic, generic target used only for the factory's portability proof. It carries no real domain knowledge; it exists so the core can be exercised end-to-end with no real target pack present.", "tags": "portability,fixture"}

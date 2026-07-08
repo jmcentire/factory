@@ -1,0 +1,7 @@
+[
+  {"method": "GET",  "path": "/api/widgets/{wid}",   "caller": "client_home",    "location": "client/home:22"},
+  {"method": "POST", "path": "/api/widgets",         "caller": "client_home",    "location": "client/home:31"},
+  {"method": "GET",  "path": "/api/reports/{rid}",   "caller": "client_reports", "location": "client/reports:9"},
+  {"method": "POST", "path": "/api/widgets/{id}/publish", "caller": "client_home", "location": "client/home:44"},
+  {"method": "GET",  "path": "",                     "caller": "client_dynamic", "location": "client/dynamic:7"}
+]

@@ -1,0 +1,8 @@
+[
+  {"method": "GET",  "path": "/api/widgets/{id}", "provider": "svc_alpha", "raw_path": "/api/widgets/{id}",   "location": "svc_alpha/spec:10"},
+  {"method": "POST", "path": "/api/widgets",      "provider": "svc_alpha", "raw_path": "/api/widgets",        "location": "svc_alpha/spec:14"},
+  {"method": "GET",  "path": "/api/reports/{id}", "provider": "svc_beta",  "raw_path": "/api/reports/{id}",   "location": "svc_beta/spec:8"},
+  {"method": "POST", "path": "/internal/reindex", "provider": "svc_beta",  "raw_path": "/internal/reindex",   "location": "svc_beta/spec:20", "tags": ["internal"]},
+  {"method": "POST", "path": "/api/hooks/inbound","provider": "svc_gamma", "raw_path": "/api/hooks/inbound",  "location": "svc_gamma/spec:5", "tags": ["hook"]},
+  {"method": "GET",  "path": "/api/orphaned",     "provider": "svc_gamma", "raw_path": "/api/orphaned",       "location": "svc_gamma/spec:12"}
+]

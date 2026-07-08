@@ -1,0 +1,7 @@
+[
+  {"id": "row-1", "dimension": "behavior", "status": "PROVED",  "source": "cat:1"},
+  {"id": "row-2", "dimension": "behavior", "status": "PROVED",  "source": "cat:2"},
+  {"id": "row-3", "dimension": "route",    "status": "PROVED",  "source": "routes:5"},
+  {"id": "row-4", "dimension": "data-path","status": "PROVED",  "source": "inv:9"},
+  {"id": "row-5", "dimension": "external", "status": "EXCUSED", "source": "ext:1", "detail": "third-party dependency, out of scope"}
+]

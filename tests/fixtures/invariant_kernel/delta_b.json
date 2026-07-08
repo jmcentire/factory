@@ -1,0 +1,10 @@
+{
+  "schema_version": "factory-capability-delta/1",
+  "id": "feat-b",
+  "summary": "Adds an export edge from the intermediate hub out to the egress sink.",
+  "stage": "candidate",
+  "nodes": [],
+  "flows": [
+    {"source": "hub_z", "target": "egress_y", "relation": "export", "data_class": "sensitive"}
+  ]
+}

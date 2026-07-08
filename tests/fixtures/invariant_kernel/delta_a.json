@@ -1,0 +1,10 @@
+{
+  "schema_version": "factory-capability-delta/1",
+  "id": "feat-a",
+  "summary": "Adds a read edge from the origin store into the intermediate hub.",
+  "stage": "in_flight",
+  "nodes": [],
+  "flows": [
+    {"source": "store_x", "target": "hub_z", "relation": "read", "data_class": "sensitive"}
+  ]
+}

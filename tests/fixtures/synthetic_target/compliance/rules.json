@@ -1,0 +1,5 @@
+{
+  "ruleset_version": "1",
+  "description": "Fed-in compliance rules for the synthetic empty target. Declarative data only — the ComplianceAdapter surfaces these; the core never imports them. Intentionally empty of real rules.",
+  "invariants": []
+}

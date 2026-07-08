@@ -1,0 +1,9 @@
+{
+  "schema_version": "factory-capability-delta/1",
+  "id": "feat-direct",
+  "summary": "A single delta that alone connects the origin store straight to the egress sink.",
+  "stage": "candidate",
+  "flows": [
+    {"source": "store_x", "target": "egress_y", "relation": "export", "data_class": "sensitive"}
+  ]
+}

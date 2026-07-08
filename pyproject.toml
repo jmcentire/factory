@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "factory-core"
+version = "0.0.0"
+description = "Founder-owned, portable software-factory core (generic; imports nothing target-specific)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Jeremy McEntire", email = "jandrewmcentire@gmail.com" }]
+# The ONLY third-party runtime dependency. No target pack is (or may be) listed here — the
+# reverse-dependency check in scripts/check_core_purity.py enforces that.
+dependencies = ["jsonschema>=4.18"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8"]
+
+[tool.setuptools]
+packages = ["factory_core"]
+
+[tool.setuptools.package-data]
+factory_core = ["schemas/*.json"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["jsonschema.*"]
+ignore_missing_imports = true

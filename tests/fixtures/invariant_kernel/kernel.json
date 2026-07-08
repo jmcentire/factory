@@ -1,0 +1,25 @@
+{
+  "id": "abstract-demo-kernel",
+  "version": "1",
+  "nodes": [
+    {"id": "store_x", "roles": ["origin"], "description": "abstract sensitive store"},
+    {"id": "hub_z", "roles": [], "description": "abstract intermediate hub"},
+    {"id": "egress_y", "roles": ["sink"], "description": "abstract uncontrolled egress"}
+  ],
+  "invariants": [
+    {
+      "id": "INV-NO-ORIGIN-TO-SINK",
+      "degree": "D0",
+      "start_roles": ["origin"],
+      "forbidden_terminal_roles": ["sink"],
+      "description": "No path may exist from an origin-role node to a sink-role node."
+    },
+    {
+      "id": "INV-ADVISORY-VACUOUS",
+      "degree": "D4",
+      "start_roles": [],
+      "forbidden_terminal_roles": [],
+      "description": "Advisory law with no role targets; always decided-satisfied."
+    }
+  ]
+}

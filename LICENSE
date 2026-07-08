@@ -1,0 +1,31 @@
+PROPRIETARY SOFTWARE LICENSE
+
+Copyright (c) 2026 Jeremy McEntire. All rights reserved.
+
+This software and its associated source code, documentation, and materials
+(the "Software") are the proprietary and confidential intellectual property of
+Jeremy McEntire (the "Owner"). The Software is NOT open source.
+
+No license, right, or interest in the Software is granted, whether by
+implication, estoppel, or otherwise, except as expressly stated in a separate
+written agreement signed by the Owner. Absent such an agreement, you may NOT:
+
+  1. use, execute, or deploy the Software;
+  2. copy, reproduce, or distribute the Software in whole or in part;
+  3. modify, adapt, translate, or create derivative works of the Software;
+  4. sublicense, sell, rent, lease, or otherwise transfer the Software; or
+  5. reverse engineer, decompile, or disassemble the Software except to the
+     extent this restriction is prohibited by applicable law.
+
+A consuming project may be granted a separate, limited CONSUMER license to
+depend on a published build of the Software. Any such grant is defined solely
+by its own written terms and conveys no ownership. The dependency relationship
+runs one way only: a consumer depends on the Software; the Software depends on
+no consumer and incorporates no consumer's code.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+OWNER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

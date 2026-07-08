@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.invalid/schemas/target_manifest.schema.json",
+  "title": "TargetManifest",
+  "description": "A data-only descriptor of a factory target. Repo coordinates + adapter selections (names, never code) + role/capability bindings + compliance-rule path + effort params + demo-env descriptor. The core imports nothing this file names.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "target_id", "repo", "adapters", "compliance"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "factory-target-manifest/1"
+    },
+    "target_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Stable, opaque target id — namespaces every run, index, token, and ledger entry (no-cross-repo-bleed)."
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "ref"],
+      "properties": {
+        "url": {"type": "string", "minLength": 1},
+        "ref": {"type": "string", "minLength": 1},
+        "provider": {"type": "string"},
+        "subpath": {"type": "string", "description": "Optional monorepo subpath the target lives under."},
+        "scope_tier": {"type": "string", "enum": ["read", "write"]}
+      }
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "knowledge", "compliance", "idp", "artifact_sink"],
+      "properties": {
+        "repo": {"type": "string"},
+        "knowledge": {"type": "string"},
+        "compliance": {"type": "string"},
+        "idp": {"type": "string"},
+        "artifact_sink": {"type": "string"}
+      }
+    },
+    "compliance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules_path"],
+      "properties": {
+        "rules_path": {
+          "type": "string",
+          "description": "Path (within the target checkout) to the fed-in compliance ruleset — declarative data the ComplianceAdapter surfaces. Never code."
+        },
+        "format": {"type": "string"}
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "capabilities"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": "string"},
+          "capabilities": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["principal"],
+        "properties": {
+          "principal": {"type": "string", "minLength": 1},
+          "role": {"type": "string"},
+          "capabilities": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "effort": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": {"type": "string"},
+        "build_threshold": {"type": "number", "minimum": 0},
+        "token_budget": {"type": "integer", "minimum": 0}
+      }
+    },
+    "demo_env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string"},
+        "launch": {"type": "string"},
+        "network": {"type": "string", "enum": ["offline", "egress-restricted"]}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content_digest": {"type": "string"},
+        "signer": {"type": "string"},
+        "algorithm": {"type": "string"},
+        "value": {"type": "string"}
+      }
+    }
+  }
+}

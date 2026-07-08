@@ -1,0 +1,58 @@
+# Synthetic EMPTY target — the portability proof fixture.
+#
+# This is a minimal, fully generic TargetManifest with no real repo behind it. It exists so
+# the core's full test suite can pass with NO target pack present: deleting every real target
+# leaves this synthetic descriptor, and the core still loads, validates, and reasons over it.
+# Nothing here is target-specific; every value is a generic placeholder.
+
+schema_version = "factory-target-manifest/1"
+target_id = "synthetic-empty"
+
+[repo]
+url = "https://example.invalid/acme/widget.git"
+ref = "main"
+provider = "generic"
+scope_tier = "read"
+
+[adapters]
+repo = "readonly_git"
+knowledge = "kin_reader"
+compliance = "rules_json"
+idp = "oidc"
+artifact_sink = "local_fs"
+
+[compliance]
+rules_path = "compliance/rules.json"
+format = "json"
+
+[[roles]]
+name = "requester"
+description = "Asks questions, browses features, authors and submits PRDs."
+capabilities = ["prd.author", "prd.submit", "demo.feedback"]
+
+[[roles]]
+name = "approver"
+description = "Signs spec approval and acceptance."
+capabilities = ["spec.approve", "capability.accept"]
+
+[[grants]]
+principal = "alice@example.invalid"
+role = "requester"
+
+[[grants]]
+principal = "bob@example.invalid"
+role = "approver"
+
+[effort]
+currency = "usd"
+build_threshold = 25.0
+token_budget = 2000000
+
+[demo_env]
+kind = "ephemeral"
+launch = "noop"
+network = "offline"
+
+[signature]
+signer = "founder"
+algorithm = "none"

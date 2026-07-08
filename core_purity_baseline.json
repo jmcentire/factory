@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "description": "Justified, pre-approved target-token occurrences in factory_core/. On a clean core this list is EMPTY: the core imports and names nothing target-specific. The active token set the guard scans for lives in the sibling data file core_purity_denylist.json (empty on the generic core); this baseline only records approved exceptions to that scan. Any new denylist hit fails check_core_purity until it is added here with a real reason, owner, and expiry. Baseline growth is a reviewable event (an entry here is a documented exception to the purity guarantee), not a silent escape hatch.",
+  "allowed_occurrences": []
+}
