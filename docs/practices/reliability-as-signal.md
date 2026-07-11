@@ -83,3 +83,29 @@ deterministic simulation, mutual-information-governed posture-input selection, a
 OpenEvent event-relationship graph. The binding rule: **no Tier-A gate or output may be
 reachable only through a Tier-B input** — the loop must compute a valid result with every
 research bet absent.
+
+## Impact valuation & the learned baseline
+
+Three pieces the severity model depends on, each with a safety rail that is gated
+(the learning itself is a funded spike):
+
+- **Impact is a declared per-event `value`** (a constant or a field expression, e.g.
+  `0.10 * subtotal`), evaluated at incident time against the instance so a large
+  checkout outranks a small one. It is **unit-declared** — impact never crosses units
+  (no raw cross-unit sum) — the expression is **sandboxed and fail-closes to UNKNOWN
+  impact (which escalates), never zero**, and it is **gated by disposition** (realized
+  impact = value × disposition factor: Recovered ≈ 0 user-impact, Failed = full,
+  Degraded = partial).
+- **The OpenEvent graph is the learned baseline** structural detection measures novelty
+  against. **Declared edges** are contract; **derived edges** are hypotheses carrying
+  confidence + decay, mined asynchronously and **consumed as a prior, never causation** —
+  provenance-separated the way the two-layer error contract is, and a derived edge that
+  *moves severity* is MI-governed. (Same shape as the provenance-tracked, edge-decaying,
+  typed relationship graph a knowledge graph already implements.)
+- **Thresholds are percentiles of the learned per-unit incident-value distribution** —
+  self-calibrating, but this carries the doctrine's most dangerous failure, **the
+  normalized baseline**: a baseline learned while chronically broken calibrates "normal"
+  to dysfunction and rounds a real outage down to ordinary (the O-ring failure). Required
+  rails: **absolute SEV-1 floors override percentiles**, the **baseline's own trend is a
+  meta-signal** (not the new normal), and **cold-start uses declared thresholds**; never
+  pool units.
