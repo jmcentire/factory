@@ -96,6 +96,13 @@ Dependencies: owned critical dependencies (the database) run as **real disposabl
 3. **Dev factory** (per-change environment, three roles). **Code** implements and crafts artifacts. **Test** writes spec-derived acceptance tests (oracle from the Product Spec, frozen before the implementation is inspected) and implementation-informed structural tests (may inspect code to hunt weaknesses, may never redefine a spec expectation). **Validator** refuses doneness until the work survives refutation, using a clean-context reader in genuine physical isolation as a supplementary lens corroborated by mechanical evidence. Mocks are authoritative executable artifacts, never agent-generated assumptions.
 4. **Promotion and production.** Same artifact promoted by digest. Canary measures change-specific correctness signals, business invariants, and side-effect reconciliation — not just latency and error rate. Rollback labeled per change as two-way-door, compatibility-window, or one-way-door; a change is not cleared for production until its reversibility is labeled and the matching recovery posture exists. **A hard capability boundary separates the authority to diagnose from the authority to ship a cure.**
 
+The Validator's refutation includes process completeness, not only behavior. The
+Validator verifies from immutable source references that required knowledge,
+docs, specs, contracts, migrations, generated artifacts, PR/commit/merge state,
+deployment evidence, monitoring, alerts, and runbooks are durable and current.
+Nothing local-only can satisfy the gate. The detailed pass/block/unknown/waiver
+rules live in [`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md).
+
 ## The correction flow (restoring a violated truth)
 
 1. **Triage and Root-Cause.** Diagnoses the actual cause (not the symptom) using the running system; classifies as instance / class / systemic; routes. A distinct role because the agent that writes the patch is least inclined to find a systemic cause.
@@ -121,6 +128,13 @@ Vocabulary: **Agents produce attestations. Policy engines produce pass-or-fail d
 ## The evidence plane
 
 The authoritative record is the **content-addressed change-evidence manifest** — the immutable ledger recording the digests of the source, the specification, the build plan or contract, the control policy, the artifact, and the configuration; the verifier identity and version; the spec-control results (including the negative-control baseline and positive-control result where present); the test/mutation/security/contract results; the hidden-suite verdict and its compound key where present; the per-environment results; the residual risks; the waivers; and the human approvals. The same artifact digest is promoted, and promotion verifies every cited fact against its authoritative source rather than trusting the manifest's own summary. **The ticket links to and summarizes the manifest; it is not the record.** The manifest is tamper-evident, independently verifiable, rooted in defined trust authorities — not unfakeable.
+
+Every Validator/Judge `PASS` also carries a process-completeness evidence bundle:
+the pinned SHA and manifest digest, source hashes consulted, generated-contract
+drift results, `.kin` export state, migration consumer registry and expected
+schema heads, PR/merge/deploy records, live probe evidence, observability/runbook
+proof, waiver records, and rollback/forward authority. A pass record without
+that bundle is `UNKNOWN`, not evidence.
 
 Artifacts are produced per an **applicability matrix** (runbook when an alert/operator action exists, migration guide when a migration occurs, decision record when a significant decision is made), each with its trigger, owner, freshness rule, and validation — not every conceivable artifact for every change.
 

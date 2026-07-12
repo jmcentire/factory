@@ -19,6 +19,10 @@ it. The doctrine is authoritative; `factory_core` is one (partial) implementatio
 - **[`docs/AGENT-DIRECTIVES.md`](docs/AGENT-DIRECTIVES.md)** — the executable companion: the
   ten role directives across the two flows (capability: PM Spec, Eng Spec, Validator, Test,
   Code; correction: Triage/Root-Cause, Spec, Hidden-Test, Repair, Judge).
+- **[`docs/VALIDATION-DIRECTIVE.md`](docs/VALIDATION-DIRECTIVE.md)** — the Validator/Judge
+  process-completeness directive: no local-only work, durable `.kin`, current docs/specs/
+  contracts, migration atomicity, PR/commit/merge/deploy evidence, live observability,
+  waivers, rollback authority, and a reproducible evidence bundle for every pass.
 
 The practices under `docs/practices/` and the sync log in `docs/PROVENANCE-SYNC.md` are
 disciplines and records **under** this doctrine.
