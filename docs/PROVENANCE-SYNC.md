@@ -144,6 +144,105 @@ to "the sync record under `docs/`" instead of naming a file. `make ship`
 
 ---
 
+## Synced pass 4 (P3) — the SoD/merge-gate spine + the deterministic intake gate
+
+**Origin advances studied (for shape only).** Four software-factory advances proven on the
+origin target's Segregation-of-Duties spine and intake pipeline:
+`src/factory/identity.ts` (DENY-wins agent denylist + enrolled-human resolution + git-author
+binding), `src/factory/merge-gate.ts` (the tier/category → approver-requirements decision,
+default-deny), `src/factory/evidence-manifest.ts` (content-addressed sha256 canonical-JSON
+manifest + constant-time verify), and `src/domain/factory/comprehensiveness.ts` (a deterministic
+structural-predicate intake gate, never an LLM). They implement the doctrine's **seven
+non-negotiables** — fail-closed authorization ("an agent can never approve"), single authoritative
+owner mutated with its audit evidence, least privilege, full auditability — and the **evidence
+plane** (`SOFTWARE-FACTORY.md`); the intake gate is the entrance analogue of the
+oracle-adequacy/launch-readiness exit discipline.
+
+### Per-advance disposition
+
+1. **DENY-wins identity resolution — ALREADY-COVERED (no port).** The load-bearing semantic —
+   an identity matching the agent denylist can NEVER resolve as human, checked BEFORE the
+   positive allowlist — already lives in `factory_core.manifest.SegregationPolicy.resolve_human`
+   / `is_excluded` (deny checked first, on both the raw and canonicalized id; `human_ids` is the
+   positive allowlist; aliases canonicalize so one human with several aliases is one principal).
+   The origin's task framing asked "if `roles.py` lacks it, add it" — the semantic exists, it is
+   just housed in `manifest.py` (SoD identities) rather than `roles.py` (RBAC), which is the
+   correct home. The origin's **email-specific** normalization (angle-bracket stripping,
+   local-part glob matching) and its **git-author binding** (a git shell-out) are target-side
+   presentation/impurity and are deliberately **kept target-side** — the core treats an identity
+   as an opaque string and takes verified authorship through a seam.
+
+2. **Merge-gate decision function — PORTED** as `factory_core/promotion.py`. This was the real
+   gap: `manifest.py` owned *per-entry* write-time SoD, but there was no *aggregate* promotion
+   decision. The new module **composes** `SegregationPolicy` (no duplication of DENY-wins) and
+   `verify_digest`, and adds the neutral, default-deny decision over {evidence integrity, gate
+   quorum, SoD, consequence-driven approver floor}. Tiers, categories, required gate ids, and
+   thresholds are all **data** on `ConsequenceProfile` / `PromotionRequest` — the core names no
+   tier, category, or gate id. The **≥2-distinct-enrolled-humans consequential floor** is encoded
+   as a core doctrine constant (`CONSEQUENTIAL_APPROVER_FLOOR`) a target profile may **raise but
+   never lower**; a non-consequential change is floored at one enrolled human
+   (`BASELINE_APPROVER_FLOOR`).
+
+3. **Manifest revision chaining — factory_core ALREADY STRONGER; one generic piece PORTED.**
+   The origin manifest is content-addressed per-document but **not hash-chained**;
+   `factory_core.manifest.Ledger` is content-addressed **and** hash-chained (`prev_hash` +
+   `verify_chain`), so the core already carries the stronger union — except the origin's
+   **constant-time** digest comparison. Ported that missing piece: `verify_digest()` (leaf
+   content-address check via `hmac.compare_digest`, fail-closed on absent/non-ASCII claims) and
+   switched `verify_chain`'s content-address comparison to the same constant-time primitive. The
+   stronger union (content-addressed + prior-digest chain + constant-time verify) now lives in
+   the core.
+
+4. **Deterministic comprehensiveness gating — PORTED** as `factory_core/comprehensiveness.py`.
+   **Not** subsumed by `completeness.py`: that module answers "is the finished work provably
+   done?" (a launch-readiness lattice over an enumerated inventory — the exit), whereas this
+   answers "does this INTAKE submission carry enough discrete information to build?" (a gate over
+   a submission's discrete fields — the entrance). Ported the generic engine: the structural
+   `is_substantive` test (length + word-token count, never semantic), a collision-guarded ordered
+   rule registry (`ComprehensivenessGate`, deterministic in registration order, no module-global
+   mutable state / no seed-on-import — matching the core's side-effect-free posture), and a
+   declarative, data-driven `SubstanceRequirement` (reads exactly one field, with an optional
+   discrete `ConditionalSpec` selector for a varying threshold). The origin's concrete field set,
+   thresholds, and its bug-vs-feature special case are **kept target-side** as data.
+
+| Deliverable | File | Why it is target-agnostic |
+|---|---|---|
+| Merge-gate / promotion decision | `factory_core/promotion.py` | Pure, stdlib + intra-core only, side-effect free at import. A default-deny `decide_promotion(request, policy, profile)` composing evidence integrity, gate quorum, SoD (via `SegregationPolicy`), and the consequence-driven distinct-human approver floor. Tiers/categories/gate-ids/thresholds are DATA (`ConsequenceProfile`, `PromotionRequest`); the ≥2-human consequential floor is a doctrine constant a target may raise, never lower. Names no target tier, category, or gate. |
+| Constant-time leaf verify | `factory_core/manifest.py` (`verify_digest` + `_const_time_eq`; `verify_chain` now constant-time) | Completes the content-addressed + prior-digest-chain + constant-time-verify union. Stdlib `hmac.compare_digest`; fail-closed on absent/non-ASCII claim. Names nothing target-specific. |
+| Deterministic intake gate | `factory_core/comprehensiveness.py` | Pure, stdlib only, side-effect free at import. Structural `is_substantive` + a collision-guarded ordered `ComprehensivenessGate` + a data-driven `SubstanceRequirement`/`ConditionalSpec`. Injection-resistant by construction (each rule reads one discrete field, asks a structural question, never scans content for a keyword) and never an LLM. Fields/thresholds/rules are DATA. Names no target field. |
+| Promotion-gate tests | `tests/test_promotion_gate.py` | Default-deny, DENY-wins-over-enrollment, unenrolled/self-approval/verifier=implementer denials, the consequential floor (by tier AND by category, floor un-lowerable, baseline floored at one), two-aliases-one-human counted once, gate missing-vs-failed, evidence tamper + absent-digest denial, `from_dict` ingestion. Token check over the module. Abstract tier/category/gate data only. |
+| Comprehensiveness tests | `tests/test_comprehensiveness_gate.py` | Structural substance (length/token, non-strings), collision/empty-id guards, deterministic order, conditional threshold via a discrete selector, and the two injection-resistance proofs (injection text elsewhere cannot satisfy a missing field; adversarial-but-substantive text passes its own field). Token check. Abstract field names only. |
+| `verify_digest` tests | `tests/test_manifest_ledger.py` (extended) | True-address accept, tamper reject, key-reorder canonicalization, fail-closed on absent/non-ASCII claim. |
+
+**Purity-guard interaction this pass:** none required — **no baseline change**. `promotion.py`
+imports only stdlib + the sibling `factory_core.manifest`; `comprehensiveness.py` imports only
+stdlib; `manifest.py` gained a stdlib `hmac` import. All three name zero denylist tokens by
+construction, and the two new test files each carry a `test_module_names_nothing_target_specific`
+token check (the guard scans core `.py`, not tests). `make ship`
+(purity → lint → typecheck → test) is green; test count 93 → 127.
+
+**Reverse-sync list — what the origin target should adopt when it rebases onto `factory_core`:**
+
+- **Hash-chain the SoD manifest.** The origin manifest is content-addressed per-document but not
+  chained; adopt `Ledger`'s `prev_hash` + `verify_chain` so a *sequence* of transitions (not just
+  a leaf) is tamper-evident. (This is also on the reconciliation gap register as a MEDIUM gap:
+  "manifest … not hash-chained.")
+- **Consume `promotion.decide_promotion`** in place of the native `decideMerge`, supplying its
+  tiers/categories/required-gates/thresholds as a `ConsequenceProfile` and its roster as a
+  `SegregationPolicy`. The target keeps only its product policy (the auto-merge toggle,
+  submitter-as-approver) around the generic decision.
+- **Consume `comprehensiveness.ComprehensivenessGate`**, supplying its field set and thresholds
+  as `SubstanceRequirement` data (including the bug-vs-feature bar as a `ConditionalSpec`), rather
+  than a module-global mutable registry seeded at import.
+- **Reconcile the glob semantics (semantic-drift watch).** The origin's `identity.ts` escapes `[`
+  in a denylist pattern (so `*[bot]` matches the literal `[bot]`), whereas the core uses stdlib
+  `fnmatch`, where `[bot]` is a character class. A target migrating denylist patterns must
+  re-express bracket patterns for `fnmatch` (or the core must grow a target-supplied matcher via a
+  seam). Until the target consumes the core, the two DENY-wins implementations can diverge on
+  bracketed patterns.
+
+---
+
 ## Historical extraction plans — now landed
 
 The plans below were the conservative-sync record for the risky work. They are retained as
@@ -333,13 +432,19 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   IR/analyzer as a pure module) and P2 (completeness-ledger + reverse-contract as
   adapter-driven generics).
 
-## Current state after P1/P2 extraction
+## Current state after P1/P2/P3 extraction
 
-- `factory_core` now includes the Phase 0 skeleton plus the P1 invariant-kernel module and
-  the P2 contract/completeness modules. `RepoAdapter` and `KnowledgeAdapter` expose neutral
-  inventory-returning methods so target-coupled scanning stays in target adapters while the
-  core owns the generic diff/lattice logic.
+- `factory_core` now includes the Phase 0 skeleton, the P1 invariant-kernel module, the P2
+  contract/completeness modules, and the **P3** SoD/merge-gate spine (`promotion.py` +
+  `manifest.verify_digest`) and deterministic intake gate (`comprehensiveness.py`). `RepoAdapter`
+  and `KnowledgeAdapter` expose neutral inventory-returning methods so target-coupled scanning
+  stays in target adapters while the core owns the generic diff/lattice/decision logic.
+- The promotion decision reuses `manifest.SegregationPolicy` (DENY-wins identity) and
+  `manifest.verify_digest` (constant-time content-address check) rather than duplicating them;
+  tiers/categories/gate-ids/thresholds arrive as data, and the ≥2-human consequential floor is a
+  core doctrine constant.
 - `README.md` is the quick public map of implemented-vs-doctrine-only controls. The doctrine
   remains authoritative, and a control specified there is still not a control running until a
   module/test/gate implements it.
-- `make ship` is the closeout gate for this repo: purity first, then lint, typecheck, and test.
+- `make ship` is the closeout gate for this repo: purity first, then lint, typecheck, and test
+  (127 tests green after this pass).

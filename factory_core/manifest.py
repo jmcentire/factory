@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import hmac
 import json
 import os
 from dataclasses import asdict, dataclass, field
@@ -67,6 +68,35 @@ def digest_obj(obj: Any) -> str:
     key order or whitespace."""
     canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return digest_bytes(canonical)
+
+
+def _const_time_eq(a: str, b: str) -> bool:
+    """Compare two digest strings without a data-dependent early exit (``hmac.compare_digest``).
+
+    A digest comparison is the tamper check; comparing it byte-by-byte with a short-circuiting
+    ``!=`` leaks, via timing, how many leading characters matched, which is a foothold for a
+    forger reconstructing a target digest. ``hmac.compare_digest`` is the stdlib constant-time
+    primitive. It rejects a non-ASCII ``str`` with ``TypeError``; we catch that and read it as
+    "not equal" (fail closed) rather than letting the exception escape.
+    """
+    try:
+        return hmac.compare_digest(a, b)
+    except TypeError:
+        return False
+
+
+def verify_digest(obj: Any, claimed_digest: str) -> bool:
+    """Constant-time content-address check: recompute the canonical address of ``obj`` and
+    compare it to ``claimed_digest`` with :func:`_const_time_eq`.
+
+    This is the leaf tamper-check for a *single* content-addressed artifact (as distinct from
+    :meth:`Ledger.verify_chain`, which verifies a whole *sequence*). Any single field change in
+    ``obj`` moves its address, so this returns ``False``; an empty/absent claimed digest also
+    returns ``False`` (fail closed — an unverifiable artifact is never treated as verified).
+    """
+    if not isinstance(claimed_digest, str) or not claimed_digest:
+        return False
+    return _const_time_eq(digest_obj(obj), claimed_digest)
 
 
 # --------------------------------------------------------------------------- #
@@ -312,7 +342,7 @@ class Ledger:
             stored = record.get("entry_hash", "")
             body = {k: val for k, val in record.items() if k != "entry_hash"}
             recomputed = digest_obj(body)
-            if recomputed != stored:
+            if not _const_time_eq(recomputed, stored):
                 return False, (
                     f"entry {i}: content-address mismatch (tampered body); "
                     f"{recomputed} != {stored}"

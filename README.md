@@ -35,18 +35,21 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 
 | `factory_core` module / file | Doctrine concept it implements | Status |
 |---|---|---|
-| `manifest.py` | The evidence plane — the content-addressed, hash-chained, tamper-evident change-evidence manifest; write-time segregation of duties (implementer ≠ verifier ≠ approver). | **Implemented** |
+| `manifest.py` | The evidence plane — the content-addressed, hash-chained, tamper-evident change-evidence manifest; write-time segregation of duties (implementer ≠ verifier ≠ approver); constant-time leaf verification (`verify_digest`). | **Implemented** |
+| `promotion.py` | The promotion / merge gate — the fail-closed, default-deny decision over {evidence integrity, gate quorum, SoD, consequence tier/category} with the ≥2-distinct-enrolled-humans consequential floor. Reuses the manifest `SegregationPolicy` (DENY-wins identity); tiers/categories/thresholds are data. | **Implemented** |
 | `invariant_kernel.py` | The capability-delta IR + the composition gate — can individually-safe deltas compose into a forbidden configuration? (the platform-invariant side of the gate). | **Implemented** |
-| `contract.py` + `completeness.py` | Oracle adequacy + the FE↔BE contract discipline + launch-readiness — forward/reverse contract diff (every caller reaches a real provider; every provider is called or excused) and the falsifiable completeness lattice. | **Implemented** |
+| `contract.py` + `completeness.py` | Oracle adequacy + the FE↔BE contract discipline + launch-readiness — forward/reverse contract diff (every caller reaches a real provider; every provider is called or excused) and the falsifiable completeness lattice (the exit gate). | **Implemented** |
+| `comprehensiveness.py` | The intake-completeness gate (the entrance) — a deterministic, injection-resistant registry of structural field predicates that decides comprehensive vs needs-info without an LLM. Fields/thresholds/rules are data. | **Implemented** |
 | `adapters.py` + `target.py` | The target-as-data boundary + the environment-ladder dependency seams — the five `Protocol` seams for all target contact, resolved by name from a signed data-only `TargetManifest` (never a code import). | **Implemented** |
 | `roles.py` | The division of labor / role model — capabilities as the atomic unit, roles as named bundles, grants as per-target data (the RBAC schema, not the authority catalog). | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
 | `scripts/check_core_purity.py` + `core_purity_denylist.json` | "The factory is itself a regulated system" — the core is governed; target tokens are data, and an executable fail-closed guard proves the core imports nothing target-specific. | **Implemented** |
 
 **Honest split (implemented vs doctrine-only).** Phase 0 (the skeleton + purity guard) and
-the two extractions (the invariant kernel; the contract/completeness modules) are **real,
-tested code**. The **orchestration engine, the ten live agent lanes, RBAC/SSO enforcement,
-and the build/demo pipeline are doctrine/design, not running** — they are specified in the
-docs above and are not wired here. A control specified is not a control running.
+the extractions (the invariant kernel; the contract/completeness modules; the SoD/merge-gate
+spine + deterministic intake gate) are **real, tested code**. The **orchestration engine, the
+ten live agent lanes, RBAC/SSO enforcement, and the build/demo pipeline are doctrine/design, not
+running** — they are specified in the docs above and are not wired here. A control specified is
+not a control running.
 
 The defining constraint: `factory_core` is generic. Every per-target input — repo coordinates,
 working-agreement docs, compliance rules, role bindings, IdP config — is **data loaded at
@@ -54,9 +57,10 @@ runtime through adapter seams**, never a code dependency. Point the factory at a
 swapping a data-only target pack; the core does not change. Correctness test: delete every
 target pack and the core is still importable, testable, and green.
 
-This repository has completed **Phase 0 plus the first two generic extractions**:
-the core skeleton and purity guard, the invariant-kernel composition gate, and the
-adapter-driven contract/completeness logic. It is a real, tested foundation, not a
+This repository has completed **Phase 0 plus three generic extractions**:
+the core skeleton and purity guard, the invariant-kernel composition gate, the
+adapter-driven contract/completeness logic, and the SoD/merge-gate spine plus the
+deterministic intake gate. It is a real, tested foundation, not a
 running portal; the orchestration engine, authoring loops, RBAC/SSO, build/demo, and
 affinity write-back are later phases (see the PRD).
 
@@ -64,7 +68,9 @@ affinity write-back are later phases (see the PRD).
 
 | Module | What it is |
 |---|---|
-| `factory_core/manifest.py` | The content-addressed (SHA-256), append-only, **hash-chained**, tamper-evident evidence ledger. Every append is **fail-closed on segregation of duties** (implementer, verifier, approver must be three distinct identities). Stdlib-only. |
+| `factory_core/manifest.py` | The content-addressed (SHA-256), append-only, **hash-chained**, tamper-evident evidence ledger. Every append is **fail-closed on segregation of duties** (implementer, verifier, approver must be three distinct identities); `SegregationPolicy` resolves identities **DENY-wins** (an agent denylist beats the human allowlist); `verify_digest` is the constant-time leaf tamper check. Stdlib-only. |
+| `factory_core/promotion.py` | The fail-closed, **default-deny** promotion / merge-gate decision (`decide_promotion`) over {content-addressed evidence integrity, required-gate quorum, segregation of duties, consequence tier/category}, with the **≥2-distinct-enrolled-humans consequential floor** (a target may raise, never lower). Reuses the manifest `SegregationPolicy`; every tier / category / gate id / threshold is per-target **data**. Stdlib + intra-core only. |
+| `factory_core/comprehensiveness.py` | The **deterministic, injection-resistant** intake-completeness gate: an ordered, collision-guarded registry of **structural** field predicates (present-and-substantive by length + word-token count, never semantic, **never an LLM**) that decides comprehensive vs needs-info. The entrance analogue of `completeness.py`'s exit gate. Fields / thresholds / rules are per-target **data**. Stdlib-only. |
 | `factory_core/target.py` | The `TargetManifest` loader: parses a content-addressed TOML manifest (repo coords + ref + subpath, adapter selections, role/capability bindings, compliance-rule path, effort params, demo-env descriptor), validates it against a JSON Schema, and **refuses any code reference** — data in, never a code import. Fail-closed before adapter resolution. |
 | `factory_core/adapters.py` | The five `typing.Protocol` seams for all target contact: `RepoAdapter`, `KnowledgeAdapter`, `ComplianceAdapter`, `IdpAdapter`, `ArtifactSink`. Interfaces only. |
 | `factory_core/roles.py` | The role/capability model **schema**: a capability is the atomic unit, a role is a named bundle, and grants are **per-target data** — not core classes. |

@@ -12,6 +12,7 @@ from factory_core.manifest import (
     SegregationError,
     SegregationPolicy,
     digest_obj,
+    verify_digest,
 )
 
 
@@ -38,6 +39,28 @@ def test_content_address_is_deterministic_and_sensitive() -> None:
     c = _entry("impl@x", "ver@x", note="different")
     assert a.content_digest() != c.content_digest(), "any change -> new address"
     assert a.content_digest().startswith("sha256:")
+
+
+# --------------------------------------------------------------------------- #
+# Constant-time leaf content-address verification (verify_digest)
+# --------------------------------------------------------------------------- #
+
+def test_verify_digest_accepts_the_true_address_and_rejects_tamper() -> None:
+    body = {"artifact": "module-x", "n": 1, "nested": {"k": "v"}}
+    addr = digest_obj(body)
+    assert verify_digest(body, addr) is True
+    # a different logical body -> different address -> rejected
+    assert verify_digest({"artifact": "module-x", "n": 2, "nested": {"k": "v"}}, addr) is False
+    # key reordering is canonicalized away: the address still verifies
+    assert verify_digest({"nested": {"k": "v"}, "n": 1, "artifact": "module-x"}, addr) is True
+
+
+def test_verify_digest_fails_closed_on_absent_or_nonascii_claim() -> None:
+    body = {"x": 1}
+    assert verify_digest(body, "") is False  # no claimed digest -> unverifiable -> False
+    assert verify_digest(body, "sha256:not-the-right-hex") is False
+    # a non-ASCII claimed digest must not raise; it is simply "not equal" (fail closed)
+    assert verify_digest(body, "sha256:café") is False
 
 
 # --------------------------------------------------------------------------- #

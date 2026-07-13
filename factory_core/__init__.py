@@ -18,6 +18,11 @@ Public surface:
     data-driven excuse classifier (inventories come from the adapter seams; rules are data)
   * completeness — a neutral inventory-row status lattice + falsifiable launch-readiness
     predicate (rows come from the adapter seams; the core owns only the aggregation)
+  * comprehensiveness — a deterministic, injection-resistant intake-completeness gate: an
+    ordered registry of structural field predicates (never an LLM); fields/thresholds are data
+  * promotion — the fail-closed, default-deny merge/promotion decision: gate quorum + a
+    consequence-driven distinct-human approver floor (reuses the manifest SegregationPolicy;
+    tiers/categories/thresholds are data)
 """
 
 from __future__ import annotations
@@ -41,6 +46,18 @@ from factory_core.completeness import (
     InventoryRow,
     LaunchReadiness,
     launch_ready,
+)
+from factory_core.comprehensiveness import (
+    VERDICT_COMPREHENSIVE,
+    VERDICT_NEEDS_INFO,
+    ComprehensivenessError,
+    ComprehensivenessGate,
+    ComprehensivenessResult,
+    ConditionalSpec,
+    FieldGap,
+    SubstanceRequirement,
+    SubstanceSpec,
+    is_substantive,
 )
 from factory_core.contract import (
     CallEdge,
@@ -83,7 +100,19 @@ from factory_core.manifest import (
     SegregationPolicy,
     digest_bytes,
     digest_obj,
+    verify_digest,
     verify_ledger,
+)
+from factory_core.promotion import (
+    BASELINE_APPROVER_FLOOR,
+    CONSEQUENTIAL_APPROVER_FLOOR,
+    ConsequenceProfile,
+    EvidenceIntegrity,
+    GateOutcome,
+    PromotionDecision,
+    PromotionError,
+    PromotionRequest,
+    decide_promotion,
 )
 from factory_core.roles import (
     Capability,
@@ -106,6 +135,8 @@ __all__ = [
     "AnalysisResult",
     "Analyzer",
     "ArtifactSink",
+    "BASELINE_APPROVER_FLOOR",
+    "CONSEQUENTIAL_APPROVER_FLOOR",
     "CallEdge",
     "Capability",
     "CapabilityCatalog",
@@ -115,13 +146,21 @@ __all__ = [
     "Classification",
     "ComplianceAdapter",
     "ComposedModel",
+    "ComprehensivenessError",
+    "ComprehensivenessGate",
+    "ComprehensivenessResult",
+    "ConditionalSpec",
+    "ConsequenceProfile",
     "ContractReport",
     "DimensionSummary",
     "Endpoint",
+    "EvidenceIntegrity",
     "ExcuseClassifier",
     "ExcuseRule",
     "FidelityResult",
+    "FieldGap",
     "ForwardReport",
+    "GateOutcome",
     "Grant",
     "GraphNode",
     "IdpAdapter",
@@ -132,6 +171,9 @@ __all__ = [
     "LaunchReadiness",
     "Ledger",
     "LedgerEntry",
+    "PromotionDecision",
+    "PromotionError",
+    "PromotionRequest",
     "ReachabilityAnalyzer",
     "ReachabilityInvariant",
     "RepoAdapter",
@@ -148,21 +190,28 @@ __all__ = [
     "SegregationPolicy",
     "SourceFacts",
     "SourceFlowFact",
+    "SubstanceRequirement",
+    "SubstanceSpec",
     "TargetManifest",
     "TargetManifestError",
     "Unsupported",
+    "VERDICT_COMPREHENSIVE",
+    "VERDICT_NEEDS_INFO",
     "Violation",
     "analyze_invariants",
     "check_contract",
     "check_delta_fidelity",
+    "decide_promotion",
     "digest_bytes",
     "digest_obj",
     "forward_contract",
+    "is_substantive",
     "launch_ready",
     "load_delta",
     "load_target_manifest",
     "normalize_path",
     "reverse_contract",
+    "verify_digest",
     "verify_ledger",
     "__version__",
 ]
