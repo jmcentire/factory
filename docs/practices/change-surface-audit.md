@@ -31,11 +31,13 @@ For each touched interaction the spec classifies it and calls it out **by name**
 - **HELD INVARIANT** — the interaction's observable contract must not change:
   behavior, payload shape, ordering, error semantics, the authorization / role gate,
   and any tenant / row isolation. Each held-invariant interaction gets a **locking
-  test** that fails if the contract drifts.
+  test** that fails if the contract drifts, and that locking test must appear as a
+  row in the signed Testing Plan Proposal before build.
 - **INTENTIONALLY CHANGED** — the new contract is stated explicitly, and the spec
   carries (a) a test asserting the **new** contract and (b) a test or argument that
   every *other* consumer of the surface is **unaffected**, or is migrated in the same
-  change.
+  change. Those new-contract and other-consumer proof tests must also appear in the
+  signed Testing Plan Proposal.
 
 Every touched interaction must land in exactly one of these two buckets. "Not
 considered" is not a valid classification — an unclassified touched surface fails the
@@ -88,6 +90,9 @@ Present consumers:  <enumeration + per-consumer decision>
 Future accessors:   <the opt-in accessor + the default-exclude of existing accessors>
 Observability:      <logging / alerts / telemetry / reporting added>
 
+Testing Plan Proposal linkage:
+  <test-plan row ids for each HELD_INVARIANT and INTENTIONALLY_CHANGED surface>
+
 Capability-delta linkage (platform-invariant surfaces only):
   <capability_delta document reference, or "none — no platform-invariant surface touched">
 ```
@@ -101,6 +106,9 @@ The audit is complete when:
 3. every HELD_INVARIANT interaction has a named locking test, and
 4. every INTENTIONALLY_CHANGED interaction has a new-contract test **and** an
    other-consumer-unaffected proof (test or migration), and
-5. any platform-invariant surface it touches is reflected in a capability delta.
+5. every named test/proof is represented in the signed Testing Plan Proposal with
+   fixture, environment rung, expected evidence, and falsifying mutation/known-bad
+   fixture, and
+6. any platform-invariant surface it touches is reflected in a capability delta.
 
 An incomplete audit blocks advancement to the build phase.
