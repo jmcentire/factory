@@ -114,6 +114,11 @@ from factory_core.promotion import (
     PromotionRequest,
     decide_promotion,
 )
+from factory_core.registry import (
+    AdapterRegistry,
+    AdapterResolutionError,
+    Provider,
+)
 from factory_core.roles import (
     Capability,
     CapabilityCatalog,
@@ -132,6 +137,8 @@ __version__ = "0.0.0"
 
 __all__ = [
     "ADAPTER_PROTOCOLS",
+    "AdapterRegistry",
+    "AdapterResolutionError",
     "AnalysisResult",
     "Analyzer",
     "ArtifactSink",
@@ -174,6 +181,7 @@ __all__ = [
     "PromotionDecision",
     "PromotionError",
     "PromotionRequest",
+    "Provider",
     "ReachabilityAnalyzer",
     "ReachabilityInvariant",
     "RepoAdapter",
