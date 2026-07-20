@@ -177,6 +177,11 @@ from factory_core.provenance import (
     provenance_issue_is_gap,
     verify_intent_provenance,
 )
+from factory_core.registry import (
+    AdapterRegistry,
+    AdapterResolutionError,
+    Provider,
+)
 from factory_core.roles import (
     Capability,
     CapabilityCatalog,
@@ -229,6 +234,8 @@ __all__ = [
     "AUTHORIZATION_MODES",
     "AUTHORIZATION_RUN",
     "AUTHORIZATION_USE",
+    "AdapterRegistry",
+    "AdapterResolutionError",
     "AnalysisResult",
     "Analyzer",
     "ArtifactSink",
@@ -304,6 +311,7 @@ __all__ = [
     "ProvenanceClaim",
     "ProvenanceReport",
     "Quarantine",
+    "Provider",
     "ReachabilityAnalyzer",
     "ReachabilityInvariant",
     "REQUIRED_PHASES",
