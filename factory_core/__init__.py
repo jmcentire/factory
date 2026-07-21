@@ -178,6 +178,7 @@ from factory_core.provenance import (
     verify_intent_provenance,
 )
 from factory_core.registry import (
+    Adapter,
     AdapterRegistry,
     AdapterResolutionError,
     Provider,
@@ -234,6 +235,7 @@ __all__ = [
     "AUTHORIZATION_MODES",
     "AUTHORIZATION_RUN",
     "AUTHORIZATION_USE",
+    "Adapter",
     "AdapterRegistry",
     "AdapterResolutionError",
     "AnalysisResult",
