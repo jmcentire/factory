@@ -1,8 +1,7 @@
 # The Doctrine Kernel — tiered intent inventory
 
-> **Status: PROPOSED 2026-07-20 — tier assignments drafted by an agent from founder
-> statements and awaiting founder ratification.** Until ratified, the tiers below bind
-> as **floors**: an agent may treat a statement as *more* protected than listed, never
+> **Status: RATIFIED by the founder, 2026-07-21** (in-session: "The kernel's tiers look
+> good"). An agent may still treat a statement as *more* protected than listed, never
 > less. Only the founder may move a statement down a tier or remove it. Changes to this
 > file pass through the Diff-Intent Gate
 > ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) like any other
