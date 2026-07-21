@@ -17,8 +17,10 @@ it. The doctrine is authoritative; `factory_core` is one (partial) implementatio
   spec, the environment ladder, the content-addressed evidence plane, and the factory-is-
   itself-a-regulated-system control plane.
 - **[`docs/AGENT-DIRECTIVES.md`](docs/AGENT-DIRECTIVES.md)** — the executable companion: the
-  ten role directives across the two flows (capability: PM Spec, Eng Spec, Validator, Test,
-  Code; correction: Triage/Root-Cause, Spec, Hidden-Test, Repair, Judge).
+  three role directives — **Code, Test, Validate** — bound to both flows. Specs (PM/Eng) are
+  human-owned artifacts, diagnosis is an intake stage, the hidden suite is a protected
+  Test-role instance, and the Judge is Validate in the correction flow. Exactly three
+  standing agent roles; nothing else in the factory is an agent role.
 - **[`docs/VALIDATION-DIRECTIVE.md`](docs/VALIDATION-DIRECTIVE.md)** — the Validator/Judge
   process-completeness directive: no local-only work, durable `.kin`, current docs/specs/
   contracts, migration atomicity, PR/commit/merge/deploy evidence, live observability,
@@ -47,8 +49,8 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 **Honest split (implemented vs doctrine-only).** Phase 0 (the skeleton + purity guard) and
 the extractions (the invariant kernel; the contract/completeness modules; the SoD/merge-gate
 spine + deterministic intake gate) are **real, tested code**. The **orchestration engine, the
-ten live agent lanes, RBAC/SSO enforcement, and the build/demo pipeline are doctrine/design, not
-running** — they are specified in the docs above and are not wired here. A control specified is
+live agent lanes for the three roles, RBAC/SSO enforcement, and the build/demo pipeline are
+doctrine/design, not running** — they are specified in the docs above and are not wired here. A control specified is
 not a control running.
 
 The defining constraint: `factory_core` is generic. Every per-target input — repo coordinates,
