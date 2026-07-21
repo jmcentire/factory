@@ -115,6 +115,7 @@ from factory_core.promotion import (
     decide_promotion,
 )
 from factory_core.registry import (
+    Adapter,
     AdapterRegistry,
     AdapterResolutionError,
     Provider,
@@ -137,6 +138,7 @@ __version__ = "0.0.0"
 
 __all__ = [
     "ADAPTER_PROTOCOLS",
+    "Adapter",
     "AdapterRegistry",
     "AdapterResolutionError",
     "AnalysisResult",

@@ -51,10 +51,17 @@ assert set(KIND_TO_PROTOCOL) == set(ADAPTER_KINDS), (
     "registry KIND_TO_PROTOCOL is out of sync with factory_core.target.ADAPTER_KINDS"
 )
 
+#: Any of the five seam types the core owns. A provider yields exactly one of these; which one
+#: is fixed by the seam kind it is registered under, and re-proven structurally at resolve time.
+Adapter = RepoAdapter | KnowledgeAdapter | ComplianceAdapter | IdpAdapter | ArtifactSink
+
 #: A provider builds an adapter instance from the per-target config handed to ``resolve`` (the
 #: ``TargetManifest`` when resolving through ``resolve_for``). It is code, supplied by a pack —
-#: never named in a manifest.
-Provider = Callable[[Any], Any]
+#: never named in a manifest. The return is narrowed to ``Adapter``: the core knows the result
+#: must be one of its own seams. The input stays ``Any`` on purpose — it is per-target config
+#: whose shape each pack defines (a manifest, a pack-specific object, or ``None``), so the core
+#: does not constrain it.
+Provider = Callable[[Any], Adapter]
 
 
 class AdapterResolutionError(ValueError):
@@ -84,7 +91,7 @@ class AdapterRegistry:
             )
         self._providers[(kind, name)] = provider
 
-    def resolve(self, kind: str, name: str, config: Any = None) -> Any:
+    def resolve(self, kind: str, name: str, config: Any = None) -> Adapter:
         """Resolve seam ``kind`` selected by ``name`` to a live, seam-conforming instance.
 
         Calls the registered provider with ``config`` (per-target data) and verifies the result
@@ -112,7 +119,7 @@ class AdapterRegistry:
             )
         return instance
 
-    def resolve_for(self, manifest: TargetManifest, config: Any = None) -> dict[str, Any]:
+    def resolve_for(self, manifest: TargetManifest, config: Any = None) -> dict[str, Adapter]:
         """Resolve every adapter a ``manifest`` selects, returning ``{seam_kind: instance}``.
 
         Each provider receives ``config`` when supplied, otherwise the ``manifest`` itself as
