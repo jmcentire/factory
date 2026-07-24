@@ -8,7 +8,7 @@ This is the unified specification. It replaces the separate capability-flow and 
 
 This document specifies the system. The deployment status — which phases are wired and enforcing today and which are design only — is tracked in the operational guide, and a reader deciding whether to rely on a given control must check there. A control that is specified here is not the same as a control that is running, and a boundary described in the present tense is a boundary the design intends to enforce, which is not a claim that it enforces now. The same discipline the factory imposes on the software it builds — that nothing is marked done on the strength of a description — applies to the factory's own description of itself.
 
-> For this repository, the honest split between what is **implemented** in `factory_core` and what is **doctrine/design only** is stated in the top-level `README.md` (see the "Doctrine → code mapping" section). Phase 0 (skeleton + purity guard) and the two extractions (invariant kernel, contract/completeness) are real, tested code; the orchestration engine, the ten live agent lanes, RBAC/SSO, and build/demo are doctrine, not running.
+> For this repository, the honest split between what is **implemented** in `factory_core` and what is **doctrine/design only** is stated in the top-level `README.md` (see the "Doctrine → code mapping" section). Phase 0 (skeleton + purity guard) and the two extractions (invariant kernel, contract/completeness) are real, tested code; the orchestration engine, the three live agent lanes, RBAC/SSO, and build/demo are doctrine, not running.
 
 ## How software companies solve this today, and why it is not enough
 
