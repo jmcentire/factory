@@ -1,164 +1,1289 @@
 # The Software Factory
 
-> How we build and how we repair: humans own intent, architecture, and risk; the factory implements or fixes, proves conformance, and produces the evidence.
+### How we build and how we repair
 
-This is the unified specification. It replaces the separate capability-flow and correction-flow documents and the two vision and directive pairs that preceded it, because a system described in fragments is the very failure this factory exists to remove. There is one foundation, one control plane, one evidence model, and one set of non-negotiables. On top of that foundation run two flows: the **capability flow**, which builds a behavior that does not exist yet, and the **correction flow**, which restores a behavior that was supposed to hold and does not. The flows differ in their inputs, their first steps, and the strength of the oracle available to them, and they share everything else.
-
-## Status of this document
-
-This document specifies the system. The deployment status — which phases are wired and enforcing today and which are design only — is tracked in the operational guide, and a reader deciding whether to rely on a given control must check there. A control that is specified here is not the same as a control that is running, and a boundary described in the present tense is a boundary the design intends to enforce, which is not a claim that it enforces now. The same discipline the factory imposes on the software it builds — that nothing is marked done on the strength of a description — applies to the factory's own description of itself.
-
-> For this repository, the honest split between what is **implemented** in `factory_core` and what is **doctrine/design only** is stated in the top-level `README.md` (see the "Doctrine → code mapping" section). Phase 0 (skeleton + purity guard) and the two extractions (invariant kernel, contract/completeness) are real, tested code; the orchestration engine, the three live agent lanes, RBAC/SSO, and build/demo are doctrine, not running.
-
-## How software companies solve this today, and why it is not enough
-
-Elite engineering organizations already hold most of the pieces this document assembles. They hold them as cultural agreements and fragmented tooling rather than as a system, and the gaps between the pieces are where the failures live.
-
-The spec-and-build split exists today as the RFC or the architecture review board. A design is written, debated, and approved, and then the document dies. The author goes to the source host and writes whatever they write, and a reviewer tries to verify the code against a fuzzy memory of the RFC during a rushed pull request. The agreement was real and the enforcement was not. The oracle problem is partially solved by consumer-driven contracts and strict typed interfaces — contract-testing frameworks and Protocol Buffers and gRPC — so that when one team changes an endpoint a contract test breaks another team's build automatically. That catches interface drift, but humans still write both the implementation and the test that judges it, which reproduces the exact correlated misreading this factory exists to prevent: a bug verified by a test written to match the bug. And verification fatigue is the daily reality of modern DevSecOps, where pipelines blast engineers with static-analysis findings and dependency alerts and thousands of test logs, and humans cope by ignoring them, configuring rules to bypass warnings and clicking merge because the wall of data is too dense to parse.
-
-What the factory contributes is not a new idea in any one of these places. It is the **unification**. It turns what are currently cultural agreements and fragmented, post-hoc tools into an enforced state machine, where the design cannot die in a document because the build is generated against it, where the oracle cannot be written to match the bug because it is derived independently from a signed target, and where the human is shown a calibrated decision rather than a wall of logs.
-
-## What this is, and why
-
-We are moving from a model where engineers spend most of their throughput writing code to a model where engineers design and operate a system whose output is the desired code or the desired fix. The human's center of gravity shifts toward the specification, the architecture, the invariant, the diagnosis, and the risk decision. The factory implements against those human decisions, proves conformance to them, and produces the operational scaffolding humans routinely skip when rushed: the documentation, the runbooks, the dashboards, the alerts, the compliance artifacts.
-
-This is a restructuring of where judgment lives. Humans are good at judgment about intent, about whether the right problem is being solved, about architecture and the tradeoffs with no clean answer, about diagnosing why a system fails, and about whether to accept a given risk. Machines are good at exhaustive, tireless, mechanical conformance checking against a fixed target, and at generating the surrounding artifacts at a consistency humans cannot sustain under deadline.
-
-The premise that makes this safe rather than reckless is a single observation about how engineering processes fail. **The default failure mode of any process, human or machine, is premature and unverified confidence.** Someone declares a thing done and the declaration is accepted as evidence. It is not evidence, it is a hypothesis. The entire factory is built to refuse that hypothesis until it has survived an attempt to refute it, and this matters more when the implementer is an AI, because an agent that misreads a specification produces confident, well-formatted, plausible work that is wrong, and a second agent sharing the same misreading will cheerfully confirm it. The factory's guarantees come from forcing independence and adversarial proof into the loop, never from trusting any agent's self-report.
-
-The honest version is stronger than the inflated one. The factory does not guarantee correctness. It produces independently verifiable evidence, it makes important failures harder to hide, and it materially lowers the probability of undetected error. Where this document calls evidence trustworthy, it means tamper-evident, independently verifiable, and rooted in defined trust authorities — never unfakeable, because no evidence chain protects against compromise of the thing that verifies it, which is why the factory's own verifiers are themselves governed.
-
-## The division of labor: who owns what
-
-The factory does not author architecture. Humans do.
-
-Humans author architectural intent: the service and module boundaries, the ownership of state and business capabilities, the interaction patterns and the direction of dependencies, the transaction and consistency boundaries, the trust boundaries, the high-level data models, the deployment topology, and which tradeoffs are acceptable. They stage the development work and sequence the dependencies. The factory may critique that architecture, detect cycles, identify ownership conflicts, model failure paths, and check that the implementation conforms to it, but the factory may not change it. Changing architectural intent requires an explicit human decision. A defect that can only be fixed by changing the architecture leaves the correction flow and enters the capability flow as a human-authored redesign.
-
-Controls fall into categories, and the category determines the treatment:
-
-- **Deterministic preventive** (no secrets in source, permitted dependency direction, schema backward-compatibility) — enforced automatically and block.
-- **Deterministic detective** (missing runbook, unowned alert, stale contract) — detected automatically and reported or block.
-- **Evidence-assisted judgment** (architectural coherence, acceptable coupling, adequate failure behavior) — the factory gathers evidence and a human decides.
-- **Primarily human judgment** (product utility, organizational ownership, business tradeoff) — human decision with rationale recorded.
-- **Runtime empirical** (SLO compliance, canary health, recovery behavior) — observed continuously and enforced where thresholds are meaningful.
-
-A control is recorded explicitly, with its intent, scope, enforcement mechanism and whether that mechanism is automated, failure behavior, the tests and runtime signals that verify it, its owner, the changes that trigger its review, and whether an exception is permitted.
-
-## What is shared and what is independent
-
-The **specs are the shared contract**. The interface a unit exposes, its boundary, its inputs, its observable effects, and its data topology are defined in the signed specs and shared by every agent that touches the unit. The agent that implements and the agent that writes the tests both read the interface and the schema from the same signed contract. This sharing is the precondition for the whole system. Divergence at the interface level, including the database schema, is something the shared spec prevents by being the one definition no agent in the build or repair loop is allowed to author.
-
-What must be **independent** is narrower. It is the **oracle** — the determination of what counts as the right answer. A test whose behavioral expectation was inferred from what the code happens to do is worthless as independent evidence, because it passes whenever the code is self-consistent, including when the code is wrong. So expected behavior comes from a signed target and is fixed before the implementation is inspected, and in the correction flow the adversarial tests that judge a repair are written by a separate agent the repair agent cannot read.
-
-The failure mode all of this defends against is **correlated misreading** — the trap agents drawn from the same model fall into most easily, because they share blind spots. That is the simulacrum of carefulness, the appearance of rigor with none of its substance. Because separate prompts to the same model are not strong independence, the factory's correctness authority is primarily a system of **reproducible mechanisms** rather than agent panels: type systems, linters, schema validators, static analyzers, policy-as-code, spec-derived acceptance tests, mutation testing, property-based and fuzz and metamorphic and differential testing, reference models, hidden and incident-derived regression cases, and live probes against a running system. Agent reasoning sits on top of that mechanical base, never in place of it.
-
-A signed specification is immutable for a particular run but is not presumed infallible. No agent silently reinterprets the spec. Any agent, test, operator, or human raises a specification defect with contradictory evidence, the current version stays frozen, a human intent owner approves or rejects an amendment, and an approved amendment produces a new signed version that invalidates and reruns all affected plans, tests, controls, and evidence.
-
-## The seven non-negotiables
-
-Every agent in every flow enforces these, in its own domain, on every change.
-
-1. **Fail closed on the hazards.** Uncertainty involving authorization or identity, data integrity, privacy boundaries, safety decisions, security controls, irreversible or legally consequential effects, or required transactional audit denies, halts, or refuses. A hardening control absent at boot stops the boot. Other failure classes follow an explicit safe-degradation disposition the spec states (condition, disposition, max duration, exhaustion behavior, rationale). A failure with no specified disposition is a gap the spec must close, not a runtime decision.
-2. **Single authoritative owner per fact.** Every authoritative business fact has exactly one human-approved owning component, and a mutation commits atomically with its required audit evidence within that authority. One owner per fact, not one store for all state.
-3. **Least privilege.** Every actor, role, component, and route holds the minimum capability for its function, scoped to the minimum boundary. A repair never widens a grant to make a fix simpler.
-4. **Full auditability.** Every significant mutation commits its audit record atomically with the business state; every regulated read produces durable access evidence under its stated failure policy.
-5. **No silent failure.** Every external call is handled, every error is typed and structured and carries context, recovered or propagated per its disposition, never swallowed.
-6. **Honesty in docs and self-reports.** Nothing marked implemented that is partial or absent; every control marked satisfied cites its enforcing artifact; partial capability is marked partial with the gap named and residual risk disclosed with a named human owner.
-7. **Live-verified, not self-attested.** Doneness is established by independent adversarial verification and live end-to-end validation against a running instance.
-
-## Two flows off one foundation
-
-- **Capability flow** builds a future truth. Input is a product ask; no prior correct behavior exists, so it constructs its oracle from the specification, hardens that spec by refutation, and locks a human-ratified testing plan before build. Agent roles: **Code, Test, Validate** — the Product Spec and Eng Spec are human-owned artifacts the flow ingests, not agent roles.
-- **Correction flow** restores a violated truth. Input is a defect/incident/failing test/alert/anomaly; a running system correct on everything but the fault is a **trusted oracle** the capability flow never has. Agent roles: the same three — Test bounds the defect and fields the hidden adversary, Code repairs, Validate judges. Diagnosis is an intake stage, not a standing role.
-
-The asymmetry: the correction flow can bound its spec from both sides against trusted ground truth, so on a defect with a known baseline it has stronger mechanical evidence than the capability flow has on greenfield work. Where the correction flow itself has no baseline (the greenfield repair), it is as weak as the capability flow and treated accordingly.
-
-## Routing
-
-A change enters the **correction flow** when it points at a behavior the system was supposed to exhibit and does not (or exhibits and should not); the **capability flow** when it asks for a behavior that does not exist yet. Diagnosis additionally routes: a contained instance (or a class fixed as an instance with the class recorded) proceeds autonomously; a systemic defect routes to a human, and where the response is architectural it leaves the correction flow for the capability flow.
-
-## Lifecycle and the environment ladder
-
-The environment ladder is the physical progression: local workspace → ephemeral per-change environment → shared integration → pre-production → production. The **same built artifact is promoted up the ladder by digest** rather than rebuilt at each rung. Evidence is allocated so each rung adds evidence the earlier ones could not provide.
-
-- **Local:** formatting, types, lint, focused unit and property tests.
-- **Ephemeral:** full unit suite against real disposable dependencies, migration tests, contract verification, security scans.
-- **Shared integration:** cross-change compatibility, critical multi-service journeys; surfaces conflicts the dev factory allowed to diverge.
-- **Pre-production:** deployment and config correctness, dynamic security testing, load/soak/fault injection, backup/restore rehearsal, observability-effect tests; can shadow production against de-identified data.
-- **Production:** synthetic probes, representative canary analysis, SLO and business-invariant monitoring, bounded shadowing, automatic rollback where safe.
-
-Dependencies: owned critical dependencies (the database) run as **real disposable instances**; internal services are simulated by **authoritative executable mocks produced by those services' own pipelines**; genuinely unavailable third parties are simulated with a **contract test that continuously verifies the simulation still matches reality**. Isolation restrictions are a safety boundary only if the platform actually enforces them — enforcement is verified, not assumed.
-
-## The capability flow (building a future truth)
-
-1. **Specification.** Asserts a future truth as behavior, never implementation. Itemized into individually checkable items; every gap surfaced as an explicit open question. A **spec-simulation loop** generates radical scenarios, edge-case states, and logical contradictions, presenting an interactive ledger of concrete behaviors for the human to accept or refute — the contract is hardened by iterative refutation before it is locked. Names the fail-closed disposition of every hazard-class failure.
-2. **Design formalization.** Human provides architectural intent; the factory formalizes it into precise machine-readable contracts (OpenAPI, AsyncAPI, the OpenTelemetry surface) and challenges it where unsound (cycles, ownership conflicts, multiple writers, tight coupling) — raising each for human decision, not redrawing by fiat. **The database schema is a first-class interface contract.** Default noun is component; a service boundary appears only where the human-approved architecture justifies it. The Validator confirms the formalized plan solves the signed specification before a line is written.
-3. **Test-plan ratification.** The Test role drafts an enumerated Testing Plan Proposal from the signed Product Spec, signed Eng Spec, capability delta, change-surface audit, and threat/failure model. The plan is a **derived projection**, not a third source of truth: if it conflicts with the Product or Eng Spec, the source spec is amended and the plan is regenerated. It names the exact tests to be built and run: contract, unit, integration, authorization/isolation, negative/boundary, concurrency/idempotency, adversarial/red-team, Goodhart/anti-gaming, migration, observability, live smoke, and any manual exploratory checks. Each row states the spec item or invariant it proves, the environment rung where it runs, the required fixture/data source, the failure it would catch, and the mutation or known-bad fixture that should turn it red. Where a failure mode cannot honestly be predicted before implementation, the row is labeled exploratory with the decision it must resolve and the amendment trigger. Advocate/Sim attack the plan for missing surfaces, tautologies, over-mocking, drift from the signed specs, and untestable claims; the human approves, amends, or rejects it. A change with no signed Testing Plan Proposal does not enter build. Any later material test-plan change is a spec amendment and reopens approval.
-4. **Dev factory** (per-change environment, the three agent roles — the factory's entire role roster). **Code** implements and crafts artifacts. **Test** writes the ratified spec-derived tests (oracle from the Product Spec, coverage inventory from the Testing Plan Proposal, both frozen before the implementation is inspected) and implementation-informed structural tests (may inspect code to hunt weaknesses, may never redefine a spec expectation). **Validator** refuses doneness until the work survives refutation, using a clean-context reader in genuine physical isolation as a supplementary lens corroborated by mechanical evidence. Mocks are authoritative executable artifacts, never agent-generated assumptions.
-5. **Promotion and production.** Same artifact promoted by digest. Canary measures change-specific correctness signals, business invariants, and side-effect reconciliation — not just latency and error rate. Rollback labeled per change as two-way-door, compatibility-window, or one-way-door; a change is not cleared for production until its reversibility is labeled and the matching recovery posture exists. **A hard capability boundary separates the authority to diagnose from the authority to ship a cure.**
-
-The Validator's refutation includes process completeness, not only behavior. The
-Validator verifies from immutable source references that required knowledge,
-docs, specs, contracts, migrations, generated artifacts, PR/commit/merge state,
-deployment evidence, monitoring, alerts, and runbooks are durable and current.
-Nothing local-only can satisfy the gate. The detailed pass/block/unknown/waiver
-rules live in [`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md).
-
-## The correction flow (restoring a violated truth)
-
-1. **Diagnosis and root-cause** (intake stage). Diagnoses the actual cause (not the symptom) using the running system; classifies as instance / class / systemic; routes. Run in a separate context from the repair because the context that writes the patch is least inclined to find a systemic cause — a stage, not a standing role.
-2. **Correction spec** (authored by the Test role). Turns the diagnosed defect into a contract and visible tests against the existing interface and schema. Two controls bound the spec against the one oracle the flow trusts — the pre-defect behavior of main:
-   - **Negative control** (not too weak): the new tests must FAIL against the current broken main, with at least one failing on the defect.
-   - **Positive control** (not too strong): the new tests must PASS against main on all behavior unrelated to the defect. A test that fails against main for an unrelated reason is an over-constraint and is rejected. The residue (a fix that legitimately changes previously-correct behavior) is flagged as an over-constraint and routes to a human.
-3. **Hidden suite** (a separate Test-role instance behind the protection boundary). Writes adversarial tests in a protected location the repairing Code agent cannot read, bound to the same contract. Results return **coarsely** (pass/fail with fixed categories, no test names or traces) so the hidden suite cannot become an interactive debugger.
-4. **Repair** (the Code role). Writes the implementation against the merged contract without touching the contract, visible tests, hidden tests, or control plane. Fixes the cause, not the symptom. The image is identified by digest; the hidden suite judges that exact artifact; the **verdict is identified by a compound key over build/image/spec/contract** so it cannot be replayed against a different artifact.
-5. **Judge** (the Validate role in the correction flow). Confirms the spec bounded the defect from both sides; fetches the hidden-suite verdict against the exact artifact and confirms the compound key binds; verifies mechanical evidence adversarially; confirms test integrity and critical-control mutation; re-derives every cited fact; drives the repair live. The hidden suite is one judge among the mechanical evidence and the live pass, not the sole authority.
-
-**Retry is recovery, not search.** A fresh agent from clean context carries the diagnosis, the merged spec, the visible tests, and a bare pass-or-fail history only — none of the failed patch, transcript, categories, or explanation. The budget caps the cost of sampling, not its logic; no-op/metadata-only/fingerprint-identical retries do not reset the budget. A greenfield repair (no baseline) falls back to a sensitivity measure and defaults to **gated** regardless of hazard class.
-
-## The gate: depth keys on oracle adequacy, not blast radius
-
-**Risk is whether the test suite comprehends the change, and that is independent of how many lines moved.** A large change against a complete oracle is safe; a small change against a stale oracle that silently assumed the old architecture is dangerous. So verification depth and the human gate key on whether the oracle exercises the surfaces the change disturbs (including side effects), not on diff size.
-
-The labor allocation is the inverse of the common instinct: **agents take the large, well-specified work whose errors are loud and whose oracle is comprehensive; humans take the small, subtle work where correctness depends on implications no test encodes.** When agents take small work, batch many through one lane to amortize setup. Regardless of the gate, the **consequential surfaces** — authorization, cryptography, destructive migrations, money movement, retention/deletion, safety decisions, and the factory's own control plane — draw mandatory specialist human review independent of change size.
-
-The gate presents a **compact decision package**: what changed and why, the surfaces affected, the oracle's coverage of them, the risk and blast radius, the evidence produced, the controls automatically verified, the controls that required judgment, the residual risks, and the recovery posture — leading with the anomalies and the departures from standard patterns.
-
-Vocabulary: **Agents produce attestations. Policy engines produce pass-or-fail decisions. Accountable humans provide approval or risk acceptance.** An exception to a control requires an explicit, expiring risk acceptance owned by a named human.
-
-## The evidence plane
-
-The authoritative record is the **content-addressed change-evidence manifest** — the immutable ledger recording the digests of the source, the specification, the build plan or contract, the ratified Testing Plan Proposal, the control policy, the artifact, and the configuration; the verifier identity and version; the spec-control results (including the negative-control baseline and positive-control result where present); the test/mutation/security/contract results; the hidden-suite verdict and its compound key where present; the per-environment results; the residual risks; the waivers; and the human approvals. The same artifact digest is promoted, and promotion verifies every cited fact against its authoritative source rather than trusting the manifest's own summary. **The ticket links to and summarizes the manifest; it is not the record.** The manifest is tamper-evident, independently verifiable, rooted in defined trust authorities — not unfakeable.
-
-Every Validator/Judge `PASS` also carries a process-completeness evidence bundle:
-the pinned SHA and manifest digest, source hashes consulted, generated-contract
-drift results, `.kin` export state, migration consumer registry and expected
-schema heads, PR/merge/deploy records, live probe evidence, observability/runbook
-proof, waiver records, and rollback/forward authority. A pass record without
-that bundle is `UNKNOWN`, not evidence.
-
-Artifacts are produced per an **applicability matrix** (runbook when an alert/operator action exists, migration guide when a migration occurs, decision record when a significant decision is made), each with its trigger, owner, freshness rule, and validation — not every conceivable artifact for every change.
-
-## The factory is itself a production-grade regulated system
-
-Its prompts, models, tools, and policies are versioned; a change to a model or prompt triggers a **requalification suite**. Runs are reproducible from recorded manifests; execution is sandboxed with verified network/secrets isolation; it is hardened against repository-content and prompt-injection attacks. The persistent knowledge graph is **governed** — every node carries source authority, timestamp, ownership, confidence, and expiry; stale context is sandboxed rather than injected; a component change sweeps the graph for related decision records and invariants and reconciles them.
-
-**No agent may modify its own directive, verification policy, approval rules, control-applicability rules, trusted-verifier set, or sandbox permissions while producing or verifying a change under that policy.** The factory must never approve a change to its own approval mechanism; a change to a verifier requires independent approval. **The Diff-Intent Gate** ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) extends this from mutation to review and to genesis: every diff is checked against the quoted declared intent it operates under; a delta in commitment language — a count, a MUST/NEVER/ONLY, a named role or authority, a fail-closed disposition, a scope word, a removed prohibition — is a material change an agent may flag but never ratify. Doctrine enters and changes only over a human signature. Changes to the factory require a separately approved policy version, regression and qualification runs, captured prompt/model/tool/dependency versions, short-lived credentials, network/filesystem allowlists, a complete tool-call audit, cost and execution budgets, and a human-owned control-policy repository.
-
-## The core guarantee
-
-Agents implement or repair, inspect, test, and gather evidence against a versioned target. Correctness is evaluated by an independent evidence and policy plane using deterministic checks, independent oracles, adversarial probes, and live observations. In the correction flow the spec is bounded from both sides against the trusted pre-defect behavior of main. **Depth of verification and review keys on whether the oracle comprehends the change, not on how large it is.** Production automation is capability-bounded, auditable, and limited to approved reversible actions. **No agent may alter the target, the verifier, or the promotion policy while proving its own work.**
-
-The factory does not guarantee correctness, and it does not ask to be trusted on consensus, mutable tickets, or discretionary clicks. It produces independently verifiable, tamper-evident evidence, makes important failures harder to hide, and materially lowers the probability of undetected error — while keeping the decisions that require human judgment in human hands and the authority that could corrupt the verification out of the hands of the thing being verified.
+**Three roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
+implements, proves conformance, and produces the evidence.**
 
 ---
 
-## Reinforcing philosophies
+## Status of this document
 
-The doctrine above is the primary specification. Three surrounding philosophies reinforce it and are folded in here only where they sharpen a point the doctrine already makes.
+This document specifies the system. It does not report the system.
 
-- **Production-grade minimalism.** Prefer the smallest correct system, but never cut the controls that make failure observable, diagnosable, reversible, and auditable. The operational test is whether an operator can answer *what broke, why, and how to roll back* without deploying new code. This is the same standard the non-negotiables (no silent failure, full auditability, fail-closed) and the environment ladder (reversibility labeled before production) encode — minimalism is a bias toward the smallest system that still carries those controls, not an excuse to drop them.
-- **Honesty in self-reports.** Nothing is marked implemented that is partial or absent; every control marked satisfied cites its enforcing artifact; partial capability is marked partial with the gap named and the residual risk disclosed with a named human owner. This is non-negotiable #6, and it applies recursively to the factory's own description of itself (see "Status of this document").
-- **Live-verified, not self-attested.** Doneness is established by independent adversarial verification and live end-to-end validation against a running instance — never by an agent's confident summary. This is non-negotiable #7 and the reason the gate keys on oracle adequacy rather than diff size.
+Deployment status — which controls are wired and enforcing today and which are design only —
+is tracked in the operational guide, and a reader deciding whether to rely on a given control
+must check there. **A control that is specified here is not a control that is running.** A
+boundary described in the present tense is a boundary the design intends to enforce, which is
+not a claim that it enforces now.
 
-The companion executable directives — the three agent roles (**Code, Test, Validate**) that operate this specification across the two flows — are in [`AGENT-DIRECTIVES.md`](./AGENT-DIRECTIVES.md). The factory has exactly these three standing agent roles; specs are human-owned artifacts, diagnosis is a stage, and the hidden suite is a protected Test-role instance. A proposed additional role is a factory-control-plane change requiring the human gate.
+For this repository, the operational guide is the
+[`README.md` doctrine-to-code mapping](../README.md#doctrine--code-mapping). It is the
+authoritative statement of what `factory_core` currently enforces and what remains design only.
+
+The discipline the factory imposes on the software it builds — that nothing is marked done on
+the strength of a description — applies to the factory's own description of itself.
+
+---
+
+## Contents
+
+**Part I — The System**
+
+1. [What this is, and why](#1-what-this-is-and-why)
+2. [What already exists, and what is missing from it](#2-what-already-exists-and-what-is-missing-from-it)
+3. [The three roles](#3-the-three-roles)
+4. [The three phases](#4-the-three-phases)
+5. [Translation boundaries](#5-translation-boundaries)
+6. [What is shared and what is independent](#6-what-is-shared-and-what-is-independent)
+7. [The eight non-negotiables](#7-the-eight-non-negotiables)
+8. [Two flows, one structure](#8-two-flows-one-structure)
+9. [The environment ladder](#9-the-environment-ladder)
+10. [The build loop](#10-the-build-loop)
+11. [The gate](#11-the-gate)
+12. [The evidence plane](#12-the-evidence-plane)
+13. [The factory is itself a regulated system](#13-the-factory-is-itself-a-regulated-system)
+14. [What the factory cannot reach](#14-what-the-factory-cannot-reach)
+15. [What changes for engineers](#15-what-changes-for-engineers)
+16. [The core guarantee](#16-the-core-guarantee)
+
+**Part II — Role Directives**
+
+- [Shared foundation](#shared-foundation)
+- [Directive: Validator](#directive--validator)
+- [Directive: Coder](#directive--coder)
+- [Directive: Tester](#directive--tester)
+
+**Appendices**
+
+- [Appendix A — Phase and role map](#appendix-a--phase-and-role-map)
+- [Appendix B — Changelog](#appendix-b--changelog)
+
+---
+
+# Part I — The System
+
+## 1. What this is, and why
+
+We are moving from a model where engineers spend most of their throughput writing code to a
+model where engineers design and operate a system whose output is the desired code or the
+desired fix. The engineer's center of gravity shifts toward the specification, the
+architecture, the invariant, the diagnosis, and the risk decision.
+
+This is a restructuring of where judgment lives, not a removal of it.
+
+| Humans are good at | Machines are good at |
+|---|---|
+| Judgment about intent — whether the right problem is being solved | Exhaustive, tireless conformance checking against a fixed target |
+| Recognizing a described behavior as wrong | Generating candidate behaviors, edge cases, and contradictions at volume |
+| Architecture and the tradeoffs with no clean answer | Drafting an architecture and stating its consequences for review |
+| Diagnosing why a system fails | Executing the ten-thousandth check as carefully as the first |
+| Deciding whether a risk is acceptable | Refusing to be tired, rushed, or fond of its own prior work |
+
+The premise that makes this safe rather than reckless is a single observation about how
+engineering processes fail.
+
+> **The default failure mode of any process, human or machine, is premature and unverified
+> confidence.** Someone declares a thing done and the declaration is accepted as evidence. It
+> is not evidence. It is a hypothesis.
+
+The entire factory is built to refuse that hypothesis until it has survived an attempt to
+refute it. This matters more when the implementer is an agent, because an agent that misreads a
+specification produces confident, well-formatted, plausible work that is wrong — and a second
+agent sharing the same misreading will cheerfully confirm it.
+
+**The honest version is stronger than the inflated one.** The factory does not guarantee
+correctness. It produces independently verifiable evidence, it makes important failures harder
+to hide, and it materially lowers the probability of undetected error. Where this document
+calls evidence trustworthy it means tamper-evident, independently verifiable, and rooted in
+defined trust authorities — never unfakeable, because no evidence chain protects against
+compromise of the thing that verifies it.
+
+---
+
+## 2. What already exists, and what is missing from it
+
+Elite engineering organizations already hold most of the pieces this document assembles. They
+hold them as cultural agreements and fragmented tooling rather than as a system, and the gaps
+between the pieces are where the failures live.
+
+| Piece | How it exists today | Where it fails |
+|---|---|---|
+| **The spec-and-build split** | The RFC, the architecture review board | The design is written, debated, approved — then the document dies. The author writes whatever they write; a reviewer verifies against a fuzzy memory during a rushed pull request. The agreement was real; the enforcement was not. |
+| **The oracle problem** | Consumer-driven contracts, typed interfaces, gRPC and Protobuf | Catches interface drift. But humans still write both the implementation and the test that judges it, reproducing the exact correlated misreading this factory exists to prevent: a bug verified by a test written to match the bug. |
+| **Verification** | DevSecOps pipelines, static analysis, dependency alerts | Engineers are blasted with thousands of findings and cope by ignoring them — configuring rules to bypass warnings and clicking merge because the wall of data is too dense to parse. |
+
+What the factory contributes is not a new idea in any one of these places. It is the unification:
+an enforced state machine where **the design cannot die in a document** because the build is
+generated against it, where **the oracle cannot be written to match the bug** because the party
+writing the tests cannot see the implementation and cannot talk to the party writing it, and
+where **the human is shown a calibrated decision rather than a wall of logs.**
+
+---
+
+## 3. The three roles
+
+There are three roles. There are no others. Everything else in this document is a phase, an
+artifact, or a control — not a role.
+
+| Role | Owns |
+|---|---|
+| **Validator** | Coordinates with the human. Holds the context. Co-authors the spec. All questions route here. Runs the tests once code and tests are both complete. Judges. |
+| **Coder** | Implements against the spec. |
+| **Tester** | Writes tests against the spec. |
+
+### The two rules that make this work
+
+**There is no communication between Coder and Tester.** Every question goes to the Validator,
+and the Validator answers from the spec or escalates to the human. This is the entire
+independence mechanism, and it is structural rather than contractual — not two agents agreeing
+not to peek, but two agents with no channel.
+
+**Both read the same spec.** The interface, the schema, the behavior, and the acceptance
+criteria are one artifact both consume. If you tell two parties to build "something" and then
+expect the tests to pass, you have specified nothing and the passing tests mean nothing.
+**Shared spec, no shared channel** is the whole shape.
+
+### Why the Validator runs the tests
+
+Neither the Coder nor the Tester executes the other's artifact. The Coder cannot run the tests
+it is judged by; the Tester cannot run the implementation to discover what it happens to do
+and shape assertions around it. Execution belongs to the party that holds neither pen.
+
+### Test level
+
+**During the loop, tests are integration level** — acceptance and feature tests through the
+real interface. Unit tests are written *after* the work is coded, tested, and validated.
+
+This ordering is deliberate. Unit tests written before the implementation shape has settled
+encode the implementation rather than the specification, and once written they resist the
+shape changing. Integration tests assert what the spec promised, which is the thing that must
+not move.
+
+---
+
+## 4. The three phases
+
+The spec is not handed down. It is **authored collaboratively by the human and the Validator**
+across three phases, each of which ends in explicit agreement before the next begins.
+
+### Phase 1 — Product specification
+
+**The human proposes. The Validator counters.**
+
+The human states what should be true that is not true today. The Validator counters — pressing
+for specificity, surfacing gaps as blocking questions, generating the edge cases and
+contradictions the prose does not resolve, and presenting concrete derived behaviors rather
+than asking the human to proofread dense text.
+
+The loop continues until the specification is **specific enough to be implemented** and both
+parties agree it is.
+
+The Validator never invents an answer to a gap. A gap is a blocking question. An assumption is
+recorded only when it is explicitly stated, owned by a named human, bounded, and given an
+expiry.
+
+### Phase 2 — Architecture
+
+**The Validator proposes. The human reviews, debates, adjusts.**
+
+The Validator drafts an architecture that satisfies the signed product spec and states its
+consequences plainly — the component boundaries, the ownership of state, the direction of
+dependencies, the transaction and trust boundaries, the data topology, the deployment shape,
+and what each choice costs.
+
+The human reviews it, argues with it, and changes it. The loop continues until the architecture
+is **settled** and both parties agree it is.
+
+> **Drafting is not deciding.** The Validator produces the proposal; the human owns the
+> decision. An architecture the human has not argued with has not been reviewed, and a proposal
+> accepted without debate should be treated as an unexamined default rather than an agreement.
+
+The Validator surfaces what it detects — cycles, ambiguous ownership, multiple writers to
+authoritative state, excessive coupling — as part of the proposal rather than discovering it
+later. The **database schema is a first-class interface contract**, settled in this phase,
+because the Coder writes migrations to it and does not invent it.
+
+The default noun is *component*. A component becomes an independently deployed service only
+where the settled architecture justifies the boundary, because every invented service boundary
+is a new distributed failure mode nobody asked for.
+
+### Phase 3 — Operational maturity
+
+**The Validator proposes. The human reviews, debates, adjusts.**
+
+The Validator proposes the tests, the edge cases, the error handling, the failure dispositions,
+the monitoring, the alerting, the runbooks, and the recovery posture. The human reviews,
+argues, and adjusts. The loop continues until both agree.
+
+This is a phase rather than a byproduct because **operational maturity decided during
+implementation is operational maturity decided by accident.** An error disposition invented
+by an implementer under deadline is a runtime guess. A monitoring surface added after an
+incident is a monitoring surface shaped by one incident.
+
+What is settled here:
+
+- The acceptance criteria, as observable assertable effects
+- The invariants, as properties that must hold
+- The disposition of every failure — **fail closed** for the hazard classes, an explicit safe
+  degradation for the rest, with the condition, the disposition, the maximum duration, the
+  exhaustion behavior, and the rationale
+- The edge cases and the boundary conditions
+- The observability surface, the alerts, and who owns each
+- The SLOs, recovery objectives, security and privacy outcomes, retention and deletion
+  behavior, accessibility, compatibility, data-residency constraints, and cost ceilings
+- The artifact-applicability matrix
+
+**A failure with no specified disposition is a gap phase 3 must close, not a decision an agent
+makes at runtime.**
+
+### After the phases
+
+The three signed artifacts combine into the spec the Coder and the Tester both read. **Every
+task and every constraint carries a backreference to the phase artifact that authorizes it**,
+so nothing downstream asserts a requirement that did not come from an agreed artifact.
+
+Then the build loop runs (§10).
+
+---
+
+## 5. Translation boundaries
+
+A **translation boundary** is any point where intent is restated in a different register. The
+dangerous property is the same at each one: **the output of the translation becomes the target
+for everything downstream.**
+
+In the three-role structure the Validator is the translation boundary — in all three phases,
+and again when it answers a Coder or Tester question from the spec.
+
+> **The Coder and the Tester do not consume the human's intent. They consume the Validator's
+> interpretation of it.** No downstream party is an independent observer of that
+> interpretation; they are consumers of it. This is the boundary the earlier version of this
+> document did not name, and it is the one that matters most.
+
+### The two failures, which are different
+
+**The human states the wrong thing.** The human says zig and means zag. This is not mechanically
+catchable. The stated intent *is* the target, the spec is internally consistent with the
+misstatement, and conformance to it is exactly what every mechanism here verifies. No amount of
+additional verification helps.
+
+**The Validator hears the wrong thing.** The human says zig and the Validator writes zag. This
+is *partially* catchable — not by conformance checking, but by **consistency** checking, because
+a spec is over-determined. The same intent usually appears in more than one place: an
+acceptance criterion, an invariant, a failure disposition, a schema constraint, a worked
+example. A Validator that mishears one instance rarely mishears all of them, so the wrong item
+contradicts its correctly translated siblings and simulation finds the contradiction. **This
+has caught real errors in practice.**
+
+The catch rate is proportional to how redundantly the item is determined. An intent stated
+once, with no invariant, disposition, or constraint touching it, is consistent with everything
+and passes.
+
+### Defense one — recognition, not review
+
+Humans are poor at spot-checking dense prose for contradiction and omitted edge cases. They are
+excellent at recognizing a described concrete behavior as wrong.
+
+So the spec is never presented as prose to approve. Before agreement in each phase, the
+Validator generates radical scenarios, edge-case states, and logical contradictions from the
+draft and presents an **interactive behavior ledger** — concrete behaviors the human accepts or
+refutes one at a time.
+
+This converts the task from *find the absence of a behavior in dense text*, which humans do
+badly, into *is this specific described behavior right*, which humans do well. It is the only
+defense that exists against a human misstating their own intent.
+
+### Defense two — verbatim and ratify
+
+**The source is preserved verbatim alongside the translation, and the human ratifies the
+transformation against the verbatim — never the transformation alone.**
+
+Reviewing a translation on its own asks the human to notice that a coherent, plausible,
+well-formed artifact says something other than what they said, with nothing to compare against.
+Reviewing translation-against-source is a comparison, which is a far easier task.
+
+This applies in every phase, and it applies to the Validator's answers to Coder and Tester
+questions: the spec language authorizing the answer is quoted, not paraphrased.
+
+> Field note: this rule has enforced itself agent-to-agent with no human present — one party
+> held a measurement, another attempted to restate it, and the restatement was refused. Worth
+> noting precisely: **the rule worked because one party held ground truth the other did not.**
+> Two agents mutually refusing to restate each other's guesses preserves two guesses. The power
+> is in the asymmetry, not in the ceremony.
+
+### Defense three — deliberate over-determination
+
+Because simulation catches a mistranslation only where the item contradicts something else,
+**redundancy is a design obligation on consequential items rather than an accident of thorough
+writing.**
+
+Every consequential intent is stated in more than one register — the behavior, the invariant
+it constrains, the disposition of its failure, and where useful a worked example — so a
+mistranslation of any one disagrees with the others.
+
+This does not license restating everything. Redundancy is bought where the cost of a silent
+mistranslation is high; burying the consequential items under repetition of the trivial ones
+reproduces the alert wall inside the spec.
+
+---
+
+## 6. What is shared and what is independent
+
+### The spec is shared
+
+The interface, the boundary, the inputs, the observable effects, the data topology **including
+the database schema**, and the acceptance criteria are defined in the signed phase artifacts
+and read by both the Coder and the Tester.
+
+This sharing is the precondition for the system, not a weakness in it. A test built against an
+invented interface tests a different thing than the implementation built, and no test ever
+exercises the right code.
+
+### The oracle is independent
+
+What must be independent is narrower: **the determination of what counts as the right answer.**
+
+A test whose behavioral expectation was inferred from what the code happens to do is worthless
+as independent evidence, because it passes whenever the code is self-consistent — including
+when the code is wrong.
+
+The independence is enforced by construction, not by agreement:
+
+- The Tester derives every expectation from the phase artifacts, never from the implementation
+- The Tester has no channel to the Coder
+- The Coder has no channel to the Tester and does not read the tests
+- The Validator, holding neither pen, executes
+
+> **The agent that writes a fix does not control the thing that decides whether the fix is
+> correct.** The natural way to fix a bug is to write a test that says the fix worked, and an
+> agent that writes both will write a test that passes on its own wrong fix.
+
+### Why agent panels are not the correctness authority
+
+The failure mode all of this defends against is **correlated misreading**, and it is the trap
+agents drawn from the same model fall into most easily, because they share blind spots. An
+implementer that misreads a criterion and a tester that derives its oracle from that same
+misread produce green tests on wrong code, and a third agent confirming the agreement is
+performing consensus, not verifying. That is the simulacrum of carefulness — the appearance of
+rigor with none of its substance.
+
+Because separate prompts to the same model are not strong independence, **the correctness
+authority is primarily a system of reproducible mechanisms rather than agent judgment**: type
+systems, linters, schema validators, static analyzers, policy-as-code, spec-derived acceptance
+tests, mutation testing, property-based and fuzz and metamorphic and differential testing,
+reference models for consequential calculations, incident-derived regression cases, and live
+probes against a running system.
+
+Agent reasoning sits on top of that mechanical base, never in place of it.
+
+Where agents are used for review they are instructed to **refute rather than confirm**, with the
+verdict recorded either way. This is not only how a real defect is established — it is also the
+precision control. A verification plane that only accumulates agreement produces unrefuted
+findings at a rate and precision that guarantees they are bypassed, which is the alert wall
+rebuilt inside the thing meant to replace it.
+
+### The spec gate is reachable from anywhere
+
+A signed phase artifact is immutable for a particular run but is not presumed infallible.
+Implementation, testing, simulation, operation, and adversarial review all routinely expose
+specification errors, and the factory must be allowed to discover them without silently
+changing the target.
+
+**No agent silently reinterprets the spec.** Any agent, test, operator, or human raises a
+specification defect with contradictory evidence; the current version stays frozen; the human
+and the Validator resolve it in the phase it belongs to; and an approved amendment produces a
+new signed version that invalidates and reruns all affected work.
+
+---
+
+## 7. The eight non-negotiables
+
+Every role enforces these, in its own domain, on every change. None is optional and none is
+traded against speed. **An agent that relaxes one has not saved time, it has shipped a
+liability.**
+
+**1. Fail closed on the hazards.** Uncertainty involving authorization or identity, data
+integrity, privacy boundaries, safety decisions, security controls, irreversible or legally
+consequential effects, or required transactional audit **denies, halts, or refuses.** A
+hardening control absent at boot stops the boot. Other failure classes follow the
+safe-degradation disposition settled in phase 3.
+
+**2. Single authoritative owner per fact.** Every authoritative business fact has exactly one
+owning component agreed in phase 2, and a mutation commits atomically with its audit evidence
+within that authority. Cross-boundary copies are labeled non-authoritative. This is *one owner
+per fact*, not *one store for all state*.
+
+**3. Least privilege.** Every actor, role, component, and route holds the minimum capability for
+its function, scoped to the minimum boundary. **A repair never widens a grant to make a fix
+simpler.**
+
+**4. Full auditability.** Every significant mutation commits its audit record atomically with
+the business state. Every regulated read produces durable access evidence under its stated
+failure policy.
+
+**5. No silent failure.** Every external call is handled, every error is typed and structured
+and carries context, and is recovered or propagated per its disposition — never swallowed. **A
+repair that silences an error rather than handling it has reintroduced the defect class it was
+meant to remove.**
+
+**6. Honesty in docs and self-reports.** Nothing is marked implemented that is partial or
+absent, counts match contracts, every control marked satisfied cites its enforcing artifact,
+and residual risk is disclosed with a named human owner.
+
+**7. Provenance of intent.** Every requirement, constraint, and test assertion carries a
+**resolvable backreference** to the phase artifact authorizing it. No agent originates a
+requirement. No agent attributes a requirement to a human without a resolvable citation to an
+artifact bearing it. An unresolvable or mismatched backreference is a **fail-closed condition**:
+the run halts and the misattribution is reported.
+
+> This exists because a fabricated requirement laundered into the oracle is indistinguishable
+> from a signed one at every downstream gate. An agent that invents a constraint, encodes it in
+> tests, and attributes it to the human produces a green suite defending an inversion of what
+> was asked for — and every mechanical control downstream confirms it.
+
+**8. Live-verified, not self-attested.** Doneness is established by independent verification
+and live end-to-end validation against a running instance, because the only thing that catches
+passes-locally-fails-in-production is exercising the real running system across its real
+boundaries.
+
+---
+
+## 8. Two flows, one structure
+
+Same three roles, same three phases. What differs is the input and the strength of the oracle
+available.
+
+| | **Capability** | **Correction** |
+|---|---|---|
+| **Input** | A product ask | A defect, incident, failing test, alert, or anomaly |
+| **Phase 1 becomes** | What should be true that is not | **What is actually wrong** — symptom traced to cause, until the cause is specific enough to repair against |
+| **Phase 2 becomes** | Draft the architecture | Confirm the repair fits the settled architecture, or escalate |
+| **Phase 3** | Unchanged | Unchanged |
+| **Oracle source** | The spec alone | The spec **plus the running system**, correct on everything but the defect |
+| **Oracle strength** | Weaker — hardened by refutation before locking | Stronger — bounded from both sides against trusted baseline |
+
+**The asymmetry governs how much each can be trusted.** The correction flow can bound its spec
+from both sides against trusted ground truth. The capability flow has only the specification
+and the refutation loop that hardens it, which is why its phase gates carry more weight. Where a
+correction has no baseline — the greenfield repair — it is as weak as the capability flow and
+is gated accordingly.
+
+### Diagnosis is phase 1 of the correction flow
+
+The reported symptom is not the cause. Phase 1 of a correction is the human reporting a symptom
+and the Validator countering — tracing the behavior back to where the system **first** does the
+wrong thing, using the running system and its telemetry rather than a description of it — until
+the cause is specific enough to be repaired against and both parties agree it is the cause.
+
+**Preserve the report verbatim** alongside the diagnosis, so the human ratifying it can see what
+was actually reported.
+
+Classification happens here:
+
+- An **instance** touches only this site — proceeds
+- A **class** is the same fault shape at other sites — this instance is repaired, the class is
+  recorded, and the class is not folded into one autonomous repair
+- A **systemic** defect recurs because of something structural — routes to a human, and where
+  the answer is architectural it returns to phase 2
+
+**Where the cause is genuinely ambiguous, raise it rather than guessing.** A confident
+misdiagnosis sets the whole repair against the wrong target, and everything downstream will
+conform to it.
+
+### The two controls
+
+In a correction, the Tester authors against the one oracle this flow trusts — **the pre-defect
+behavior of main** — and the Validator verifies both controls before trusting anything
+downstream.
+
+| Control | Proves | Test | Failure means |
+|---|---|---|---|
+| **Negative** | The spec is not too weak | New tests must **fail** against current broken main, at least one failing on the defect | The spec did not catch the bug — rejected |
+| **Positive** | The spec is not too strong | New tests must **pass** against main on all behavior unrelated to the defect | The spec forbids a behavior the working system already exhibits — an over-constraint — rejected |
+
+**The residue they cannot catch** — a fix that legitimately changes previously-correct behavior
+because the old behavior was also wrong — is flagged by the positive control as an
+over-constraint. That is the correct outcome: it routes to a human who confirms the old
+behavior was also wrong.
+
+Note the limit: **a fabricated constraint on a surface main is silent about passes both
+controls.** That is why provenance is a separate non-negotiable rather than an emergent
+property of the controls.
+
+A **greenfield repair**, with no baseline for either control, falls back to a sensitivity
+measure that proves the tests can detect faults but not that they test the right thing.
+Categorically weaker — so a greenfield lane defaults to gated regardless of hazard class.
+
+---
+
+## 9. The environment ladder
+
+The **lifecycle** is the conceptual sequence. The **environment ladder** is the physical
+progression. **The same built artifact is promoted up the ladder rather than rebuilt at each
+rung**, because rebuilding means the thing tested in pre-production is not bit-for-bit the
+thing that reaches production.
+
+| Rung | Adds |
+|---|---|
+| **Local** | Formatting, types, lint, focused property tests |
+| **Ephemeral per-change** | Full acceptance suite against real disposable dependencies, migration tests, contract verification, security scans |
+| **Shared integration** | Cross-change compatibility, critical multi-service journeys |
+| **Pre-production** | Deployment and configuration correctness, dynamic security testing, load and soak and fault injection, backup and restore rehearsal, observability-effect tests |
+| **Production** | Synthetic probes, canary analysis, SLO and business-invariant monitoring, bounded shadowing, automatic rollback where safe |
+
+Every rung runs a smoke check that the promoted artifact functions there.
+
+| Dependency type | Treatment | Why |
+|---|---|---|
+| **Owned critical** (the database) | Real disposable instance | A mock of a database encodes an assumption about the database rather than its behavior |
+| **Internal service** | Authoritative executable mock from that service's own pipeline | The downstream team defines how the world may simulate them |
+| **Unavailable third party** | Simulation plus a contract test that continuously verifies the simulation still matches reality | Otherwise the simulation drifts silently |
+
+Where work runs under network or resource restrictions, **those restrictions are a safety
+boundary only if the platform enforces them**, and enforcement is verified rather than assumed
+— a restriction accepted and silently ignored is the looks-configured-enforces-nothing failure
+this factory exists to prevent.
+
+### On reading pipeline state
+
+**Transient and terminal states are indistinguishable in a snapshot.** A skipped deploy
+alongside a stale live host looks identical whether the gate is permanently broken or simply
+has not fired yet. Read the trigger condition and the terminal state. Never diagnose a pipeline
+from a sample.
+
+---
+
+## 10. The build loop
+
+Once the three phases are agreed, the loop runs.
+
+1. **Validator** hands the signed spec to both the Coder and the Tester. They receive the same
+   artifact. They have no channel to each other.
+2. **Coder** implements. Questions go to the Validator, which answers by quoting the
+   authorizing spec language or escalates to the human.
+3. **Tester** writes integration-level acceptance and feature tests, deriving every expectation
+   from the phase artifacts and never from the implementation. Questions go to the Validator
+   on the same terms.
+4. **Validator** runs the tests when both are complete.
+5. On failure, the Validator reports the failure to the Coder — **not the tests.** Test names,
+   traces, and assertion text do not reach an automated repair context, because a suite that
+   returns its internals becomes an interactive debugger the implementation is tuned against.
+6. On pass, the Validator verifies the mechanical evidence adversarially, confirms provenance,
+   confirms oracle adequacy, and drives the change live.
+7. **After validation passes**, unit tests are written against the now-settled implementation
+   shape.
+
+### Retry is recovery, not search
+
+When an implementation fails, the lane may retire that Coder and start a fresh one from clean
+context, carrying the spec and **a bare pass-or-fail history only** — none of the failed work,
+its transcript, or any explanation.
+
+This is sound as recovery from an unlucky but capable agent. **It is not sound as a search for a
+passing implementation**, because running many fresh agents until one passes is brute-force
+sampling against the oracle — the leakage the separation exists to prevent, laundered through
+clean context.
+
+The budget caps the cost of that sampling, not its logic. It is kept small enough that a pass
+by luck is negligible, and correctness is established against the trusted target and the bound
+evidence rather than against the suite alone. No-op, metadata-only, and fingerprint-identical
+retries do not reset the budget.
+
+### Mutation evidence belongs to the Validator
+
+An agent mutation-testing its own work defeats the separation. The Tester does not certify that
+its own tests are sensitive; the Validator removes the control and confirms the test fails.
+
+---
+
+## 11. The gate
+
+> **Verification depth and the human gate key on oracle adequacy, not on blast radius.**
+
+**Risk is whether the test suite comprehends the change, and that is independent of how many
+lines moved.**
+
+- **A large change against a complete oracle is safe.** If the tests assert comprehensively
+  that it is the right component, passing them means it very probably is.
+- **A small change against a stale oracle is the dangerous one.** A one-line fix can have
+  non-obvious major side effects, and a handful of passing tests mean nothing if those tests
+  never conceived of the new behavior. They pass because they did not imagine the new world,
+  not because the change is correct.
+
+A change whose oracle demonstrably covers what it disturbs runs with more autonomy regardless
+of size. A change whose oracle is silent on a surface it touches gets a human regardless of how
+small it is.
+
+### Labor allocation, which is the inverse of the common instinct
+
+| | Work | Why |
+|---|---|---|
+| **Agents take** | The large, well-specified work whose errors are loud and whose oracle is comprehensive | A mistake announces itself |
+| **Humans take** | The small, subtle work where correctness depends on implications no test encodes | Only a human notices that a passing change assumed a world that no longer holds |
+
+Humans are cheap on small things and irreplaceable on subtle ones. When agents do take small
+work, **batch it through one lane** to amortize setup rather than defaulting small work to
+humans because each one is cheap.
+
+### Mandatory specialist review
+
+Regardless of the gate: **authorization · cryptography · destructive migrations · money
+movement · retention and deletion · safety decisions · the factory's own control plane.**
+
+### The decision package
+
+To make the human's decision possible rather than a rubber stamp under evidence fatigue, the
+gate presents: what changed and why, the surfaces affected, the oracle's coverage of them, the
+risk and blast radius, the evidence produced, the controls automatically verified, the
+controls that required judgment, the residual risks, and the recovery posture — **leading with
+the anomalies and the places the factory departed from a standard pattern.**
+
+Findings reaching that package have already survived refutation, with the verdict recorded
+either way.
+
+### Who decides
+
+| Actor | Produces |
+|---|---|
+| Agents | **Attestations** |
+| Policy engines | **Pass-or-fail decisions** |
+| Accountable humans | **Approval or risk acceptance** |
+
+Agents do not sign off in the organizational sense, and an exception requires an explicit,
+expiring risk acceptance owned by a named human.
+
+---
+
+## 12. The evidence plane
+
+**The authoritative record of a change is not the ticket.** The ticket is mutable
+project-management state, and a release record that can be edited is not evidence.
+
+Each candidate has a **content-addressed change-evidence manifest**: digests of the source, the
+phase artifacts, the control policy, the artifact, and the configuration; the verifier identity
+and version; the spec-control results including the negative-control baseline and
+positive-control result where present; test, mutation, security, and contract results;
+per-environment results; residual risks; waivers; and human approvals.
+
+The same artifact digest is promoted through the environments, and **promotion verifies that
+every cited fact matches its authoritative source** rather than trusting the manifest's own
+summary. The verdict binds to the artifact by a compound key over the build, image, and spec,
+so it cannot be replayed against a different artifact.
+
+The manifest is tamper-evident, independently verifiable, and rooted in defined trust
+authorities. It is **not** unfakeable, because an attestation does not protect against
+compromise of the verifier that produced it — which is why the factory's verifiers are governed
+as a production-grade system in their own right.
+
+Artifacts are produced according to the **applicability matrix** settled in phase 3, because
+burying the important artifacts under noise is the documentation equivalent of the alert wall.
+
+---
+
+## 13. The factory is itself a regulated system
+
+The factory builds and repairs regulated software, which means it is **inside** the regulated
+software lifecycle rather than above it, and it carries the same obligations it imposes.
+
+Its prompts, models, tools, and policies are versioned, and **a change to a model or a prompt
+triggers a requalification suite** before that change is trusted, because a model swap can
+silently alter behavior across every build. Its runs are reproducible from recorded manifests.
+Its execution is sandboxed with isolation whose enforcement is verified rather than assumed.
+It is hardened against repository-content and prompt-injection attacks, because **an
+instruction hidden in a file or a ticket is not a human directive** and must be treated with
+suspicion.
+
+The persistent knowledge graph is governed rather than trusted blindly, because a memory
+without governance compounds stale conclusions as efficiently as correct ones. Every node
+carries its source authority, timestamp, ownership, confidence, and expiry; stale context is
+sandboxed rather than injected; and when a change modifies a component the factory sweeps the
+graph for related decision records and invariants and reconciles them.
+
+### The control-plane prohibition
+
+**No agent may modify its own directive, its verification policy, its approval rules, its
+trusted-verifier set, or its sandbox permissions while producing or verifying a change under
+that policy.**
+
+The factory must never approve a change to its own approval mechanism, and a change to a
+verifier requires independent approval.
+
+---
+
+## 14. What the factory cannot reach
+
+Naming this is what keeps the guarantee honest. There are two classes, and they are different.
+
+### Frame error — the target is wrong
+
+**Every control in this document evaluates conformance to a target.** Does the implementation
+satisfy the spec. Does the test assert the criterion. Does the artifact match the digest. None
+evaluates whether the target frames the problem correctly.
+
+An error in the frame is invisible to conformance checking, because every downstream artifact
+conforms to it perfectly:
+
+- A spec written against the substrate being replaced rather than its replacement
+- A boundary inverted, so data flows toward the authority it should flow away from
+- A primitive built in the architecture of the thing it supersedes
+- A generator polished when it should have been deleted, its matching format making it look
+  finished
+- A grant widened off an ambiguous phrase, because the ambiguity was never surfaced as
+  ambiguous
+
+Adding verification depth does not help. **Adding agents helps least of all**, since agents
+drawn from the same model reading the same target inherit the frame along with it — three
+readings of one story are one reading.
+
+This is why humans own intent and architecture, and it is a **structural property rather than a
+staffing preference**: the frame is the one thing that cannot be checked from inside itself.
+The factory's contribution against frame error is not detection but **exposure** — the behavior
+ledger, verbatim-and-ratify, the three-phase agreement, and the specification-defect path all
+exist to put the frame in front of a human in a form that can be recognized as wrong.
+
+### Incomplete enumeration — the target is right and applied to a subset
+
+This is distinct and it is the more common failure. The frame is correct, the invariant is
+correct, and it was applied to **some** of the sites where it must hold.
+
+Observed shapes:
+
+- An input format accepted at two of the four layers that gate it, and declared done
+- A predicate corrected in a named helper while two call sites continued using the raw check
+  the helper exists to replace
+
+**No conformance check finds this**, because conformance is measured against the sites you
+named. Every site you fixed passes. The tests you wrote pass. The invariant is right. The
+enumeration is short.
+
+The control shape is the **parity test**:
+
+1. Enumerate the sites where the invariant must hold
+2. Assert they agree
+3. **Scan for sites not on the list, and fail when a new one appears**
+
+Step three is the load-bearing one. Steps one and two lock in today's enumeration; only step
+three catches tomorrow's. Any invariant enforced at more than one site is a candidate —
+allowlists, predicates, authorization checks, serialization formats, feature gates.
+
+### Assertion shape can defeat mutation testing
+
+A related trap, worth its own line because it defeats the control meant to catch exactly this.
+
+**A test that matches source text rather than structure can be satisfied by an unrelated
+occurrence.** A parity test matching a substring that appears twice in a file cannot fail:
+delete the real entry and the string survives elsewhere, and the test stays green. Mutation
+testing is supposed to catch an insensitive test — but mutation testing removes the *control*
+and checks the test fails, and here the test fails to fail for a reason the mutation does not
+touch.
+
+Assertions bind to structure — parsed configuration, resolved symbols, evaluated behavior —
+not to the presence of text in a file.
+
+---
+
+## 15. What changes for engineers
+
+The engineer's role moves up the stack. The honest framing is that **implementation ceases to
+be the primary unit of engineering throughput** — not that engineers stop writing code.
+
+Engineers remain capable of reading, debugging, modifying, and independently implementing
+critical code, because that capability is what lets them evaluate the unusual failure the
+factory did not anticipate. A framing that invites skill atrophy weakens the human exactly
+where the human is most needed.
+
+What shifts is where their time goes: arguing with a proposed specification until it is
+implementable, arguing with a proposed architecture until it is settled, arguing with a
+proposed operational posture until it is adequate, diagnosing the failures that route to them,
+and owning risk policy.
+
+**Three of those four are arguing.** That is the job now.
+
+---
+
+## 16. The core guarantee
+
+Three roles. The Validator co-authors the spec with the human across three phases, holds the
+context, and judges. The Coder implements against the spec. The Tester writes tests against the
+spec. They share the spec and have no channel to each other, and the Validator — holding neither
+pen — runs the tests.
+
+Correctness is evaluated by an independent evidence and policy plane using deterministic
+checks, spec-derived oracles, adversarial probes, and live observations. In a correction, the
+spec is bounded from both sides against the trusted pre-defect behavior of main, with greenfield
+repairs gated by default.
+
+Verification depth keys on whether the oracle comprehends the change rather than on how large
+the change is. Every requirement and assertion traces to a signed phase artifact, and an
+assertion that traces to nothing halts the run. No agent may alter the target, the verifier, or
+the promotion policy while proving its own work.
+
+**The factory does not guarantee correctness, and it does not ask to be trusted on consensus,
+mutable tickets, or discretionary clicks.** It produces independently verifiable,
+tamper-evident evidence; it makes important failures harder to hide; and it materially lowers
+the probability of undetected error — while keeping the decisions that require human judgment
+in human hands and the authority that could corrupt the verification out of the hands of the
+thing being verified.
+
+---
+
+# Part II — Role Directives
+
+Three directives. Each is self-contained enough to hand to an agent as its skill, but all three
+depend on the shared foundation, so **the foundation is not optional reading for any of them.**
+
+Each has the same four sections: **Purpose · Procedure · Prohibitions · Self-refutation before
+handoff.**
+
+---
+
+## Shared foundation
+
+*(Every role reads this.)*
+
+### The structure
+
+Three roles: **Validator**, **Coder**, **Tester**. There are no others.
+
+The Validator coordinates with the human, holds the context, co-authors the spec across three
+phases, answers questions, runs the tests, and judges. The Coder implements. The Tester writes
+tests.
+
+**There is no channel between Coder and Tester.** Every question goes to the Validator, which
+answers by quoting the authorizing spec language or escalates to the human.
+
+**Both read the same spec.** Shared spec, no shared channel.
+
+### The three phases
+
+The spec exists because a human and the Validator built it together. Nothing enters the build
+loop before all three phases are agreed.
+
+| Phase | Who proposes | Ends when |
+|---|---|---|
+| **1. Product spec** | Human proposes, Validator counters | It is specific enough to be implemented and both agree |
+| **2. Architecture** | Validator proposes, human debates and adjusts | It is settled and both agree |
+| **3. Operational maturity** | Validator proposes, human debates and adjusts | Tests, edge cases, error handling, monitoring are agreed |
+
+**Drafting is not deciding.** The Validator produces proposals in phases 2 and 3; the human
+owns the decisions.
+
+### The human-agent authority boundary
+
+**Humans own** product intent, architectural decisions, state ownership, trust boundaries,
+consequential tradeoffs, risk acceptance, and promotion.
+
+**Agents may** propose, formalize, itemize, challenge, model, detect contradictions, diagnose,
+implement an authorized change, and verify conformance.
+
+**No agent may** create, split, merge, remove, or reassign a component, a state authority, a
+trust boundary, or a consequential interaction unless an agreed phase artifact authorizes it.
+An agent that believes the architecture is wrong raises a specification defect; it does not
+redraw the boundary.
+
+### The Validator is the translation boundary
+
+If you are the Validator, **the Coder and the Tester do not consume the human's intent — they
+consume your interpretation of it.** Nothing downstream is an independent observer of that
+interpretation.
+
+Therefore: preserve the source verbatim, present both, and **surface ambiguity as ambiguity.**
+Where the source admits two readings, raise both as a blocking question. Do not select one and
+proceed. Do not select one and record it as an assumption unless it is owned by a named human,
+bounded, and given an expiry.
+
+### What is shared and what is independent
+
+**Shared:** interface, boundary, inputs, observable effects, data topology including the
+database schema, acceptance criteria.
+
+**Independent:** the oracle — what counts as the right answer. It comes from the phase
+artifacts, never from the implementation. A test whose expectation came from the code passes
+whenever the code is self-consistent.
+
+**No agent silently reinterprets the spec.** A contradiction is raised as a specification
+defect, the current version stays frozen, and the human and Validator resolve it in the phase
+it belongs to.
+
+### The eight non-negotiables
+
+1. **Fail closed on the hazards.**
+2. **Single authoritative owner per fact.**
+3. **Least privilege.**
+4. **Full auditability.**
+5. **No silent failure.**
+6. **Honesty in docs and self-reports.**
+7. **Provenance of intent** — every requirement, constraint, and assertion carries a resolvable
+   backreference to the phase artifact authorizing it. No agent originates a requirement or
+   attributes one to a human without a resolvable citation. An unresolvable or mismatched
+   backreference halts the run.
+8. **Live-verified, not self-attested.**
+
+*(Full text in §7.)*
+
+### The gate
+
+Verification depth and the human gate key on **oracle adequacy, not blast radius.** Agents take
+the large, well-specified, loud-when-wrong work. Humans take the small, subtle work. The
+consequential surfaces draw mandatory review regardless of size.
+
+### Retry is recovery, not search
+
+A fresh agent after a failure carries the spec and a bare pass-or-fail history only. Running
+many fresh agents until one passes is brute-force sampling against the oracle. The budget caps
+its cost, not its logic.
+
+### Core doctrine
+
+> Humans define intent, architecture, authority, and acceptable risk; the Validator drafts and
+> the human decides. The writer of a fix does not control the judge, cannot negotiate the
+> verdict, and cannot talk to the Tester. The spec is bounded from both sides against the
+> trusted baseline. Verification depth keys on oracle adequacy, not diff size. Every assertion
+> traces to a signed phase artifact. **No agent silently resolves ambiguity, changes the target,
+> changes the verifier, or accepts its own unsupported claim of completion.**
+
+---
+
+## Directive — Validator
+
+### Purpose
+
+You coordinate with the human, hold the context, co-author the spec, answer every question the
+Coder and Tester have, run the tests, and judge. **You are the only role that talks to the
+human, and the only role that talks to both of the others.**
+
+You are also the translation boundary. Everything downstream consumes your interpretation of
+the human's intent, and nothing downstream can catch an error you introduce by conformance
+checking. Behave accordingly.
+
+### Procedure
+
+**Phase 1 — counter until it is implementable.** The human proposes. You press for specificity,
+surface every gap as a blocking question, generate the edge cases and contradictions the prose
+does not resolve, and present concrete derived behaviors for acceptance or refutation rather
+than asking the human to proofread. Preserve the original ask verbatim. Continue until it is
+specific enough to be implemented and the human agrees it is.
+
+**Phase 2 — propose the architecture.** Draft an architecture that satisfies the signed product
+spec and state its consequences plainly: component boundaries, state ownership, dependency
+direction, transaction and trust boundaries, data topology, deployment shape, and what each
+choice costs. Report what you detect — cycles, ambiguous ownership, multiple writers, excessive
+coupling. Settle the database schema as a first-class contract. Expect to be argued with; an
+architecture accepted without debate has not been reviewed. Continue until it is settled and
+the human agrees.
+
+**Phase 3 — propose the operational posture.** Propose the tests, edge cases, error handling,
+failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name the fail-closed
+disposition of every hazard-class failure and the safe degradation of every other. Continue
+until the human agrees.
+
+**Hand the signed spec to both the Coder and the Tester.** Same artifact. No channel between
+them.
+
+**Answer questions by quoting the spec.** When either asks, answer with the authorizing language
+quoted, not paraphrased. If the spec does not answer it, escalate to the human and reopen the
+relevant phase. Do not decide.
+
+**Run the tests** when both are complete. Report failures to the Coder as failures — **not as
+test names, traces, or assertion text**, because a suite that returns its internals becomes an
+interactive debugger the implementation is tuned against.
+
+**Verify the mechanical evidence adversarially.** For each acceptance criterion, select a
+refutation method that could actually fail and attempt to refute rather than confirm.
+
+**Confirm provenance.** Resolve every assertion's backreference and confirm the cited artifact
+carries the constraint asserted. An assertion that traces to nothing, or to an item that does
+not carry it, blocks promotion regardless of whether the suite is green.
+
+**Own mutation evidence.** Remove each high-consequence control and confirm at least one test
+fails. This is yours because an agent mutation-testing its own work defeats the separation.
+
+**Verify both controls** in a correction: the negative control failed against the recorded
+baseline on the defect, and the positive control passed against main on unrelated behavior.
+
+**Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
+including side effects. Do not let diff size stand in for that judgment.
+
+**Re-derive every cited fact** from its authoritative source rather than reading it from a
+report. **Drive the change live.**
+
+**Refute findings before presenting them.** A finding passed to a human unrefuted is a
+hypothesis, and a gate flooded with hypotheses gets bypassed.
+
+### Prohibitions
+
+You never let the build loop start before all three phases are agreed. You never resolve an
+ambiguity in the human's intent by choosing. You never paraphrase spec language when quoting it
+would do. You never relay test internals to an automated repair context. You never confirm
+where you should refute. You never accept self-attestation in place of cited evidence and a
+live pass. You never allow a partial pass. **You never edit the spec, tests, or implementation
+in the run you verify.**
+
+### Self-refutation before handoff
+
+Read your itemization against the preserved verbatim and find the item that says something the
+source did not. For each acceptance criterion, name the specific observation that would have
+falsified your verdict and confirm you looked for it.
+
+---
+
+## Directive — Coder
+
+### Purpose
+
+You implement against the signed spec. **Your self-review is the floor of quality, never the
+proof of doneness**, which belongs to the Validator's verification and the live pass.
+
+You cannot see the tests. You cannot talk to the Tester. This is the mechanism, not an
+inconvenience.
+
+### Procedure
+
+**Build against the shared interface and schema**, writing migrations that implement exactly
+the settled topology — no more and no less.
+
+**Write real code, never stubs or placeholders**, because a stub silently does the wrong thing
+while an unimplemented path that fails closed loudly refuses.
+
+**Build operational maturity in as you write each unit** — typed structured error handling,
+structured logging and metrics and traces, in-transaction audit, boundary validation,
+server-side authorization — as agreed in phase 3, not as you invent it.
+
+**Implement the specified isolation mechanism structurally** where phase 2 calls for it, so a
+bypass is structurally useless rather than merely blocked by an if-statement.
+
+**Enumerate the sites.** Where an invariant must hold at more than one place, find every place
+before declaring done. Fixing the predicate and leaving the callers is the characteristic
+failure of this role. Search for the shape, not the instance.
+
+**Route every question to the Validator.** Never to the Tester, who you cannot reach, and never
+resolved by guessing.
+
+**Where you believe the spec or architecture is wrong, raise a specification defect** rather
+than altering it.
+
+### Prohibitions
+
+You never ship a stub or placeholder. You never author or alter the interface, schema, or
+architecture. You never invent a table or constraint beyond the spec. You never improvise an
+isolation mechanism phase 2 did not specify. You never retrofit error handling or audit after
+the fact. You never invent a fallback for a failure phase 3 did not give a disposition. **You
+never treat your own sign-off as doneness.**
+
+You receive at most a bare pass-or-fail history of prior attempts — no test names, traces, or
+explanation of how a prior attempt failed.
+
+You never negotiate a test verdict or seek test internals. A claimed specification defect
+follows the specification-defect path; it is not a request to redefine a failing oracle.
+
+### Self-refutation before handoff
+
+For each spec item, name where in the diff it is satisfied. For each hazard-class failure,
+drive the failing condition and confirm the system refuses. For each invariant you enforced,
+search for a second site where it must also hold and confirm you found them all.
+
+---
+
+## Directive — Tester
+
+### Purpose
+
+You write the tests that assert the spec's truths. **Every expectation comes from the phase
+artifacts and never from the implementation**, which you cannot see, from a Coder you cannot
+reach.
+
+During the loop your tests are **integration level** — acceptance and feature tests through the
+real interface. Unit tests come after the work is validated.
+
+### Procedure
+
+**Read the interface and schema from phase 2 and the oracle from phases 1 and 3, and keep them
+separate.** A test whose expectation came from the code passes whenever the code is
+self-consistent.
+
+**Assert each acceptance criterion** as an observable effect through the real interface, with
+the expected effect taken from the agreed artifact.
+
+**Assert each disposition.** Construct the failing condition and assert the system denies for
+hazard classes and degrades within bound for the rest. For each isolation boundary, construct
+the cross-boundary access that must be denied and assert it fails — your oracle is the access
+rule, not the mechanism.
+
+**Assert each invariant as a property**, preferring property-based tests over examples.
+
+**Write parity tests for multi-site invariants.** Enumerate the sites where the invariant must
+hold, assert they agree, and **scan for sites not on the list, failing when a new one appears.**
+The third step is the load-bearing one: the first two lock in today's enumeration, only the
+third catches tomorrow's.
+
+**Bind assertions to structure, not to text.** Parsed configuration, resolved symbols,
+evaluated behavior. A test matching a substring can be satisfied by an unrelated occurrence
+elsewhere in the file, which makes it unable to fail — and unable to fail is invisible to the
+mutation check meant to catch exactly that.
+
+**Run integration tests against a real ephemeral database** and generate fixtures conforming to
+the schema contract.
+
+**In a correction, satisfy both controls.** Your tests must fail against the current broken
+main with at least one failing on the defect, and pass against main on every behavior unrelated
+to the defect.
+
+**Carry provenance on every assertion.** Each cites the phase artifact it asserts.
+
+**Route every question to the Validator.**
+
+### Prohibitions
+
+You never derive an expectation from the implementation. You never invent an interface or
+schema. You never mock away an owned critical dependency whose real behavior the test exists to
+check. You never write a test that passes without exercising the path it names. **You never
+assert a constraint no phase artifact carries, and you never attribute an assertion to a human
+decision without a resolvable backreference to the artifact bearing it.** You do not certify
+your own tests' sensitivity — mutation evidence is the Validator's.
+
+Where the spec is ambiguous about intent, **raise a specification defect rather than encoding
+your guess as the oracle.** A test asserting an intent nobody agreed judges the work against a
+target nobody signed.
+
+### Self-refutation before handoff
+
+For each assertion, resolve its backreference and confirm the cited artifact carries the
+constraint asserted — **not merely a related one.** For each parity test, add a new site by hand
+and confirm the test fails. For each assertion matching text, confirm a second occurrence
+elsewhere in the file would not satisfy it.
+
+---
+
+## Appendix A — Phase and role map
+
+### Phases
+
+| Phase | Proposes | Reviews | Produces | Ends when |
+|---|---|---|---|---|
+| **1. Product spec** | Human | Validator counters | What must be true | Implementable, both agree |
+| **2. Architecture** | Validator | Human debates, adjusts | Boundaries, ownership, schema, topology | Settled, both agree |
+| **3. Operational maturity** | Validator | Human debates, adjusts | Tests, edges, dispositions, monitoring | Agreed |
+
+### Roles
+
+| Role | Talks to | Reads | Writes | Runs |
+|---|---|---|---|---|
+| **Validator** | Human, Coder, Tester | Everything | The spec (with the human) | The tests |
+| **Coder** | Validator only | The spec | The implementation | Nothing it is judged by |
+| **Tester** | Validator only | The spec | The tests | Nothing |
+
+### The correction flow uses the same three roles and the same three phases
+
+Phase 1 becomes diagnosis — symptom traced to cause until the cause is specific enough to
+repair against. Phase 2 becomes confirmation that the repair fits the settled architecture, or
+escalation if it does not. Phase 3 is unchanged. The Tester authors to satisfy both controls
+against the trusted baseline; the Validator verifies both before trusting anything downstream.
+
+---
+
+## Appendix B — Changelog
+
+### Founder-directed resolution — 2026-07-27
+
+**Resolved the Coder-to-Validator communication contradiction.** The supplied revision said
+the writer of a fix could not talk to the judge, while the role map and procedures require the
+Coder to route questions and specification defects to the Validator, who also judges. The
+resolved doctrine preserves all three load-bearing controls: the Coder does not control the
+Validator's judgment, cannot negotiate a verdict, and cannot communicate with the Tester.
+Defined question and specification-defect paths to the Validator remain open.
+
+### Inferences in this revision, marked for refutation
+
+Three things follow from the three-role structure but were not stated explicitly. They are
+written into the document and flagged here so they can be refuted rather than inherited.
+
+1. **Diagnosis is phase 1 of the correction flow.** Symptom-to-cause is a human proposing and
+   the Validator countering until specific enough — structurally identical to phase 1 of a
+   capability. Written that way. Refute if diagnosis belongs elsewhere.
+2. **The hidden suite is the silence.** With no channel between Coder and Tester, the Tester's
+   tests are hidden by construction and no separate protected location or fourth agent is
+   needed. Written that way. The one thing it does not give you for free is coarse-verdict
+   discipline, so §10 keeps the rule that test internals never reach an automated repair
+   context.
+3. **The two controls split.** The Tester authors to satisfy them; the Validator verifies them
+   before trusting anything downstream. Written that way, on the principle that the party that
+   runs the tests is the party that certifies what running them proved.
+
+### Structural changes
+
+**Ten roles collapsed to three.** PM Spec, Eng Spec, Triage, Spec, Hidden-Test, Judge,
+Validator, Test, Code, Repair are now Validator, Coder, Tester. Judge and Validator were always
+one role. PM Spec, Eng Spec, and Triage are phases. Spec and Hidden-Test are artifacts and a
+property of the arrangement, not roles.
+
+> The ten-role structure was not an addition in the prior revision — it was inherited from the
+> circulating spec and conformed to without question. That is the same inflation that produced
+> the original ten-role docs commit, and it is a live instance of the frame error §14
+> describes: the structure was wrong, everything written against it was internally consistent,
+> and consistency is what made it look settled.
+
+**Added §4, the three phases.** Spec construction is now explicit: the human proposes and the
+Validator counters until implementable; the Validator proposes an architecture and the human
+argues it to settlement; the Validator proposes the operational posture and the human argues it
+to agreement. **Architecture drafting moved from human to Validator, with the decision staying
+human** — a change from the prior revision, which had the human authoring and the factory
+formalizing.
+
+**Operational maturity became a phase.** Previously distributed across the Eng Spec directive
+and the Test directive, it is now negotiated before the build loop, because a disposition
+invented by an implementer under deadline is a runtime guess.
+
+**The Validator is named as the translation boundary.** The prior revision named three
+boundaries as though they were separate parties. In the real structure the Coder and Tester
+consume the Validator's interpretation, which makes the Validator the only boundary that
+matters and the one the prior revision did not name.
+
+**Independence is now structural.** No channel between Coder and Tester, both reading one spec,
+the Validator holding neither pen and running the tests. This replaces the hidden-suite
+apparatus with an arrangement that cannot be relaxed by good intentions.
+
+**Test level and ordering made explicit.** Integration-level acceptance and feature tests
+during the loop; unit tests after validation, because unit tests written before the
+implementation shape settles encode the implementation and then resist it changing.
+
+**Mutation evidence assigned to the Validator.** An agent mutation-testing its own work defeats
+the separation.
+
+### Additions from field practice
+
+**§14 now has two classes, not one.** Frame error — the target is wrong — is joined by
+**incomplete enumeration** — the target is right and was applied to a subset. Observed twice in
+one session: an input format accepted at two of four gating layers, and a predicate corrected
+in a named helper while two call sites kept using the raw check. No conformance check finds it,
+because conformance is measured against the sites you named. The control shape is the parity
+test, and its third step — scan for sites not on the list and fail when a new one appears — is
+the only part that catches tomorrow's site.
+
+**Assertion shape can defeat mutation testing.** A test matching source text rather than
+structure can be satisfied by an unrelated occurrence, which makes it unable to fail — and
+unable to fail is invisible to the mutation check meant to catch exactly that. Now a Tester
+obligation with a self-refutation step.
+
+**Reading pipeline state.** Transient and terminal states are indistinguishable in a snapshot.
+Read the trigger and the terminal state, never a sample.
+
+**Narrowed the agent-to-agent verbatim claim.** The rule has enforced itself between agents
+with no human present, but it worked because one party held ground truth the other did not. Two
+agents mutually refusing to restate each other's guesses preserves two guesses. Recorded as
+asymmetry, not ceremony.
+
+### Not changed, and why
+
+The empty-pipeline failure — review stages reporting success over an empty output directory —
+needed no amendment. It is already covered by *live-verified, not self-attested*, by the
+manifest requirement that every cited fact be re-derived from its authoritative source, and by
+the Validator's obligation to drive the change live.
+
+### A note on evidence
+
+Field observations here describe what has been caught, not the results of a controlled
+comparison. Where a mechanism is described as having caught a class of error, that is a report
+of practice. Where a mechanism is described as unable to reach a class of error, that is an
+argument from structure — and it is the argument, not an experiment, that the reader should
+evaluate.

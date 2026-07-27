@@ -14,13 +14,14 @@ it: it reuses :class:`~factory_core.manifest.SegregationPolicy` for DENY-wins id
 resolution and :func:`~factory_core.manifest.verify_digest` for the content-address tamper
 check, and adds the *aggregate* promotion decision on top: gate-outcome quorum, the
 consequence-driven distinct-human approver floor, and default-deny composition of every
-condition into one verdict.
+condition into one verdict. It also calls the provenance verifier directly so a caller cannot
+promote a claim set whose authority does not resolve to the three trusted phase artifacts.
 
-The doctrine this implements (the seven non-negotiables; oracle-adequacy gating):
+The doctrine this implements (the eight non-negotiables; oracle-adequacy gating):
 
   * **Default-deny.** ``allowed`` is true only when EVERY condition is affirmatively satisfied.
-    Any missing input, tamper, failed/absent gate, or SoD violation denies. The reason set is
-    the falsifiable evidence of *why* it denied.
+    Any missing input, provenance defect, tamper, failed/absent gate, or SoD violation denies.
+    The reason set is the falsifiable evidence of *why* it denied.
   * **An agent can never approve** (fail closed on authorization). Approver resolution is
     DENY-wins (the agent denylist is checked before the human allowlist), inherited from the
     :class:`SegregationPolicy`. No policy ⇒ no identity resolves ⇒ deny.
@@ -42,6 +43,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from factory_core.manifest import SegregationPolicy, verify_digest
+from factory_core.provenance import ProvenanceBundle
 
 # --------------------------------------------------------------------------- #
 # Doctrine constant: the non-lowerable consequential-approver floor
@@ -220,7 +222,8 @@ class PromotionRequest:
     be agents — the factory implements/verifies mechanically). ``approvers`` are the identities
     that approved THIS artifact; each is resolved DENY-wins against the roster policy, and a
     human with several aliases still counts once. ``evidence`` is the content-addressed tamper
-    precondition (absent ⇒ deny).
+    precondition. ``provenance`` is the complete phase-artifact/backreference bundle re-derived
+    at decision time. Either one absent means deny.
     """
 
     tier: str = ""
@@ -230,6 +233,7 @@ class PromotionRequest:
     verifier: str = ""
     approvers: tuple[str, ...] = ()
     evidence: EvidenceIntegrity | None = None
+    provenance: ProvenanceBundle | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
@@ -247,6 +251,7 @@ class PromotionRequest:
             if isinstance(ev_raw, Mapping)
             else None
         )
+        provenance_raw = raw.get("provenance")
         return cls(
             tier=str(raw.get("tier", "")),
             categories=_as_str_tuple(raw.get("categories")),
@@ -255,6 +260,11 @@ class PromotionRequest:
             verifier=str(raw.get("verifier", "")),
             approvers=_as_str_tuple(raw.get("approvers")),
             evidence=evidence,
+            provenance=(
+                ProvenanceBundle.from_dict(provenance_raw)
+                if isinstance(provenance_raw, Mapping)
+                else None
+            ),
         )
 
 
@@ -265,6 +275,8 @@ class PromotionRequest:
 # Reason codes (stable, machine-branchable prefixes). Interpolated values are runtime DATA.
 REASON_EVIDENCE_MISSING = "evidence-missing"
 REASON_EVIDENCE_DIGEST_MISMATCH = "evidence-digest-mismatch"
+REASON_PROVENANCE_MISSING = "provenance-missing"
+REASON_PROVENANCE_FAILED = "provenance-failed"  # ":<issue>"
 REASON_GATE_MISSING = "gate-missing"  # ":<id>"
 REASON_GATE_FAILED = "gate-failed"  # ":<id>"
 REASON_VERIFIER_EQUALS_IMPLEMENTER = "verifier-equals-implementer"
@@ -284,6 +296,7 @@ class PromotionDecision:
     consequential: bool
     required_approvers: int
     approver_count: int
+    provenance_issues: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -292,6 +305,7 @@ class PromotionDecision:
             "consequential": self.consequential,
             "required_approvers": self.required_approvers,
             "approver_count": self.approver_count,
+            "provenance_issues": list(self.provenance_issues),
         }
 
 
@@ -302,28 +316,40 @@ def decide_promotion(
 ) -> PromotionDecision:
     """Pure, default-deny promotion decision. NEVER performs a promotion/merge.
 
-    Composes four independent conditions; the decision allows only when the reason set is empty:
+    Composes five independent conditions; the decision allows only when the reason set is empty:
 
-      (a) evidence integrity — the content-addressed artifact is present and its claimed digest
+      (a) provenance of intent — every downstream claim resolves to a canonical item in exactly
+          one externally trusted artifact for each of the three phases;
+      (b) evidence integrity — the content-addressed artifact is present and its claimed digest
           verifies (constant-time);
-      (b) gate quorum — every profile-required gate is present AND passed;
-      (c) segregation of duties — verifier ≠ implementer, and each approver resolves to an
+      (c) gate quorum — every profile-required gate is present AND passed;
+      (d) segregation of duties — verifier ≠ implementer, and each approver resolves to an
           enrolled human (DENY-wins: never an agent), distinct from implementer and verifier;
-      (d) approver floor — the count of DISTINCT enrolled-human approvers meets the consequence-
+      (e) approver floor — the count of DISTINCT enrolled-human approvers meets the consequence-
           driven requirement (≥2 for consequential, ≥1 otherwise; a target may raise, not lower).
     """
     consequential = profile.is_consequential(request.tier, request.categories)
     required = profile.required_approvers(request.tier, request.categories)
     reasons: list[str] = []
 
-    # (a) evidence integrity — content-addressed tamper precondition.
+    # (a) provenance of intent — no self-attested summary; re-derive from the full bundle.
+    provenance_issues: tuple[str, ...]
+    if request.provenance is None:
+        provenance_issues = (REASON_PROVENANCE_MISSING,)
+        reasons.append(REASON_PROVENANCE_MISSING)
+    else:
+        provenance_report = request.provenance.verify()
+        provenance_issues = provenance_report.issues
+        reasons.extend(f"{REASON_PROVENANCE_FAILED}:{issue}" for issue in provenance_issues)
+
+    # (b) evidence integrity — content-addressed tamper precondition.
     evidence = request.evidence
     if evidence is None or not evidence.present:
         reasons.append(REASON_EVIDENCE_MISSING)
     elif not evidence.verify():
         reasons.append(REASON_EVIDENCE_DIGEST_MISMATCH)
 
-    # (b) gate quorum — every required gate present AND passed. Sorted for a deterministic order.
+    # (c) gate quorum — every required gate present AND passed. Sorted for a deterministic order.
     outcomes = {_norm(g.id): g for g in request.gates}
     for gate_id in sorted(profile.required_gate_ids):
         gate = outcomes.get(gate_id)
@@ -332,7 +358,7 @@ def decide_promotion(
         elif not gate.passed:
             reasons.append(f"{REASON_GATE_FAILED}:{gate_id}")
 
-    # (c) segregation of duties. verifier↔implementer distinctness is independent of approvers
+    # (d) segregation of duties. verifier↔implementer distinctness is independent of approvers
     # (covers the zero-approver case); reuse the policy's canonicalization so two aliases of one
     # principal are not mistaken for distinct.
     impl_c = policy.canonical(request.implementer)
@@ -363,7 +389,7 @@ def decide_promotion(
 
     approver_count = len(distinct_human_ids)
 
-    # (d) the consequence-driven distinct-human floor.
+    # (e) the consequence-driven distinct-human floor.
     if approver_count < required:
         reasons.append(f"{REASON_INSUFFICIENT_APPROVERS}:{approver_count}/{required}")
 
@@ -374,4 +400,5 @@ def decide_promotion(
         consequential=consequential,
         required_approvers=required,
         approver_count=approver_count,
+        provenance_issues=provenance_issues,
     )

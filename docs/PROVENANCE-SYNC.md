@@ -370,6 +370,32 @@ the target side of the adapter seam. A token test guards each new module.
 
 ---
 
+## Synced pass 5 (P4) — three-role/three-phase doctrine + intent-provenance gate
+
+**Authority:** founder-supplied doctrine revision, 2026-07-26. This is a material
+control-plane change authorized directly by the human under the Diff-Intent Gate, not an
+agent inference from the prior documents.
+
+| Deliverable | File | What changed |
+|---|---|---|
+| Canonical working specification | `docs/SOFTWARE-FACTORY.md` | Retains the complete supplied doctrine as the repository's working copy: Validator/Coder/Tester; product-specification/architecture/operational-maturity phases; shared spec/no Coder↔Tester channel; eight non-negotiables; integration tests during the loop; Validator-owned execution/mutation evidence; provenance; incomplete-enumeration/parity controls. The repository-local addition points status readers to `README.md`; encoding artifacts were normalized to their intended punctuation. |
+| Stable directive entry point | `docs/AGENT-DIRECTIVES.md` | Became a link-only compatibility surface into Part II of the canonical document. It intentionally carries no second copy of the directives that could drift. |
+| Active operational surfaces | `README.md`, `docs/VALIDATION-DIRECTIVE.md`, `docs/DOCTRINE-KERNEL.md`, `docs/practices/*.md`, `CLAUDE.md`, `AGENTS.md` | Reconciled role names, phase authority, Tester isolation, Validator mutation ownership, eight-rule inventory, and phase-3 test authorization while preserving the honest doctrine-vs-running boundary. Historical claims in this file remain historical rather than being silently rewritten. |
+| Canonical intent schema + verifier | `factory_core/provenance.py` | Adds canonical phase-artifact items, exact item digests, downstream backreferences for requirement/constraint/task/test-assertion metadata, external-authority artifact digests, full-bundle verification, and stable fail-closed issues. It explicitly refuses to treat digest equality as semantic equivalence: semantic canonicalization happens in the human/Validator phase loop. |
+| Promotion integration | `factory_core/promotion.py` | `decide_promotion` now re-derives the complete provenance bundle and denies missing/untrusted/unresolved/mismatched intent before allowing promotion. Provenance issues are retained in the decision evidence. |
+| Structural parity guard | `scripts/check_doctrine_sync.py`, `tests/test_check_doctrine_sync.py`, `Makefile` | Parses headings, phase/role tables, and the numbered non-negotiables structurally; scans every active Markdown surface plus core modules for superseded commitments; excludes this historical log; and makes doctrine parity a fail-closed `make ship` stage after purity. Regression cases exercise a removed directive, changed role-map row, and newly added stale doc; they are implementation self-checks, not independent Validator mutation evidence. |
+
+**Adversarial framing result:** a digest match is a correct enforcement mechanism only after
+the phase loop has produced canonical intent items. The verifier therefore resolves canonical
+metadata and returns the canonical statement; it does not compare paraphrases or claim that a
+hash proves meaning.
+
+**Purity-guard interaction:** no baseline change and no target vocabulary. The new module is
+stdlib + intra-core only; phase names and claim kinds are doctrine constants, while all
+target-specific intent remains data.
+
+---
+
 ## The repeatable mechanism (how future target-factory changes propagate)
 
 This is the standing discipline the founder asked for — run it whenever the origin target's
@@ -402,7 +428,8 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
    with tests first.
 
 5. **Keep `make ship` green.** Every sync pass ends with `make ship`
-   (purity → lint → typecheck → test) green. The purity guard is the arbiter: if a sync
+   (purity → doctrine parity → lint → typecheck → test) green. The purity guard is the arbiter:
+   if a sync
    trips it, the sync was not generic enough. Baseline growth is a **reviewable event**
    (a documented exception to the purity guarantee), never a silent escape hatch — and
    the strong default is to reformulate the sync so no baseline entry is needed.
@@ -432,11 +459,12 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   IR/analyzer as a pure module) and P2 (completeness-ledger + reverse-contract as
   adapter-driven generics).
 
-## Current state after P1/P2/P3 extraction
+## Current state after P1/P2/P3/P4 extraction
 
 - `factory_core` now includes the Phase 0 skeleton, the P1 invariant-kernel module, the P2
-  contract/completeness modules, and the **P3** SoD/merge-gate spine (`promotion.py` +
-  `manifest.verify_digest`) and deterministic intake gate (`comprehensiveness.py`). `RepoAdapter`
+  contract/completeness modules, the **P3** SoD/merge-gate spine (`promotion.py` +
+  `manifest.verify_digest`) and deterministic intake gate (`comprehensiveness.py`), and the
+  **P4** canonical intent-provenance verifier wired directly into promotion. `RepoAdapter`
   and `KnowledgeAdapter` expose neutral inventory-returning methods so target-coupled scanning
   stays in target adapters while the core owns the generic diff/lattice/decision logic.
 - The promotion decision reuses `manifest.SegregationPolicy` (DENY-wins identity) and
@@ -446,5 +474,7 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
 - `README.md` is the quick public map of implemented-vs-doctrine-only controls. The doctrine
   remains authoritative, and a control specified there is still not a control running until a
   module/test/gate implements it.
-- `make ship` is the closeout gate for this repo: purity first, then lint, typecheck, and test
-  (127 tests green after this pass).
+- `make ship` is the closeout gate for this repo: purity first, then structural doctrine
+  parity, lint, typecheck, and test. The live orchestration lanes, phase-authoring/signature
+  authorities, and deployment loop remain design-only and are not implied by this substrate.
+  The P4 reconciliation closed with all five local gates green and 142 tests passing.

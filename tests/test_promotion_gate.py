@@ -3,6 +3,8 @@
 These prove the extraction is correct AND target-agnostic:
 
   * default-deny: an empty request denies with a falsifiable reason set;
+  * provenance: every downstream claim resolves to a canonical item in one trusted artifact
+    for each phase; missing/unresolved provenance denies even when every other condition passes;
   * evidence integrity: a content-addressed artifact must be present and verify (constant-time);
     a tampered digest denies;
   * gate quorum: every profile-required gate must be present AND passed (missing vs failed);
@@ -22,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from factory_core.manifest import SegregationPolicy, digest_obj
 from factory_core.promotion import (
@@ -32,6 +35,17 @@ from factory_core.promotion import (
     GateOutcome,
     PromotionRequest,
     decide_promotion,
+)
+from factory_core.provenance import (
+    CLAIM_REQUIREMENT,
+    PHASE_ARCHITECTURE,
+    PHASE_OPERATIONAL_MATURITY,
+    PHASE_PRODUCT_SPECIFICATION,
+    IntentBackreference,
+    IntentItem,
+    PhaseArtifact,
+    ProvenanceBundle,
+    ProvenanceClaim,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -87,6 +101,64 @@ def _passing_gates() -> tuple[GateOutcome, ...]:
     )
 
 
+def _good_provenance() -> ProvenanceBundle:
+    phases = (
+        (PHASE_PRODUCT_SPECIFICATION, "phase-1", "behavior", "The interface returns the record."),
+        (PHASE_ARCHITECTURE, "phase-2", "owner", "Component alpha owns the record."),
+        (
+            PHASE_OPERATIONAL_MATURITY,
+            "phase-3",
+            "failure",
+            "An unavailable authority denies the mutation.",
+        ),
+    )
+    artifacts = tuple(
+        PhaseArtifact(
+            artifact_id=artifact_id,
+            phase=phase,
+            version="1",
+            source_digest=digest_obj({"verbatim": f"source for {artifact_id}"}),
+            human_ratifier="human-1",
+            validator_ratifier="validator-1",
+            items=(IntentItem(item_id=item_id, canonical_statement=statement),),
+        )
+        for phase, artifact_id, item_id, statement in phases
+    )
+    product_item = artifacts[0].items[0]
+    claims = (
+        ProvenanceClaim(
+            claim_id="requirement-1",
+            kind=CLAIM_REQUIREMENT,
+            backreference=IntentBackreference(
+                artifact_id=artifacts[0].artifact_id,
+                item_id=product_item.item_id,
+                intent_digest=product_item.intent_digest,
+            ),
+        ),
+    )
+    return ProvenanceBundle(
+        artifacts=artifacts,
+        claims=claims,
+        trusted_artifact_digests={
+            artifact.artifact_id: artifact.content_digest for artifact in artifacts
+        },
+    )
+
+
+def _request(**overrides: Any) -> PromotionRequest:
+    values: dict[str, Any] = {
+        "tier": "low",
+        "gates": _passing_gates(),
+        "implementer": "claude-opus",
+        "verifier": "ci-bot",
+        "approvers": ("alice",),
+        "evidence": _good_evidence(),
+        "provenance": _good_provenance(),
+    }
+    values.update(overrides)
+    return PromotionRequest(**values)
+
+
 # --------------------------------------------------------------------------- #
 # Default-deny
 # --------------------------------------------------------------------------- #
@@ -96,6 +168,7 @@ def test_empty_request_denies_default_deny() -> None:
     assert decision.allowed is False
     # nothing is affirmatively satisfied: no evidence, both gates missing, no approver.
     assert "evidence-missing" in decision.reasons
+    assert "provenance-missing" in decision.reasons
     assert "gate-missing:tests" in decision.reasons
     assert "gate-missing:build" in decision.reasons
     assert "insufficient-approvers:0/1" in decision.reasons
@@ -105,7 +178,7 @@ def test_empty_request_denies_default_deny() -> None:
 
 
 def test_happy_path_non_consequential_one_human_allows() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",  # an agent may implement
@@ -133,7 +206,7 @@ def test_agent_approver_denied_deny_wins_over_enrollment() -> None:
         human_aliases={"alice": "alice", "sneaky-bot": "sneaky-bot"},
         excluded_service_identities=frozenset({"*-bot"}),
     )
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="alice",
@@ -148,7 +221,7 @@ def test_agent_approver_denied_deny_wins_over_enrollment() -> None:
 
 
 def test_unenrolled_approver_denied() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -163,7 +236,7 @@ def test_unenrolled_approver_denied() -> None:
 
 def test_self_approval_denied_implementer_equals_approver() -> None:
     # alice implemented AND tries to approve via a different alias of the same human.
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="alice@example.com",
@@ -178,7 +251,7 @@ def test_self_approval_denied_implementer_equals_approver() -> None:
 
 
 def test_verifier_equals_implementer_denied() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -193,7 +266,7 @@ def test_verifier_equals_implementer_denied() -> None:
 
 def test_empty_policy_denies_every_approver() -> None:
     # No enrolled humans at all -> nothing resolves -> deny (fail closed).
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -211,7 +284,7 @@ def test_empty_policy_denies_every_approver() -> None:
 # --------------------------------------------------------------------------- #
 
 def test_consequential_by_tier_requires_two_distinct_humans() -> None:
-    one_human = PromotionRequest(
+    one_human = _request(
         tier="high",  # a consequential tier
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -225,7 +298,7 @@ def test_consequential_by_tier_requires_two_distinct_humans() -> None:
     assert decision.allowed is False
     assert "insufficient-approvers:1/2" in decision.reasons
 
-    two_humans = PromotionRequest(
+    two_humans = _request(
         tier="high",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -240,7 +313,7 @@ def test_consequential_by_tier_requires_two_distinct_humans() -> None:
 
 
 def test_consequential_by_category_requires_two() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",  # not a consequential tier
         categories=("financial",),  # but a consequential category
         gates=_passing_gates(),
@@ -256,7 +329,7 @@ def test_consequential_by_category_requires_two() -> None:
 
 
 def test_two_aliases_of_one_human_count_once() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="high",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -286,11 +359,36 @@ def test_baseline_floored_at_one_human() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Gate quorum + evidence integrity
+# Provenance, gate quorum, and evidence integrity
 # --------------------------------------------------------------------------- #
 
+def test_provenance_defect_denies_even_when_every_other_condition_passes() -> None:
+    good = _good_provenance()
+    bad_claim = ProvenanceClaim(
+        claim_id="requirement-1",
+        kind=CLAIM_REQUIREMENT,
+        backreference=IntentBackreference(
+            artifact_id=good.artifacts[0].artifact_id,
+            item_id="missing-item",
+            intent_digest=good.artifacts[0].items[0].intent_digest,
+        ),
+    )
+    bad = ProvenanceBundle(
+        artifacts=good.artifacts,
+        claims=(bad_claim,),
+        trusted_artifact_digests=good.trusted_artifact_digests,
+    )
+
+    decision = decide_promotion(_request(provenance=bad), _roster(), _profile())
+
+    expected = "item-unresolved:requirement-1:phase-1:missing-item"
+    assert decision.allowed is False
+    assert f"provenance-failed:{expected}" in decision.reasons
+    assert decision.provenance_issues == (expected,)
+
+
 def test_gate_failed_vs_missing_are_distinguished() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=(GateOutcome(id="tests", passed=False, detail="1 failed"),),  # build absent
         implementer="claude-opus",
@@ -309,7 +407,7 @@ def test_evidence_tamper_denies() -> None:
     wrong = digest_obj({"artifact": "module-x", "n": 2})
     tampered = EvidenceIntegrity(body=body, claimed_digest=wrong)
     assert tampered.verify() is False
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -323,7 +421,7 @@ def test_evidence_tamper_denies() -> None:
 
 
 def test_evidence_absent_digest_denies() -> None:
-    request = PromotionRequest(
+    request = _request(
         tier="low",
         gates=_passing_gates(),
         implementer="claude-opus",
@@ -360,12 +458,14 @@ def test_from_dict_round_trip_and_case_insensitive_labels() -> None:
             "verifier": "ci-bot",
             "approvers": ["alice", "bob"],
             "evidence": {"body": {"a": 1}, "claimed_digest": digest_obj({"a": 1})},
+            "provenance": _good_provenance().to_dict(),
         }
     )
     decision = decide_promotion(request, _roster(), profile)
     assert decision.allowed is True, decision.reasons
     assert decision.consequential is True
     assert decision.to_dict()["approver_count"] == 2
+    assert decision.to_dict()["provenance_issues"] == []
 
 
 # --------------------------------------------------------------------------- #

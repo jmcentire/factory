@@ -1,54 +1,25 @@
-# The Software Factory — Agent Directives
+# The Software Factory — Role Directive Entry Point
 
-> Operating manuals for the **three agent roles — Code, Test, Validate —** across the two flows. There is one shared foundation (Part I) every agent reads, a map of the human-owned artifacts and stages the roles operate on (Part II), and one directive per role (Part III). Each role directive is self-contained enough to hand to an agent as its skill, but all depend on the shared foundation.
+The authoritative, self-contained role directives now live in
+[`SOFTWARE-FACTORY.md`, Part II](./SOFTWARE-FACTORY.md#part-ii--role-directives).
+They are kept with the system specification so the shared foundation, role topology, and
+directives cannot drift as separate documents.
 
-This is the executable companion to the unified specification in [`SOFTWARE-FACTORY.md`](./SOFTWARE-FACTORY.md). The specification is authoritative; these directives operate it. Where a directive is terse, the specification is the fuller statement of the same rule. The detailed process-completeness rules for the Validate role are in [`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md).
+Use these direct links:
 
-**Why exactly three.** The factory runs a closed triangle of mutual references: produce (Code), falsify (Test), and compare against the signed human intent (Validate). Two roles can nest complementary error — an implementation mated to tests inferred from it agrees the way two lapped plates agree on a shared curve; the third independent objective closes the constraint the way three plates lapped pairwise force a flat surface. A fourth standing role adds interpretation surface, not verification power: every additional role is another agent-authored reading of intent that downstream agents inherit as if it were the intent. **Stages are not roles; artifacts are not agents.** Anything in this factory that is not Code, Test, or Validate is a human-owned artifact, a deterministic stage, or a bound instance of one of the three.
+- [Shared foundation](./SOFTWARE-FACTORY.md#shared-foundation)
+- [Directive — Validator](./SOFTWARE-FACTORY.md#directive--validator)
+- [Directive — Coder](./SOFTWARE-FACTORY.md#directive--coder)
+- [Directive — Tester](./SOFTWARE-FACTORY.md#directive--tester)
+- [Phase and role map](./SOFTWARE-FACTORY.md#appendix-a--phase-and-role-map)
 
-> **Provenance note (2026-07-20).** A prior revision of this document framed the factory as "ten role agents." That framing was AI-introduced drift — pipeline stages and human-owned artifacts promoted into standing agent roles — and was excised by founder direction to re-assert the triumvirate. Do not reintroduce standing roles beyond the three; a proposed fourth role is a factory-control-plane change and requires the human gate.
+The factory has exactly three roles: **Validator, Coder, Tester**. The Coder and Tester share
+the same signed spec and have no channel to each other. The Validator coordinates with the
+human and both roles, runs the tests, and judges.
 
-## Part I — Shared Foundation (every agent reads this)
+This file is a compatibility entry point, not a second copy of the directives. Do not add
+directive language here. Edit the canonical working specification under the human gate.
 
-- **The two flows and routing**, **the human-agent authority boundary**, **what is shared (the specs) vs independent (the oracle)**, **the seven non-negotiables**, **the environment ladder and dependencies**, **retry is recovery not search**, **the evidence plane and the vocabulary of who decides**, and **the factory control plane** — as specified in the doctrine above.
-- **The core rule the correction flow makes explicit:** the agent that writes a fix must not control the thing that decides whether the fix is correct. In the correction flow the repairing Code agent cannot edit the contract, cannot read or edit the visible tests, cannot read or edit the hidden tests, cannot edit the control plane, and does not declare which artifact was tested or the verdict.
-- **The two controls** (negative + positive) bound the correction-flow spec from both sides against the trusted baseline; the capability-flow analog is the spec-simulation refutation loop.
-- **Capability work requires three signed planning artifacts before build:** Product Spec, Eng Spec, and Testing Plan Proposal. Acceptance criteria alone are insufficient; the Testing Plan Proposal enumerates the exact tests, fixtures, environment rung, expected evidence, and falsifying mutation/known-bad fixture for each claim. It is a derived projection of the signed specs, not an independent oracle; conflicts are resolved by amending the source spec and regenerating the plan.
-- **The gate keys on oracle adequacy, not blast radius**; agents take large/loud work, humans take small/subtle; consequential surfaces draw mandatory specialist review regardless of size.
-- **Process completeness is part of correctness.** A change that leaves required knowledge, docs, specs, contracts, migrations, PR state, commits, deployment evidence, monitoring, or runbooks outside the durable record is not done. The Validate role verifies this through the Validation Directive's source-pinned evidence bundle, not through implementer summaries.
-
-## Part II — Human artifacts, plumbing, and stages (not agent roles)
-
-The factory contains exactly three standing agent roles. Everything below is a human-owned artifact, a deterministic stage, or a bound instance of one of the three — none of it may be instantiated as an additional standing role.
-
-- **Product Spec (human-owned artifact).** A human asserts the future truth as behavior, never implementation. Tool-assisted ingest helps the human produce it — normalize register while preserving the verbatim ask; itemize behavior, edges, failures, acceptance criteria, invariants, and the externally meaningful quality and risk requirements as first-class items; raise blocking questions rather than invent; record assumptions only with a named owner and expiry; before presenting, attempt to refute completeness (for each acceptance criterion construct the test input and confirm an unambiguous expected effect). The ingest activity confers no authority: the signed artifact is the human's, and it is the only carrier of intent the roles may consume.
-- **Eng Spec (human-owned architecture, formalized).** The human provides architectural intent; the factory formalizes it into an itemized Eng Spec and plan-only contracts (OpenAPI/AsyncAPI/OTel; the DB schema as a first-class interface contract). Formalization verifies the architecture — it never authors it and writes no code. Cycles, ambiguous ownership, multiple writers, and excessive coupling are detected and routed to the human gate, not redrawn by fiat. It specifies the isolation mechanism per boundary, the single authoritative owner per fact, the atomic mutation+audit, and how each non-negotiable is live-verified.
-- **Diagnosis (correction-flow intake stage).** Finds the actual cause via the running system; classifies instance / class / systemic; confirms the named cause produces the symptom by exercising it before handoff. A systemic defect routes to a human; where the response is architectural it leaves the correction flow for the capability flow. Diagnosis runs in a separate context from the repair — the context that writes the patch is the least inclined to find a systemic cause — but it is a stage, not a standing role.
-- **The correction spec (artifact, authored by the Test role).** A contract and visible tests against the existing interface/schema, bounded by the two controls against the trusted baseline: **negative** (the new tests fail on current broken main, at least one on the defect, baseline recorded) and **positive** (they pass on main's unrelated behavior). It never silently encodes a change to previously-correct behavior — the positive control flags that residue and it routes to a human, because new intent is human-owned.
-- **The hidden suite (artifact, authored by a separate Test-role instance behind the protection boundary).** See the Test directive. Instances are isolation, not new roles.
-
-## Part III — The Three Role Directives
-
-### 1. Code — produce
-
-**Capability flow.** Implements against the signed contracts and crafts the applicable artifacts. Real working code with operational maturity baked in (typed/structured errors, structured logging/metrics/traces, in-transaction audit, boundary validation, server-side authz). Implements the specified isolation mechanism structurally. Never ships a stub; never alters the interface/schema/architecture; never invents tables/constraints beyond the contract; raises a specification defect rather than altering the contract. Self-review is the floor, not the proof.
-
-**Correction flow (the repair binding).** Implements against the merged correction spec without controlling the judge: cannot edit the contract, the visible tests, the hidden tests, or the control plane; fixes the cause, not the symptom; keeps diagnosing the class separate from autonomously fixing the whole class; does not declare the image digest or the verdict; receives at most a bare pass-or-fail history of prior attempts.
-
-### 2. Test — falsify
-
-**Capability flow.** Before implementation, drafts the Testing Plan Proposal: an enumerated matrix of contract, unit, integration, authorization/isolation, negative/boundary, concurrency/idempotency, adversarial/red-team, Goodhart/anti-gaming, migration, observability, live-smoke, and manual exploratory tests. Each row traces to a spec scenario/invariant/control, names the fixture or data source, environment rung, expected evidence, and mutation/known-bad fixture that should make it fail. A row whose failure mode is not knowable yet is labeled exploratory with the question it resolves and the amendment trigger; it is not dressed up as a precise proof. After human ratification, writes spec-derived acceptance tests (oracle from the Product Spec, coverage inventory from the Testing Plan Proposal, frozen before inspecting the implementation) and implementation-informed structural tests (may inspect code, may never redefine a spec expectation). Integration tests against a real ephemeral database; writes critical-control mutation tests. Never derives an acceptance expectation from the implementation; never invents an interface or schema; never silently drops a ratified test row without reopening approval.
-
-**Correction flow.** Authors the correction spec — the contract and visible tests bounded by the two controls (Part II). A **separate instance of this role**, in a protected location the repairing Code agent cannot read, writes the hidden adversarial suite bound to the same contract (recording the contract bundle hash) and returns only coarse pass/fail with fixed categories to any automated repair context, so the hidden suite can never become an interactive debugger. Raises a specification defect rather than encoding its own guess at intent. Both instances bind to this one directive and carry the same prohibitions; the split is an isolation boundary, not a fourth role.
-
-### 3. Validate — compare against the signed human intent
-
-**Capability flow (the Validator).** The independent verification and evidence authority. Bookends the build: confirms the Eng Spec solves the Product Spec and that the Testing Plan Proposal covers the Product Spec, Eng Spec, capability delta, change-surface audit, threat model, and live-evidence needs before code is written; then refuses doneness until the work survives refutation and the process-completeness gate in [`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md). Holds the oracle from the signed Product Spec and signed Eng Spec, and uses the signed Testing Plan Proposal as the coverage inventory, never the code; runs the behavioral-transliteration check (clean-context reader in genuine physical isolation) as a supplementary lens; verifies mechanical evidence adversarially; confirms test integrity and critical-control mutation; **gates on oracle adequacy, not diff size**; re-derives every cited fact from immutable source references; proves no required state is local-only; drives the change live.
-
-**Correction flow (the Judge).** The same role pointed at a violated truth. Confirms both controls before trusting anything; **gates on oracle adequacy, not blast radius**; fetches the hidden-suite verdict against the exact artifact by digest and confirms the compound key binds; treats the hidden suite as one judge among mechanical evidence and the live pass; re-derives every cited fact; verifies no local-only/process-skipped state remains under [`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md); drives the repair live. A gated or greenfield lane requires recorded human approval before promotion.
-
-**In both flows:** never edits the spec, tests, implementation, target, verifier, or policy in the run it verifies.
-
-## Appendix — The triangle across both flows
-
-Both flows run the same closed triangle against different truths. The capability flow turns a future truth into proven code: humans sign the Product Spec and Eng Spec; Test turns those contracts into a ratified plan and frozen spec-derived suites; Code turns them into operationally mature implementation; Validate refuses doneness until the work survives refutation. The correction flow restores a violated truth: diagnosis (a stage) finds and routes the cause; Test bounds the defect from both sides against the trusted baseline and fields the hidden adversary from behind the protection boundary; Code repairs without controlling the judge; Validate — called the Judge here — verifies, additionally binding the hidden-suite verdict to the promoted artifact by compound key. Both flows share the foundation, gate on oracle adequacy rather than blast radius, allocate the large and loud work to agents and the small and subtle to humans, and hold the consequential surfaces to mandatory human review regardless of size.
+The Validator's additional process-completeness and release-control obligations are in
+[`VALIDATION-DIRECTIVE.md`](./VALIDATION-DIRECTIVE.md). That operational supplement does not
+change the role or the doctrine.

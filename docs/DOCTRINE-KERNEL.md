@@ -1,9 +1,9 @@
 # The Doctrine Kernel — tiered intent inventory
 
-> **Status: RATIFIED by the founder, 2026-07-21** (in-session: "The kernel's tiers look
-> good"). An agent may still treat a statement as *more* protected than listed, never
-> less. Only the founder may move a statement down a tier or remove it. Changes to this
-> file pass through the Diff-Intent Gate
+> **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
+> three-role/three-phase doctrine revision, 2026-07-26.** An agent may still treat a statement
+> as *more* protected than listed, never less. Only the founder may move a statement down a tier
+> or remove it. Changes to this file pass through the Diff-Intent Gate
 > ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) like any other
 > doctrine change — an agent proposing an edit here escalates; it never ratifies.
 
@@ -24,9 +24,9 @@ judgment. Four tiers:
 
 | # | Statement (anchor) |
 |---|---|
-| S1 | Humans own intent, architecture, and risk; the factory implements, proves conformance, and produces evidence. |
-| S2 | **Exactly three standing agent roles: Code, Test, Validate.** Specs are human-owned artifacts; diagnosis is a stage; the hidden suite is a protected Test-role instance. |
-| S3 | The authority is signed artifacts — the specs and the content-addressed manifest — never memory, never a mutable ticket, never an agent's summary. |
+| S1 | Humans own product intent, architectural decisions, authority, and acceptable risk. The Validator drafts and the human decides; the factory implements, proves conformance, and produces evidence. |
+| S2 | **Exactly three roles: Validator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
+| S3 | The authority is the preserved verbatim source plus the three signed phase artifacts and the content-addressed manifest — never memory, never a mutable ticket, never an agent's summary. |
 | S4 | Agents escalate; humans ratify. No agent ratifies a material change to declared intent; genesis and mutation of doctrine require a human signature. |
 | S5 | Honesty in self-reports: nothing marked done, implemented, or satisfied that is partial or absent. |
 
@@ -34,14 +34,15 @@ judgment. Four tiers:
 
 | # | Statement (anchor) |
 |---|---|
-| I1 | The seven non-negotiables (fail-closed on hazards; single authoritative owner per fact; least privilege; full auditability; no silent failure; honesty; live-verified not self-attested). |
+| I1 | The eight non-negotiables (fail-closed on hazards; single authoritative owner per fact; least privilege; full auditability; no silent failure; honesty; provenance of intent; live-verified not self-attested). |
 | I2 | Segregation of duties: implementer ≠ verifier ≠ approver; identity resolution is deny-wins; consequential changes carry the ≥2-distinct-enrolled-humans floor. |
-| I3 | Oracle independence: expected behavior derives from the signed spec and is frozen before the implementation is inspected; the hidden suite is unreadable by the repairing agent and returns only coarse verdicts. |
+| I3 | Oracle independence: Coder and Tester receive the same signed spec but have no channel; the Tester never sees the implementation, the Coder never sees the tests, and the Validator returns only bare failure outcomes to an automated repair context. |
 | I4 | The two controls (negative and positive) bound every correction spec against the trusted baseline. |
 | I5 | The gate keys on oracle adequacy, not blast radius; consequential surfaces draw mandatory human review regardless of size. |
 | I6 | The same built artifact is promoted up the ladder by digest; the evidence plane is content-addressed, hash-chained, and tamper-evident. |
 | I7 | The generic core names no target: targets are data behind adapter seams, never code imports (the purity guard enforces the code side; this doctrine enforces the prose side). |
 | I8 | No agent modifies its own directive, verifier set, approval rules, or sandbox permissions while producing or verifying a change under that policy. |
+| I9 | Provenance of intent is fail-closed: every downstream requirement, constraint, task, and test assertion resolves to the exact canonical item in a trusted phase artifact. |
 
 ## Tier E — Epistemic
 

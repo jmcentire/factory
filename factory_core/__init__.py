@@ -20,9 +20,11 @@ Public surface:
     predicate (rows come from the adapter seams; the core owns only the aggregation)
   * comprehensiveness — a deterministic, injection-resistant intake-completeness gate: an
     ordered registry of structural field predicates (never an LLM); fields/thresholds are data
-  * promotion — the fail-closed, default-deny merge/promotion decision: gate quorum + a
-    consequence-driven distinct-human approver floor (reuses the manifest SegregationPolicy;
-    tiers/categories/thresholds are data)
+  * promotion — the fail-closed, default-deny merge/promotion decision: phase-artifact
+    provenance + gate quorum + a consequence-driven distinct-human approver floor (reuses the
+    manifest SegregationPolicy; tiers/categories/thresholds are data)
+  * provenance — fail-closed resolution of every downstream claim to a canonical item in the
+    externally trusted product, architecture, or operational-maturity phase artifacts
 """
 
 from __future__ import annotations
@@ -114,6 +116,25 @@ from factory_core.promotion import (
     PromotionRequest,
     decide_promotion,
 )
+from factory_core.provenance import (
+    CLAIM_CONSTRAINT,
+    CLAIM_REQUIREMENT,
+    CLAIM_TASK,
+    CLAIM_TEST_ASSERTION,
+    PHASE_ARCHITECTURE,
+    PHASE_OPERATIONAL_MATURITY,
+    PHASE_PRODUCT_SPECIFICATION,
+    REQUIRED_PHASES,
+    SUPPORTED_CLAIM_KINDS,
+    IntentBackreference,
+    IntentItem,
+    PhaseArtifact,
+    ProvenanceBundle,
+    ProvenanceClaim,
+    ProvenanceReport,
+    ResolvedClaim,
+    verify_intent_provenance,
+)
 from factory_core.roles import (
     Capability,
     CapabilityCatalog,
@@ -138,6 +159,10 @@ __all__ = [
     "BASELINE_APPROVER_FLOOR",
     "CONSEQUENTIAL_APPROVER_FLOOR",
     "CallEdge",
+    "CLAIM_CONSTRAINT",
+    "CLAIM_REQUIREMENT",
+    "CLAIM_TASK",
+    "CLAIM_TEST_ASSERTION",
     "Capability",
     "CapabilityCatalog",
     "CapabilityDelta",
@@ -166,6 +191,8 @@ __all__ = [
     "IdpAdapter",
     "Inventory",
     "InventoryRow",
+    "IntentBackreference",
+    "IntentItem",
     "InvariantKernel",
     "KnowledgeAdapter",
     "LaunchReadiness",
@@ -174,13 +201,18 @@ __all__ = [
     "PromotionDecision",
     "PromotionError",
     "PromotionRequest",
+    "ProvenanceBundle",
+    "ProvenanceClaim",
+    "ProvenanceReport",
     "ReachabilityAnalyzer",
     "ReachabilityInvariant",
+    "REQUIRED_PHASES",
     "RepoAdapter",
     "ReverseReport",
     "Role",
     "RoleModel",
     "RoleModelError",
+    "ResolvedClaim",
     "STATUS_DECLARED",
     "STATUS_EXCUSED",
     "STATUS_GAP",
@@ -192,12 +224,17 @@ __all__ = [
     "SourceFlowFact",
     "SubstanceRequirement",
     "SubstanceSpec",
+    "SUPPORTED_CLAIM_KINDS",
     "TargetManifest",
     "TargetManifestError",
     "Unsupported",
     "VERDICT_COMPREHENSIVE",
     "VERDICT_NEEDS_INFO",
     "Violation",
+    "PHASE_ARCHITECTURE",
+    "PHASE_OPERATIONAL_MATURITY",
+    "PHASE_PRODUCT_SPECIFICATION",
+    "PhaseArtifact",
     "analyze_invariants",
     "check_contract",
     "check_delta_fidelity",
@@ -212,6 +249,7 @@ __all__ = [
     "normalize_path",
     "reverse_contract",
     "verify_digest",
+    "verify_intent_provenance",
     "verify_ledger",
     "__version__",
 ]

@@ -21,10 +21,12 @@ construction — the purity guard will (and must) reject it.
 ## Layout
 
 - `factory_core/manifest.py` — content-addressed, hash-chained, SoD-enforcing evidence ledger (stdlib-only).
+- `factory_core/provenance.py` — canonical phase-artifact and intent-backreference verifier.
 - `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
 - `factory_core/adapters.py` — the five `typing.Protocol` seams (interfaces only).
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
 - `scripts/check_core_purity.py` — the fail-closed anti-coupling guard.
+- `scripts/check_doctrine_sync.py` — structural parity guard for the active doctrine surfaces.
 - `core_purity_denylist.json` — the token-denylist **data file** the guard reads (empty on the
   generic core; a target fills in its own tokens as private config, never shipped in the core).
 - `core_purity_baseline.json` — justified token exceptions (empty on a clean core).
@@ -35,17 +37,25 @@ construction — the purity guard will (and must) reject it.
 
 ```bash
 make check-purity   # the boundary guarantee — run this first
+make check-doctrine # structural doctrine parity (three roles / phases / eight rules)
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
-make ship           # every gate, fail-closed (purity -> lint -> typecheck -> test)
+make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typecheck -> test)
 ```
 
 ## Invariants (enforced, not just asserted)
 
 - **No target code in core** — `check_core_purity.py`: import scan + token denylist (read from `core_purity_denylist.json`, empty on the generic core) + reverse-dep assert. Fail-closed.
-- **Segregation of duties** — implementer, verifier, approver are three distinct identities; the ledger refuses any append with a two-role overlap.
+- **Segregation of duties** — implementer, verifier, approver are three distinct signing
+  identities (not extra workflow roles); the ledger refuses any append with a two-identity
+  overlap.
 - **Tamper-evident ledger** — append-only, content-addressed (SHA-256), hash-chained; `verify_chain` re-derives every address and link.
+- **Provenance of intent** — downstream requirements, constraints, tasks, and test assertions
+  resolve to canonical items in one externally trusted artifact for each of the three phases;
+  unresolved or mismatched references fail closed.
+- **Doctrine parity** — active docs retain exactly Validator/Coder/Tester, the three phases, and
+  all eight non-negotiables; historical records are not rewritten.
 - **Data-only targets** — the `TargetManifest` loader refuses code references; a target may only *select* named seams the core already owns.
 - **Portability** — the full suite passes with no target pack present (only the synthetic empty fixture).
 

@@ -17,8 +17,9 @@ Guarantees:
     changes the address.
   * Hash-chained — every entry records the prior entry's address; tampering with any entry
     breaks the chain at the next link, so the whole history is verifiable, not just a leaf.
-  * Segregation of duties — implementer, verifier, and approver must be three distinct
-    identities; a write with any two-role overlap is refused (fail closed). When an optional
+  * Segregation of duties — implementer, verifier, and approver must be three distinct signing
+    identities (not additional workflow roles); a write with any two-identity overlap is
+    refused (fail closed). When an optional
     policy is supplied, the approver must additionally resolve to an enrolled human.
   * Stdlib only (hashlib + json) — it runs anywhere Python runs, with no third-party surface.
 
@@ -165,9 +166,10 @@ class LedgerEntry:
     structured result, a recorded identity, or opaque payload data — never prose-as-truth.
 
     The three SoD identities carry the load: ``implementer`` built it, ``verifier`` proved it,
-    ``approver`` accepted the risk. Any two overlapping is refused at append time. For
-    transitions that involve fewer than three roles (e.g. a draft edit), leave the unused
-    identities empty; distinctness is enforced only among the identities actually present."""
+    ``approver`` accepted the risk. Any two overlapping is refused at append time. These are
+    signing identities, not extra factory workflow roles. For transitions that involve fewer
+    than three signers (e.g. a draft edit), leave the unused identities empty; distinctness is
+    enforced only among the identities actually present."""
 
     # --- chain linkage (set by the ledger at append time) ---
     seq: int = 0

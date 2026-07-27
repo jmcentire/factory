@@ -6,10 +6,11 @@ to a single target. Crucially: the *catalog of capabilities*, the *roles*, and t
 are all per-target **data**, fed in through the manifest and IdP seams — they are never core
 classes. This module owns only the shape and the resolution rules; it hardcodes no authority.
 
-This is distinct from the segregation-of-duties identities in ``manifest`` (implementer /
-verifier / approver), which are about *who signed a transition*. RBAC here is about *what a
-principal may do on a target*. The two intersect only at the ledger: a principal must hold the
-capability to act, and the acting identities must still be three distinct SoD principals.
+This is also distinct from the factory's three workflow roles (Validator / Coder / Tester) and
+from the segregation-of-duties identities in ``manifest`` (implementer / verifier / approver),
+which describe *who signed a transition*. RBAC here is about *what a principal may do on a
+target*. The models intersect only at the ledger: a principal must hold the capability to act,
+and the acting identities must still be distinct SoD principals.
 
 An ``ILLUSTRATIVE_CAPABILITIES`` set is provided purely as a convenience/example (it mirrors
 the PRD's illustrative catalog). It is NOT authoritative and NOT loaded by default — a real

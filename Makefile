@@ -1,6 +1,6 @@
 PY ?= python3
 
-.PHONY: help dev test lint typecheck check-purity ship
+.PHONY: help dev test lint typecheck check-purity check-doctrine ship
 
 help:
 	@echo "factory_core — make targets"
@@ -9,7 +9,8 @@ help:
 	@echo "  make lint          ruff over factory_core / scripts / tests"
 	@echo "  make typecheck     mypy over factory_core / scripts"
 	@echo "  make check-purity  the anti-coupling guard (core imports nothing target-specific)"
-	@echo "  make ship          run every gate, fail-closed (purity -> lint -> typecheck -> test)"
+	@echo "  make check-doctrine structural parity for active doctrine surfaces"
+	@echo "  make ship          run every gate (purity -> doctrine -> lint -> typecheck -> test)"
 
 dev:
 	$(PY) -m pip install -e ".[dev]"
@@ -26,8 +27,11 @@ typecheck:
 check-purity:
 	$(PY) scripts/check_core_purity.py
 
+check-doctrine:
+	$(PY) scripts/check_doctrine_sync.py
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity lint typecheck test
+ship: check-purity check-doctrine lint typecheck test
 	@echo "ship: all gates green (fail-closed)."

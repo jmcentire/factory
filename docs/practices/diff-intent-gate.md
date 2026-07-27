@@ -11,10 +11,12 @@ On 2026-07-07 an AI-co-authored docs commit (`ab45e3c`) promoted pipeline stages
 human-owned artifacts into "ten role agents" and stamped the result canonical. The drift
 did not arrive as a suspicious edit; it arrived as authoritative-sounding text, and every
 subsequent reader — agent and human-adjacent alike — inherited it as gospel until the
-founder spot-checked it (2026-07-20). The lesson: *reading* cannot be trusted to catch
-what *diffing against a quoted invariant* will. The three-roles re-assertion is the
-canonical worked example — "exactly three standing agent roles" changing to any other
-count is a material change, full stop.
+founder spot-checked it (2026-07-20). The founder then supplied the settled
+Validator/Coder/Tester and three-phase structure directly (2026-07-26). The lesson:
+*reading* cannot be trusted to catch what *diffing against a quoted invariant* will. The
+three-role re-assertion is the canonical worked example — changing the count, changing one
+of the three role identities, or promoting a phase/artifact into a role is a material
+change, full stop.
 
 ## The rule
 
