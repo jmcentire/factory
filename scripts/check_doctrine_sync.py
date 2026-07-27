@@ -2,9 +2,10 @@
 """Fail-closed structural parity guard for the active factory doctrine surfaces.
 
 The canonical specification is intentionally prose, but its load-bearing shape is structural:
-sixteen numbered system sections, three phase headings, three role directives, a three-row role
-map, and eight numbered non-negotiables. This guard parses those structures rather than asking
-whether a phrase happens to occur somewhere in the file.
+sixteen numbered system sections plus §3.5 Criticality, three phase headings, three role
+directives, a three-row role map, three criticality classes, and eight numbered
+non-negotiables. This guard parses those structures rather than asking whether a phrase happens
+to occur somewhere in the file.
 
 It also scans every active Markdown surface (including future files) and core module for
 superseded commitment phrases. Historical provenance is explicitly excluded: a history should
@@ -26,6 +27,7 @@ EXPECTED_PART_I_SECTIONS: tuple[str, ...] = (
     "1. What this is, and why",
     "2. What already exists, and what is missing from it",
     "3. The three roles",
+    "3.5. Criticality",
     "4. The three phases",
     "5. Translation boundaries",
     "6. What is shared and what is independent",
@@ -64,6 +66,7 @@ EXPECTED_PHASE_ROWS: tuple[str, ...] = (
     "2. Architecture",
     "3. Operational maturity",
 )
+EXPECTED_CRITICALITY_ROWS: tuple[str, ...] = ("Critical", "Standard", "Cosmetic")
 
 EXPECTED_NON_NEGOTIABLES: tuple[str, ...] = (
     "Fail closed on the hazards",
@@ -83,6 +86,8 @@ STALE_COMMITMENTS: tuple[str, ...] = (
     "protected hidden tests",
     "hidden suite is a protected",
     "product spec, eng spec",
+    "consequenceprofile",
+    "consequence-driven distinct-human approver floor",
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -226,6 +231,16 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if phase_headings != EXPECTED_PHASE_HEADINGS:
         errors.append(f"phase-headings-mismatch:{phase_headings!r}")
 
+    criticality_section = _section_lines(canonical, 2, "3.5. Criticality")
+    criticality_rows = _table_first_column(criticality_section)
+    if criticality_rows != EXPECTED_CRITICALITY_ROWS:
+        errors.append(f"criticality-map-mismatch:{criticality_rows!r}")
+    criticality_text = _normalized("\n".join(criticality_section))
+    if "An unclassified surface is critical." not in criticality_text:
+        errors.append("unclassified-critical-default-missing")
+    if "including the surfaces its side effects reach" not in criticality_text:
+        errors.append("side-effect-criticality-inheritance-missing")
+
     role_directives = tuple(
         title for level, title in headings if level == 2 and title.startswith("Directive — ")
     )
@@ -272,6 +287,35 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if "Working-copy question" in canonical:
         errors.append("unresolved-working-copy-question")
 
+    determinism = _section_lines(
+        canonical, 3, "Determinism is class-scoped, and retry is search"
+    )
+    determinism_rows = _table_first_column(determinism)
+    if determinism_rows != EXPECTED_CRITICALITY_ROWS:
+        errors.append(f"determinism-policy-mismatch:{determinism_rows!r}")
+
+    gate_axes = _section_lines(canonical, 3, "The two axes compose")
+    gate_rows = _table_first_column(gate_axes)
+    if gate_rows != EXPECTED_CRITICALITY_ROWS:
+        errors.append(f"criticality-gate-matrix-mismatch:{gate_rows!r}")
+    gate_matrix = _table_rows(gate_axes)
+    critical_row = next((row for row in gate_matrix if row and row[0] == "Critical"), ())
+    if len(critical_row) < 3 or critical_row[2] != "Block":
+        errors.append("criticality-critical-gap-must-block")
+    gate_text = _normalized("\n".join(gate_axes))
+    if "Oracle adequacy and criticality are independent and both apply." not in gate_text:
+        errors.append("oracle-criticality-independence-missing")
+
+    validator = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Validator")))
+    if "Assign criticality per component and externally reachable surface." not in validator:
+        errors.append("validator-criticality-assignment-missing")
+    if "You never promote a Critical surface on a waiver." not in validator:
+        errors.append("validator-critical-no-waiver-missing")
+
+    tester = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Tester")))
+    if "Write deterministically on critical surfaces." not in tester:
+        errors.append("tester-critical-determinism-missing")
+
     for path in _active_markdown(root) + _active_python(root):
         text = _read(root, path).casefold()
         for stale in STALE_COMMITMENTS:
@@ -289,8 +333,8 @@ def main() -> int:
             print(f"  {error}")
         return 1
     print(
-        "check_doctrine_sync: GREEN — canonical three-role/three-phase/eight-rule "
-        "structure, communication contract, and active-surface parity hold"
+        "check_doctrine_sync: GREEN — canonical three-role/three-phase/eight-rule structure, "
+        "criticality/determinism policy, communication contract, and active-surface parity hold"
     )
     return 0
 

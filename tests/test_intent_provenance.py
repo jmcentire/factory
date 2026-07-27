@@ -17,11 +17,13 @@ from factory_core.provenance import (
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
     PHASE_PRODUCT_SPECIFICATION,
+    PROVENANCE_GAP_PREFIXES,
     IntentBackreference,
     IntentItem,
     PhaseArtifact,
     ProvenanceBundle,
     ProvenanceClaim,
+    provenance_issue_is_gap,
     verify_intent_provenance,
 )
 
@@ -111,8 +113,7 @@ def test_all_claim_kinds_resolve_to_canonical_statements() -> None:
         "assertion-1",
     ]
     assert (
-        report.resolved_claims[-1].canonical_statement
-        == artifacts[2].items[0].canonical_statement
+        report.resolved_claims[-1].canonical_statement == artifacts[2].items[0].canonical_statement
     )
 
 
@@ -205,6 +206,76 @@ def test_missing_or_unresolvable_backreference_fails_closed() -> None:
     assert "item-unresolved:no-item:phase-1-v1:absent" in report.issues
 
 
+def test_missing_links_are_classifiable_without_weakening_integrity_failures() -> None:
+    artifacts = _bundle()
+    missing = ProvenanceClaim(claim_id="no-ref", kind=CLAIM_TASK, backreference=None)
+    unresolved = ProvenanceClaim(
+        claim_id="no-item",
+        kind=CLAIM_TASK,
+        backreference=IntentBackreference(
+            artifact_id=artifacts[0].artifact_id,
+            item_id="absent",
+            intent_digest=digest_obj({"canonical_statement": "x"}),
+        ),
+    )
+
+    report = verify_intent_provenance(artifacts, (missing, unresolved), _trust(artifacts))
+
+    missing_issue = "backreference-missing:no-ref"
+    unresolved_issue = "item-unresolved:no-item:phase-1-v1:absent"
+    assert missing_issue in report.issues
+    assert unresolved_issue in report.issues
+    assert provenance_issue_is_gap(missing_issue) is True
+    assert provenance_issue_is_gap(unresolved_issue) is False
+    assert "backreference-missing" in PROVENANCE_GAP_PREFIXES
+
+
+def test_empty_backreference_fields_are_reported_as_gaps_but_bad_digest_is_not() -> None:
+    artifacts = _bundle()
+    claims = (
+        ProvenanceClaim(
+            claim_id="no-artifact-id",
+            kind=CLAIM_TASK,
+            backreference=IntentBackreference(
+                artifact_id="",
+                item_id="item",
+                intent_digest=digest_obj({"canonical_statement": "x"}),
+            ),
+        ),
+        ProvenanceClaim(
+            claim_id="no-digest",
+            kind=CLAIM_TASK,
+            backreference=IntentBackreference(
+                artifact_id=artifacts[0].artifact_id,
+                item_id=artifacts[0].items[0].item_id,
+                intent_digest="",
+            ),
+        ),
+        ProvenanceClaim(
+            claim_id="bad-digest",
+            kind=CLAIM_TASK,
+            backreference=IntentBackreference(
+                artifact_id=artifacts[0].artifact_id,
+                item_id=artifacts[0].items[0].item_id,
+                intent_digest="sha256:not-a-real-digest",
+            ),
+        ),
+    )
+
+    report = verify_intent_provenance(artifacts, claims, _trust(artifacts))
+
+    assert "backreference-artifact-id-missing:no-artifact-id" in report.issues
+    assert any(issue.startswith("intent-digest-missing:no-digest:") for issue in report.issues)
+    assert any(issue.startswith("intent-digest-mismatch:bad-digest:") for issue in report.issues)
+    assert provenance_issue_is_gap("backreference-artifact-id-missing:no-artifact-id")
+    assert provenance_issue_is_gap(
+        f"intent-digest-missing:no-digest:{artifacts[0].artifact_id}:behavior-1"
+    )
+    assert not provenance_issue_is_gap(
+        f"intent-digest-mismatch:bad-digest:{artifacts[0].artifact_id}:behavior-1"
+    )
+
+
 def test_item_id_cannot_be_replayed_after_the_statement_changes() -> None:
     artifacts = _bundle()
     item = artifacts[0].items[0]
@@ -254,24 +325,28 @@ def test_duplicate_phases_items_and_claims_are_not_accepted() -> None:
 
 
 def test_from_dict_loads_the_canonical_schema() -> None:
-    artifact = PhaseArtifact.from_dict({
-        "artifact_id": "phase-1-v1",
-        "phase": PHASE_PRODUCT_SPECIFICATION,
-        "version": "1",
-        "source_digest": digest_obj({"verbatim": "source"}),
-        "human_ratifier": "human-1",
-        "validator_ratifier": "validator-1",
-        "items": [{"item_id": "item-1", "canonical_statement": "The exact statement."}],
-    })
-    claim = ProvenanceClaim.from_dict({
-        "claim_id": "claim-1",
-        "kind": CLAIM_REQUIREMENT,
-        "backreference": {
-            "artifact_id": artifact.artifact_id,
-            "item_id": artifact.items[0].item_id,
-            "intent_digest": artifact.items[0].intent_digest,
-        },
-    })
+    artifact = PhaseArtifact.from_dict(
+        {
+            "artifact_id": "phase-1-v1",
+            "phase": PHASE_PRODUCT_SPECIFICATION,
+            "version": "1",
+            "source_digest": digest_obj({"verbatim": "source"}),
+            "human_ratifier": "human-1",
+            "validator_ratifier": "validator-1",
+            "items": [{"item_id": "item-1", "canonical_statement": "The exact statement."}],
+        }
+    )
+    claim = ProvenanceClaim.from_dict(
+        {
+            "claim_id": "claim-1",
+            "kind": CLAIM_REQUIREMENT,
+            "backreference": {
+                "artifact_id": artifact.artifact_id,
+                "item_id": artifact.items[0].item_id,
+                "intent_digest": artifact.items[0].intent_digest,
+            },
+        }
+    )
 
     report = verify_intent_provenance(
         (artifact,),

@@ -33,6 +33,7 @@ the strength of a description — applies to the factory's own description of it
 1. [What this is, and why](#1-what-this-is-and-why)
 2. [What already exists, and what is missing from it](#2-what-already-exists-and-what-is-missing-from-it)
 3. [The three roles](#3-the-three-roles)
+3.5. [Criticality](#35-criticality)
 4. [The three phases](#4-the-three-phases)
 5. [Translation boundaries](#5-translation-boundaries)
 6. [What is shared and what is independent](#6-what-is-shared-and-what-is-independent)
@@ -159,6 +160,42 @@ This ordering is deliberate. Unit tests written before the implementation shape 
 encode the implementation rather than the specification, and once written they resist the
 shape changing. Integration tests assert what the spec promised, which is the thing that must
 not move.
+
+---
+
+## 3.5. Criticality
+
+Verification depth keys on oracle adequacy. **What happens when the oracle is inadequate keys
+on criticality**, and the two are independent.
+
+Oracle adequacy answers *is this change verified*. Criticality answers *what the factory does
+when it is not*, and *how deterministic the evidence has to be before it counts*. A change with
+a comprehensive oracle promotes regardless of the surface it touches. A change with a gap in
+its oracle is disposed of according to what that surface is for.
+
+Criticality is a property of the **surface**, not of the change and not of the diff. It is
+assigned by a human during design formalization, recorded per component in the control profile,
+and inherited by every change that disturbs the component.
+
+| Class | Surfaces | Evidence requirement | Disposition when the oracle is silent on a disturbed surface |
+|---|---|---|---|
+| **Critical** | Authorization and identity · money movement · data integrity · privacy, retention, deletion · safety decisions · irreversible or legally consequential effects · required transactional audit · cryptography · destructive migrations · the factory's own control plane | Complete for every disturbed surface, deterministic, live-verified | **Block. No waiver, no expiring risk acceptance, no promotion.** |
+| **Standard** | Ordinary business logic and its supporting surfaces | Covers the disturbed surfaces; gaps named | Gate to a human, who may promote under an explicit expiring risk acceptance with a named owner |
+| **Cosmetic** | Presentation, copy, layout, non-functional display where being wrong costs an aesthetic defect and nothing else | Best available | Report and promote |
+
+**A change inherits the highest criticality of any surface it disturbs, including the surfaces
+its side effects reach.** A cosmetic change that writes to an audited table is a critical
+change.
+
+**An unclassified surface is critical.** This is fail-closed on the classification itself, and
+it is deliberate: cosmetic must be an assertion someone made, never a default arrived at by
+omission. Given the enumeration failure class in §14, a surface nobody classified is precisely
+the surface nobody thought about.
+
+Criticality is not a claim about how likely a change is to be wrong. It is a claim about **what
+being wrong costs**, which is why it governs disposition rather than depth. The factory
+verifies a cosmetic change as rigorously as its oracle allows; it simply does not stop the line
+when the oracle falls short.
 
 ---
 
@@ -383,6 +420,38 @@ precision control. A verification plane that only accumulates agreement produces
 findings at a rate and precision that guarantees they are bypassed, which is the alert wall
 rebuilt inside the thing meant to replace it.
 
+### Determinism is class-scoped, and retry is search
+
+**A non-deterministic test is not evidence on a critical surface.**
+
+The reason is already in this document under another name. Retry is recovery, not search:
+running fresh attempts until one passes is brute-force sampling against the oracle, and the
+budget caps the cost of that sampling rather than its logic. A flaky test rerun until it goes
+green is the same error at a smaller scale. After the retry you cannot distinguish *the
+implementation is correct* from *this attempt was lucky*, and the green result carries none of
+the information the test was built to produce.
+
+Consequently:
+
+| Class | Flake policy |
+|---|---|
+| **Critical** | Zero tolerance. A test that has flaked once is quarantined, and **the behavior it asserted is unverified until the flake is fixed**, which blocks promotion. Automatic retry is disabled on critical suites — a rerun is a new run, recorded as such, and does not overwrite the failure. |
+| **Standard** | A flake budget exists. A quarantined test carries a named owner and an expiry, and an expired quarantine escalates. Quarantine is a debt with a due date, not a disposal. |
+| **Cosmetic** | Flake is noise. Retry freely. |
+
+The failure this prevents is specific and it is the one that erodes a gate fastest: a suite
+that goes red for reasons unrelated to the change trains everyone in the loop to rerun rather
+than read, and a gate that is routinely rerun until green has been bypassed without anyone
+deciding to bypass it.
+
+This also settles the disposition of a missing link in any evidence chain. **A gap is a failure
+on a critical surface and a report elsewhere.** An attestation chain, a provenance
+backreference, or a live-verification artifact that is absent on a critical surface blocks;
+the same absence on a standard surface gates for explicit, expiring risk acceptance, and the
+same absence on a cosmetic surface is recorded and promoted past. A malformed, unresolvable,
+mismatched, or fabricated link is not an absence; it is an integrity failure and blocks every
+class.
+
 ### The spec gate is reachable from anywhere
 
 A signed phase artifact is immutable for a particular run but is not presumed infallible.
@@ -434,8 +503,9 @@ and residual risk is disclosed with a named human owner.
 **7. Provenance of intent.** Every requirement, constraint, and test assertion carries a
 **resolvable backreference** to the phase artifact authorizing it. No agent originates a
 requirement. No agent attributes a requirement to a human without a resolvable citation to an
-artifact bearing it. An unresolvable or mismatched backreference is a **fail-closed condition**:
-the run halts and the misattribution is reported.
+artifact bearing it. A missing backreference is an evidence gap disposed of by criticality. An
+unresolvable or mismatched backreference is an integrity failure: the run halts and the
+misattribution is reported regardless of class.
 
 > This exists because a fabricated requirement laundered into the oracle is indistinguishable
 > from a signed one at every downstream gate. An agent that invents a constraint, encodes it in
@@ -445,7 +515,9 @@ the run halts and the misattribution is reported.
 **8. Live-verified, not self-attested.** Doneness is established by independent verification
 and live end-to-end validation against a running instance, because the only thing that catches
 passes-locally-fails-in-production is exercising the real running system across its real
-boundaries.
+boundaries. No self-attestation substitutes for that evidence. If the live-verification
+artifact is absent, the gap is disposed of by criticality and any cosmetic promotion past it
+is reported as unverified rather than described as done.
 
 ---
 
@@ -626,10 +698,26 @@ Humans are cheap on small things and irreplaceable on subtle ones. When agents d
 work, **batch it through one lane** to amortize setup rather than defaulting small work to
 humans because each one is cheap.
 
+### The two axes compose
+
+Oracle adequacy and criticality are independent and both apply.
+
+| | **Oracle adequate for the disturbed surfaces** | **Oracle silent on a disturbed surface** |
+|---|---|---|
+| **Critical** | Promote after mandatory specialist review | **Block** |
+| **Standard** | Auto-promote | Gate; expiring risk acceptance permitted |
+| **Cosmetic** | Auto-promote | Report and promote |
+
+Note what this does not say. It does not scale depth with impact, which §11 rejects and
+continues to reject. A large change to a cosmetic surface with a comprehensive oracle
+auto-promotes. A one-line change to a payment path whose oracle is silent on the surface it
+touched blocks, and no amount of smallness, urgency, or confidence changes that.
+
 ### Mandatory specialist review
 
-Regardless of the gate: **authorization · cryptography · destructive migrations · money
-movement · retention and deletion · safety decisions · the factory's own control plane.**
+Every surface in the **Critical** class defined in §3.5 receives mandatory specialist review.
+That class table is the one authoritative list; this section does not maintain a second
+enumeration that can drift.
 
 ### The decision package
 
@@ -651,7 +739,8 @@ either way.
 | Accountable humans | **Approval or risk acceptance** |
 
 Agents do not sign off in the organizational sense, and an exception requires an explicit,
-expiring risk acceptance owned by a named human.
+expiring risk acceptance owned by a named human. Risk acceptance is available for a Standard
+gap, never for a Critical one.
 
 ---
 
@@ -664,7 +753,13 @@ Each candidate has a **content-addressed change-evidence manifest**: digests of 
 phase artifacts, the control policy, the artifact, and the configuration; the verifier identity
 and version; the spec-control results including the negative-control baseline and
 positive-control result where present; test, mutation, security, and contract results;
-per-environment results; residual risks; waivers; and human approvals.
+per-environment results; residual risks; Standard risk acceptances; and human approvals. It
+also records:
+
+- The criticality class of every surface the change disturbed, including surfaces reached by
+  side effects, and the class-required evidence set for each
+- For every critical surface, the determinism record — whether any test on it flaked during
+  this run, whether an automatic retry occurred, and the disposition
 
 The same artifact digest is promoted through the environments, and **promotion verifies that
 every cited fact matches its authoritative source** rather than trusting the manifest's own
@@ -872,7 +967,7 @@ owns the decisions.
 ### The human-agent authority boundary
 
 **Humans own** product intent, architectural decisions, state ownership, trust boundaries,
-consequential tradeoffs, risk acceptance, and promotion.
+criticality classifications, consequential tradeoffs, risk acceptance, and promotion.
 
 **Agents may** propose, formalize, itemize, challenge, model, detect contradictions, diagnose,
 implement an authorized change, and verify conformance.
@@ -916,9 +1011,10 @@ it belongs to.
 6. **Honesty in docs and self-reports.**
 7. **Provenance of intent** — every requirement, constraint, and assertion carries a resolvable
    backreference to the phase artifact authorizing it. No agent originates a requirement or
-   attributes one to a human without a resolvable citation. An unresolvable or mismatched
-   backreference halts the run.
-8. **Live-verified, not self-attested.**
+   attributes one to a human without a resolvable citation. A missing link is disposed of by
+   criticality; an unresolvable or mismatched link halts the run.
+8. **Live-verified, not self-attested** — a missing live artifact is disposed of by
+   criticality and never replaced by a self-report.
 
 *(Full text in §7.)*
 
@@ -926,7 +1022,9 @@ it belongs to.
 
 Verification depth and the human gate key on **oracle adequacy, not blast radius.** Agents take
 the large, well-specified, loud-when-wrong work. Humans take the small, subtle work. The
-consequential surfaces draw mandatory review regardless of size.
+Critical surfaces draw mandatory specialist review regardless of size. When the oracle is
+silent, Critical blocks, Standard gates for expiring human risk acceptance, and Cosmetic
+reports and promotes.
 
 ### Retry is recovery, not search
 
@@ -940,8 +1038,9 @@ its cost, not its logic.
 > the human decides. The writer of a fix does not control the judge, cannot negotiate the
 > verdict, and cannot talk to the Tester. The spec is bounded from both sides against the
 > trusted baseline. Verification depth keys on oracle adequacy, not diff size. Every assertion
-> traces to a signed phase artifact. **No agent silently resolves ambiguity, changes the target,
-> changes the verifier, or accepts its own unsupported claim of completion.**
+> traces to a signed phase artifact. Criticality governs the disposition of gaps, not the depth
+> of verification. **No agent silently resolves ambiguity, changes the target, changes the
+> verifier, or accepts its own unsupported claim of completion.**
 
 ---
 
@@ -972,6 +1071,12 @@ choice costs. Report what you detect — cycles, ambiguous ownership, multiple w
 coupling. Settle the database schema as a first-class contract. Expect to be argued with; an
 architecture accepted without debate has not been reviewed. Continue until it is settled and
 the human agrees.
+
+**Assign criticality per component and externally reachable surface.** Propose Critical,
+Standard, or Cosmetic with the reasoning stated; the human decides and the control profile
+records the result. State what being wrong costs for each surface, because that is the question
+the class answers. Enumerate side effects that reach other surfaces so the change inherits
+their highest class. Leave nothing unclassified; the gate treats anything omitted as Critical.
 
 **Phase 3 — propose the operational posture.** Propose the tests, edge cases, error handling,
 failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name the fail-closed
@@ -1005,6 +1110,17 @@ baseline on the defect, and the positive control passed against main on unrelate
 **Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
 including side effects. Do not let diff size stand in for that judgment.
 
+**Dispose of gaps by class.** Determine every surface the change disturbs, including those its
+side effects reach, and take the highest class among them. Where the oracle is silent on a
+disturbed surface: block if Critical, gate if Standard, report if Cosmetic. Where a required
+evidence artifact is absent — an attestation, a backreference, a live-verification result —
+apply the same disposition. A malformed, mismatched, or fabricated artifact blocks regardless
+of class.
+
+**Treat a flaked critical test as a failure.** A green result obtained after a red on a
+critical surface is not a pass; it is two observations, one of which was negative, and the
+behavior remains unverified.
+
 **Re-derive every cited fact** from its authoritative source rather than reading it from a
 report. **Drive the change live.**
 
@@ -1017,14 +1133,17 @@ You never let the build loop start before all three phases are agreed. You never
 ambiguity in the human's intent by choosing. You never paraphrase spec language when quoting it
 would do. You never relay test internals to an automated repair context. You never confirm
 where you should refute. You never accept self-attestation in place of cited evidence and a
-live pass. You never allow a partial pass. **You never edit the spec, tests, or implementation
-in the run you verify.**
+live pass. You never allow a partial pass. You never classify a surface as Cosmetic on the
+grounds that the change touching it is small. You never promote a Critical surface on a
+waiver. **You never edit the spec, tests, or implementation in the run you verify.**
 
 ### Self-refutation before handoff
 
 Read your itemization against the preserved verbatim and find the item that says something the
 source did not. For each acceptance criterion, name the specific observation that would have
-falsified your verdict and confirm you looked for it.
+falsified your verdict and confirm you looked for it. For each surface classified below
+Critical, name the worst outcome of that surface being wrong and confirm it is bounded to what
+the class tolerates. For each Critical surface, trace which components' side effects reach it.
 
 ---
 
@@ -1129,6 +1248,11 @@ the schema contract.
 main with at least one failing on the defect, and pass against main on every behavior unrelated
 to the defect.
 
+**Write deterministically on critical surfaces.** No time dependence, no ordering dependence,
+no shared mutable fixture, no network to anything outside the disposable environment, no
+sleep-and-hope. A test on a critical surface that cannot be made deterministic is a
+specification defect about testability, raised rather than shipped with a retry wrapper.
+
 **Carry provenance on every assertion.** Each cites the phase artifact it asserts.
 
 **Route every question to the Validator.**
@@ -1140,7 +1264,9 @@ schema. You never mock away an owned critical dependency whose real behavior the
 check. You never write a test that passes without exercising the path it names. **You never
 assert a constraint no phase artifact carries, and you never attribute an assertion to a human
 decision without a resolvable backreference to the artifact bearing it.** You do not certify
-your own tests' sensitivity — mutation evidence is the Validator's.
+your own tests' sensitivity — mutation evidence is the Validator's. You never add a retry, a
+rerun, or a tolerance window to a test on a critical surface to make it stable. Stabilizing a
+flaky critical test by rerunning it converts evidence into sampling.
 
 Where the spec is ambiguous about intent, **raise a specification defect rather than encoding
 your guess as the oracle.** A test asserting an intent nobody agreed judges the work against a
@@ -1183,6 +1309,36 @@ against the trusted baseline; the Validator verifies both before trusting anythi
 ---
 
 ## Appendix B — Changelog
+
+### Criticality amendment — 2026-07-27
+
+**Added §3.5, Criticality.** The document previously carried three partial mechanisms pointing
+at the same idea — hazard classes governing runtime disposition, the consequential-surface
+list governing mandatory review, and the control categories governing enforcement mode — with
+no unified classification and no statement of what a criticality class *decides*. It now
+decides two things: the disposition when the oracle is short, and the tolerance for
+non-deterministic evidence.
+
+This does not reverse §11's rejection of scaling depth with blast radius. Blast radius is how
+much a change touches; criticality is what the surface is for, and they are independent axes
+that compose in a two-by-three matrix.
+
+**Determinism became class-scoped.** Flake tolerance was previously unaddressed. A flaky test
+rerun to green is retry-as-search at test granularity — after the rerun you cannot distinguish a
+correct implementation from a lucky attempt — so critical surfaces carry zero flake tolerance
+and automatic retry is disabled on them. Standard surfaces carry a flake budget where
+quarantine is a debt with an owner and an expiry.
+
+**Unclassified surfaces are critical.** Fail-closed on classification, so Cosmetic is always
+an assertion someone made rather than a default reached by omission. This is the enumeration
+failure of §14 anticipated one layer up: a surface nobody classified is the surface nobody
+thought about.
+
+**Evidence gaps now have a disposition.** A missing attestation, backreference, or
+live-verification artifact blocks on Critical, gates on Standard, and reports on Cosmetic —
+which is the policy any evidence-chain mechanism needs before it can ship without becoming
+decorative. Malformed, mismatched, fabricated, or otherwise untrustworthy evidence remains an
+integrity failure and blocks every class.
 
 ### Founder-directed resolution — 2026-07-27
 

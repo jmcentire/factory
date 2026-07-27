@@ -8,7 +8,8 @@ it. This module implements the deterministic part of that rule:
 * every canonical item has a content digest;
 * downstream claims carry only a reference to that canonical item and its digest;
 * the artifact bundle is accepted only against externally trusted content digests; and
-* a missing phase, untrusted artifact, unresolved item, or mismatched digest fails closed.
+* a missing phase, untrusted artifact, unresolved item, or mismatched digest is reported as an
+  unsatisfied control.
 
 This deliberately does **not** decide semantic equivalence. A digest cannot determine whether
 two paraphrases mean the same thing, and pretending otherwise would launder an agent judgment
@@ -20,6 +21,10 @@ The module is a pure substrate control, not an orchestration engine. It does not
 enforce communication topology, verify signatures, or claim the three live lanes exist.
 Signature and authority verification happen outside the core; the resulting trusted artifact
 digests enter this function as data.
+
+The verifier does not itself decide promotion. It classifies issues so the promotion policy can
+distinguish an **absent link** (an evidence gap disposed of by surface criticality) from an
+**invalid link** (an integrity failure that blocks every class). Both remain unsatisfied here.
 """
 
 from __future__ import annotations
@@ -47,18 +52,51 @@ CLAIM_CONSTRAINT = "constraint"
 CLAIM_TASK = "task"
 CLAIM_TEST_ASSERTION = "test-assertion"
 
-SUPPORTED_CLAIM_KINDS: frozenset[str] = frozenset({
-    CLAIM_REQUIREMENT,
-    CLAIM_CONSTRAINT,
-    CLAIM_TASK,
-    CLAIM_TEST_ASSERTION,
-})
+SUPPORTED_CLAIM_KINDS: frozenset[str] = frozenset(
+    {
+        CLAIM_REQUIREMENT,
+        CLAIM_CONSTRAINT,
+        CLAIM_TASK,
+        CLAIM_TEST_ASSERTION,
+    }
+)
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# Absence is different from contradiction. These stable prefixes identify missing links whose
+# promotion disposition belongs to the surface-criticality policy. Every other issue is an
+# integrity defect: malformed, duplicated, unresolvable, mismatched, or fabricated.
+PROVENANCE_GAP_PREFIXES: frozenset[str] = frozenset(
+    {
+        "artifact-items-empty",
+        "artifact-untrusted",
+        "artifact-version-missing",
+        "backreference-artifact-id-missing",
+        "backreference-item-id-missing",
+        "backreference-missing",
+        "claims-empty",
+        "human-ratifier-missing",
+        "intent-digest-missing",
+        "phase-missing",
+        "source-digest-missing",
+        "validator-ratifier-missing",
+    }
+)
 
 
 def _is_digest(value: str) -> bool:
     return bool(_SHA256_RE.fullmatch(value))
+
+
+def provenance_issue_is_gap(issue: str) -> bool:
+    """Return whether ``issue`` represents absence rather than invalid authority.
+
+    The prefix vocabulary is part of the verifier's stable machine contract. Missing evidence
+    is still an unsatisfied provenance check; this helper only tells the promotion layer which
+    criticality disposition applies. Unknown prefixes fail closed as integrity defects.
+    """
+
+    return issue.split(":", 1)[0] in PROVENANCE_GAP_PREFIXES
 
 
 @dataclass(frozen=True)
@@ -338,7 +376,9 @@ def verify_intent_provenance(
 
         if not artifact.version.strip():
             issues.append(f"artifact-version-missing:{artifact_id}")
-        if not _is_digest(artifact.source_digest):
+        if not artifact.source_digest:
+            issues.append(f"source-digest-missing:{artifact_id}")
+        elif not _is_digest(artifact.source_digest):
             issues.append(f"source-digest-invalid:{artifact_id}")
         if not artifact.human_ratifier.strip():
             issues.append(f"human-ratifier-missing:{artifact_id}")
@@ -354,9 +394,7 @@ def verify_intent_provenance(
         trusted_digest = trusted_artifact_digests.get(artifact_id, "")
         if not trusted_digest:
             issues.append(f"artifact-untrusted:{artifact_id}")
-        elif not _is_digest(trusted_digest) or not verify_digest(
-            artifact.body(), trusted_digest
-        ):
+        elif not _is_digest(trusted_digest) or not verify_digest(artifact.body(), trusted_digest):
             issues.append(f"artifact-digest-mismatch:{artifact_id}")
 
         if not artifact.items:
@@ -403,6 +441,15 @@ def verify_intent_provenance(
         ref = claim.backreference
         if ref is None:
             issues.append(f"backreference-missing:{claim_id}")
+            continue
+        if not ref.artifact_id.strip():
+            issues.append(f"backreference-artifact-id-missing:{claim_id}")
+            continue
+        if not ref.item_id.strip():
+            issues.append(f"backreference-item-id-missing:{claim_id}")
+            continue
+        if not ref.intent_digest:
+            issues.append(f"intent-digest-missing:{claim_id}:{ref.artifact_id}:{ref.item_id}")
             continue
         if ref.artifact_id not in artifact_index:
             issues.append(f"artifact-unresolved:{claim_id}:{ref.artifact_id}")

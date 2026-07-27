@@ -1,78 +1,95 @@
-"""factory_core.promotion — the fail-closed, default-deny promotion (merge-gate) decision.
+"""Fail-closed promotion decision over oracle adequacy and surface criticality.
 
-This is the generic extraction of the "may this built artifact be promoted / merged?" gate
-proven on the first consuming target. That target's implementation names its own gate ids, its
-own risk tiers, and its own action categories, and reads its own content-addressed manifest.
-Here, none of that vocabulary is present: the tiers, the categories, the required gate ids, and
-the approver thresholds are all **data** the target supplies through :class:`ConsequenceProfile`
-and :class:`PromotionRequest`. This core owns only the neutral decision.
+The core answers one question: may this exact built artifact be promoted? Every target-specific
+surface, component, gate id, evidence id, and dependency edge arrives as data. The core fixes
+only the doctrine:
 
-Relationship to :mod:`factory_core.manifest`: the manifest module owns *write-time* segregation
-of duties for a single ledger entry (implementer/verifier/approver distinctness, approver-is-
-human) and the tamper-evident hash-chain. This module does NOT duplicate that — it *composes*
-it: it reuses :class:`~factory_core.manifest.SegregationPolicy` for DENY-wins identity
-resolution and :func:`~factory_core.manifest.verify_digest` for the content-address tamper
-check, and adds the *aggregate* promotion decision on top: gate-outcome quorum, the
-consequence-driven distinct-human approver floor, and default-deny composition of every
-condition into one verdict. It also calls the provenance verifier directly so a caller cannot
-promote a claim set whose authority does not resolve to the three trusted phase artifacts.
+* verification depth is not scaled by diff size or criticality;
+* every explicitly disturbed surface inherits the highest class reachable through declared
+  side effects;
+* missing oracle/evidence links are gaps disposed by class;
+* malformed, mismatched, or negative evidence blocks every class;
+* Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
+  retry-free, live, specialist-reviewed, and approved by at least two distinct enrolled humans;
+* Standard gaps require a candidate-bound, expiring risk acceptance from an enrolled human;
+* Cosmetic gaps are reported and promoted past; and
+* Standard/Cosmetic changes with adequate oracles need no discretionary human click.
 
-The doctrine this implements (the eight non-negotiables; oracle-adequacy gating):
+The declared side-effect closure is not a proof that the topology is complete. Phase-2
+enumeration and parity controls own that upstream obligation. This module guarantees only that
+the supplied topology cannot be bypassed during the decision.
 
-  * **Default-deny.** ``allowed`` is true only when EVERY condition is affirmatively satisfied.
-    Any missing input, provenance defect, tamper, failed/absent gate, or SoD violation denies.
-    The reason set is the falsifiable evidence of *why* it denied.
-  * **An agent can never approve** (fail closed on authorization). Approver resolution is
-    DENY-wins (the agent denylist is checked before the human allowlist), inherited from the
-    :class:`SegregationPolicy`. No policy ⇒ no identity resolves ⇒ deny.
-  * **The consequential floor.** A consequential change (a data-declared risk tier or action
-    category) requires at least :data:`CONSEQUENTIAL_APPROVER_FLOOR` (= two) DISTINCT enrolled
-    humans — a floor the core enforces and a target profile may raise but never lower. A
-    non-consequential change still requires at least one enrolled human (the mechanical gates
-    are the second reviewer, but a human still accepts the risk).
-
-Posture (matching the sibling modules): stdlib only, side-effect free at import, no clock, no
-disk-reading, no target contact. Every per-target specific (which tiers/categories are
-consequential, which gates are required, the exact thresholds) arrives as data.
+Posture: stdlib only, pure, no clock, no disk, no target contact. The caller supplies the
+evaluation time and externally trusted identity roster.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from factory_core.manifest import SegregationPolicy, verify_digest
-from factory_core.provenance import ProvenanceBundle
+from factory_core.criticality import (
+    BASE_REQUIRED_EVIDENCE_IDS,
+    CRITICALITY_COSMETIC,
+    CRITICALITY_CRITICAL,
+    CRITICALITY_STANDARD,
+    CriticalityProfile,
+    CriticalityResolution,
+    ResolvedSurface,
+    normalize_label,
+    resolve_criticality,
+)
+from factory_core.manifest import SegregationPolicy, digest_obj, verify_digest
+from factory_core.provenance import ProvenanceBundle, provenance_issue_is_gap
 
-# --------------------------------------------------------------------------- #
-# Doctrine constant: the non-lowerable consequential-approver floor
-# --------------------------------------------------------------------------- #
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_LIVE_RESULTS = frozenset({"missing", "passed", "failed"})
 
-#: A consequential change requires at least this many DISTINCT enrolled humans. This is a
-#: property of the factory doctrine (a consequential action is never taken on one authority),
-#: NOT of any target — so it lives in the core and a target profile may raise it but never lower
-#: it. A non-consequential change requires at least one (see :data:`BASELINE_APPROVER_FLOOR`).
-CONSEQUENTIAL_APPROVER_FLOOR = 2
-
-#: The lowest an approver requirement can ever be: at least one enrolled human accepts the risk,
-#: even for the most inert change. (An agent can never fill this slot — DENY-wins.)
-BASELINE_APPROVER_FLOOR = 1
+DISPOSITION_PROMOTE = "promote"
+DISPOSITION_REPORT_AND_PROMOTE = "report-and-promote"
+DISPOSITION_RISK_ACCEPTED = "risk-accepted"
+DISPOSITION_GATE = "gate"
+DISPOSITION_BLOCK = "block"
 
 
 class PromotionError(ValueError):
-    """Raised when a promotion input is structurally invalid (fail closed)."""
+    """Raised when a promotion input cannot be parsed without guessing."""
 
 
-# --------------------------------------------------------------------------- #
-# Gate outcomes (the mechanical, reproducible checks that stand in for review)
-# --------------------------------------------------------------------------- #
+def _as_str_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
+def _as_int(value: Any, *, field_name: str, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise PromotionError(f"{field_name!r} must be an integer, got {value!r}") from exc
+
+
+def _is_sha256(value: str) -> bool:
+    return bool(_SHA256_RE.fullmatch(value))
+
+
+def _mapping_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
 
 @dataclass(frozen=True)
 class GateOutcome:
-    """One mechanical gate's captured outcome. ``id`` is the target's opaque gate name; the core
-    assigns it no meaning beyond matching it against the profile's required set. ``detail`` is
-    free-form evidence for the outcome (e.g. a test count, a build log pointer)."""
+    """One target-named mechanical gate result."""
 
     id: str
     passed: bool
@@ -81,27 +98,15 @@ class GateOutcome:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> GateOutcome:
         return cls(
-            id=str(raw.get("id", "")).strip(),
+            id=str(raw.get("id", "")),
             passed=bool(raw.get("passed", False)),
             detail=str(raw.get("detail", "")),
         )
 
 
-# --------------------------------------------------------------------------- #
-# The evidence-integrity precondition (content-addressed tamper check)
-# --------------------------------------------------------------------------- #
-
 @dataclass(frozen=True)
 class EvidenceIntegrity:
-    """The content-addressed artifact this promotion is bound to, plus its claimed address.
-
-    A promotion is bound to a specific verified artifact (the target's evidence manifest, a spec
-    digest bundle, whatever it content-addresses). ``body`` is that artifact as a canonical-
-    JSON-serializable mapping; ``claimed_digest`` is the address carried alongside it (e.g. from
-    a signed side-record). The gate recomputes the address and constant-time-compares — any
-    field mutation moves the address and denies. An absent body or digest denies (fail closed:
-    an unverifiable artifact is never promoted).
-    """
+    """A content-addressed evidence artifact and the address claimed for it."""
 
     body: Mapping[str, Any] | None = None
     claimed_digest: str = ""
@@ -111,155 +116,241 @@ class EvidenceIntegrity:
         return self.body is not None and bool(self.claimed_digest)
 
     def verify(self) -> bool:
-        """Constant-time content-address check via :func:`factory_core.manifest.verify_digest`."""
-        if self.body is None or not self.claimed_digest:
+        if not self.present:
             return False
-        return verify_digest(dict(self.body), self.claimed_digest)
+        return verify_digest(dict(self.body or {}), self.claimed_digest)
 
+    def verifies_binding(self, expected: Mapping[str, Any]) -> bool:
+        """Verify both the content address and the required subject fields.
 
-# --------------------------------------------------------------------------- #
-# The consequence profile (TARGET DATA: what is consequential + the thresholds)
-# --------------------------------------------------------------------------- #
+        Additional evidence fields are permitted, but an artifact about another candidate,
+        surface, result, or decision cannot be replayed here.
+        """
 
-def _norm(value: str) -> str:
-    """Casefold + trim a tier/category/gate label so matching is whitespace/case-insensitive.
-    Neutral string hygiene — the LABELS themselves are target data, never named here."""
-    return value.strip().casefold()
+        if not self.verify() or self.body is None:
+            return False
+        return all(self.body.get(key) == value for key, value in expected.items())
 
-
-def _norm_set(values: Iterable[str]) -> frozenset[str]:
-    return frozenset(_norm(v) for v in values if v and v.strip())
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> EvidenceIntegrity | None:
+        if raw is None:
+            return None
+        body = raw.get("body")
+        return cls(
+            body=body if isinstance(body, Mapping) else None,
+            claimed_digest=str(raw.get("claimed_digest", "")),
+        )
 
 
 @dataclass(frozen=True)
-class ConsequenceProfile:
-    """The target's promotion policy, as DATA. The core names none of these labels.
+class NamedEvidence:
+    """One additional class-required evidence artifact for a surface."""
 
-    * ``consequential_tiers`` — the risk-tier labels that make a change consequential;
-    * ``consequential_categories`` — the action-category labels that make a change consequential
-      regardless of tier;
-    * ``required_gate_ids`` — the mechanical gates that must all be present AND passed;
-    * ``baseline_min_approvers`` — distinct-human approvals a non-consequential change needs
-      (clamped up to :data:`BASELINE_APPROVER_FLOOR`);
-    * ``consequential_min_approvers`` — distinct-human approvals a consequential change needs
-      (clamped up to :data:`CONSEQUENTIAL_APPROVER_FLOOR` — the target may raise the floor,
-      never lower it).
-
-    Labels are stored normalized (casefold+trim) so a target's data and a request's values
-    compare regardless of case/whitespace.
-    """
-
-    consequential_tiers: frozenset[str] = frozenset()
-    consequential_categories: frozenset[str] = frozenset()
-    required_gate_ids: frozenset[str] = frozenset()
-    baseline_min_approvers: int = BASELINE_APPROVER_FLOOR
-    consequential_min_approvers: int = CONSEQUENTIAL_APPROVER_FLOOR
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "consequential_tiers", _norm_set(self.consequential_tiers))
-        object.__setattr__(
-            self, "consequential_categories", _norm_set(self.consequential_categories)
-        )
-        object.__setattr__(self, "required_gate_ids", _norm_set(self.required_gate_ids))
+    evidence_id: str
+    integrity: EvidenceIntegrity | None = None
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> ConsequenceProfile:
-        def _ints(key: str, default: int) -> int:
-            val = raw.get(key, default)
-            try:
-                return int(val)
-            except (TypeError, ValueError) as exc:
-                raise PromotionError(f"{key!r} must be an integer, got {val!r}") from exc
-
+    def from_dict(cls, raw: Mapping[str, Any]) -> NamedEvidence:
         return cls(
-            consequential_tiers=frozenset(_as_str_tuple(raw.get("consequential_tiers"))),
-            consequential_categories=frozenset(
-                _as_str_tuple(raw.get("consequential_categories"))
-            ),
-            required_gate_ids=frozenset(_as_str_tuple(raw.get("required_gate_ids"))),
-            baseline_min_approvers=_ints("baseline_min_approvers", BASELINE_APPROVER_FLOOR),
-            consequential_min_approvers=_ints(
-                "consequential_min_approvers", CONSEQUENTIAL_APPROVER_FLOOR
+            evidence_id=str(raw.get("evidence_id", "")),
+            integrity=EvidenceIntegrity.from_dict(
+                raw.get("integrity") if isinstance(raw.get("integrity"), Mapping) else None
             ),
         )
 
-    def is_consequential(self, tier: str, categories: Iterable[str]) -> bool:
-        """A change is consequential if its tier is a consequential tier OR any of its declared
-        categories is a consequential category. Comparison is on normalized labels."""
-        if _norm(tier) in self.consequential_tiers:
-            return True
-        return bool(_norm_set(categories) & self.consequential_categories)
 
-    def required_approvers(self, tier: str, categories: Iterable[str]) -> int:
-        """The distinct-human approver requirement, with the doctrine floors applied. A
-        consequential change is floored at :data:`CONSEQUENTIAL_APPROVER_FLOOR`; every change is
-        floored at :data:`BASELINE_APPROVER_FLOOR` (the target may raise, never lower)."""
-        if self.is_consequential(tier, categories):
-            return max(CONSEQUENTIAL_APPROVER_FLOOR, self.consequential_min_approvers)
-        return max(BASELINE_APPROVER_FLOOR, self.baseline_min_approvers)
+@dataclass(frozen=True)
+class Quarantine:
+    """Time-bounded Standard flake debt."""
+
+    owner: str
+    expires_at: int
+    rationale: str
+    evidence: EvidenceIntegrity | None = None
+
+    def authority_body(self, surface_id: str) -> dict[str, Any]:
+        return {
+            "surface_id": normalize_label(surface_id),
+            "owner": self.owner,
+            "expires_at": self.expires_at,
+            "rationale": self.rationale,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> Quarantine:
+        return cls(
+            owner=str(raw.get("owner", "")),
+            expires_at=_as_int(raw.get("expires_at"), field_name="expires_at"),
+            rationale=str(raw.get("rationale", "")),
+            evidence=EvidenceIntegrity.from_dict(
+                raw.get("evidence") if isinstance(raw.get("evidence"), Mapping) else None
+            ),
+        )
 
 
-def _as_str_tuple(value: Any) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return tuple(str(v) for v in value)
-    return (str(value),)
+@dataclass(frozen=True)
+class SurfaceObservation:
+    """Oracle, live, determinism, and additional evidence for one disturbed surface."""
+
+    surface_id: str
+    oracle_adequate: bool = False
+    live_result: str = "missing"
+    live_evidence: EvidenceIntegrity | None = None
+    evidence: tuple[NamedEvidence, ...] = ()
+    deterministic: bool = False
+    flake_count: int = 0
+    automatic_retry_count: int = 0
+    quarantine: Quarantine | None = None
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> SurfaceObservation:
+        quarantine_raw = raw.get("quarantine")
+        return cls(
+            surface_id=str(raw.get("surface_id", "")),
+            oracle_adequate=bool(raw.get("oracle_adequate", False)),
+            live_result=str(raw.get("live_result", "missing")),
+            live_evidence=EvidenceIntegrity.from_dict(
+                raw.get("live_evidence") if isinstance(raw.get("live_evidence"), Mapping) else None
+            ),
+            evidence=tuple(
+                NamedEvidence.from_dict(item) for item in _mapping_sequence(raw.get("evidence"))
+            ),
+            deterministic=bool(raw.get("deterministic", False)),
+            flake_count=_as_int(raw.get("flake_count"), field_name="flake_count"),
+            automatic_retry_count=_as_int(
+                raw.get("automatic_retry_count"),
+                field_name="automatic_retry_count",
+            ),
+            quarantine=(
+                Quarantine.from_dict(quarantine_raw)
+                if isinstance(quarantine_raw, Mapping)
+                else None
+            ),
+        )
 
 
-# --------------------------------------------------------------------------- #
-# The promotion request (the specific artifact being promoted)
-# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SpecialistReview:
+    """Candidate-bound human specialist verdict for one surface."""
+
+    surface_id: str
+    reviewer: str
+    candidate_digest: str
+    criticality_profile_digest: str
+    passed: bool
+    evidence: EvidenceIntegrity | None = None
+
+    def authority_body(self) -> dict[str, Any]:
+        return {
+            "surface_id": normalize_label(self.surface_id),
+            "reviewer": self.reviewer,
+            "candidate_digest": self.candidate_digest,
+            "criticality_profile_digest": self.criticality_profile_digest,
+            "passed": self.passed,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> SpecialistReview:
+        return cls(
+            surface_id=str(raw.get("surface_id", "")),
+            reviewer=str(raw.get("reviewer", "")),
+            candidate_digest=str(raw.get("candidate_digest", "")),
+            criticality_profile_digest=str(raw.get("criticality_profile_digest", "")),
+            passed=bool(raw.get("passed", False)),
+            evidence=EvidenceIntegrity.from_dict(
+                raw.get("evidence") if isinstance(raw.get("evidence"), Mapping) else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class RiskAcceptance:
+    """Candidate-bound, expiring Standard-gap acceptance owned by a named human."""
+
+    owner: str
+    surface_ids: tuple[str, ...]
+    candidate_digest: str
+    criticality_profile_digest: str
+    expires_at: int
+    rationale: str
+    evidence: EvidenceIntegrity | None = None
+
+    def authority_body(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "surface_ids": sorted(
+                {
+                    normalize_label(surface_id)
+                    for surface_id in self.surface_ids
+                    if normalize_label(surface_id)
+                }
+            ),
+            "candidate_digest": self.candidate_digest,
+            "criticality_profile_digest": self.criticality_profile_digest,
+            "expires_at": self.expires_at,
+            "rationale": self.rationale,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> RiskAcceptance:
+        return cls(
+            owner=str(raw.get("owner", "")),
+            surface_ids=_as_str_tuple(raw.get("surface_ids")),
+            candidate_digest=str(raw.get("candidate_digest", "")),
+            criticality_profile_digest=str(raw.get("criticality_profile_digest", "")),
+            expires_at=_as_int(raw.get("expires_at"), field_name="expires_at"),
+            rationale=str(raw.get("rationale", "")),
+            evidence=EvidenceIntegrity.from_dict(
+                raw.get("evidence") if isinstance(raw.get("evidence"), Mapping) else None
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class PromotionRequest:
-    """Everything about the specific change being promoted. All values are data.
+    """All evidence and authority records for one exact candidate."""
 
-    ``tier`` / ``categories`` classify consequence (matched against the profile). ``gates`` are
-    the captured mechanical outcomes. ``implementer`` built it, ``verifier`` proved it (both may
-    be agents — the factory implements/verifies mechanically). ``approvers`` are the identities
-    that approved THIS artifact; each is resolved DENY-wins against the roster policy, and a
-    human with several aliases still counts once. ``evidence`` is the content-addressed tamper
-    precondition. ``provenance`` is the complete phase-artifact/backreference bundle re-derived
-    at decision time. Either one absent means deny.
-    """
-
-    tier: str = ""
-    categories: tuple[str, ...] = ()
+    candidate_digest: str = ""
+    disturbed_surface_ids: tuple[str, ...] = ()
+    observations: tuple[SurfaceObservation, ...] = ()
     gates: tuple[GateOutcome, ...] = ()
     implementer: str = ""
     verifier: str = ""
     approvers: tuple[str, ...] = ()
+    specialist_reviews: tuple[SpecialistReview, ...] = ()
+    risk_acceptance: RiskAcceptance | None = None
+    evaluated_at: int = 0
     evidence: EvidenceIntegrity | None = None
     provenance: ProvenanceBundle | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
-        gates_raw = raw.get("gates")
-        gates = tuple(
-            GateOutcome.from_dict(g)
-            for g in (gates_raw if isinstance(gates_raw, (list, tuple)) else ())
-        )
-        ev_raw = raw.get("evidence")
-        evidence = (
-            EvidenceIntegrity(
-                body=ev_raw.get("body"),
-                claimed_digest=str(ev_raw.get("claimed_digest", "")),
-            )
-            if isinstance(ev_raw, Mapping)
-            else None
-        )
+        risk_raw = raw.get("risk_acceptance")
         provenance_raw = raw.get("provenance")
         return cls(
-            tier=str(raw.get("tier", "")),
-            categories=_as_str_tuple(raw.get("categories")),
-            gates=gates,
+            candidate_digest=str(raw.get("candidate_digest", "")),
+            disturbed_surface_ids=_as_str_tuple(raw.get("disturbed_surface_ids")),
+            observations=tuple(
+                SurfaceObservation.from_dict(item)
+                for item in _mapping_sequence(raw.get("observations"))
+            ),
+            gates=tuple(
+                GateOutcome.from_dict(item) for item in _mapping_sequence(raw.get("gates"))
+            ),
             implementer=str(raw.get("implementer", "")),
             verifier=str(raw.get("verifier", "")),
             approvers=_as_str_tuple(raw.get("approvers")),
-            evidence=evidence,
+            specialist_reviews=tuple(
+                SpecialistReview.from_dict(item)
+                for item in _mapping_sequence(raw.get("specialist_reviews"))
+            ),
+            risk_acceptance=(
+                RiskAcceptance.from_dict(risk_raw) if isinstance(risk_raw, Mapping) else None
+            ),
+            evaluated_at=_as_int(raw.get("evaluated_at"), field_name="evaluated_at"),
+            evidence=EvidenceIntegrity.from_dict(
+                raw.get("evidence") if isinstance(raw.get("evidence"), Mapping) else None
+            ),
             provenance=(
                 ProvenanceBundle.from_dict(provenance_raw)
                 if isinstance(provenance_raw, Mapping)
@@ -268,137 +359,723 @@ class PromotionRequest:
         )
 
 
-# --------------------------------------------------------------------------- #
-# The decision
-# --------------------------------------------------------------------------- #
+def _integrity_digest(evidence: EvidenceIntegrity | None) -> str:
+    """Return the claimed address so the manifest binds the exact cited artifact."""
 
-# Reason codes (stable, machine-branchable prefixes). Interpolated values are runtime DATA.
-REASON_EVIDENCE_MISSING = "evidence-missing"
-REASON_EVIDENCE_DIGEST_MISMATCH = "evidence-digest-mismatch"
-REASON_PROVENANCE_MISSING = "provenance-missing"
-REASON_PROVENANCE_FAILED = "provenance-failed"  # ":<issue>"
-REASON_GATE_MISSING = "gate-missing"  # ":<id>"
-REASON_GATE_FAILED = "gate-failed"  # ":<id>"
-REASON_VERIFIER_EQUALS_IMPLEMENTER = "verifier-equals-implementer"
-REASON_APPROVER_IS_AGENT = "approver-is-agent"  # ":<identity>"
-REASON_APPROVER_NOT_ENROLLED = "approver-not-enrolled"  # ":<identity>"
-REASON_IMPLEMENTER_EQUALS_APPROVER = "implementer-equals-approver"  # ":<identity>"
-REASON_VERIFIER_EQUALS_APPROVER = "verifier-equals-approver"  # ":<identity>"
-REASON_INSUFFICIENT_APPROVERS = "insufficient-approvers"  # ":<count>/<required>"
+    return evidence.claimed_digest if evidence is not None else ""
+
+
+def promotion_attestation_subject(
+    request: PromotionRequest,
+    profile: CriticalityProfile,
+) -> dict[str, Any]:
+    """Canonical decision inputs the change-evidence attestation must bind.
+
+    The attestation is the content-addressed envelope for the facts used by the promotion
+    decision. Individual live, specialist, quarantine, risk-acceptance, and named evidence
+    artifacts are still verified independently; this subject binds their claimed addresses
+    and the decision inputs so none can be swapped, erased, or rewritten after attestation.
+
+    This function defines content, not authority. The core still relies on an external trust
+    system to establish who was allowed to attest it.
+    """
+
+    gates = sorted(
+        (
+            {
+                "id": normalize_label(gate.id),
+                "passed": gate.passed,
+                "detail": gate.detail,
+            }
+            for gate in request.gates
+        ),
+        key=lambda item: (item["id"], str(item["passed"]), item["detail"]),
+    )
+    observations = sorted(
+        (
+            {
+                "surface_id": normalize_label(observation.surface_id),
+                "oracle_adequate": observation.oracle_adequate,
+                "live_result": normalize_label(observation.live_result) or "missing",
+                "live_evidence_digest": _integrity_digest(observation.live_evidence),
+                "evidence": sorted(
+                    (
+                        {
+                            "evidence_id": normalize_label(record.evidence_id),
+                            "claimed_digest": _integrity_digest(record.integrity),
+                        }
+                        for record in observation.evidence
+                    ),
+                    key=lambda item: (item["evidence_id"], item["claimed_digest"]),
+                ),
+                "deterministic": observation.deterministic,
+                "flake_count": observation.flake_count,
+                "automatic_retry_count": observation.automatic_retry_count,
+                "quarantine": (
+                    {
+                        **observation.quarantine.authority_body(observation.surface_id),
+                        "evidence_digest": _integrity_digest(observation.quarantine.evidence),
+                    }
+                    if observation.quarantine is not None
+                    else None
+                ),
+            }
+            for observation in request.observations
+        ),
+        key=lambda item: str(item["surface_id"]),
+    )
+    specialist_reviews = sorted(
+        (
+            {
+                **review.authority_body(),
+                "evidence_digest": _integrity_digest(review.evidence),
+            }
+            for review in request.specialist_reviews
+        ),
+        key=lambda item: (item["surface_id"], item["reviewer"]),
+    )
+    risk_acceptance = (
+        {
+            **request.risk_acceptance.authority_body(),
+            "evidence_digest": _integrity_digest(request.risk_acceptance.evidence),
+        }
+        if request.risk_acceptance is not None
+        else None
+    )
+    return {
+        "candidate_digest": request.candidate_digest,
+        "criticality_profile_digest": profile.content_digest,
+        "disturbed_surface_ids": sorted(
+            normalize_label(surface_id)
+            for surface_id in request.disturbed_surface_ids
+            if normalize_label(surface_id)
+        ),
+        "gates": gates,
+        "implementer": normalize_label(request.implementer),
+        "verifier": normalize_label(request.verifier),
+        "approvers": sorted(normalize_label(approver) for approver in request.approvers),
+        "observations": observations,
+        "specialist_reviews": specialist_reviews,
+        "risk_acceptance": risk_acceptance,
+        "evaluated_at": request.evaluated_at,
+        "provenance_bundle_digest": (
+            digest_obj(request.provenance.to_dict()) if request.provenance is not None else ""
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class SurfaceDecision:
+    """Class, evidence requirement, and findings for one disturbed surface."""
+
+    surface_id: str
+    criticality: str
+    required_evidence_ids: tuple[str, ...]
+    gaps: tuple[str, ...]
+    negative_findings: tuple[str, ...]
+    reports: tuple[str, ...]
+    deterministic: bool | None
+    flake_count: int | None
+    automatic_retry_count: int | None
+    live_result: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "surface_id": self.surface_id,
+            "criticality": self.criticality,
+            "required_evidence_ids": list(self.required_evidence_ids),
+            "gaps": list(self.gaps),
+            "negative_findings": list(self.negative_findings),
+            "reports": list(self.reports),
+            "deterministic": self.deterministic,
+            "flake_count": self.flake_count,
+            "automatic_retry_count": self.automatic_retry_count,
+            "live_result": self.live_result,
+        }
 
 
 @dataclass(frozen=True)
 class PromotionDecision:
-    """The fail-closed verdict. ``allowed`` is true iff ``reasons`` is empty."""
+    """The independently inspectable gate verdict."""
 
     allowed: bool
+    disposition: str
     reasons: tuple[str, ...]
-    consequential: bool
+    reports: tuple[str, ...]
+    highest_criticality: str
     required_approvers: int
     approver_count: int
     provenance_issues: tuple[str, ...]
+    criticality: CriticalityResolution
+    surfaces: tuple[SurfaceDecision, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "allowed": self.allowed,
+            "disposition": self.disposition,
             "reasons": list(self.reasons),
-            "consequential": self.consequential,
+            "reports": list(self.reports),
+            "highest_criticality": self.highest_criticality,
             "required_approvers": self.required_approvers,
             "approver_count": self.approver_count,
             "provenance_issues": list(self.provenance_issues),
+            "criticality": self.criticality.to_dict(),
+            "surfaces": [surface.to_dict() for surface in self.surfaces],
         }
+
+
+def _record_human(
+    identity: str,
+    *,
+    policy: SegregationPolicy,
+    implementer: str,
+    verifier: str,
+) -> tuple[str | None, str | None]:
+    human = policy.resolve_human(identity)
+    if human is None:
+        code = (
+            "authority-is-agent"
+            if policy.is_excluded(identity) or policy.is_excluded(policy.canonical(identity))
+            else "authority-not-enrolled"
+        )
+        return None, f"{code}:{normalize_label(identity)}"
+    if implementer and human == policy.canonical(implementer):
+        return None, f"authority-equals-implementer:{normalize_label(identity)}"
+    if verifier and human == policy.canonical(verifier):
+        return None, f"authority-equals-verifier:{normalize_label(identity)}"
+    return human, None
+
+
+def _validate_authority_evidence(
+    evidence: EvidenceIntegrity | None,
+    expected_body: Mapping[str, Any],
+    *,
+    missing_code: str,
+    invalid_code: str,
+) -> tuple[bool, str | None, bool]:
+    """Return valid, issue, is_integrity_failure."""
+
+    if evidence is None or not evidence.present:
+        return False, missing_code, False
+    if not evidence.verifies_binding(expected_body):
+        return False, invalid_code, True
+    return True, None, False
 
 
 def decide_promotion(
     request: PromotionRequest,
     policy: SegregationPolicy,
-    profile: ConsequenceProfile,
+    profile: CriticalityProfile,
 ) -> PromotionDecision:
-    """Pure, default-deny promotion decision. NEVER performs a promotion/merge.
+    """Pure promotion decision. It never performs the promotion.
 
-    Composes five independent conditions; the decision allows only when the reason set is empty:
-
-      (a) provenance of intent — every downstream claim resolves to a canonical item in exactly
-          one externally trusted artifact for each of the three phases;
-      (b) evidence integrity — the content-addressed artifact is present and its claimed digest
-          verifies (constant-time);
-      (c) gate quorum — every profile-required gate is present AND passed;
-      (d) segregation of duties — verifier ≠ implementer, and each approver resolves to an
-          enrolled human (DENY-wins: never an agent), distinct from implementer and verifier;
-      (e) approver floor — the count of DISTINCT enrolled-human approvers meets the consequence-
-          driven requirement (≥2 for consequential, ≥1 otherwise; a target may raise, not lower).
+    Missing evidence is accumulated per surface before disposition. Negative evidence and
+    evidence-integrity failures are accumulated separately because neither can be converted
+    into a risk acceptance.
     """
-    consequential = profile.is_consequential(request.tier, request.categories)
-    required = profile.required_approvers(request.tier, request.categories)
-    reasons: list[str] = []
 
-    # (a) provenance of intent — no self-attested summary; re-derive from the full bundle.
+    resolution = resolve_criticality(profile, request.disturbed_surface_ids, policy)
+    surface_by_id = {surface.surface_id: surface for surface in resolution.surfaces}
+    gaps: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
+    negatives: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
+    local_reports: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
+    hard_reasons: list[str] = [
+        f"criticality-profile-invalid:{issue}" for issue in resolution.blocking_issues
+    ]
+    reports: list[str] = list(resolution.reports)
+    gate_reasons: list[str] = []
+
+    def gap_all(code: str) -> None:
+        for surface_gaps in gaps.values():
+            surface_gaps.append(code)
+
+    def negative(surface_id: str, code: str) -> None:
+        negatives[surface_id].append(code)
+
+    candidate_valid = _is_sha256(request.candidate_digest)
+    if not request.candidate_digest:
+        hard_reasons.append("candidate-digest-missing")
+    elif not candidate_valid:
+        hard_reasons.append("candidate-digest-invalid")
+
+    # The content-addressed manifest is the attestation-chain anchor. Absence is a class-scoped
+    # gap; tamper or subject mismatch is an integrity failure for every class.
+    if request.evidence is None or not request.evidence.present:
+        gap_all("attestation-missing")
+    elif not request.evidence.verify():
+        hard_reasons.append("attestation-digest-mismatch")
+    elif not request.evidence.verifies_binding(promotion_attestation_subject(request, profile)):
+        hard_reasons.append("attestation-subject-mismatch")
+
     provenance_issues: tuple[str, ...]
     if request.provenance is None:
-        provenance_issues = (REASON_PROVENANCE_MISSING,)
-        reasons.append(REASON_PROVENANCE_MISSING)
+        provenance_issues = ("provenance-missing",)
+        gap_all("provenance-missing")
     else:
         provenance_report = request.provenance.verify()
         provenance_issues = provenance_report.issues
-        reasons.extend(f"{REASON_PROVENANCE_FAILED}:{issue}" for issue in provenance_issues)
+        for issue in provenance_issues:
+            if provenance_issue_is_gap(issue):
+                gap_all(f"provenance-gap:{issue}")
+            else:
+                hard_reasons.append(f"provenance-integrity:{issue}")
 
-    # (b) evidence integrity — content-addressed tamper precondition.
-    evidence = request.evidence
-    if evidence is None or not evidence.present:
-        reasons.append(REASON_EVIDENCE_MISSING)
-    elif not evidence.verify():
-        reasons.append(REASON_EVIDENCE_DIGEST_MISMATCH)
-
-    # (c) gate quorum — every required gate present AND passed. Sorted for a deterministic order.
-    outcomes = {_norm(g.id): g for g in request.gates}
+    # Gate absence is silence; a gate that actually failed is negative evidence.
+    gate_outcomes: dict[str, GateOutcome] = {}
+    for captured_outcome in request.gates:
+        gate_id = normalize_label(captured_outcome.id)
+        if not gate_id:
+            hard_reasons.append("gate-id-missing")
+            continue
+        if gate_id in gate_outcomes:
+            hard_reasons.append(f"gate-outcome-duplicate:{gate_id}")
+            continue
+        gate_outcomes[gate_id] = captured_outcome
     for gate_id in sorted(profile.required_gate_ids):
-        gate = outcomes.get(gate_id)
-        if gate is None:
-            reasons.append(f"{REASON_GATE_MISSING}:{gate_id}")
-        elif not gate.passed:
-            reasons.append(f"{REASON_GATE_FAILED}:{gate_id}")
+        required_outcome = gate_outcomes.get(gate_id)
+        if required_outcome is None:
+            gap_all(f"gate-missing:{gate_id}")
+        elif not required_outcome.passed:
+            for surface_id in negatives:
+                negative(surface_id, f"gate-failed:{gate_id}")
 
-    # (d) segregation of duties. verifier↔implementer distinctness is independent of approvers
-    # (covers the zero-approver case); reuse the policy's canonicalization so two aliases of one
-    # principal are not mistaken for distinct.
+    observations: dict[str, SurfaceObservation] = {}
+    for captured_observation in request.observations:
+        surface_id = normalize_label(captured_observation.surface_id)
+        if not surface_id:
+            hard_reasons.append("observation-surface-id-missing")
+            continue
+        if surface_id in observations:
+            hard_reasons.append(f"surface-observation-duplicate:{surface_id}")
+            continue
+        observations[surface_id] = captured_observation
+        if surface_id not in surface_by_id:
+            reports.append(f"observation-outside-disturbance:{surface_id}")
+
+    for surface_id, surface in surface_by_id.items():
+        current_observation = observations.get(surface_id)
+        if current_observation is None:
+            gaps[surface_id].append("surface-observation-missing")
+            continue
+
+        if not current_observation.oracle_adequate:
+            gaps[surface_id].append("oracle-silent")
+
+        live_result = normalize_label(current_observation.live_result) or "missing"
+        if live_result not in _LIVE_RESULTS:
+            hard_reasons.append(f"live-result-invalid:{surface_id}:{live_result}")
+        elif live_result == "missing":
+            gaps[surface_id].append("live-verification-missing")
+        elif live_result == "failed":
+            negative(surface_id, "live-verification-failed")
+        else:
+            live = current_observation.live_evidence
+            if live is None or not live.present:
+                gaps[surface_id].append("live-verification-artifact-missing")
+            elif not live.verify():
+                hard_reasons.append(f"live-evidence-digest-mismatch:{surface_id}")
+            elif not live.verifies_binding(
+                {
+                    "surface_id": surface_id,
+                    "candidate_digest": request.candidate_digest,
+                    "result": "passed",
+                }
+            ):
+                hard_reasons.append(f"live-evidence-subject-mismatch:{surface_id}")
+
+        if current_observation.flake_count < 0:
+            hard_reasons.append(f"flake-count-invalid:{surface_id}")
+        if current_observation.automatic_retry_count < 0:
+            hard_reasons.append(f"automatic-retry-count-invalid:{surface_id}")
+
+        named: dict[str, NamedEvidence] = {}
+        for captured_record in current_observation.evidence:
+            evidence_id = normalize_label(captured_record.evidence_id)
+            if not evidence_id:
+                hard_reasons.append(f"evidence-id-missing:{surface_id}")
+                continue
+            if evidence_id in named:
+                hard_reasons.append(f"evidence-duplicate:{surface_id}:{evidence_id}")
+                continue
+            named[evidence_id] = captured_record
+
+        additional_required = surface.required_evidence_ids - BASE_REQUIRED_EVIDENCE_IDS
+        for evidence_id in sorted(additional_required):
+            required_record = named.get(evidence_id)
+            if (
+                required_record is None
+                or required_record.integrity is None
+                or not required_record.integrity.present
+            ):
+                gaps[surface_id].append(f"evidence-missing:{evidence_id}")
+            elif not required_record.integrity.verify():
+                hard_reasons.append(f"evidence-digest-mismatch:{surface_id}:{evidence_id}")
+            elif not required_record.integrity.verifies_binding(
+                {
+                    "surface_id": surface_id,
+                    "candidate_digest": request.candidate_digest,
+                    "evidence_id": evidence_id,
+                }
+            ):
+                hard_reasons.append(f"evidence-subject-mismatch:{surface_id}:{evidence_id}")
+
+        if surface.effective_criticality == CRITICALITY_CRITICAL:
+            if not current_observation.deterministic:
+                negative(surface_id, "critical-evidence-nondeterministic")
+            if current_observation.flake_count > 0:
+                negative(
+                    surface_id,
+                    f"critical-test-flaked:{current_observation.flake_count}",
+                )
+            if current_observation.automatic_retry_count > 0:
+                negative(
+                    surface_id,
+                    f"critical-automatic-retry:{current_observation.automatic_retry_count}",
+                )
+        elif surface.effective_criticality == CRITICALITY_STANDARD:
+            if current_observation.flake_count > 0:
+                quarantine_ok, quarantine_issue, quarantine_integrity = _validate_quarantine(
+                    current_observation.quarantine,
+                    surface,
+                    request,
+                    policy,
+                )
+                if current_observation.flake_count > surface.standard_flake_budget:
+                    gaps[surface_id].append(
+                        "standard-flake-budget-exceeded:"
+                        f"{current_observation.flake_count}/{surface.standard_flake_budget}"
+                    )
+                elif not quarantine_ok and quarantine_issue:
+                    if quarantine_integrity:
+                        hard_reasons.append(f"{quarantine_issue}:{surface_id}")
+                    else:
+                        gaps[surface_id].append(quarantine_issue)
+                else:
+                    local_reports[surface_id].append(
+                        f"standard-flake-quarantined:{current_observation.flake_count}"
+                    )
+            if current_observation.automatic_retry_count > 0:
+                local_reports[surface_id].append(
+                    f"standard-automatic-retry:{current_observation.automatic_retry_count}"
+                )
+        else:
+            if current_observation.flake_count > 0:
+                local_reports[surface_id].append(
+                    f"cosmetic-flake:{current_observation.flake_count}"
+                )
+            if current_observation.automatic_retry_count > 0:
+                local_reports[surface_id].append(
+                    f"cosmetic-automatic-retry:{current_observation.automatic_retry_count}"
+                )
+
+    # Validate every supplied specialist record; cited bad evidence cannot be ignored merely
+    # because a review was unnecessary on that class.
+    reviews: dict[str, SpecialistReview] = {}
+    for review in request.specialist_reviews:
+        surface_id = normalize_label(review.surface_id)
+        if not surface_id:
+            hard_reasons.append("specialist-review-surface-id-missing")
+            continue
+        if surface_id in reviews:
+            hard_reasons.append(f"specialist-review-duplicate:{surface_id}")
+            continue
+        reviews[surface_id] = review
+        _validate_specialist_review(
+            review,
+            surface_id,
+            request,
+            policy,
+            profile,
+            hard_reasons,
+            gaps.get(surface_id),
+        )
+        if not review.passed:
+            hard_reasons.append(f"specialist-review-failed:{surface_id}")
+
+    for surface_id, surface in surface_by_id.items():
+        if surface.effective_criticality == CRITICALITY_CRITICAL and surface_id not in reviews:
+            gaps[surface_id].append("specialist-review-missing")
+
     impl_c = policy.canonical(request.implementer)
-    verf_c = policy.canonical(request.verifier)
-    if request.implementer and request.verifier and impl_c == verf_c:
-        reasons.append(REASON_VERIFIER_EQUALS_IMPLEMENTER)
+    verifier_c = policy.canonical(request.verifier)
+    if not normalize_label(request.implementer):
+        hard_reasons.append("implementer-missing")
+    if not normalize_label(request.verifier):
+        hard_reasons.append("verifier-missing")
+    if request.implementer and request.verifier and impl_c == verifier_c:
+        hard_reasons.append("verifier-equals-implementer")
 
-    distinct_human_ids: set[str] = set()
+    distinct_approvers: set[str] = set()
     for approver in request.approvers:
-        human = policy.resolve_human(approver)
-        if human is None:
-            # DENY-wins: an excluded (agent) identity is reported as an agent; anything else that
-            # fails to resolve is simply not enrolled. Either way it can never approve.
-            code = (
-                REASON_APPROVER_IS_AGENT
-                if (policy.is_excluded(approver) or policy.is_excluded(policy.canonical(approver)))
-                else REASON_APPROVER_NOT_ENROLLED
-            )
-            reasons.append(f"{code}:{_norm(approver)}")
-            continue
-        if request.implementer and human == impl_c:
-            reasons.append(f"{REASON_IMPLEMENTER_EQUALS_APPROVER}:{_norm(approver)}")
-            continue
-        if request.verifier and human == verf_c:
-            reasons.append(f"{REASON_VERIFIER_EQUALS_APPROVER}:{_norm(approver)}")
-            continue
-        distinct_human_ids.add(human)
+        human, authority_issue = _record_human(
+            approver,
+            policy=policy,
+            implementer=request.implementer,
+            verifier=request.verifier,
+        )
+        if authority_issue:
+            hard_reasons.append(authority_issue.replace("authority-", "approver-", 1))
+        elif human:
+            distinct_approvers.add(human)
 
-    approver_count = len(distinct_human_ids)
+    required_approvers = (
+        profile.required_critical_approvers
+        if resolution.highest_criticality == CRITICALITY_CRITICAL
+        else 0
+    )
+    approver_count = len(distinct_approvers)
+    if approver_count < required_approvers:
+        hard_reasons.append(f"insufficient-approvers:{approver_count}/{required_approvers}")
 
-    # (e) the consequence-driven distinct-human floor.
-    if approver_count < required:
-        reasons.append(f"{REASON_INSUFFICIENT_APPROVERS}:{approver_count}/{required}")
+    for surface_id, findings in negatives.items():
+        hard_reasons.extend(f"negative-evidence:{surface_id}:{finding}" for finding in findings)
 
-    deduped = tuple(dict.fromkeys(reasons))  # de-dup, preserve first-seen order
+    critical_gap_ids = {
+        surface_id
+        for surface_id, surface in surface_by_id.items()
+        if surface.effective_criticality == CRITICALITY_CRITICAL and gaps[surface_id]
+    }
+    critical_surface_ids = {
+        surface_id
+        for surface_id, surface in surface_by_id.items()
+        if surface.effective_criticality == CRITICALITY_CRITICAL
+    }
+    standard_gap_ids = {
+        surface_id
+        for surface_id, surface in surface_by_id.items()
+        if surface.effective_criticality == CRITICALITY_STANDARD and gaps[surface_id]
+    }
+    cosmetic_gap_ids = {
+        surface_id
+        for surface_id, surface in surface_by_id.items()
+        if surface.effective_criticality == CRITICALITY_COSMETIC and gaps[surface_id]
+    }
+
+    hard_reasons.extend(
+        f"critical-gap:{surface_id}:{gap}"
+        for surface_id in sorted(critical_gap_ids)
+        for gap in gaps[surface_id]
+    )
+
+    risk_valid = False
+    if request.risk_acceptance is not None:
+        risk_valid = _validate_risk_acceptance(
+            request.risk_acceptance,
+            request,
+            policy,
+            profile,
+            critical_surface_ids,
+            standard_gap_ids,
+            hard_reasons,
+            gate_reasons,
+            reports,
+        )
+    if standard_gap_ids and not risk_valid:
+        gate_reasons.extend(
+            f"standard-gap-requires-risk-acceptance:{surface_id}"
+            for surface_id in sorted(standard_gap_ids)
+        )
+    elif standard_gap_ids:
+        reports.extend(
+            f"standard-gap-risk-accepted:{surface_id}:{gap}"
+            for surface_id in sorted(standard_gap_ids)
+            for gap in gaps[surface_id]
+        )
+
+    reports.extend(
+        f"cosmetic-gap:{surface_id}:{gap}"
+        for surface_id in sorted(cosmetic_gap_ids)
+        for gap in gaps[surface_id]
+    )
+    for surface_id, surface_reports in local_reports.items():
+        reports.extend(f"{surface_id}:{report}" for report in surface_reports)
+
+    hard = tuple(dict.fromkeys(hard_reasons))
+    gated = tuple(dict.fromkeys(gate_reasons))
+    reasons = hard + tuple(reason for reason in gated if reason not in hard)
+    if hard:
+        disposition = DISPOSITION_BLOCK
+    elif gated:
+        disposition = DISPOSITION_GATE
+    elif standard_gap_ids:
+        disposition = DISPOSITION_RISK_ACCEPTED
+    elif cosmetic_gap_ids:
+        disposition = DISPOSITION_REPORT_AND_PROMOTE
+    else:
+        disposition = DISPOSITION_PROMOTE
+
+    surface_decisions = tuple(
+        SurfaceDecision(
+            surface_id=surface_id,
+            criticality=surface.effective_criticality,
+            required_evidence_ids=tuple(sorted(surface.required_evidence_ids)),
+            gaps=tuple(dict.fromkeys(gaps[surface_id])),
+            negative_findings=tuple(dict.fromkeys(negatives[surface_id])),
+            reports=tuple(dict.fromkeys(local_reports[surface_id])),
+            deterministic=(
+                observations[surface_id].deterministic if surface_id in observations else None
+            ),
+            flake_count=(
+                observations[surface_id].flake_count if surface_id in observations else None
+            ),
+            automatic_retry_count=(
+                observations[surface_id].automatic_retry_count
+                if surface_id in observations
+                else None
+            ),
+            live_result=(
+                normalize_label(observations[surface_id].live_result)
+                if surface_id in observations
+                else "missing"
+            ),
+        )
+        for surface_id, surface in sorted(surface_by_id.items())
+    )
     return PromotionDecision(
-        allowed=not deduped,
-        reasons=deduped,
-        consequential=consequential,
-        required_approvers=required,
+        allowed=disposition
+        in {
+            DISPOSITION_PROMOTE,
+            DISPOSITION_REPORT_AND_PROMOTE,
+            DISPOSITION_RISK_ACCEPTED,
+        },
+        disposition=disposition,
+        reasons=reasons,
+        reports=tuple(dict.fromkeys(reports)),
+        highest_criticality=resolution.highest_criticality,
+        required_approvers=required_approvers,
         approver_count=approver_count,
         provenance_issues=provenance_issues,
+        criticality=resolution,
+        surfaces=surface_decisions,
+    )
+
+
+def _validate_quarantine(
+    quarantine: Quarantine | None,
+    surface: ResolvedSurface,
+    request: PromotionRequest,
+    policy: SegregationPolicy,
+) -> tuple[bool, str | None, bool]:
+    if quarantine is None:
+        return False, "standard-flake-quarantine-missing", False
+    _, authority_issue = _record_human(
+        quarantine.owner,
+        policy=policy,
+        implementer=request.implementer,
+        verifier=request.verifier,
+    )
+    if authority_issue:
+        return False, f"standard-flake-quarantine-{authority_issue}", False
+    if request.evaluated_at <= 0 or quarantine.expires_at <= request.evaluated_at:
+        return False, "standard-flake-quarantine-expired", False
+    if not quarantine.rationale.strip():
+        return False, "standard-flake-quarantine-rationale-missing", False
+    valid, issue, integrity = _validate_authority_evidence(
+        quarantine.evidence,
+        quarantine.authority_body(surface.surface_id),
+        missing_code="standard-flake-quarantine-evidence-missing",
+        invalid_code="standard-flake-quarantine-evidence-invalid",
+    )
+    return valid, issue, integrity
+
+
+def _validate_specialist_review(
+    review: SpecialistReview,
+    surface_id: str,
+    request: PromotionRequest,
+    policy: SegregationPolicy,
+    profile: CriticalityProfile,
+    hard_reasons: list[str],
+    surface_gaps: list[str] | None,
+) -> None:
+    _, authority_issue = _record_human(
+        review.reviewer,
+        policy=policy,
+        implementer=request.implementer,
+        verifier=request.verifier,
+    )
+    if authority_issue:
+        hard_reasons.append(f"specialist-review-{authority_issue}:{surface_id}")
+    if review.candidate_digest != request.candidate_digest:
+        hard_reasons.append(f"specialist-review-candidate-mismatch:{surface_id}")
+    if review.criticality_profile_digest != profile.content_digest:
+        hard_reasons.append(f"specialist-review-profile-mismatch:{surface_id}")
+    valid, issue, integrity = _validate_authority_evidence(
+        review.evidence,
+        review.authority_body(),
+        missing_code="specialist-review-evidence-missing",
+        invalid_code="specialist-review-evidence-invalid",
+    )
+    if not valid and issue:
+        if integrity or surface_gaps is None:
+            hard_reasons.append(f"{issue}:{surface_id}")
+        else:
+            surface_gaps.append(issue)
+
+
+def _validate_risk_acceptance(
+    risk: RiskAcceptance,
+    request: PromotionRequest,
+    policy: SegregationPolicy,
+    profile: CriticalityProfile,
+    critical_surface_ids: set[str],
+    standard_gap_ids: set[str],
+    hard_reasons: list[str],
+    gate_reasons: list[str],
+    reports: list[str],
+) -> bool:
+    covered = {
+        normalize_label(surface_id)
+        for surface_id in risk.surface_ids
+        if normalize_label(surface_id)
+    }
+    prohibited = covered & critical_surface_ids
+    if prohibited:
+        hard_reasons.extend(
+            f"critical-risk-acceptance-prohibited:{surface_id}" for surface_id in sorted(prohibited)
+        )
+    if risk.candidate_digest != request.candidate_digest:
+        hard_reasons.append("risk-acceptance-candidate-mismatch")
+    if risk.criticality_profile_digest != profile.content_digest:
+        hard_reasons.append("risk-acceptance-profile-mismatch")
+    _, authority_issue = _record_human(
+        risk.owner,
+        policy=policy,
+        implementer=request.implementer,
+        verifier=request.verifier,
+    )
+    if authority_issue:
+        gate_reasons.append(f"risk-acceptance-{authority_issue}")
+    if request.evaluated_at <= 0 or risk.expires_at <= request.evaluated_at:
+        gate_reasons.append("risk-acceptance-expired")
+    if not risk.rationale.strip():
+        gate_reasons.append("risk-acceptance-rationale-missing")
+    uncovered = standard_gap_ids - covered
+    gate_reasons.extend(
+        f"risk-acceptance-surface-missing:{surface_id}" for surface_id in sorted(uncovered)
+    )
+    valid_evidence, evidence_issue, integrity = _validate_authority_evidence(
+        risk.evidence,
+        risk.authority_body(),
+        missing_code="risk-acceptance-evidence-missing",
+        invalid_code="risk-acceptance-evidence-invalid",
+    )
+    if not valid_evidence and evidence_issue:
+        if integrity:
+            hard_reasons.append(evidence_issue)
+        else:
+            gate_reasons.append(evidence_issue)
+    if covered - standard_gap_ids - critical_surface_ids:
+        reports.append("risk-acceptance-covers-surface-without-gap")
+
+    return not (
+        prohibited
+        or risk.candidate_digest != request.candidate_digest
+        or risk.criticality_profile_digest != profile.content_digest
+        or authority_issue
+        or request.evaluated_at <= 0
+        or risk.expires_at <= request.evaluated_at
+        or not risk.rationale.strip()
+        or uncovered
+        or not valid_evidence
     )

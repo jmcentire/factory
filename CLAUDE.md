@@ -21,7 +21,11 @@ construction — the purity guard will (and must) reject it.
 ## Layout
 
 - `factory_core/manifest.py` — content-addressed, hash-chained, SoD-enforcing evidence ledger (stdlib-only).
-- `factory_core/provenance.py` — canonical phase-artifact and intent-backreference verifier.
+- `factory_core/criticality.py` — surface control profile, declared side-effect closure, and
+  unclassified-to-Critical resolution.
+- `factory_core/promotion.py` — oracle-adequacy × criticality promotion decision.
+- `factory_core/provenance.py` — canonical phase-artifact/backreference verifier and
+  absence-vs-integrity issue classification.
 - `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
 - `factory_core/adapters.py` — the five `typing.Protocol` seams (interfaces only).
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
@@ -53,9 +57,13 @@ make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typ
 - **Tamper-evident ledger** — append-only, content-addressed (SHA-256), hash-chained; `verify_chain` re-derives every address and link.
 - **Provenance of intent** — downstream requirements, constraints, tasks, and test assertions
   resolve to canonical items in one externally trusted artifact for each of the three phases;
-  unresolved or mismatched references fail closed.
-- **Doctrine parity** — active docs retain exactly Validator/Coder/Tester, the three phases, and
-  all eight non-negotiables; historical records are not rewritten.
+  missing links are class-disposed while unresolved or mismatched references fail closed.
+- **Surface criticality** — human-decided Critical/Standard/Cosmetic per surface; declared side
+  effects inherit the highest class; unclassified is Critical; a Critical gap has no waiver and
+  Critical evidence has zero flake/retry tolerance.
+- **Doctrine parity** — active docs retain exactly Validator/Coder/Tester, the three phases, all
+  eight non-negotiables, and the structural criticality/determinism policy; historical records
+  are not rewritten.
 - **Data-only targets** — the `TargetManifest` loader refuses code references; a target may only *select* named seams the core already owns.
 - **Portability** — the full suite passes with no target pack present (only the synthetic empty fixture).
 

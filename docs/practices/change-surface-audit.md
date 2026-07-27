@@ -19,8 +19,8 @@ Phase 1 states the observable affected behavior, phase 2 enumerates *every* stru
 surface and interaction the change touches — walking the whole consumer / accessor /
 caller / reporting / job / contract tree — and phase 3 authorizes the tests and
 operational evidence for each one. This is the "shake the tree" discipline done before
-the build loop, not discovered at implementation time, so the blast radius is explicit
-**before any code exists**.
+the build loop, not discovered at implementation time, so the blast radius and the
+surface-criticality inheritance graph are explicit **before any code exists**.
 
 A change whose spec does not enumerate its touched surfaces and their
 invariant-vs-changed classification is an **incomplete spec** and does not advance to
@@ -44,6 +44,13 @@ For each touched interaction the spec classifies it and calls it out **by name**
 Every touched interaction must land in exactly one of these two buckets. "Not
 considered" is not a valid classification — an unclassified touched surface fails the
 audit.
+
+This invariant-vs-changed classification is orthogonal to **Critical / Standard /
+Cosmetic**. The former says whether the contract moves; criticality says what being
+wrong costs and therefore how an evidence gap is disposed. Phase 2 records, for every
+surface, the human decider, wrong-cost rationale, criticality class, and every
+side-effect edge. An omitted or invalid criticality decision resolves to Critical. A
+change inherits the highest class reachable through the declared edges.
 
 ## How it rides the rails the factory already has
 
@@ -88,6 +95,12 @@ Touched surfaces (walk the consumer / accessor / caller / reporting / job / cont
 | <surface A>           | <who>     | HELD_INVARIANT      | <test id>                | n/a                  |
 | <surface B>           | <who>     | INTENTIONALLY_CHANGED | <new-contract test id> | <unaffected/migrated proof> |
 
+Surface control profile:
+
+| Surface | Component | Criticality | Human decider | What being wrong costs | Side effects reach |
+|---------|-----------|-------------|---------------|------------------------|--------------------|
+| <surface A> | <component> | <Critical / Standard / Cosmetic> | <human> | <worst outcome> | <surface ids> |
+
 Present consumers:  <enumeration + per-consumer decision>
 Future accessors:   <the opt-in accessor + the default-exclude of existing accessors>
 Observability:      <logging / alerts / telemetry / reporting added>
@@ -115,7 +128,9 @@ The audit is complete when:
    with fixture, environment rung, expected evidence, and a resolvable backreference,
    and
 6. the audit scans for sites not in its enumeration and fails when a new one appears,
-   and
-7. any platform-invariant surface it touches is reflected in a capability delta.
+7. each surface carries a human-decided criticality class and wrong-cost rationale,
+8. every declared side-effect target is also present in the profile and the change
+   inherits the highest reachable class, and
+9. any platform-invariant surface it touches is reflected in a capability delta.
 
 An incomplete audit blocks advancement to the build phase.

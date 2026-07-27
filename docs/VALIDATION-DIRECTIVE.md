@@ -13,11 +13,13 @@ checkable evidence.
 
 ## One-page rule
 
-A change may not be promoted while any required work remains local-only,
+A change may not be called clean while any required work remains local-only,
 uncommitted, unpushed, unmerged, undocumented, not reflected in durable `.kin`,
 not represented in contracts/types/signatures, not migration-atomic, not tied to
 tests and observability, not deployed by the sanctioned path, or not live-proven
-against the exact artifact being promoted.
+against the exact artifact being promoted. Promotion of an incomplete change is
+then disposed by surface class: Critical blocks without waiver, Standard requires
+explicit expiring human risk acceptance, and Cosmetic reports the gap and promotes.
 
 Existence is not adequacy. A file, PR, review, runbook, spec, manifest, or
 `.kin` node satisfies the gate only when the Validator can cite the independent
@@ -34,7 +36,7 @@ The Validator verifies from immutable, externally supplied references:
   contract-bundle digests;
 - the content-addressed artifact/config/deployment digests;
 - the externally timestamped gate/audit records for signatures, CI, reviews,
-  deploys, and human waivers.
+  deploys, Standard risk acceptances, and Cosmetic gap reports.
 
 The Coder must not be able to choose or mutate those references. The
 trigger is created by the source host, CI/event system, or a non-implementer
@@ -57,10 +59,13 @@ an independent verifier.
 ## Decision states
 
 - `PASS` means every required dimension is proved by cited evidence and there
-  are no active waivers.
-- `PASS_WITH_WAIVERS` means promotion is allowed only because a named enrolled
-  human accepted an explicit, expiring residual risk. It is not equivalent to
-  clean pass and remains visible in dashboards, manifests, and release notes.
+  are no active risk acceptances or gap reports.
+- `PASS_WITH_RISK_ACCEPTANCE` means a Standard-surface promotion is allowed only because
+  a named enrolled human accepted an explicit, expiring residual risk. It is not
+  equivalent to clean pass and remains visible in dashboards, manifests, and
+  release notes.
+- `PASS_WITH_REPORTS` means only Cosmetic-surface evidence gaps remain. They are
+  recorded and promoted past without being mislabeled as verified.
 - `BLOCKED:<dimension>` means project work or required evidence is missing,
   wrong, stale, drifted, or semantically inadequate.
 - `UNKNOWN:<source>` means the Validator cannot currently consult one of its
@@ -73,7 +78,9 @@ source health check is red, DNS fails, credentials for the Validator's own
 source access are unavailable, or the source returns 5xx, the verdict may be
 `UNKNOWN`. `UNKNOWN` blocks promotion, retries at most three times with
 exponential backoff capped at thirty minutes total elapsed time, then pages the
-release-engineering owner for repair or a human emergency waiver.
+release-engineering owner for repair. A Standard gap may then use explicit
+expiring risk acceptance; a Critical gap has no emergency-waiver path; a
+Cosmetic gap is reported and promoted.
 
 ## Validation checklist
 
@@ -105,14 +112,15 @@ or externally attested, and still matches the final promoted digest.
    each re-derived from their authoritative source and checked against the
    preserved verbatim input. Every requirement, constraint, task, and test
    assertion resolves to the exact canonical item in one of those artifacts;
-   an absent, untrusted, unresolved, or mismatched backreference is
-   `BLOCKED:provenance`. Capability deltas, ADRs, operator docs, runbooks, API
-   docs, generated SDKs, schema contracts, OpenAPI/AsyncAPI/OTel surfaces, and
-   type signatures are checked according to the target's declared contract
-   discipline. Code-first services prove generated-spec drift is clean.
-   Spec-first services prove code and runtime behavior still conform to the
-   signed spec. Docs may say `IMPLEMENTED` only when they cite the enforcing
-   artifact or live proof.
+   an absent link is an evidence gap disposed by surface class. An unresolvable,
+   mismatched, fabricated, or malformed backreference is
+   `BLOCKED:provenance` for every class. Capability deltas, ADRs, operator docs,
+   runbooks, API docs, generated SDKs, schema contracts,
+   OpenAPI/AsyncAPI/OTel surfaces, and type signatures are checked according to
+   the target's declared contract discipline. Code-first services prove
+   generated-spec drift is clean. Spec-first services prove code and runtime
+   behavior still conform to the signed spec. Docs may say `IMPLEMENTED` only
+   when they cite the enforcing artifact or live proof.
 
 5. **Consumer registry and migration atomicity.** Any schema, role, privilege,
    protocol, or storage change must cite the authoritative consumer registry
@@ -121,8 +129,9 @@ or externally attested, and still matches the final promoted digest.
    Breaking changes require producer, all consumers, tests, expected-schema-head
    startup contracts, migration docs, rollback/forward plan, and deploy order to
    move as one change or to use an explicitly signed compatibility window.
-   Accumulated unapplied migrations block until cleared or waived as a named
-   production residual.
+   Accumulated unapplied migrations are evidence gaps disposed by class.
+   Destructive migrations are Critical and therefore block until cleared; no
+   waiver can promote them past an oracle or evidence gap.
 
 6. **Oracle quality and tests.** The Validator distinguishes mechanical facts
    from semantic adequacy. Mechanical claims are mechanically checked. Semantic
@@ -130,8 +139,10 @@ or externally attested, and still matches the final promoted digest.
    acceptance suite derived from the frozen phase artifacts while structurally
    isolated from the Coder, invariant-kernel counterexamples, live probes, or a
    review record with a documented objection/refutation path. The Validator,
-   not the Tester, produces mutation evidence for high-consequence controls.
-   A review that merely says "looks good" is not adversarial evidence.
+   not the Tester, produces mutation evidence for Critical controls. A review
+   that merely says "looks good" is not adversarial evidence. Critical tests are
+   deterministic, have automatic retry disabled, and remain failed after any
+   flake; the later green run is a second observation, not an erasure.
 
 7. **Fresh baseline and final gate.** The trusted baseline is green before new
    tests are trusted, unless a pre-existing red is individually attributed and
@@ -142,9 +153,9 @@ or externally attested, and still matches the final promoted digest.
 
 8. **Observability, monitoring, and operations.** Every new failure mode has
    structured logs, metrics/traces where applicable, alert routing, and a
-   runbook. The Validator proves the observability is live or records a waiver.
-   An alert with no runbook, a runbook with no alert, or a metric that is only
-   declared but not emitted is incomplete.
+   runbook. The Validator proves the observability is live or records the
+   class-disposed gap. An alert with no runbook, a runbook with no alert, or a
+   metric that is only declared but not emitted is incomplete.
 
 9. **Deploy and live proof.** The same artifact digest is promoted through the
    ladder. The deployed revision, runtime configuration, expected schema heads,
@@ -152,11 +163,12 @@ or externally attested, and still matches the final promoted digest.
    Canary or demo validation records exact requests/responses, side effects, log
    evidence, and observation-window results. A local pass is never a live pass.
 
-10. **Waivers and residuals.** A waiver names the dimension, owner, approver,
-    expiry, residual risk, affected artifact digest, and remediation ticket.
-    Waiver TTLs are capped by policy; security/compliance/process waivers do not
-    silently renew. Expiry or revocation invalidates dependent promotions and
-    triggers re-validation. Waiver accumulation is itself a risk signal.
+10. **Risk acceptances and residuals.** Risk acceptance exists for Standard
+    gaps only. It names the dimension, owner, approver, expiry, residual risk,
+    affected artifact digest, and remediation ticket. TTLs are capped by policy
+    and never silently renew. Expiry or revocation invalidates dependent
+    promotions and triggers re-validation. Critical has no exception mechanism;
+    Cosmetic gaps are reports, not waivers. Accumulation is itself a risk signal.
 
 11. **Rollback and forward authority.** `BLOCKED` output includes the applicable
     remediation tier: automated rollback allowed, on-call rollback allowed,
@@ -169,17 +181,17 @@ or externally attested, and still matches the final promoted digest.
 Every validation result uses the same compact shape:
 
 ```text
-status: PASS | PASS_WITH_WAIVERS | BLOCKED:<dimension> | UNKNOWN:<source>
+status: PASS | PASS_WITH_RISK_ACCEPTANCE | PASS_WITH_REPORTS | BLOCKED:<dimension> | UNKNOWN:<source>
 target: <repo>@<sha>
 manifest: <digest>
 policy: <policy digest/version>
 evidence_bundle: <digest/path>
 findings:
-  - dimension: <local-state|kin|provenance|docs|contracts|migration|tests|observability|deploy|waiver|rollback|...>
+  - dimension: <local-state|kin|provenance|docs|contracts|migration|tests|observability|deploy|risk-acceptance|rollback|...>
     claim: <what is missing or proved>
     evidence: <source reference, command, file:line, matrix row, log/query id>
     owner: <role/person/system>
-    action: <forward fix | rollback | re-run source | human waiver | escalate>
+    action: <forward fix | rollback | re-run source | Standard risk acceptance | report | escalate>
     rollback_tier: <auto|on-call|forward-only|human-escalation|not-applicable>
 ```
 

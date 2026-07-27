@@ -396,6 +396,37 @@ target-specific intent remains data.
 
 ---
 
+## Synced pass 6 (P5) — surface criticality and class-scoped evidence disposition
+
+**Authority:** founder-supplied Criticality amendment, 2026-07-27. This is a material
+control-plane change authorized directly by the human. It supersedes the active
+change-level tier/category promotion model; the P3 section above remains the historical
+record of what that pass implemented at the time.
+
+| Deliverable | File | What changed |
+|---|---|---|
+| Canonical criticality doctrine | `docs/SOFTWARE-FACTORY.md` | Adds §3.5 Criticality; the oracle-adequacy × criticality matrix; Critical/Standard/Cosmetic gap disposition; class-scoped determinism and flake policy; human classification, highest-side-effect inheritance, unclassified→Critical; Critical no-waiver and specialist-review duties; manifest class/evidence/determinism records. |
+| Surface control profile | `factory_core/criticality.py` | Replaces target-declared consequence tiers/categories with per-surface human decisions, wrong-cost rationale, required evidence, Standard flake budget, and declared side-effect edges. The exact profile is content-addressed. Resolution includes explicit disturbances plus declared closure and makes unknown, unclassified, incomplete, or non-human-decided entries Critical. It does not claim the declared topology is complete. |
+| Two-axis promotion policy | `factory_core/promotion.py` | Missing oracle/evidence links are accumulated per disturbed surface and disposed by class. Critical blocks with no waiver and requires deterministic zero-flake/zero-retry live evidence, candidate-bound specialist review, and the existing two-human floor. Standard gaps require candidate-bound expiring enrolled-human risk acceptance. Cosmetic gaps report-and-promote. Negative evidence or malformed/mismatched evidence blocks every class. Adequate Standard/Cosmetic changes auto-promote. The global attestation binds the profile plus every decision input — disturbances, gate outcomes, implementer/verifier/approvers, observations, flake/retry history, authority records, and cited evidence addresses — so inputs cannot be rewritten after attestation. Specialist review and risk acceptance are independently candidate/profile/evidence-bound. |
+| Provenance issue classification | `factory_core/provenance.py` | The verifier still marks every issue unsatisfied, but now labels absent links separately from invalid authority. Promotion may class-dispose absence; unresolvable, mismatched, duplicated, fabricated, malformed, and unknown issue forms remain universal integrity failures. |
+| Executable doctrine parity | `scripts/check_doctrine_sync.py`, `tests/test_check_doctrine_sync.py` | Structurally verifies the three class rows, unclassified default, side-effect inheritance clause, determinism table, two-axis matrix Critical/Block cell, Validator assignment/no-waiver duties, and Tester determinism duty. |
+| Active operating surfaces | `README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/DOCTRINE-KERNEL.md`, `docs/VALIDATION-DIRECTIVE.md` | Remove the old active tier/category authority, distinguish missing evidence from invalid evidence, and constrain waivers to Standard gaps. |
+
+**Adversarial boundary:** declared side-effect closure is an inheritance mechanism, not an
+enumeration oracle. A stale or omitted edge can still hide a real disturbance. The signed
+phase-2 topology, change-surface audit, and parity tests remain responsible for finding sites
+not present in the supplied graph.
+
+**Purity-guard interaction:** no target token or dependency entered the core. The three class
+names and base evidence-link names are doctrine constants; all surface/component/gate/evidence
+ids and topology remain runtime data.
+
+**Local verification (2026-07-27):** `make ship` completed purity, structural doctrine
+parity, Ruff, mypy, and `162 passed` in pytest. This is implementation self-verification
+of the generic core, not independent Validator evidence and not a live deployment proof.
+
+---
+
 ## The repeatable mechanism (how future target-factory changes propagate)
 
 This is the standing discipline the founder asked for — run it whenever the origin target's
@@ -459,22 +490,25 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   IR/analyzer as a pure module) and P2 (completeness-ledger + reverse-contract as
   adapter-driven generics).
 
-## Current state after P1/P2/P3/P4 extraction
+## Current state after P1/P2/P3/P4/P5 extraction
 
 - `factory_core` now includes the Phase 0 skeleton, the P1 invariant-kernel module, the P2
   contract/completeness modules, the **P3** SoD/merge-gate spine (`promotion.py` +
   `manifest.verify_digest`) and deterministic intake gate (`comprehensiveness.py`), and the
-  **P4** canonical intent-provenance verifier wired directly into promotion. `RepoAdapter`
-  and `KnowledgeAdapter` expose neutral inventory-returning methods so target-coupled scanning
-  stays in target adapters while the core owns the generic diff/lattice/decision logic.
+  **P4** canonical intent-provenance verifier, plus the **P5** surface-criticality profile and
+  two-axis promotion policy. `RepoAdapter` and `KnowledgeAdapter` expose neutral
+  inventory-returning methods so target-coupled scanning stays in target adapters while the
+  core owns the generic diff/lattice/decision logic.
 - The promotion decision reuses `manifest.SegregationPolicy` (DENY-wins identity) and
   `manifest.verify_digest` (constant-time content-address check) rather than duplicating them;
-  tiers/categories/gate-ids/thresholds arrive as data, and the ≥2-human consequential floor is a
-  core doctrine constant.
+  surfaces/components/side-effect edges/gate ids/evidence ids/Standard flake budgets arrive as
+  data. Critical keeps the ≥2-human floor; Standard/Cosmetic with adequate oracles require no
+  discretionary click.
 - `README.md` is the quick public map of implemented-vs-doctrine-only controls. The doctrine
   remains authoritative, and a control specified there is still not a control running until a
   module/test/gate implements it.
 - `make ship` is the closeout gate for this repo: purity first, then structural doctrine
   parity, lint, typecheck, and test. The live orchestration lanes, phase-authoring/signature
   authorities, and deployment loop remain design-only and are not implied by this substrate.
-  The P4 reconciliation closed with all five local gates green and 142 tests passing.
+  P5's local implementation checks are recorded above; independent and live evidence remains
+  outside this repository's current running surface.

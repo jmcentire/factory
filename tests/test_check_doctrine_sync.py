@@ -92,6 +92,39 @@ def test_old_writer_to_judge_contradiction_cannot_return(tmp_path: Path) -> None
     assert "core-doctrine-communication-mismatch" in errors
 
 
+def test_missing_criticality_class_is_detected_structurally(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    cosmetic_row = (
+        "| **Cosmetic** | Presentation, copy, layout, non-functional display where being wrong "
+        "costs an aesthetic defect and nothing else | Best available | Report and promote |"
+    )
+    doctrine.write_text(source.replace(cosmetic_row, ""), encoding="utf-8")
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("criticality-map-mismatch:") for error in errors)
+
+
+def test_oracle_criticality_matrix_cannot_silently_drift(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "| **Critical** | Promote after mandatory specialist review | **Block** |",
+            "| **Critical** | Promote after mandatory specialist review | Gate |",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert "criticality-gate-matrix-mismatch" not in errors
+    assert "criticality-critical-gap-must-block" in errors
+
+
 def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) -> None:
     root = _copy_guard_surface(tmp_path)
     new_surface = root / "docs" / "new-operating-guide.md"
@@ -102,6 +135,4 @@ def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) 
 
     errors = check_repository(root)
 
-    assert (
-        "stale-commitment:docs/new-operating-guide.md:the seven non-negotiables" in errors
-    )
+    assert "stale-commitment:docs/new-operating-guide.md:the seven non-negotiables" in errors

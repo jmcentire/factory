@@ -20,9 +20,11 @@ Public surface:
     predicate (rows come from the adapter seams; the core owns only the aggregation)
   * comprehensiveness — a deterministic, injection-resistant intake-completeness gate: an
     ordered registry of structural field predicates (never an LLM); fields/thresholds are data
-  * promotion — the fail-closed, default-deny merge/promotion decision: phase-artifact
-    provenance + gate quorum + a consequence-driven distinct-human approver floor (reuses the
-    manifest SegregationPolicy; tiers/categories/thresholds are data)
+  * criticality — human-decided surface classes, declared side-effect closure, and fail-closed
+    classification (unknown/unclassified is Critical)
+  * promotion — the oracle-adequacy × surface-criticality promotion decision: class-disposed
+    evidence gaps, deterministic Critical evidence, specialist review, and candidate-bound
+    Standard risk acceptance
   * provenance — fail-closed resolution of every downstream claim to a canonical item in the
     externally trusted product, architecture, or operational-maturity phase artifacts
 """
@@ -75,6 +77,21 @@ from factory_core.contract import (
     normalize_path,
     reverse_contract,
 )
+from factory_core.criticality import (
+    BASE_REQUIRED_EVIDENCE_IDS,
+    CRITICAL_APPROVER_FLOOR,
+    CRITICALITY_CLASSES,
+    CRITICALITY_COSMETIC,
+    CRITICALITY_CRITICAL,
+    CRITICALITY_STANDARD,
+    CriticalityError,
+    CriticalityProfile,
+    CriticalityResolution,
+    ResolvedSurface,
+    SurfaceControl,
+    normalize_label,
+    resolve_criticality,
+)
 from factory_core.invariant_kernel import (
     AnalysisResult,
     Analyzer,
@@ -106,15 +123,24 @@ from factory_core.manifest import (
     verify_ledger,
 )
 from factory_core.promotion import (
-    BASELINE_APPROVER_FLOOR,
-    CONSEQUENTIAL_APPROVER_FLOOR,
-    ConsequenceProfile,
+    DISPOSITION_BLOCK,
+    DISPOSITION_GATE,
+    DISPOSITION_PROMOTE,
+    DISPOSITION_REPORT_AND_PROMOTE,
+    DISPOSITION_RISK_ACCEPTED,
     EvidenceIntegrity,
     GateOutcome,
+    NamedEvidence,
     PromotionDecision,
     PromotionError,
     PromotionRequest,
+    Quarantine,
+    RiskAcceptance,
+    SpecialistReview,
+    SurfaceDecision,
+    SurfaceObservation,
     decide_promotion,
+    promotion_attestation_subject,
 )
 from factory_core.provenance import (
     CLAIM_CONSTRAINT,
@@ -124,6 +150,7 @@ from factory_core.provenance import (
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
     PHASE_PRODUCT_SPECIFICATION,
+    PROVENANCE_GAP_PREFIXES,
     REQUIRED_PHASES,
     SUPPORTED_CLAIM_KINDS,
     IntentBackreference,
@@ -133,6 +160,7 @@ from factory_core.provenance import (
     ProvenanceClaim,
     ProvenanceReport,
     ResolvedClaim,
+    provenance_issue_is_gap,
     verify_intent_provenance,
 )
 from factory_core.roles import (
@@ -156,8 +184,12 @@ __all__ = [
     "AnalysisResult",
     "Analyzer",
     "ArtifactSink",
-    "BASELINE_APPROVER_FLOOR",
-    "CONSEQUENTIAL_APPROVER_FLOOR",
+    "BASE_REQUIRED_EVIDENCE_IDS",
+    "CRITICALITY_CLASSES",
+    "CRITICALITY_COSMETIC",
+    "CRITICALITY_CRITICAL",
+    "CRITICALITY_STANDARD",
+    "CRITICAL_APPROVER_FLOOR",
     "CallEdge",
     "CLAIM_CONSTRAINT",
     "CLAIM_REQUIREMENT",
@@ -175,8 +207,15 @@ __all__ = [
     "ComprehensivenessGate",
     "ComprehensivenessResult",
     "ConditionalSpec",
-    "ConsequenceProfile",
     "ContractReport",
+    "CriticalityError",
+    "CriticalityProfile",
+    "CriticalityResolution",
+    "DISPOSITION_BLOCK",
+    "DISPOSITION_GATE",
+    "DISPOSITION_PROMOTE",
+    "DISPOSITION_REPORT_AND_PROMOTE",
+    "DISPOSITION_RISK_ACCEPTED",
     "DimensionSummary",
     "Endpoint",
     "EvidenceIntegrity",
@@ -198,12 +237,15 @@ __all__ = [
     "LaunchReadiness",
     "Ledger",
     "LedgerEntry",
+    "NamedEvidence",
     "PromotionDecision",
     "PromotionError",
     "PromotionRequest",
     "ProvenanceBundle",
     "ProvenanceClaim",
     "ProvenanceReport",
+    "PROVENANCE_GAP_PREFIXES",
+    "Quarantine",
     "ReachabilityAnalyzer",
     "ReachabilityInvariant",
     "REQUIRED_PHASES",
@@ -213,6 +255,8 @@ __all__ = [
     "RoleModel",
     "RoleModelError",
     "ResolvedClaim",
+    "ResolvedSurface",
+    "RiskAcceptance",
     "STATUS_DECLARED",
     "STATUS_EXCUSED",
     "STATUS_GAP",
@@ -222,9 +266,13 @@ __all__ = [
     "SegregationPolicy",
     "SourceFacts",
     "SourceFlowFact",
+    "SpecialistReview",
     "SubstanceRequirement",
     "SubstanceSpec",
     "SUPPORTED_CLAIM_KINDS",
+    "SurfaceControl",
+    "SurfaceDecision",
+    "SurfaceObservation",
     "TargetManifest",
     "TargetManifestError",
     "Unsupported",
@@ -247,6 +295,10 @@ __all__ = [
     "load_delta",
     "load_target_manifest",
     "normalize_path",
+    "normalize_label",
+    "promotion_attestation_subject",
+    "provenance_issue_is_gap",
+    "resolve_criticality",
     "reverse_contract",
     "verify_digest",
     "verify_intent_provenance",

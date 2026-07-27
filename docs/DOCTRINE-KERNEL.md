@@ -1,9 +1,10 @@
 # The Doctrine Kernel — tiered intent inventory
 
 > **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
-> three-role/three-phase doctrine revision, 2026-07-26.** An agent may still treat a statement
-> as *more* protected than listed, never less. Only the founder may move a statement down a tier
-> or remove it. Changes to this file pass through the Diff-Intent Gate
+> three-role/three-phase doctrine revision, 2026-07-26, and Criticality amendment,
+> 2026-07-27.** An agent may still treat a statement as *more* protected than listed, never
+> less. Only the founder may move a statement down a tier or remove it. Changes to this file
+> pass through the Diff-Intent Gate
 > ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) like any other
 > doctrine change — an agent proposing an edit here escalates; it never ratifies.
 
@@ -35,14 +36,15 @@ judgment. Four tiers:
 | # | Statement (anchor) |
 |---|---|
 | I1 | The eight non-negotiables (fail-closed on hazards; single authoritative owner per fact; least privilege; full auditability; no silent failure; honesty; provenance of intent; live-verified not self-attested). |
-| I2 | Segregation of duties: implementer ≠ verifier ≠ approver; identity resolution is deny-wins; consequential changes carry the ≥2-distinct-enrolled-humans floor. |
+| I2 | Segregation of duties: implementer ≠ verifier ≠ approver; identity resolution is deny-wins; Critical changes carry the ≥2-distinct-enrolled-humans floor and mandatory specialist review. |
 | I3 | Oracle independence: Coder and Tester receive the same signed spec but have no channel; the Tester never sees the implementation, the Coder never sees the tests, and the Validator returns only bare failure outcomes to an automated repair context. |
 | I4 | The two controls (negative and positive) bound every correction spec against the trusted baseline. |
-| I5 | The gate keys on oracle adequacy, not blast radius; consequential surfaces draw mandatory human review regardless of size. |
+| I5 | Oracle adequacy and criticality are independent axes: depth keys on oracle adequacy, never blast radius; a gap blocks on Critical, gates for expiring human risk acceptance on Standard, and reports-and-promotes on Cosmetic. |
 | I6 | The same built artifact is promoted up the ladder by digest; the evidence plane is content-addressed, hash-chained, and tamper-evident. |
 | I7 | The generic core names no target: targets are data behind adapter seams, never code imports (the purity guard enforces the code side; this doctrine enforces the prose side). |
 | I8 | No agent modifies its own directive, verifier set, approval rules, or sandbox permissions while producing or verifying a change under that policy. |
-| I9 | Provenance of intent is fail-closed: every downstream requirement, constraint, task, and test assertion resolves to the exact canonical item in a trusted phase artifact. |
+| I9 | Provenance of intent distinguishes absence from corruption: a missing link is an evidence gap disposed by surface class; an unresolvable, mismatched, fabricated, or malformed link blocks every class. |
+| I10 | Criticality is human-decided per surface; a change inherits the highest declared side effect; unclassified is Critical. Critical evidence is deterministic with zero flake/retry tolerance and no waiver. |
 
 ## Tier E — Epistemic
 
@@ -51,7 +53,7 @@ judgment. Four tiers:
 | E1 | Cross-model diversity reduces correlated misreading; the verifier runs a different vendor than the implementer. | Correlated-failure research + converged industry practice. Revisable if measurement shows a better independence mechanism. |
 | E2 | Agents take large, loud, well-oracled work; humans take small, subtle work. | Oracle-adequacy observations. Revisable as oracle coverage changes. |
 | E3 | Interpretation depth degrades intent (each re-delegation is a lossy reconstruction); breadth against a fixed artifact preserves independence. | Founder multi-agent research (hop/relay and swarm studies). Refinable — e.g., relay degradation saturates; production-under-reconstruction diverges. |
-| E4 | Retry is recovery, not search: fresh context, bare pass/fail history, budget caps. | Observed retry pathologies. Parameter values are per-target data. |
+| E4 | Retry is recovery, not search: fresh context, bare pass/fail history, budget caps. A flaky test rerun to green is the same sampling error at test granularity. | Observed retry pathologies. Parameter values are per-target data; Critical test evidence has no retry budget. |
 
 ## Tier X — Exercise to the reader
 
@@ -59,7 +61,7 @@ judgment. Four tiers:
 |---|---|
 | X1 | Implementation structure, style, and libraries within the signed contracts. |
 | X2 | Vendor/model assignment per role, provided E1's independence holds. |
-| X3 | All per-target configuration: tiers, categories, thresholds, denylist tokens, adapter selections, environment-rung composition. |
+| X3 | All per-target configuration within the fixed doctrine: surface/component ids, human-decided classes and wrong-cost rationales, side-effect edges, Standard flake budgets, gate/evidence ids, denylist tokens, adapter selections, and environment-rung composition. |
 | X4 | Tooling that assists a stage (spec ingest, diagnosis, coordination), provided it claims no role authority. |
 
 ## Rule of interpretation
