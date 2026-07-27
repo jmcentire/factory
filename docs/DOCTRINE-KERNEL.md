@@ -2,7 +2,8 @@
 
 > **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
 > three-role/three-phase doctrine revision, 2026-07-26, and Criticality amendment,
-> 2026-07-27.** An agent may still treat a statement as *more* protected than listed, never
+> 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27.** An agent may still
+> treat a statement as *more* protected than listed, never
 > less. Only the founder may move a statement down a tier or remove it. Changes to this file
 > pass through the Diff-Intent Gate
 > ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) like any other
@@ -27,7 +28,7 @@ judgment. Four tiers:
 |---|---|
 | S1 | Humans own product intent, architectural decisions, authority, and acceptable risk. The Validator drafts and the human decides; the factory implements, proves conformance, and produces evidence. |
 | S2 | **Exactly three roles: Validator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
-| S3 | The authority is the preserved verbatim source plus the three signed phase artifacts and the content-addressed manifest — never memory, never a mutable ticket, never an agent's summary. |
+| S3 | Intent authority exists only in the Product Specification, Architecture Specification, and Testing and Monitoring Strategy, each signed, content-addressed, immutable for the run, and compared with the preserved verbatim input — never memory, a mutable ticket, a comment, or an agent's summary. The manifest records evidence; it does not originate intent. |
 | S4 | Agents escalate; humans ratify. No agent ratifies a material change to declared intent; genesis and mutation of doctrine require a human signature. |
 | S5 | Honesty in self-reports: nothing marked done, implemented, or satisfied that is partial or absent. |
 
@@ -45,6 +46,10 @@ judgment. Four tiers:
 | I8 | No agent modifies its own directive, verifier set, approval rules, or sandbox permissions while producing or verifying a change under that policy. |
 | I9 | Provenance of intent distinguishes absence from corruption: a missing link is an evidence gap disposed by surface class; an unresolvable, mismatched, fabricated, or malformed link blocks every class. |
 | I10 | Criticality is human-decided per surface; a change inherits the highest declared side effect; unclassified is Critical. Critical evidence is deterministic with zero flake/retry tolerance and no waiver. |
+| I11 | Every downstream backreference binds both the exact invariant-document digest and canonical item digest. A new signed artifact version invalidates every plan, test, control, and evidence reference derived from the old version. |
+| I12 | Every run tool, credential, route, and integration has exactly one signed tier: Allowed, Sign-off required, or Verboten. Unknown and Verboten are absent/denied; scope ceilings are enforced before execution; Sign-off authority is human, fresh, scoped, and expiring; denial probes demonstrate the boundary. The tool policy projects phase-2/3 authority and cannot widen it. |
+| I13 | Every phase and promotion gate is an explicit checklist whose items are satisfied only by individually cited, content-addressed evidence recorded when obtained. Unchecked or uncited remains a visible gap; negative or invalid evidence cannot be converted to a pass. |
+| I14 | A formerly passing test is updated only when an exact signed item supersedes its asserted behavior. Unchanged authority means fix the implementation; artifact silence or conflicting supersession routes to the human. |
 
 ## Tier E — Epistemic
 
@@ -61,7 +66,7 @@ judgment. Four tiers:
 |---|---|
 | X1 | Implementation structure, style, and libraries within the signed contracts. |
 | X2 | Vendor/model assignment per role, provided E1's independence holds. |
-| X3 | All per-target configuration within the fixed doctrine: surface/component ids, human-decided classes and wrong-cost rationales, side-effect edges, Standard flake budgets, gate/evidence ids, denylist tokens, adapter selections, and environment-rung composition. |
+| X3 | All per-target configuration within the fixed doctrine: surface/component ids, human-decided classes and wrong-cost rationales, side-effect edges, Standard flake budgets, gate/evidence ids, tool/inventory/scope ids within the fixed tier semantics, denylist tokens, adapter selections, and environment-rung composition. |
 | X4 | Tooling that assists a stage (spec ingest, diagnosis, coordination), provided it claims no role authority. |
 
 ## Rule of interpretation

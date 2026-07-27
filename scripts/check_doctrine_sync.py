@@ -2,10 +2,10 @@
 """Fail-closed structural parity guard for the active factory doctrine surfaces.
 
 The canonical specification is intentionally prose, but its load-bearing shape is structural:
-sixteen numbered system sections plus §3.5 Criticality, three phase headings, three role
-directives, a three-row role map, three criticality classes, and eight numbered
-non-negotiables. This guard parses those structures rather than asking whether a phrase happens
-to occur somewhere in the file.
+sixteen numbered system sections plus §3.5 Criticality and §4.5 Invariant documents, three
+phase headings, three role directives, a three-row role map, three criticality classes, and
+eight numbered non-negotiables. This guard parses those structures rather than asking whether
+a phrase happens to occur somewhere in the file.
 
 It also scans every active Markdown surface (including future files) and core module for
 superseded commitment phrases. Historical provenance is explicitly excluded: a history should
@@ -29,6 +29,7 @@ EXPECTED_PART_I_SECTIONS: tuple[str, ...] = (
     "3. The three roles",
     "3.5. Criticality",
     "4. The three phases",
+    "4.5. Invariant documents",
     "5. Translation boundaries",
     "6. What is shared and what is independent",
     "7. The eight non-negotiables",
@@ -67,6 +68,12 @@ EXPECTED_PHASE_ROWS: tuple[str, ...] = (
     "3. Operational maturity",
 )
 EXPECTED_CRITICALITY_ROWS: tuple[str, ...] = ("Critical", "Standard", "Cosmetic")
+EXPECTED_INVARIANT_ARTIFACT_ROWS: tuple[str, ...] = (
+    "Product Specification",
+    "Architecture Specification",
+    "Testing and Monitoring Strategy",
+)
+EXPECTED_TOOL_TIER_ROWS: tuple[str, ...] = ("Allowed", "Sign-off required", "Verboten")
 
 EXPECTED_NON_NEGOTIABLES: tuple[str, ...] = (
     "Fail closed on the hazards",
@@ -231,6 +238,22 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if phase_headings != EXPECTED_PHASE_HEADINGS:
         errors.append(f"phase-headings-mismatch:{phase_headings!r}")
 
+    invariant_documents = _section_lines(canonical, 2, "4.5. Invariant documents")
+    invariant_rows = _table_first_column(invariant_documents)
+    if invariant_rows != EXPECTED_INVARIANT_ARTIFACT_ROWS:
+        errors.append(f"invariant-artifact-map-mismatch:{invariant_rows!r}")
+    invariant_text = _normalized("\n".join(invariant_documents))
+    for required in (
+        "Signed.",
+        "Content-addressed.",
+        "Immutable for the run.",
+        "Amendable only through the specification-defect path.",
+        "Nothing outside these three authorizes a requirement.",
+        "A trivial change collapses the three phases into one confirmation.",
+    ):
+        if required not in invariant_text:
+            errors.append(f"invariant-document-rule-missing:{required}")
+
     criticality_section = _section_lines(canonical, 2, "3.5. Criticality")
     criticality_rows = _table_first_column(criticality_section)
     if criticality_rows != EXPECTED_CRITICALITY_ROWS:
@@ -306,15 +329,54 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if "Oracle adequacy and criticality are independent and both apply." not in gate_text:
         errors.append("oracle-criticality-independence-missing")
 
+    checklist_gate = _normalized(
+        "\n".join(_section_lines(canonical, 3, "A gate is a checklist, not a recollection"))
+    )
+    if "an item is satisfied only by cited evidence" not in checklist_gate:
+        errors.append("checklist-cited-evidence-rule-missing")
+    if "an unchecked item is a visible gap" not in checklist_gate:
+        errors.append("checklist-visible-gap-rule-missing")
+
+    existing_test = _normalized(
+        "\n".join(_section_lines(canonical, 3, "When an existing test fails"))
+    )
+    for required in (
+        "The control is authorization, not immutability",
+        "Fix the code, not the test.",
+        "Route to the human.",
+    ):
+        if required not in existing_test:
+            errors.append(f"existing-test-disposition-missing:{required}")
+
+    tools = _section_lines(canonical, 3, "Tools and integrations")
+    tool_rows = _table_first_column(tools)
+    if tool_rows != EXPECTED_TOOL_TIER_ROWS:
+        errors.append(f"tool-tier-map-mismatch:{tool_rows!r}")
+    tools_text = _normalized("\n".join(tools))
+    if "A prohibition an agent can execute is a suggestion." not in tools_text:
+        errors.append("verboten-capability-absence-rule-missing")
+    if "The tool policy is itself an invariant document." not in tools_text:
+        errors.append("tool-policy-invariant-rule-missing")
+
     validator = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Validator")))
     if "Assign criticality per component and externally reachable surface." not in validator:
         errors.append("validator-criticality-assignment-missing")
     if "You never promote a Critical surface on a waiver." not in validator:
         errors.append("validator-critical-no-waiver-missing")
+    if "Dispose of failing existing tests by authorization, not by preference." not in validator:
+        errors.append("validator-existing-test-disposition-missing")
+    if "Externalize as you go." not in validator:
+        errors.append("validator-checklist-externalization-missing")
+
+    coder = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Coder")))
+    if "A capability you do not hold is a decision someone made." not in coder:
+        errors.append("coder-tool-policy-prohibition-missing")
 
     tester = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Tester")))
     if "Write deterministically on critical surfaces." not in tester:
         errors.append("tester-critical-determinism-missing")
+    if "Report contradictions; do not resolve them." not in tester:
+        errors.append("tester-existing-test-contradiction-rule-missing")
 
     for path in _active_markdown(root) + _active_python(root):
         text = _read(root, path).casefold()
@@ -334,7 +396,8 @@ def main() -> int:
         return 1
     print(
         "check_doctrine_sync: GREEN — canonical three-role/three-phase/eight-rule structure, "
-        "criticality/determinism policy, communication contract, and active-surface parity hold"
+        "invariant artifacts, tool policy, checklist/test disposition, criticality/determinism, "
+        "communication contract, and active-surface parity hold"
     )
     return 0
 

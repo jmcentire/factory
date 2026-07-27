@@ -15,9 +15,11 @@ it. The doctrine is authoritative; `factory_core` is one (partial) implementatio
   (product specification, architecture, operational maturity), two flows (capability +
   correction), the eight non-negotiables, shared-spec/no-shared-channel independence,
   oracle-adequacy-not-blast-radius gating, human-decided surface criticality, class-scoped
-  determinism and evidence-gap disposition, the correction controls, environment ladder,
-  content-addressed evidence plane, and regulated control plane. Part II contains the
-  authoritative self-contained role directives.
+  determinism and evidence-gap disposition, the three signed/content-addressed invariant
+  documents, authorization-based existing-test disposition, evidence-backed checklist gates,
+  signed scoped tool tiers, the correction controls, environment ladder, content-addressed
+  evidence plane, and regulated control plane. Part II contains the authoritative
+  self-contained role directives.
 - **[`docs/AGENT-DIRECTIVES.md`](docs/AGENT-DIRECTIVES.md)** — a stable compatibility entry
   point into the role directives embedded in the canonical specification; it deliberately
   does not duplicate them.
@@ -39,9 +41,12 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `factory_core` module / file | Doctrine concept it implements | Status |
 |---|---|---|
 | `manifest.py` | The evidence plane — the content-addressed, hash-chained, tamper-evident change-evidence manifest; write-time segregation of duties (implementer ≠ verifier ≠ approver); constant-time leaf verification (`verify_digest`). | **Implemented** |
+| `evidence.py` + `checklist.py` | Reusable content-addressed evidence binding and checklist gates: every required item is independently recorded against the exact subject; missing/uncited is a visible gap, failed is negative evidence, and tampered/wrong-subject is an integrity failure. | **Implemented** (pure verifier; append timing/platform persistence remains external) |
 | `criticality.py` | §3.5 — the human-decided per-surface control profile, content address, declared side-effect closure, highest-class inheritance, and unclassified/invalid-classification → Critical default. It explicitly does not claim the supplied topology is complete. | **Implemented** (profile resolution; phase-2 topology enumeration remains external) |
-| `promotion.py` | The two-axis promotion gate — class-disposed oracle/evidence gaps, universal rejection of negative or mismatched evidence, deterministic zero-flake/zero-retry Critical evidence, Critical specialist review and two-human floor, Standard candidate-bound expiring risk acceptance, and Cosmetic report-and-promote. The attestation binds the exact profile plus every decision input (disturbances, gate results, identities, observations, flake/retry record, and cited evidence addresses); reviews and risk acceptance are independently candidate/profile/evidence-bound. | **Implemented** |
-| `provenance.py` | Non-negotiable #7 — a verifier that resolves requirement/constraint/task/test-assertion metadata to canonical items in exactly one externally trusted artifact for each of the three phases and distinguishes absent links from invalid ones for promotion disposition. It verifies content/digest provenance, not semantic equivalence. | **Implemented** (verifier + promotion wiring; phase authoring/signing is doctrine-only) |
+| `promotion.py` | The two-axis promotion gate — class-disposed oracle/evidence gaps, universal rejection of negative or mismatched evidence, deterministic zero-flake/zero-retry Critical evidence, Critical specialist review and two-human floor, Standard candidate-bound expiring risk acceptance, Cosmetic report-and-promote, signed tool-policy verification, and evidence-backed checklist evaluation. The attestation binds the exact profile plus every decision input and cited evidence/policy address. | **Implemented** |
+| `provenance.py` | Non-negotiable #7 and invariant-document identity — a verifier over exactly one externally trusted Product Specification, Architecture Specification, and Testing and Monitoring Strategy. Every downstream reference binds both the exact artifact digest and canonical item digest, so any amended artifact version invalidates old derived work. It distinguishes absent links from invalid ones and verifies provenance, not semantic equivalence. | **Implemented** (verifier + promotion wiring; phase authoring/signing is doctrine-only) |
+| `test_disposition.py` | The three-way disposition for a formerly passing test that now fails: a signed exact supersession authorizes a Tester-side update, retained exact behavior (including under a newly addressed artifact version) requires fixing the implementation and rebinding provenance, and silence/conflict routes to the human. | **Implemented** (pure classifier; lane routing remains orchestration) |
+| `tool_policy.py` | The run-scoped Allowed / Sign-off-required / Verboten policy: exact inventory coverage, phase-2/3 backreferences, independently approved content address, scope ceilings, fresh expiring human authorizations, unknown-tool denial, and content-addressed Verboten denial probes. | **Implemented** (pure pre-execution decision and verifier; credential/network removal and resource probes must be wired by the platform) |
 | `invariant_kernel.py` | The capability-delta IR + the composition gate — can individually-safe deltas compose into a forbidden configuration? (the platform-invariant side of the gate). | **Implemented** |
 | `contract.py` + `completeness.py` | Oracle adequacy + the FE↔BE contract discipline + launch-readiness — forward/reverse contract diff (every caller reaches a real provider; every provider is called or excused) and the falsifiable completeness lattice (the exit gate). | **Implemented** |
 | `comprehensiveness.py` | The intake-completeness gate (the entrance) — a deterministic, injection-resistant registry of structural field predicates that decides comprehensive vs needs-info without an LLM. Fields/thresholds/rules are data. | **Implemented** |
@@ -52,10 +57,12 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 **Honest split (implemented vs doctrine-only).** Phase 0 (the skeleton + purity guard) and
 the extractions (the invariant kernel; the contract/completeness modules; the SoD/merge-gate
 spine + deterministic intake gate; the intent-provenance verifier; the surface-criticality
-profile and promotion policy) are **real, tested code**.
+profile and promotion policy; evidence-backed checklists; invariant-version binding;
+existing-test disposition; and tool-policy enforcement) are **real, tested code**.
 The **orchestration engine, three live isolated lanes, collaborative phase-authoring loops,
-artifact signing/authority wiring, RBAC/SSO enforcement, and the build/demo pipeline are
-doctrine/design, not running** — they are specified in the docs above and are not wired here.
+artifact signing/authority wiring, platform-enforced credential/network grants and denial
+probes, RBAC/SSO enforcement, and the build/demo pipeline are doctrine/design, not running** —
+they are specified in the docs above and are not wired here.
 A control specified is not a control running.
 
 The defining constraint: `factory_core` is generic. Every per-target input — repo coordinates,
@@ -64,22 +71,26 @@ runtime through adapter seams**, never a code dependency. Point the factory at a
 swapping a data-only target pack; the core does not change. Correctness test: delete every
 target pack and the core is still importable, testable, and green.
 
-This repository has completed **Phase 0 plus five generic extractions**:
+This repository has completed **Phase 0 plus six generic extractions**:
 the core skeleton and purity guard, the invariant-kernel composition gate, the
 adapter-driven contract/completeness logic, and the SoD/merge-gate spine plus the
 deterministic intake gate, the provenance-of-intent verifier, and surface-criticality
-enforcement. It is a real, tested foundation, not a running portal; the orchestration engine,
-three-phase authoring loops, lane isolation, RBAC/SSO, build/demo, and affinity write-back are
-later phases.
+enforcement, followed by invariant/checklist/tool-policy/test-disposition controls. It is a
+real, tested foundation, not a running portal; the orchestration engine, three-phase authoring
+loops, lane isolation, platform capability grants, RBAC/SSO, build/demo, and affinity
+write-back are later phases.
 
 ## What's here
 
 | Module | What it is |
 |---|---|
 | `factory_core/manifest.py` | The content-addressed (SHA-256), append-only, **hash-chained**, tamper-evident evidence ledger. Every append is **fail-closed on segregation of duties** (implementer, verifier, approver must be three distinct identities); `SegregationPolicy` resolves identities **DENY-wins** (an agent denylist beats the human allowlist); `verify_digest` is the constant-time leaf tamper check. Stdlib-only. |
+| `factory_core/evidence.py` + `factory_core/checklist.py` | Shared subject-bound evidence verification and the generic checklist item/report model. A checked item without its own valid citation is still a gap. |
 | `factory_core/criticality.py` | The fixed three-class (**Critical / Standard / Cosmetic**) surface-policy model. Components, surfaces, wrong-cost rationales, human deciders, side-effect edges, extra evidence ids, and Standard flake budgets are target **data**. Unknown/unclassified resolves Critical. |
-| `factory_core/promotion.py` | The pure promotion decision (`decide_promotion`) over criticality resolution, oracle/live/determinism observations, trusted intent provenance, content-addressed evidence, gate quorum, specialist review, risk acceptance, and SoD. Critical gaps block without waiver; Standard gaps gate; Cosmetic gaps report-and-promote. |
-| `factory_core/provenance.py` | The **provenance-of-intent** verifier (`verify_intent_provenance`): exactly one trusted product-specification, architecture, and operational-maturity artifact; canonical intent-item digests; and resolvable metadata for every downstream requirement, constraint, task, and test assertion. Missing links are labeled for class disposition; unresolvable/mismatched links remain integrity failures. Semantic canonicalization remains in the human/Validator phase loop. Stdlib + intra-core only. |
+| `factory_core/promotion.py` | The pure promotion decision (`decide_promotion`) over criticality resolution, oracle/live/determinism observations, trusted invariant documents, signed tool policy, evidence-backed checklist, specialist review, risk acceptance, and SoD. Critical gaps block without waiver; Standard gaps gate; Cosmetic gaps report-and-promote. |
+| `factory_core/provenance.py` | The **provenance-of-intent** verifier (`verify_intent_provenance`): exactly one trusted Product Specification, Architecture Specification, and Testing and Monitoring Strategy; artifact-and-item digest binding for every downstream requirement, constraint, task, and test assertion; and explicit signed supersession metadata. Missing links are labeled for class disposition; unresolvable/mismatched links remain integrity failures. |
+| `factory_core/test_disposition.py` | Pure authorization-based classification of formerly passing failures: update test only on an exact signed supersession, otherwise fix the code when authority is unchanged or route silence/conflict to the human. |
+| `factory_core/tool_policy.py` | Pure signed run-policy verifier and pre-execution invocation decision over opaque target-supplied tool/scope ids. Verboten and unknown deny, Sign-off authority expires, and denial probes prove configured refusal. |
 | `factory_core/comprehensiveness.py` | The **deterministic, injection-resistant** intake-completeness gate: an ordered, collision-guarded registry of **structural** field predicates (present-and-substantive by length + word-token count, never semantic, **never an LLM**) that decides comprehensive vs needs-info. The entrance analogue of `completeness.py`'s exit gate. Fields / thresholds / rules are per-target **data**. Stdlib-only. |
 | `factory_core/target.py` | The `TargetManifest` loader: parses a content-addressed TOML manifest (repo coords + ref + subpath, adapter selections, role/capability bindings, compliance-rule path, effort params, demo-env descriptor), validates it against a JSON Schema, and **refuses any code reference** — data in, never a code import. Fail-closed before adapter resolution. |
 | `factory_core/adapters.py` | The five `typing.Protocol` seams for all target contact: `RepoAdapter`, `KnowledgeAdapter`, `ComplianceAdapter`, `IdpAdapter`, `ArtifactSink`. Interfaces only. |

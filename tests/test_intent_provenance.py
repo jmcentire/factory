@@ -87,6 +87,7 @@ def _claim(
         kind=kind,
         backreference=IntentBackreference(
             artifact_id=artifact.artifact_id,
+            artifact_digest=artifact.content_digest,
             item_id=selected.item_id,
             intent_digest=selected.intent_digest,
         ),
@@ -183,6 +184,7 @@ def test_missing_or_unresolvable_backreference_fails_closed() -> None:
             kind=CLAIM_TASK,
             backreference=IntentBackreference(
                 artifact_id="absent",
+                artifact_digest=digest_obj({"artifact": "absent"}),
                 item_id="item",
                 intent_digest=digest_obj({"canonical_statement": "x"}),
             ),
@@ -192,6 +194,7 @@ def test_missing_or_unresolvable_backreference_fails_closed() -> None:
             kind=CLAIM_TEST_ASSERTION,
             backreference=IntentBackreference(
                 artifact_id=artifacts[0].artifact_id,
+                artifact_digest=artifacts[0].content_digest,
                 item_id="absent",
                 intent_digest=digest_obj({"canonical_statement": "x"}),
             ),
@@ -214,6 +217,7 @@ def test_missing_links_are_classifiable_without_weakening_integrity_failures() -
         kind=CLAIM_TASK,
         backreference=IntentBackreference(
             artifact_id=artifacts[0].artifact_id,
+            artifact_digest=artifacts[0].content_digest,
             item_id="absent",
             intent_digest=digest_obj({"canonical_statement": "x"}),
         ),
@@ -238,6 +242,7 @@ def test_empty_backreference_fields_are_reported_as_gaps_but_bad_digest_is_not()
             kind=CLAIM_TASK,
             backreference=IntentBackreference(
                 artifact_id="",
+                artifact_digest=digest_obj({"artifact": "missing-id"}),
                 item_id="item",
                 intent_digest=digest_obj({"canonical_statement": "x"}),
             ),
@@ -247,8 +252,19 @@ def test_empty_backreference_fields_are_reported_as_gaps_but_bad_digest_is_not()
             kind=CLAIM_TASK,
             backreference=IntentBackreference(
                 artifact_id=artifacts[0].artifact_id,
+                artifact_digest=artifacts[0].content_digest,
                 item_id=artifacts[0].items[0].item_id,
                 intent_digest="",
+            ),
+        ),
+        ProvenanceClaim(
+            claim_id="no-artifact-digest",
+            kind=CLAIM_TASK,
+            backreference=IntentBackreference(
+                artifact_id=artifacts[0].artifact_id,
+                artifact_digest="",
+                item_id=artifacts[0].items[0].item_id,
+                intent_digest=artifacts[0].items[0].intent_digest,
             ),
         ),
         ProvenanceClaim(
@@ -256,6 +272,7 @@ def test_empty_backreference_fields_are_reported_as_gaps_but_bad_digest_is_not()
             kind=CLAIM_TASK,
             backreference=IntentBackreference(
                 artifact_id=artifacts[0].artifact_id,
+                artifact_digest=artifacts[0].content_digest,
                 item_id=artifacts[0].items[0].item_id,
                 intent_digest="sha256:not-a-real-digest",
             ),
@@ -266,10 +283,14 @@ def test_empty_backreference_fields_are_reported_as_gaps_but_bad_digest_is_not()
 
     assert "backreference-artifact-id-missing:no-artifact-id" in report.issues
     assert any(issue.startswith("intent-digest-missing:no-digest:") for issue in report.issues)
+    assert "backreference-artifact-digest-missing:no-artifact-digest" in report.issues
     assert any(issue.startswith("intent-digest-mismatch:bad-digest:") for issue in report.issues)
     assert provenance_issue_is_gap("backreference-artifact-id-missing:no-artifact-id")
     assert provenance_issue_is_gap(
         f"intent-digest-missing:no-digest:{artifacts[0].artifact_id}:behavior-1"
+    )
+    assert provenance_issue_is_gap(
+        "backreference-artifact-digest-missing:no-artifact-digest"
     )
     assert not provenance_issue_is_gap(
         f"intent-digest-mismatch:bad-digest:{artifacts[0].artifact_id}:behavior-1"
@@ -293,6 +314,19 @@ def test_item_id_cannot_be_replayed_after_the_statement_changes() -> None:
     assert report.satisfied is False
     assert "intent-digest-mismatch:req-1:phase-1-v1:behavior-1" in report.issues
     assert report.resolved_claims == ()
+
+
+def test_new_signed_artifact_version_invalidates_all_old_derived_references() -> None:
+    artifacts = _bundle()
+    old_claim = _claim("req-1", CLAIM_REQUIREMENT, artifacts[0])
+    amended_product = replace(artifacts[0], version="2")
+    amended = (amended_product, artifacts[1], artifacts[2])
+
+    report = verify_intent_provenance(amended, (old_claim,), _trust(amended))
+
+    assert report.satisfied is False
+    assert "backreference-artifact-digest-mismatch:req-1:phase-1-v1" in report.issues
+    assert amended_product.items[0].intent_digest == artifacts[0].items[0].intent_digest
 
 
 def test_duplicate_phases_items_and_claims_are_not_accepted() -> None:
@@ -342,6 +376,7 @@ def test_from_dict_loads_the_canonical_schema() -> None:
             "kind": CLAIM_REQUIREMENT,
             "backreference": {
                 "artifact_id": artifact.artifact_id,
+                "artifact_digest": artifact.content_digest,
                 "item_id": artifact.items[0].item_id,
                 "intent_digest": artifact.items[0].intent_digest,
             },

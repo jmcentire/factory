@@ -16,8 +16,8 @@ fail-closed; `make ship` runs it first.
 ## Where things live
 
 See `CLAUDE.md` "Layout". In short:
-`factory_core/{manifest,criticality,promotion,provenance,target,adapters,roles}.py`, the guards
-in `scripts/`, tests in `tests/`, and the synthetic empty target under
+`factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,test_disposition,tool_policy,target,adapters,roles}.py`,
+the guards in `scripts/`, tests in `tests/`, and the synthetic empty target under
 `tests/fixtures/synthetic_target/`.
 
 ## Commands
@@ -33,9 +33,12 @@ make ship           # purity -> doctrine -> lint -> typecheck -> test, fail-clos
 No target code in core · signing-identity segregation of duties
 (implementer ≠ verifier ≠ approver; these are not extra workflow roles) · tamper-evident
 hash-chained ledger · fail-closed provenance of intent against the three trusted phase
-artifacts · human-decided surface criticality (unclassified is Critical; no waiver or flake
-tolerance on Critical) · data-only targets (no code references) · portability (green with no
-target pack present). All are enforced by the guards and the test suite, not merely documented.
+artifacts with artifact-version invalidation · evidence-backed checklist items · signed scoped
+tool tiers (unknown and Verboten deny; Sign-off authority expires) · authorization-based
+existing-test disposition · human-decided surface criticality (unclassified is Critical; no
+waiver or flake tolerance on Critical) · data-only targets (no code references) · portability
+(green with no target pack present). All are enforced by the guards and the test suite, not
+merely documented.
 
 ## Durable knowledge
 

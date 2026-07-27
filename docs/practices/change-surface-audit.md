@@ -34,12 +34,12 @@ For each touched interaction the spec classifies it and calls it out **by name**
   behavior, payload shape, ordering, error semantics, the authorization / role gate,
   and any tenant / row isolation. Each held-invariant interaction gets a **locking
   test** that fails if the contract drifts, and that locking test must be authorized
-  in the signed operational-maturity artifact before build.
+  in the signed Testing and Monitoring Strategy before build.
 - **INTENTIONALLY CHANGED** — the new contract is stated explicitly, and the spec
   carries (a) a test asserting the **new** contract and (b) a test or argument that
   every *other* consumer of the surface is **unaffected**, or is migrated in the same
   change. Those new-contract and other-consumer proof tests must also be authorized in
-  the signed operational-maturity artifact.
+  the signed Testing and Monitoring Strategy.
 
 Every touched interaction must land in exactly one of these two buckets. "Not
 considered" is not a valid classification — an unclassified touched surface fails the
@@ -51,6 +51,12 @@ wrong costs and therefore how an evidence gap is disposed. Phase 2 records, for 
 surface, the human decider, wrong-cost rationale, criticality class, and every
 side-effect edge. An omitted or invalid criticality decision resolves to Critical. A
 change inherits the highest class reachable through the declared edges.
+
+Phase 2 also enumerates every tool, credential, network route, and external integration
+the change or its verification may reach. Phase 2 or phase 3 authorizes one exact tier
+and scope for each entry; the signed run tool policy projects those decisions into
+enforceable grants. A tool absent from the inventory is Verboten rather than implicitly
+available.
 
 ## How it rides the rails the factory already has
 
@@ -106,10 +112,13 @@ Future accessors:   <the opt-in accessor + the default-exclude of existing acces
 Observability:      <logging / alerts / telemetry / reporting added>
 
 Operational-maturity linkage:
-  <phase-3 item ids for each HELD_INVARIANT and INTENTIONALLY_CHANGED test/proof>
+  <Testing and Monitoring Strategy item ids for each test/proof>
 
 Provenance linkage:
-  <exact phase-artifact backreference for each requirement, constraint, task, and assertion>
+  <exact phase-artifact digest + item backreference for each requirement, constraint, task, and assertion>
+
+Tool-policy linkage:
+  <inventory item, tier, scope, and exact phase-2/3 backreference for every reachable capability>
 
 Capability-delta linkage (platform-invariant surfaces only):
   <capability_delta document reference, or "none — no platform-invariant surface touched">
@@ -124,13 +133,15 @@ The audit is complete when:
 3. every HELD_INVARIANT interaction has a named locking test, and
 4. every INTENTIONALLY_CHANGED interaction has a new-contract test **and** an
    other-consumer-unaffected proof (test or migration), and
-5. every named test/proof is authorized in the signed operational-maturity artifact
+5. every named test/proof is authorized in the signed Testing and Monitoring Strategy
    with fixture, environment rung, expected evidence, and a resolvable backreference,
    and
 6. the audit scans for sites not in its enumeration and fails when a new one appears,
 7. each surface carries a human-decided criticality class and wrong-cost rationale,
 8. every declared side-effect target is also present in the profile and the change
    inherits the highest reachable class, and
-9. any platform-invariant surface it touches is reflected in a capability delta.
+9. any platform-invariant surface it touches is reflected in a capability delta, and
+10. every reachable tool, credential, route, and integration has exactly one phase-authorized
+    tier and scope in the run tool policy.
 
 An incomplete audit blocks advancement to the build phase.

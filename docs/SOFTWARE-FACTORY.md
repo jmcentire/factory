@@ -35,6 +35,7 @@ the strength of a description — applies to the factory's own description of it
 3. [The three roles](#3-the-three-roles)
 3.5. [Criticality](#35-criticality)
 4. [The three phases](#4-the-three-phases)
+4.5. [Invariant documents](#45-invariant-documents)
 5. [Translation boundaries](#5-translation-boundaries)
 6. [What is shared and what is independent](#6-what-is-shared-and-what-is-independent)
 7. [The eight non-negotiables](#7-the-eight-non-negotiables)
@@ -261,7 +262,7 @@ incident is a monitoring surface shaped by one incident.
 What is settled here:
 
 - The acceptance criteria, as observable assertable effects
-- The invariants, as properties that must hold
+- The tests and probes that attempt to refute the invariants established in phase 1
 - The disposition of every failure — **fail closed** for the hazard classes, an explicit safe
   degradation for the rest, with the condition, the disposition, the maximum duration, the
   exhaustion behavior, and the rationale
@@ -281,6 +282,54 @@ task and every constraint carries a backreference to the phase artifact that aut
 so nothing downstream asserts a requirement that did not come from an agreed artifact.
 
 Then the build loop runs (§10).
+
+---
+
+## 4.5. Invariant documents
+
+Three artifacts come out of the three phases, and they are the only things in this system that
+authorize anything.
+
+| Artifact | Phase | Carries |
+|---|---|---|
+| **Product Specification** | 1 | What must be true that is not true today, itemized as observable assertable effects; the invariants; the quality and risk requirements |
+| **Architecture Specification** | 2 | Component boundaries, state ownership, dependency direction, transaction and trust boundaries, data topology, the database schema as a contract, deployment shape |
+| **Testing and Monitoring Strategy** | 3 | Acceptance tests, edge cases, failure dispositions, observability surface, alerts and owners, recovery posture, the artifact-applicability matrix |
+
+**Invariant means four things.**
+
+*Signed.* A named human agreed it. Agreement is the act that creates the authority; an unsigned
+draft authorizes nothing, no matter how complete.
+
+*Content-addressed.* The artifact has a digest, and every downstream citation resolves to that
+digest. Two agents holding "the spec" are holding the same bytes or they are not holding the
+same spec.
+
+*Immutable for the run.* No agent edits it. Not to fix a typo, not to resolve an ambiguity, not
+to record something learned during implementation.
+
+*Amendable only through the specification-defect path.* Any agent, test, operator, or human may
+raise a contradiction with evidence. The current version stays frozen. The human and the
+Validator resolve it in the phase it belongs to. An approved amendment produces a **new signed
+version** that invalidates and reruns every plan, test, control, and piece of evidence derived
+from the old one.
+
+> **Nothing outside these three authorizes a requirement.** Every backreference required by
+> non-negotiable 7 resolves to an exact item and artifact digest in one of these three
+> artifacts. A backreference to a Linear ticket, a Slack thread, a PR comment, a design doc,
+> or a prior conversation does not resolve, and an assertion whose only authority is one of
+> those halts the run.
+
+This is deliberate and it is the point. Tickets, threads, and comments are mutable
+project-management state — the same reason §12 refuses to treat the ticket as the record. They
+are legitimate *inputs* to phase 1, preserved verbatim and ratified against. They are not
+authorities. The transformation from a mutable input to a signed artifact is exactly the
+translation boundary this document exists to guard, and letting a downstream agent cite the
+input directly routes around it.
+
+**A trivial change collapses the three phases into one confirmation. It does not skip the
+artifacts.** The confirmation is signed, addressed, and cited like any other — a one-line spec
+is still a spec.
 
 ---
 
@@ -646,6 +695,42 @@ Once the three phases are agreed, the loop runs.
 7. **After validation passes**, unit tests are written against the now-settled implementation
    shape.
 
+### When an existing test fails
+
+A failing test that used to pass is the most consequential signal in the loop, and it means one
+of three things. **Only the Validator can tell them apart**, because the Coder cannot see the
+tests and the Tester cannot see the results.
+
+| The failing test asserts… | Meaning | Disposition |
+|---|---|---|
+| behavior a signed artifact **supersedes** | Stale. The specification changed it deliberately. | Update the test, citing the superseding item. Ordinary work. |
+| behavior no signed artifact **touched** | Regression, or an unintended side effect of the change. | The implementation is wrong. Fix the code, not the test. |
+| behavior the artifacts are **silent** on, and it is unclear which of the above applies | Ambiguity | **Route to the human.** Do not resolve it. |
+
+If the current signed artifacts both retain and supersede the exact asserted behavior, they
+contradict each other. That is a specification defect routed to the human, not a choice the
+Validator resolves by ordering the items.
+
+Note what this replaces. An earlier reading of this problem proposed making existing tests
+immutable to protect the oracle. That deadlocks every change to previously-correct behavior —
+the tests assert the old behavior, they can never pass, and the Validator can never validate.
+**The control is authorization, not immutability**, and the authorization already exists: the
+positive control flags a change to previously-correct behavior as an over-constraint and routes
+it to a human who confirms the old behavior was also wrong.
+
+It also needs no prohibition on the Tester. **The Tester never runs the tests**, so it receives
+no signal that a test went red and has no occasion to tune one to green. Tuning a test to pass
+requires a feedback loop the structure does not provide, which is why the separation is the
+defense and a rule would be decoration. Where a signed item supersedes the asserted behavior,
+the Validator issues that cited disposition to the Tester; the Validator still does not edit
+tests in the run it verifies, and no implementation observation enters the update.
+
+An unrelated amendment still changes the whole-artifact digest and invalidates the old test
+reference. If exactly one item in the new signed version retains the same item id and canonical
+intent digest, rebind the test's provenance to that new artifact version without changing its
+assertion; the failing behavior remains a regression and the implementation is fixed. This is
+version invalidation without pretending an untouched requirement disappeared.
+
 ### Retry is recovery, not search
 
 When an implementation fails, the lane may retire that Coder and start a fresh one from clean
@@ -719,6 +804,26 @@ Every surface in the **Critical** class defined in §3.5 receives mandatory spec
 That class table is the one authoritative list; this section does not maintain a second
 enumeration that can drift.
 
+### A gate is a checklist, not a recollection
+
+**Every gate is a list of items, and an item is satisfied only by cited evidence.** Not by the
+Validator's judgment that it was handled, not by its memory of having looked, not by a summary
+it wrote earlier in the run.
+
+The Validator writes each item's evidence into the manifest **as it is obtained**, rather than
+holding the state of a long run in working context and assembling the account at the end. A
+Validator juggling a run from memory will drop an item, and the drop is invisible — nothing
+records what was not checked, so an unexamined item and a passed item look identical in the
+final report.
+
+Externalizing has a second effect that matters more than the first: **an unchecked item is a
+visible gap.** The checklist is the artifact, so the absence of evidence against an item is
+itself evidence, and it is evidence a human can act on.
+
+Each of the three phases ends in the same shape — a checklist gate whose items are satisfied by
+cited evidence, plus an adversarial pass, because **done is a claim to be refuted rather than
+accepted.**
+
 ### The decision package
 
 To make the human's decision possible rather than a rubber stamp under evidence fatigue, the
@@ -756,6 +861,12 @@ positive-control result where present; test, mutation, security, and contract re
 per-environment results; residual risks; Standard risk acceptances; and human approvals. It
 also records:
 
+- The exact digest and version of each invariant document, and each downstream item's
+  artifact-and-item backreference
+- The signed tool-policy digest; every declared inventory item's tier and scope; every
+  Sign-off-required authorization; and every Verboten denial-probe result
+- Every checklist definition and each item's independently addressed evidence, recorded when
+  obtained, so an unchecked item remains visible
 - The criticality class of every surface the change disturbed, including surfaces reached by
   side effects, and the class-required evidence set for each
 - For every critical surface, the determinism record — whether any test on it flaked during
@@ -803,6 +914,50 @@ that policy.**
 
 The factory must never approve a change to its own approval mechanism, and a change to a
 verifier requires independent approval.
+
+### Tools and integrations
+
+Every tool, credential, network route, and external integration available to an agent falls in
+exactly one tier, declared in the run's signed tool policy.
+
+| Tier | Meaning | Enforcement |
+|---|---|---|
+| **Allowed** | Available without asking, for the duration of the run | Present in the grant |
+| **Sign-off required** | A named human authorizes per use or per run; the grant is scoped, recorded, and expires | Present only after authorization, and only in the scope authorized |
+| **Verboten** | Not available | **Absent from the grant.** Not present and forbidden — not present. |
+
+> **A prohibition an agent can execute is a suggestion.**
+>
+> "Never write to production," "never move real money," "never exfiltrate a secret into
+> context," "never force-push," "never deploy without a gate" are instructions asking an agent
+> to obey. An agent that has misread its situation, or that is carrying an instruction hidden
+> in a repository file, obeys nothing. The Verboten tier is therefore enforced by the
+> capability not existing — no credential, no network route, no scope in the token, no
+> reachable endpoint — so the prohibition arrives as a rejection from the resource rather
+> than as a decision by the agent.
+
+**Enforcement is verified, not assumed.** The same rule already stated for sandbox restrictions
+applies here without exception: a tier is a boundary only if the platform enforces it, and
+enforcement is demonstrated by attempting the forbidden operation and observing the refusal.
+A Verboten tier that has never been tested is a documented intention.
+
+**Scope, not just presence.** A grant carries what the capability may reach, not merely that it
+exists — push scoped to a branch pattern rather than a repository, read scoped to a dataset
+rather than a project, a delegation to *use* a secret in a call rather than to *read* it into
+context.
+
+**The tool policy is itself an invariant document.** Signed, versioned, content-addressed, and
+covered by the control-plane prohibition: no agent modifies the policy under which it is
+operating, and a change to the policy requires independent approval.
+
+This does not create a fourth source of intent. The tool policy is an enforcement projection:
+every tier and every Sign-off-required authorization carries a resolvable backreference to the
+Architecture Specification or Testing and Monitoring Strategy item it implements. It may
+narrow or activate that signed boundary; it cannot originate a requirement or widen the
+boundary. Its phase-artifact versions must be the same exact versions governing the candidate;
+a policy derived from different artifact bytes is invalid. An unknown tool is Verboten, a grant
+outside its declared scope is invalid, and renewal of an expiring authorization requires fresh
+human evidence.
 
 ---
 
@@ -910,9 +1065,12 @@ spec is bounded from both sides against the trusted pre-defect behavior of main,
 repairs gated by default.
 
 Verification depth keys on whether the oracle comprehends the change rather than on how large
-the change is. Every requirement and assertion traces to a signed phase artifact, and an
-assertion that traces to nothing halts the run. No agent may alter the target, the verifier, or
-the promotion policy while proving its own work.
+the change is. Every requirement and assertion traces to an exact item and digest in the
+Product Specification, Architecture Specification, or Testing and Monitoring Strategy, and a
+new signed version invalidates all derived work. Every gate is an evidence-backed checklist.
+Every tool call is bounded by the signed run policy; unknown and Verboten capabilities are
+absent rather than entrusted to agent restraint. No agent may alter the target, the verifier,
+or the promotion policy while proving its own work.
 
 **The factory does not guarantee correctness, and it does not ask to be trusted on consensus,
 mutable tickets, or discretionary clicks.** It produces independently verifiable,
@@ -963,6 +1121,24 @@ loop before all three phases are agreed.
 
 **Drafting is not deciding.** The Validator produces proposals in phases 2 and 3; the human
 owns the decisions.
+
+### The invariant documents
+
+The three outputs are the **Product Specification**, **Architecture Specification**, and
+**Testing and Monitoring Strategy**. They are signed by a named human, content-addressed,
+immutable for the run, and amendable only through the specification-defect path. Every
+downstream backreference binds the exact artifact digest and item. A ticket, thread, comment,
+design note, memory, or conversation is input, never authority. A new signed version
+invalidates all work and evidence derived from the old one.
+
+### The run tool policy
+
+Every tool, credential, route, and integration is Allowed, Sign-off required, or Verboten in a
+signed, content-addressed policy whose rules cite phase 2 or phase 3. Unknown is Verboten.
+Allowed does not mean unscoped. Sign-off authority is human, scoped, recorded, and expiring.
+Verboten means the capability is absent, and a denial probe proves the resource refuses it.
+The policy and candidate bind the same exact phase-artifact versions. No agent changes or
+routes around the policy under which it is operating.
 
 ### The human-agent authority boundary
 
@@ -1025,6 +1201,9 @@ the large, well-specified, loud-when-wrong work. Humans take the small, subtle w
 Critical surfaces draw mandatory specialist review regardless of size. When the oracle is
 silent, Critical blocks, Standard gates for expiring human risk acceptance, and Cosmetic
 reports and promotes.
+
+Every gate is an explicit checklist. Each satisfied item cites individually content-addressed
+evidence recorded when obtained; an unchecked or uncited item remains a visible gap.
 
 ### Retry is recovery, not search
 
@@ -1094,6 +1273,13 @@ relevant phase. Do not decide.
 test names, traces, or assertion text**, because a suite that returns its internals becomes an
 interactive debugger the implementation is tuned against.
 
+**Dispose of failing existing tests by authorization, not by preference.** For each test that
+passed before this change and fails now, determine whether a signed artifact supersedes the
+behavior it asserts, whether no artifact touched that behavior, or whether the artifacts are
+silent. Authorize a cited Tester-side update, fix the implementation, or route to the human
+respectively. **Never update a test on the grounds that it is inconvenient**, and never
+authorize one without citing the superseding item.
+
 **Verify the mechanical evidence adversarially.** For each acceptance criterion, select a
 refutation method that could actually fail and attempt to refute rather than confirm.
 
@@ -1126,6 +1312,9 @@ report. **Drive the change live.**
 
 **Refute findings before presenting them.** A finding passed to a human unrefuted is a
 hypothesis, and a gate flooded with hypotheses gets bypassed.
+
+**Externalize as you go.** Write each gate item's evidence into the manifest at the moment it
+is obtained. Do not carry the state of the run and assemble the account at the end.
 
 ### Prohibitions
 
@@ -1189,6 +1378,10 @@ architecture. You never invent a table or constraint beyond the spec. You never 
 isolation mechanism phase 2 did not specify. You never retrofit error handling or audit after
 the fact. You never invent a fallback for a failure phase 3 did not give a disposition. **You
 never treat your own sign-off as doneness.**
+
+You never reach a tool, credential, or integration outside the run's signed tool policy, and
+you never treat the absence of a capability as an obstacle to route around. **A capability you
+do not hold is a decision someone made.**
 
 You receive at most a bare pass-or-fail history of prior attempts — no test names, traces, or
 explanation of how a prior attempt failed.
@@ -1255,6 +1448,10 @@ specification defect about testability, raised rather than shipped with a retry 
 
 **Carry provenance on every assertion.** Each cites the phase artifact it asserts.
 
+**Report contradictions; do not resolve them.** If, while reading the signed artifacts, you
+find an existing test that contradicts a signed item, raise it as a specification defect. You
+are not authorized to decide that previously-correct behavior was incorrect.
+
 **Route every question to the Validator.**
 
 ### Prohibitions
@@ -1287,9 +1484,9 @@ elsewhere in the file would not satisfy it.
 
 | Phase | Proposes | Reviews | Produces | Ends when |
 |---|---|---|---|---|
-| **1. Product spec** | Human | Validator counters | What must be true | Implementable, both agree |
-| **2. Architecture** | Validator | Human debates, adjusts | Boundaries, ownership, schema, topology | Settled, both agree |
-| **3. Operational maturity** | Validator | Human debates, adjusts | Tests, edges, dispositions, monitoring | Agreed |
+| **1. Product spec** | Human | Validator counters | Product Specification | Implementable, both agree |
+| **2. Architecture** | Validator | Human debates, adjusts | Architecture Specification | Settled, both agree |
+| **3. Operational maturity** | Validator | Human debates, adjusts | Testing and Monitoring Strategy | Agreed |
 
 ### Roles
 
@@ -1309,6 +1506,39 @@ against the trusted baseline; the Validator verifies both before trusting anythi
 ---
 
 ## Appendix B — Changelog
+
+### Invariants, tools, test disposition, and checklist gates — 2026-07-27
+
+**Added *Invariant documents*.** The three phase artifacts — Product Specification,
+Architecture Specification, Testing and Monitoring Strategy — are named, defined as signed,
+content-addressed, immutable-for-the-run, and amendable only through the
+specification-defect path. Backreferences now bind the exact artifact digest and item in one
+of these three or the run halts; a citation to a ticket, thread, or comment does not resolve,
+because those are mutable inputs to phase 1 rather than authorities. Any new artifact version
+invalidates all derived work, including references to items whose text did not change.
+
+**Added *Tools and integrations*.** Three tiers — Allowed, Sign-off required, Verboten — with
+Verboten enforced as an absent capability rather than an instruction, because a prohibition an
+agent can execute is a suggestion. Grants are scoped, enforcement is demonstrated by
+attempting the forbidden operation, and the tool policy is signed and immutable under the
+control-plane prohibition. The policy is an enforcement projection, not a fourth source of
+intent: every rule cites phase 2 or phase 3, and neither a policy nor a per-use authorization
+may widen that signed boundary. Promotion rejects a policy derived from phase-artifact bytes
+different from the candidate's.
+
+**Added the failing-test disposition.** Three cases, distinguished by whether a signed artifact
+supersedes the asserted behavior, and decided by the Validator because it is the only role
+holding both the specification and the results. This corrects an earlier proposal to make
+existing tests immutable, which deadlocks every deliberate change to previously-correct
+behavior. No prohibition on the Tester is required: it never runs the tests, so it has no
+feedback signal by which to tune one to green. A cited supersession routes a test update to the
+Tester without giving the Validator a test-editing role. Signed items that both retain and
+supersede the same behavior are a specification contradiction and route to the human.
+
+**Gates became checklists.** An item is satisfied by individually content-addressed cited
+evidence, never by recollection, and the Validator externalizes evidence into the manifest as
+it is obtained rather than assembling an account at the end. An unchecked or uncited item is
+now a visible gap rather than indistinguishable from a passed one.
 
 ### Criticality amendment — 2026-07-27
 

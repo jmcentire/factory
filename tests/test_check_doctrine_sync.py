@@ -125,6 +125,55 @@ def test_oracle_criticality_matrix_cannot_silently_drift(tmp_path: Path) -> None
     assert "criticality-critical-gap-must-block" in errors
 
 
+def test_invariant_artifact_authority_cannot_be_replaced_by_a_ticket(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "> **Nothing outside these three authorizes a requirement.**",
+            "> **A ticket may authorize a requirement.**",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("invariant-document-rule-missing:") for error in errors)
+
+
+def test_missing_tool_tier_is_detected_structurally(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    row = (
+        "| **Verboten** | Not available | **Absent from the grant.** "
+        "Not present and forbidden — not present. |"
+    )
+    doctrine.write_text(source.replace(row, ""), encoding="utf-8")
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("tool-tier-map-mismatch:") for error in errors)
+
+
+def test_checklist_item_cannot_be_satisfied_by_recollection(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "an item is satisfied only by cited evidence.",
+            "an item may be satisfied by recollection.",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert "checklist-cited-evidence-rule-missing" in errors
+
+
 def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) -> None:
     root = _copy_guard_surface(tmp_path)
     new_surface = root / "docs" / "new-operating-guide.md"

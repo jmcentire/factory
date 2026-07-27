@@ -45,6 +45,14 @@ from factory_core.provenance import (
     ProvenanceBundle,
     ProvenanceClaim,
 )
+from factory_core.tool_policy import (
+    TOOL_TIER_ALLOWED,
+    TOOL_TIER_VERBOTEN,
+    DenialProbe,
+    ToolPolicy,
+    ToolPolicyBundle,
+    ToolRule,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "factory_core" / "promotion.py"
@@ -188,6 +196,7 @@ def _good_provenance() -> ProvenanceBundle:
         kind=CLAIM_REQUIREMENT,
         backreference=IntentBackreference(
             artifact_id=artifacts[0].artifact_id,
+            artifact_digest=artifacts[0].content_digest,
             item_id=item.item_id,
             intent_digest=item.intent_digest,
         ),
@@ -201,10 +210,73 @@ def _good_provenance() -> ProvenanceBundle:
     )
 
 
+def _gate(
+    gate_id: str,
+    *,
+    passed: bool = True,
+    candidate: str = CANDIDATE,
+) -> GateOutcome:
+    unsigned = GateOutcome(
+        id=gate_id,
+        passed=passed,
+        detail="passed" if passed else "failed",
+        recorded_at=90,
+    )
+    return replace(unsigned, evidence=_evidence(unsigned.authority_body(candidate)))
+
+
 def _passing_gates() -> tuple[GateOutcome, ...]:
     return (
-        GateOutcome(id="tests", passed=True, detail="passed"),
-        GateOutcome(id="build", passed=True, detail="passed"),
+        _gate("tests"),
+        _gate("build"),
+    )
+
+
+def _good_tool_policy(provenance: ProvenanceBundle | None = None) -> ToolPolicyBundle:
+    authority = provenance or _good_provenance()
+    architecture = authority.artifacts[1]
+    operations = authority.artifacts[2]
+    policy = ToolPolicy(
+        policy_id="run-policy",
+        version="1",
+        run_id="run-1",
+        issued_at=1,
+        expires_at=1_000,
+        signed_by="alice",
+        independently_approved_by="bob",
+        inventory_tool_ids=frozenset({"workspace", "production-mutation"}),
+        rules=(
+            ToolRule(
+                tool_id="workspace",
+                tier=TOOL_TIER_ALLOWED,
+                scope_ids=frozenset({"read-write"}),
+                backreference=architecture.backreference(architecture.items[0]),
+            ),
+            ToolRule(
+                tool_id="production-mutation",
+                tier=TOOL_TIER_VERBOTEN,
+                backreference=operations.backreference(operations.items[0]),
+            ),
+        ),
+    )
+    unsigned_probe = DenialProbe(
+        probe_id="deny-production",
+        tool_id="production-mutation",
+        scope_id="write",
+        attempted_at=10,
+        refused=True,
+        policy_digest=policy.content_digest,
+        run_id=policy.run_id,
+    )
+    probe = replace(
+        unsigned_probe,
+        evidence=_evidence(unsigned_probe.authority_body()),
+    )
+    return ToolPolicyBundle(
+        policy=policy,
+        trusted_policy_digest=policy.content_digest,
+        provenance=authority,
+        denial_probes=(probe,),
     )
 
 
@@ -289,6 +361,7 @@ def _request(
 ) -> PromotionRequest:
     selected_profile = profile or _profile()
     evidence_overridden = "evidence" in overrides
+    tool_policy_overridden = "tool_policy" in overrides
     values: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
         "disturbed_surface_ids": ("standard-surface",),
@@ -301,8 +374,14 @@ def _request(
         "evaluated_at": 100,
         "evidence": None,
         "provenance": _good_provenance(),
+        "tool_policy": None,
     }
     values.update(overrides)
+    if not tool_policy_overridden:
+        authority = values["provenance"]
+        values["tool_policy"] = _good_tool_policy(
+            authority if isinstance(authority, ProvenanceBundle) else None
+        )
     request = PromotionRequest(**values)
     if evidence_overridden:
         return request
@@ -714,6 +793,7 @@ def test_missing_provenance_is_a_gap_but_unresolved_reference_is_integrity_failu
         kind=CLAIM_REQUIREMENT,
         backreference=IntentBackreference(
             artifact_id=good.artifacts[0].artifact_id,
+            artifact_digest=good.artifacts[0].content_digest,
             item_id="absent",
             intent_digest=good.artifacts[0].items[0].intent_digest,
         ),
@@ -737,13 +817,54 @@ def test_missing_provenance_is_a_gap_but_unresolved_reference_is_integrity_failu
     )
 
 
+def test_missing_tool_policy_blocks_because_the_run_has_no_capability_authority() -> None:
+    decision = decide_promotion(
+        _request(
+            disturbed_surface_ids=("cosmetic-surface",),
+            observations=(_observation("cosmetic-surface"),),
+            tool_policy=None,
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.allowed is False
+    assert "tool-policy-missing" in decision.reasons
+
+
+def test_tool_policy_must_derive_from_the_candidate_phase_artifact_versions() -> None:
+    candidate_authority = _good_provenance()
+    amended_architecture = replace(candidate_authority.artifacts[1], version="2")
+    policy_artifacts = (
+        candidate_authority.artifacts[0],
+        amended_architecture,
+        candidate_authority.artifacts[2],
+    )
+    policy_authority = ProvenanceBundle(
+        artifacts=policy_artifacts,
+        claims=candidate_authority.claims,
+        trusted_artifact_digests={
+            artifact.artifact_id: artifact.content_digest for artifact in policy_artifacts
+        },
+    )
+    request = _request(
+        provenance=candidate_authority,
+        tool_policy=_good_tool_policy(policy_authority),
+    )
+
+    decision = decide_promotion(request, _roster(), _profile())
+
+    assert decision.allowed is False
+    assert "tool-policy-phase-artifacts-mismatch" in decision.reasons
+
+
 def test_gate_absence_is_class_disposed_but_failed_gate_is_negative_evidence() -> None:
     cosmetic = {
         "disturbed_surface_ids": ("cosmetic-surface",),
         "observations": (_observation("cosmetic-surface"),),
     }
     missing = decide_promotion(
-        _request(**cosmetic, gates=(GateOutcome(id="tests", passed=True),)),
+        _request(**cosmetic, gates=(_gate("tests"),)),
         _roster(),
         _profile(),
     )
@@ -751,8 +872,8 @@ def test_gate_absence_is_class_disposed_but_failed_gate_is_negative_evidence() -
         _request(
             **cosmetic,
             gates=(
-                GateOutcome(id="tests", passed=False),
-                GateOutcome(id="build", passed=True),
+                _gate("tests", passed=False),
+                _gate("build"),
             ),
         ),
         _roster(),
@@ -760,9 +881,54 @@ def test_gate_absence_is_class_disposed_but_failed_gate_is_negative_evidence() -
     )
 
     assert missing.allowed is True
-    assert "cosmetic-gap:cosmetic-surface:gate-missing:build" in missing.reports
+    assert (
+        "cosmetic-gap:cosmetic-surface:checklist-item-missing:build" in missing.reports
+    )
     assert failed.allowed is False
-    assert "negative-evidence:cosmetic-surface:gate-failed:tests" in failed.reasons
+    assert (
+        "negative-evidence:cosmetic-surface:checklist-item-failed:tests"
+        in failed.reasons
+    )
+
+
+def test_a_checked_box_without_cited_evidence_is_a_gap_and_tamper_blocks() -> None:
+    cosmetic = {
+        "disturbed_surface_ids": ("cosmetic-surface",),
+        "observations": (_observation("cosmetic-surface"),),
+    }
+    uncited = GateOutcome(
+        id="tests",
+        passed=True,
+        detail="remembered as green",
+        recorded_at=90,
+    )
+    missing = decide_promotion(
+        _request(**cosmetic, gates=(uncited, _gate("build"))),
+        _roster(),
+        _profile(),
+    )
+    valid = _gate("tests")
+    assert valid.evidence is not None
+    tampered = replace(
+        valid,
+        evidence=EvidenceIntegrity(
+            body=valid.evidence.body,
+            claimed_digest=digest_obj({"different": "body"}),
+        ),
+    )
+    invalid = decide_promotion(
+        _request(**cosmetic, gates=(tampered, _gate("build"))),
+        _roster(),
+        _profile(),
+    )
+
+    assert missing.allowed is True
+    assert any("checklist-item-evidence-missing:tests" in report for report in missing.reports)
+    assert invalid.allowed is False
+    assert (
+        "checklist-integrity:checklist-item-evidence-digest-mismatch:tests"
+        in invalid.reasons
+    )
 
 
 def test_additional_required_evidence_is_subject_bound() -> None:
@@ -847,6 +1013,8 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     )
     review = _review("critical-surface", profile=profile)
     assert review.evidence is not None
+    provenance = _good_provenance()
+    tool_policy = _good_tool_policy(provenance)
     raw_request: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
         "disturbed_surface_ids": ["critical-surface"],
@@ -864,10 +1032,7 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
                 "automatic_retry_count": 0,
             },
         ],
-        "gates": [
-            {"id": "tests", "passed": True},
-            {"id": "build", "passed": True},
-        ],
+        "gates": [_gate("tests").to_dict(), _gate("build").to_dict()],
         "implementer": "claude-opus",
         "verifier": "ci-bot",
         "approvers": ["alice", "bob"],
@@ -885,7 +1050,8 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
             }
         ],
         "evaluated_at": 100,
-        "provenance": _good_provenance().to_dict(),
+        "provenance": provenance.to_dict(),
+        "tool_policy": tool_policy.to_dict(),
     }
     unsigned = PromotionRequest.from_dict(raw_request)
     attestation = _attestation(unsigned, profile=profile)

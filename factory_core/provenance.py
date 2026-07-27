@@ -6,10 +6,15 @@ it. This module implements the deterministic part of that rule:
 
 * phase artifacts contain canonical intent items, not merely prose that "means roughly this";
 * every canonical item has a content digest;
-* downstream claims carry only a reference to that canonical item and its digest;
+* downstream claims bind the exact artifact digest, canonical item, and item digest;
 * the artifact bundle is accepted only against externally trusted content digests; and
 * a missing phase, untrusted artifact, unresolved item, or mismatched digest is reported as an
   unsatisfied control.
+
+Binding the artifact digest as well as the item digest is deliberate. An approved amendment
+creates a new artifact address and invalidates every downstream plan, test, control, and
+evidence reference derived from the old version even when an individual sentence did not
+change.
 
 This deliberately does **not** decide semantic equivalence. A digest cannot determine whether
 two paraphrases mean the same thing, and pretending otherwise would launder an agent judgment
@@ -41,10 +46,22 @@ PHASE_PRODUCT_SPECIFICATION = "product-specification"
 PHASE_ARCHITECTURE = "architecture"
 PHASE_OPERATIONAL_MATURITY = "operational-maturity"
 
+ARTIFACT_PRODUCT_SPECIFICATION = "Product Specification"
+ARTIFACT_ARCHITECTURE_SPECIFICATION = "Architecture Specification"
+ARTIFACT_TESTING_MONITORING_STRATEGY = "Testing and Monitoring Strategy"
+
 REQUIRED_PHASES: tuple[str, ...] = (
     PHASE_PRODUCT_SPECIFICATION,
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
+)
+
+PHASE_ARTIFACT_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        PHASE_PRODUCT_SPECIFICATION: ARTIFACT_PRODUCT_SPECIFICATION,
+        PHASE_ARCHITECTURE: ARTIFACT_ARCHITECTURE_SPECIFICATION,
+        PHASE_OPERATIONAL_MATURITY: ARTIFACT_TESTING_MONITORING_STRATEGY,
+    }
 )
 
 CLAIM_REQUIREMENT = "requirement"
@@ -71,6 +88,7 @@ PROVENANCE_GAP_PREFIXES: frozenset[str] = frozenset(
         "artifact-items-empty",
         "artifact-untrusted",
         "artifact-version-missing",
+        "backreference-artifact-digest-missing",
         "backreference-artifact-id-missing",
         "backreference-item-id-missing",
         "backreference-missing",
@@ -100,38 +118,85 @@ def provenance_issue_is_gap(issue: str) -> bool:
 
 
 @dataclass(frozen=True)
+class IntentBackreference:
+    """Resolvable pointer carried by downstream work.
+
+    ``artifact_digest`` freezes the whole signed phase artifact for the run.
+    ``intent_digest`` prevents a stable item id from being replayed after its canonical
+    statement changes. Both are required: the first invalidates all derived work on any
+    amendment; the second binds the exact authorizing line.
+    """
+
+    artifact_id: str
+    artifact_digest: str
+    item_id: str
+    intent_digest: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
+            "item_id": self.item_id,
+            "intent_digest": self.intent_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> IntentBackreference:
+        return cls(
+            artifact_id=str(raw.get("artifact_id", "")),
+            artifact_digest=str(raw.get("artifact_digest", "")),
+            item_id=str(raw.get("item_id", "")),
+            intent_digest=str(raw.get("intent_digest", "")),
+        )
+
+
+@dataclass(frozen=True)
 class IntentItem:
     """One canonical statement ratified inside a phase artifact.
 
     ``canonical_statement`` is the exact authority downstream work references. A reader may
     render or explain it differently, but the explanation never replaces this value.
+
+    ``supersedes`` records exact prior authorities this item deliberately replaces. Because
+    that declaration is inside the newly signed artifact, it is the only authorization the
+    existing-test disposition may use to update a formerly correct test.
     """
 
     item_id: str
     canonical_statement: str
+    supersedes: tuple[IntentBackreference, ...] = ()
 
     @property
     def intent_digest(self) -> str:
         """Content address of the canonical statement, independent of its display location."""
         return digest_obj({"canonical_statement": self.canonical_statement})
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "item_id": self.item_id,
             "canonical_statement": self.canonical_statement,
+            "supersedes": [reference.to_dict() for reference in self.supersedes],
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> IntentItem:
+        raw_supersedes = raw.get("supersedes")
         return cls(
             item_id=str(raw.get("item_id", "")),
             canonical_statement=str(raw.get("canonical_statement", "")),
+            supersedes=tuple(
+                IntentBackreference.from_dict(reference)
+                for reference in (
+                    raw_supersedes if isinstance(raw_supersedes, Sequence) else ()
+                )
+                if isinstance(reference, Mapping)
+            ),
         )
 
 
 @dataclass(frozen=True)
 class PhaseArtifact:
-    """One ratified artifact from the product, architecture, or operational-maturity phase.
+    """One frozen artifact from the phase's canonical invariant-document class.
 
     ``source_digest`` binds the translation to the preserved verbatim source. The ratifier
     identities are included in the content address, but this core does not self-attest that
@@ -162,6 +227,22 @@ class PhaseArtifact:
     def content_digest(self) -> str:
         return digest_obj(self.body())
 
+    @property
+    def artifact_name(self) -> str:
+        """Human-facing invariant-document name fixed by the artifact's phase."""
+
+        return PHASE_ARTIFACT_NAMES.get(self.phase, "")
+
+    def backreference(self, item: IntentItem) -> IntentBackreference:
+        """Build the exact run-frozen authority pointer for one of this artifact's items."""
+
+        return IntentBackreference(
+            artifact_id=self.artifact_id,
+            artifact_digest=self.content_digest,
+            item_id=item.item_id,
+            intent_digest=item.intent_digest,
+        )
+
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PhaseArtifact:
         raw_items = raw.get("items")
@@ -178,34 +259,6 @@ class PhaseArtifact:
             human_ratifier=str(raw.get("human_ratifier", "")),
             validator_ratifier=str(raw.get("validator_ratifier", "")),
             items=items,
-        )
-
-
-@dataclass(frozen=True)
-class IntentBackreference:
-    """Resolvable pointer carried by downstream work.
-
-    ``intent_digest`` prevents a stable item id from being replayed after its canonical
-    statement changes.
-    """
-
-    artifact_id: str
-    item_id: str
-    intent_digest: str
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "artifact_id": self.artifact_id,
-            "item_id": self.item_id,
-            "intent_digest": self.intent_digest,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> IntentBackreference:
-        return cls(
-            artifact_id=str(raw.get("artifact_id", "")),
-            item_id=str(raw.get("item_id", "")),
-            intent_digest=str(raw.get("intent_digest", "")),
         )
 
 
@@ -247,6 +300,7 @@ class ResolvedClaim:
     claim_id: str
     kind: str
     artifact_id: str
+    artifact_digest: str
     item_id: str
     intent_digest: str
     canonical_statement: str
@@ -256,6 +310,7 @@ class ResolvedClaim:
             "claim_id": self.claim_id,
             "kind": self.kind,
             "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
             "item_id": self.item_id,
             "intent_digest": self.intent_digest,
             "canonical_statement": self.canonical_statement,
@@ -412,6 +467,30 @@ def verify_intent_provenance(
             if not item.canonical_statement.strip():
                 issues.append(f"canonical-statement-missing:{artifact_id}:{item_id}")
                 continue
+            seen_superseded: set[tuple[str, str, str, str]] = set()
+            for superseded in item.supersedes:
+                key = (
+                    superseded.artifact_id,
+                    superseded.artifact_digest,
+                    superseded.item_id,
+                    superseded.intent_digest,
+                )
+                if key in seen_superseded:
+                    issues.append(f"supersedes-duplicate:{artifact_id}:{item_id}")
+                    continue
+                seen_superseded.add(key)
+                if not superseded.artifact_id.strip():
+                    issues.append(f"supersedes-artifact-id-missing:{artifact_id}:{item_id}")
+                if not superseded.artifact_digest:
+                    issues.append(f"supersedes-artifact-digest-missing:{artifact_id}:{item_id}")
+                elif not _is_digest(superseded.artifact_digest):
+                    issues.append(f"supersedes-artifact-digest-invalid:{artifact_id}:{item_id}")
+                if not superseded.item_id.strip():
+                    issues.append(f"supersedes-item-id-missing:{artifact_id}:{item_id}")
+                if not superseded.intent_digest:
+                    issues.append(f"supersedes-intent-digest-missing:{artifact_id}:{item_id}")
+                elif not _is_digest(superseded.intent_digest):
+                    issues.append(f"supersedes-intent-digest-invalid:{artifact_id}:{item_id}")
             item_index[(artifact_id, item_id)] = item
 
     for phase, count in phase_counts.items():
@@ -445,6 +524,9 @@ def verify_intent_provenance(
         if not ref.artifact_id.strip():
             issues.append(f"backreference-artifact-id-missing:{claim_id}")
             continue
+        if not ref.artifact_digest:
+            issues.append(f"backreference-artifact-digest-missing:{claim_id}")
+            continue
         if not ref.item_id.strip():
             issues.append(f"backreference-item-id-missing:{claim_id}")
             continue
@@ -453,6 +535,13 @@ def verify_intent_provenance(
             continue
         if ref.artifact_id not in artifact_index:
             issues.append(f"artifact-unresolved:{claim_id}:{ref.artifact_id}")
+            continue
+        resolved_artifact = artifact_index[ref.artifact_id]
+        if (
+            not _is_digest(ref.artifact_digest)
+            or ref.artifact_digest != resolved_artifact.content_digest
+        ):
+            issues.append(f"backreference-artifact-digest-mismatch:{claim_id}:{ref.artifact_id}")
             continue
         resolved_item = item_index.get((ref.artifact_id, ref.item_id))
         if resolved_item is None:
@@ -467,6 +556,7 @@ def verify_intent_provenance(
                 claim_id=claim_id,
                 kind=claim.kind,
                 artifact_id=ref.artifact_id,
+                artifact_digest=resolved_artifact.content_digest,
                 item_id=ref.item_id,
                 intent_digest=expected_digest,
                 canonical_statement=resolved_item.canonical_statement,

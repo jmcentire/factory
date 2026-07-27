@@ -1,4 +1,4 @@
-"""Fail-closed promotion decision over oracle adequacy and surface criticality.
+"""Fail-closed promotion over invariant authority, tool policy, checklists, and criticality.
 
 The core answers one question: may this exact built artifact be promoted? Every target-specific
 surface, component, gate id, evidence id, and dependency edge arrives as data. The core fixes
@@ -7,6 +7,9 @@ only the doctrine:
 * verification depth is not scaled by diff size or criticality;
 * every explicitly disturbed surface inherits the highest class reachable through declared
   side effects;
+* every requirement resolves to one exact version of the three invariant documents;
+* a signed tool policy is required and every rule resolves to phase-2/3 authority;
+* gate items count only when individually cited by subject-bound evidence;
 * missing oracle/evidence links are gaps disposed by class;
 * malformed, mismatched, or negative evidence blocks every class;
 * Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
@@ -30,6 +33,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from factory_core.checklist import (
+    ChecklistItemResult,
+    ChecklistReport,
+    verify_checklist,
+)
 from factory_core.criticality import (
     BASE_REQUIRED_EVIDENCE_IDS,
     CRITICALITY_COSMETIC,
@@ -41,8 +49,14 @@ from factory_core.criticality import (
     normalize_label,
     resolve_criticality,
 )
-from factory_core.manifest import SegregationPolicy, digest_obj, verify_digest
+from factory_core.evidence import EvidenceIntegrity
+from factory_core.manifest import SegregationPolicy, digest_obj
 from factory_core.provenance import ProvenanceBundle, provenance_issue_is_gap
+from factory_core.tool_policy import (
+    ToolPolicyBundle,
+    tool_policy_issue_is_gap,
+    verify_tool_policy,
+)
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _LIVE_RESULTS = frozenset({"missing", "passed", "failed"})
@@ -52,6 +66,9 @@ DISPOSITION_REPORT_AND_PROMOTE = "report-and-promote"
 DISPOSITION_RISK_ACCEPTED = "risk-accepted"
 DISPOSITION_GATE = "gate"
 DISPOSITION_BLOCK = "block"
+
+# Compatibility name: promotion gates are the generic evidence-backed checklist primitive.
+GateOutcome = ChecklistItemResult
 
 
 class PromotionError(ValueError):
@@ -87,59 +104,12 @@ def _mapping_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple(item for item in value if isinstance(item, Mapping))
 
 
-@dataclass(frozen=True)
-class GateOutcome:
-    """One target-named mechanical gate result."""
+def _phase_artifact_versions(provenance: ProvenanceBundle) -> tuple[tuple[str, str], ...]:
+    """Return the exact phase-to-content-address mapping carried by a bundle."""
 
-    id: str
-    passed: bool
-    detail: str = ""
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> GateOutcome:
-        return cls(
-            id=str(raw.get("id", "")),
-            passed=bool(raw.get("passed", False)),
-            detail=str(raw.get("detail", "")),
-        )
-
-
-@dataclass(frozen=True)
-class EvidenceIntegrity:
-    """A content-addressed evidence artifact and the address claimed for it."""
-
-    body: Mapping[str, Any] | None = None
-    claimed_digest: str = ""
-
-    @property
-    def present(self) -> bool:
-        return self.body is not None and bool(self.claimed_digest)
-
-    def verify(self) -> bool:
-        if not self.present:
-            return False
-        return verify_digest(dict(self.body or {}), self.claimed_digest)
-
-    def verifies_binding(self, expected: Mapping[str, Any]) -> bool:
-        """Verify both the content address and the required subject fields.
-
-        Additional evidence fields are permitted, but an artifact about another candidate,
-        surface, result, or decision cannot be replayed here.
-        """
-
-        if not self.verify() or self.body is None:
-            return False
-        return all(self.body.get(key) == value for key, value in expected.items())
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, Any] | None) -> EvidenceIntegrity | None:
-        if raw is None:
-            return None
-        body = raw.get("body")
-        return cls(
-            body=body if isinstance(body, Mapping) else None,
-            claimed_digest=str(raw.get("claimed_digest", "")),
-        )
+    return tuple(
+        sorted((artifact.phase, artifact.content_digest) for artifact in provenance.artifacts)
+    )
 
 
 @dataclass(frozen=True)
@@ -322,11 +292,13 @@ class PromotionRequest:
     evaluated_at: int = 0
     evidence: EvidenceIntegrity | None = None
     provenance: ProvenanceBundle | None = None
+    tool_policy: ToolPolicyBundle | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
         risk_raw = raw.get("risk_acceptance")
         provenance_raw = raw.get("provenance")
+        tool_policy_raw = raw.get("tool_policy")
         return cls(
             candidate_digest=str(raw.get("candidate_digest", "")),
             disturbed_surface_ids=_as_str_tuple(raw.get("disturbed_surface_ids")),
@@ -354,6 +326,11 @@ class PromotionRequest:
             provenance=(
                 ProvenanceBundle.from_dict(provenance_raw)
                 if isinstance(provenance_raw, Mapping)
+                else None
+            ),
+            tool_policy=(
+                ToolPolicyBundle.from_dict(tool_policy_raw)
+                if isinstance(tool_policy_raw, Mapping)
                 else None
             ),
         )
@@ -386,6 +363,8 @@ def promotion_attestation_subject(
                 "id": normalize_label(gate.id),
                 "passed": gate.passed,
                 "detail": gate.detail,
+                "recorded_at": gate.recorded_at,
+                "evidence_digest": _integrity_digest(gate.evidence),
             }
             for gate in request.gates
         ),
@@ -461,6 +440,9 @@ def promotion_attestation_subject(
         "provenance_bundle_digest": (
             digest_obj(request.provenance.to_dict()) if request.provenance is not None else ""
         ),
+        "tool_policy_bundle_digest": (
+            digest_obj(request.tool_policy.to_dict()) if request.tool_policy is not None else ""
+        ),
     }
 
 
@@ -506,6 +488,9 @@ class PromotionDecision:
     required_approvers: int
     approver_count: int
     provenance_issues: tuple[str, ...]
+    tool_policy_issues: tuple[str, ...]
+    tool_policy_digest: str
+    checklist: ChecklistReport
     criticality: CriticalityResolution
     surfaces: tuple[SurfaceDecision, ...]
 
@@ -519,6 +504,9 @@ class PromotionDecision:
             "required_approvers": self.required_approvers,
             "approver_count": self.approver_count,
             "provenance_issues": list(self.provenance_issues),
+            "tool_policy_issues": list(self.tool_policy_issues),
+            "tool_policy_digest": self.tool_policy_digest,
+            "checklist": self.checklist.to_dict(),
             "criticality": self.criticality.to_dict(),
             "surfaces": [surface.to_dict() for surface in self.surfaces],
         }
@@ -607,6 +595,24 @@ def decide_promotion(
     elif not request.evidence.verifies_binding(promotion_attestation_subject(request, profile)):
         hard_reasons.append("attestation-subject-mismatch")
 
+    tool_policy_issues: tuple[str, ...]
+    tool_policy_digest = ""
+    if request.tool_policy is None:
+        # Unlike a missing observation, an absent run policy means no authority exists for the
+        # tools that produced the candidate or its evidence. This is a control-plane defect,
+        # not an evidence item a lower class may promote past.
+        tool_policy_issues = ("tool-policy-missing",)
+        hard_reasons.append("tool-policy-missing")
+    else:
+        tool_report = verify_tool_policy(request.tool_policy, policy, request.evaluated_at)
+        tool_policy_issues = tool_report.issues
+        tool_policy_digest = tool_report.policy_digest
+        for issue in tool_policy_issues:
+            if tool_policy_issue_is_gap(issue):
+                gap_all(f"tool-policy-gap:{issue}")
+            else:
+                hard_reasons.append(f"tool-policy-invalid:{issue}")
+
     provenance_issues: tuple[str, ...]
     if request.provenance is None:
         provenance_issues = ("provenance-missing",)
@@ -620,24 +626,29 @@ def decide_promotion(
             else:
                 hard_reasons.append(f"provenance-integrity:{issue}")
 
-    # Gate absence is silence; a gate that actually failed is negative evidence.
-    gate_outcomes: dict[str, GateOutcome] = {}
-    for captured_outcome in request.gates:
-        gate_id = normalize_label(captured_outcome.id)
-        if not gate_id:
-            hard_reasons.append("gate-id-missing")
-            continue
-        if gate_id in gate_outcomes:
-            hard_reasons.append(f"gate-outcome-duplicate:{gate_id}")
-            continue
-        gate_outcomes[gate_id] = captured_outcome
-    for gate_id in sorted(profile.required_gate_ids):
-        required_outcome = gate_outcomes.get(gate_id)
-        if required_outcome is None:
-            gap_all(f"gate-missing:{gate_id}")
-        elif not required_outcome.passed:
-            for surface_id in negatives:
-                negative(surface_id, f"gate-failed:{gate_id}")
+    if request.provenance is not None and request.tool_policy is not None:
+        if _phase_artifact_versions(
+            request.provenance
+        ) != _phase_artifact_versions(request.tool_policy.provenance):
+            hard_reasons.append("tool-policy-phase-artifacts-mismatch")
+
+    # A gate is the checklist definition plus individually cited item observations. Absence is
+    # visible silence; failed items are negative evidence; tampered or wrong-subject citations
+    # are integrity failures for every class.
+    checklist_report = verify_checklist(
+        profile.required_gate_ids,
+        request.gates,
+        request.candidate_digest,
+    )
+    for gap in checklist_report.gaps:
+        gap_all(gap)
+    hard_reasons.extend(
+        f"checklist-integrity:{issue}" for issue in checklist_report.integrity_issues
+    )
+    for failure in checklist_report.failures:
+        for surface_id in negatives:
+            negative(surface_id, failure)
+    reports.extend(checklist_report.reports)
 
     observations: dict[str, SurfaceObservation] = {}
     for captured_observation in request.observations:
@@ -945,6 +956,9 @@ def decide_promotion(
         required_approvers=required_approvers,
         approver_count=approver_count,
         provenance_issues=provenance_issues,
+        tool_policy_issues=tool_policy_issues,
+        tool_policy_digest=tool_policy_digest,
+        checklist=checklist_report,
         criticality=resolution,
         surfaces=surface_decisions,
     )

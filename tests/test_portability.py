@@ -26,8 +26,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_core_imports_with_no_target_pack() -> None:
-    for mod in ("factory_core", "factory_core.manifest", "factory_core.target",
-                "factory_core.adapters", "factory_core.roles"):
+    for mod in (
+        "factory_core",
+        "factory_core.adapters",
+        "factory_core.checklist",
+        "factory_core.evidence",
+        "factory_core.manifest",
+        "factory_core.provenance",
+        "factory_core.roles",
+        "factory_core.target",
+        "factory_core.test_disposition",
+        "factory_core.tool_policy",
+    ):
         assert importlib.import_module(mod) is not None
 
 

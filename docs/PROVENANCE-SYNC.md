@@ -427,6 +427,42 @@ of the generic core, not independent Validator evidence and not a live deploymen
 
 ---
 
+## Synced pass 7 (P6) — invariant versions, tool policy, checklist evidence, and test disposition
+
+**Authority:** founder-supplied Invariants, Tools, Test Disposition, and Checklist Gates
+amendment, 2026-07-27. This is a material control-plane change authorized directly by the
+human. The four proposed Adapt extractions named as still outstanding in that amendment are
+not part of this pass.
+
+| Deliverable | File | What changed |
+|---|---|---|
+| Canonical doctrine and parity | `docs/SOFTWARE-FACTORY.md`, `scripts/check_doctrine_sync.py`, `tests/test_check_doctrine_sync.py` | Names the Product Specification, Architecture Specification, and Testing and Monitoring Strategy as the only intent authorities; defines whole-artifact version invalidation; adds the three tool tiers and resource-denial proof; classifies formerly passing failures by signed supersession; and makes every phase/build/release gate an evidence-backed checklist. The structural guard now fails if an active surface drops these controls. |
+| Artifact-version provenance | `factory_core/provenance.py` | Every downstream backreference now binds the exact phase-artifact digest as well as the canonical item digest. An amended artifact invalidates work derived from the old version even when one item's text and item digest are unchanged. Signed supersession references carry the same exact binding. |
+| Shared evidence and checklist | `factory_core/evidence.py`, `factory_core/checklist.py` | Extracts the reusable content-addressed evidence primitive and adds individually addressed checklist results. Missing or uncited items remain visible gaps, failed items are negative evidence, and duplicated, tampered, or wrong-subject records are universal integrity failures. The caller supplies `recorded_at`; append timing and persistence remain platform responsibilities. |
+| Existing-test disposition | `factory_core/test_disposition.py` | A pure three-way classifier authorizes a Tester-side update only when exactly one current signed item supersedes the old behavior. Exact retained behavior requires a code fix, including when an unrelated amendment changes the artifact digest and the test provenance must be rebound. Silence, conflict, or invalid authority routes to the human. It neither runs nor edits tests. |
+| Signed tool-policy verifier | `factory_core/tool_policy.py` | Implements the phase-authorized enforcement projection over opaque tool and scope ids: exact inventory coverage, exactly one Allowed / Sign-off-required / Verboten rule, independent policy approval, content address, scope ceilings, fresh expiring human authorization, unknown/Verboten denial, and a subject-bound denial probe for every Verboten item. Concrete credentials, routes, scope resolution, and resource rejection remain behind platform/adapter boundaries. |
+| Promotion integration | `factory_core/promotion.py` | Requires the signed tool-policy bundle, re-verifies it, rejects a policy derived from phase-artifact bytes different from the candidate's, binds it into the candidate attestation, and evaluates gate outcomes through the generic checklist verifier. Missing proof inside a valid policy or checklist is disposed by surface class; invalid authority, negative evidence, and a missing whole run policy block. |
+| Active operating surfaces | `README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/DOCTRINE-KERNEL.md`, `docs/VALIDATION-DIRECTIVE.md`, `docs/practices/change-surface-audit.md` | Reconciles artifact names/version binding, phase-authorized tool inventory, checklist persistence, and authorization-based failing-test handling while retaining the explicit running-vs-specified boundary. |
+
+**Authority-boundary resolution.** Calling the tool policy an invariant document does not make
+it a fourth source of intent. It is signed, content-addressed, immutable for the run, and
+independently approved as an enforcement projection. Every rule resolves to an Architecture
+Specification or Testing and Monitoring Strategy item; it may narrow or activate that
+authority but cannot originate or widen it.
+
+**Purity-guard interaction:** no target token, dependency, credential, route, tool id, scope
+id, or target policy entered the core. All concrete vocabulary remains data; the modules are
+stdlib plus intra-core only, and the purity baseline is unchanged.
+
+**Local verification (2026-07-27):** `make ship` completed purity, structural doctrine
+parity, Ruff, mypy, and `190 passed` in pytest. The tools playbook was assembled twice from
+its source chapters to the identical SHA-256
+`b7c4cd9499fec5b64434990df4972b3029a1b03f64d409a419e1f06e3538ac34`, with its purity
+assertion clean. These are implementation and generation checks, not independent Validator
+evidence, platform-enforced capability proof, or a live deployment.
+
+---
+
 ## The repeatable mechanism (how future target-factory changes propagate)
 
 This is the standing discipline the founder asked for — run it whenever the origin target's
@@ -490,13 +526,14 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   IR/analyzer as a pure module) and P2 (completeness-ledger + reverse-contract as
   adapter-driven generics).
 
-## Current state after P1/P2/P3/P4/P5 extraction
+## Current state after P1/P2/P3/P4/P5/P6 extraction
 
 - `factory_core` now includes the Phase 0 skeleton, the P1 invariant-kernel module, the P2
   contract/completeness modules, the **P3** SoD/merge-gate spine (`promotion.py` +
   `manifest.verify_digest`) and deterministic intake gate (`comprehensiveness.py`), and the
-  **P4** canonical intent-provenance verifier, plus the **P5** surface-criticality profile and
-  two-axis promotion policy. `RepoAdapter` and `KnowledgeAdapter` expose neutral
+  **P4** canonical intent-provenance verifier, the **P5** surface-criticality profile and
+  two-axis promotion policy, and the **P6** invariant-version, checklist, existing-test, and
+  tool-policy controls. `RepoAdapter` and `KnowledgeAdapter` expose neutral
   inventory-returning methods so target-coupled scanning stays in target adapters while the
   core owns the generic diff/lattice/decision logic.
 - The promotion decision reuses `manifest.SegregationPolicy` (DENY-wins identity) and
@@ -510,5 +547,7 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
 - `make ship` is the closeout gate for this repo: purity first, then structural doctrine
   parity, lint, typecheck, and test. The live orchestration lanes, phase-authoring/signature
   authorities, and deployment loop remain design-only and are not implied by this substrate.
-  P5's local implementation checks are recorded above; independent and live evidence remains
-  outside this repository's current running surface.
+  P5's local implementation checks are recorded above. P6's platform-enforced grants, resource
+  denial probes, live checklist persistence, and lane routing remain outside this repository's
+  current running surface; the core verifies supplied records but does not claim to operate the
+  platform.

@@ -21,11 +21,17 @@ construction — the purity guard will (and must) reject it.
 ## Layout
 
 - `factory_core/manifest.py` — content-addressed, hash-chained, SoD-enforcing evidence ledger (stdlib-only).
+- `factory_core/evidence.py` / `checklist.py` — subject-bound evidence and independently cited
+  checklist items whose omissions remain visible.
 - `factory_core/criticality.py` — surface control profile, declared side-effect closure, and
   unclassified-to-Critical resolution.
 - `factory_core/promotion.py` — oracle-adequacy × criticality promotion decision.
 - `factory_core/provenance.py` — canonical phase-artifact/backreference verifier and
-  absence-vs-integrity issue classification.
+  absence-vs-integrity issue classification, including whole-artifact version binding.
+- `factory_core/test_disposition.py` — signed-supersession / regression / ambiguity classifier
+  for formerly passing tests.
+- `factory_core/tool_policy.py` — signed Allowed / Sign-off-required / Verboten run-policy and
+  scoped pre-execution decision.
 - `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
 - `factory_core/adapters.py` — the five `typing.Protocol` seams (interfaces only).
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
@@ -57,7 +63,15 @@ make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typ
 - **Tamper-evident ledger** — append-only, content-addressed (SHA-256), hash-chained; `verify_chain` re-derives every address and link.
 - **Provenance of intent** — downstream requirements, constraints, tasks, and test assertions
   resolve to canonical items in one externally trusted artifact for each of the three phases;
-  missing links are class-disposed while unresolved or mismatched references fail closed.
+  every reference binds the whole artifact digest so any new signed version invalidates old
+  derived work; missing links are class-disposed while unresolved or mismatched references
+  fail closed.
+- **Checklist gates** — each required item is independently content-addressed against the
+  candidate; unchecked/uncited remains a gap and negative or invalid evidence cannot pass.
+- **Tool capability boundary** — every declared tool has exactly one signed tier and a
+  phase-2/3 backreference; unknown/Verboten denies, Sign-off grants are scoped and expiring,
+  and denial probes demonstrate enforcement. Platform credential/network removal remains an
+  external integration obligation.
 - **Surface criticality** — human-decided Critical/Standard/Cosmetic per surface; declared side
   effects inherit the highest class; unclassified is Critical; a Critical gap has no waiver and
   Critical evidence has zero flake/retry tolerance.
