@@ -35,6 +35,12 @@ construction — the purity guard will (and must) reject it.
 - `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
 - `factory_core/adapters.py` — the five `typing.Protocol` seams (interfaces only).
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
+- `factory_runtime/state.py` — persisted lifecycle ledger and checked projection.
+- `factory_runtime/tessera.py` / `authority.py` — real Tessera CLI and external authority.
+- `factory_runtime/workflow.py` — authorized intake and invariant-document ratification.
+- `factory_runtime/isolation.py` / `lanes.py` — qualified platform isolation and role lanes.
+- `factory_runtime/evidence_plane.py` / `orchestrator.py` — item evidence and runtime to preview.
+- `factory_runtime/cli.py` — executable command boundary.
 - `scripts/check_core_purity.py` — the fail-closed anti-coupling guard.
 - `scripts/check_doctrine_sync.py` — structural parity guard for the active doctrine surfaces.
 - `core_purity_denylist.json` — the token-denylist **data file** the guard reads (empty on the
@@ -52,6 +58,8 @@ make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
 make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typecheck -> test)
+make test-isolation # macOS kernel isolation proof
+make test-tessera   # real signing + runtime-through-preview proof
 ```
 
 ## Invariants (enforced, not just asserted)

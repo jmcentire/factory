@@ -551,3 +551,37 @@ factory (its factory modules, gates, playbook, invariant/ledger tooling) advance
   denial probes, live checklist persistence, and lane routing remain outside this repository's
   current running surface; the core verifies supplied records but does not claim to operate the
   platform.
+
+## Runtime bootstrap (2026-07-28)
+
+The substrate above is now consumed by a generic executable vertical slice under
+`factory_runtime/`. This does not revise the historical extraction record and does not claim
+the full doctrine is deployed.
+
+- The run lifecycle is an append-only, content-addressed ledger; its JSON status is a checked
+  projection. Specification-defect transitions identify the affected phase and invalidate that
+  phase plus every downstream phase artifact.
+- Jon Frisby's generic adapter registry work from Factory PR #2 was preserved with authorship
+  in commits `cba4f7f` and `a7dd544`; it was not rewritten as local work.
+- A founder-root Tessera genesis enrolls unique principals and capabilities. Authorized intake
+  and each human/Validator phase ratification use real Ed25519 Tessera envelopes bound to the
+  exact run, action, subject, signer, repository, expiry, and one-use nonce. The authorized
+  request binds its target digest, and each phase artifact must retain the authorized verbatim
+  source digest.
+- Coder and Tester run under disjoint deny-default macOS Seatbelt grants. The boundary is
+  qualified with live forbidden-read and forbidden-write probes plus bind and connect attempts
+  against a reachable loopback listener; unsupported platforms fail closed. Validator alone
+  receives copied regular-file outputs and executes the acceptance suite.
+- Checklist evidence is persisted in a hash chain when observed. Evidence bundles are rebuilt
+  from the ledger, exact phase artifact bytes, Tester backreferences, and checklist records.
+  Candidate/test addresses must match the validating transition, and a caller-supplied hash is
+  not accepted as surface evidence unless it resolves to the candidate-bound checklist. The
+  result, plus Validator-supplied oracle/determinism records, is signed by the enrolled
+  Validator.
+- The tested endpoint is `preview`. Human approval, CI/CD handoff, fresh target deployment,
+  live production probes, specialist review, rollback, correction baselines, managed key
+  custody, SSO/RBAC, and platform tool/credential grants remain outside the running slice.
+- `make ship`, `make test-isolation`, and `make test-tessera` are distinct evidence: the first
+  proves the portable repository, the second proves the macOS isolation boundary, and the
+  third proves real Tessera plus the signed synthetic runtime through preview. A synthetic pass
+  is not a production deployment claim.

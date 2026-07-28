@@ -17,6 +17,8 @@ fail-closed; `make ship` runs it first.
 
 See `CLAUDE.md` "Layout". In short:
 `factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,test_disposition,tool_policy,target,adapters,roles}.py`,
+the executable boundary under
+`factory_runtime/{state,schema,tessera,authority,workflow,isolation,lanes,evidence_plane,orchestrator,cli}.py`,
 the guards in `scripts/`, tests in `tests/`, and the synthetic empty target under
 `tests/fixtures/synthetic_target/`.
 
@@ -26,6 +28,8 @@ the guards in `scripts/`, tests in `tests/`, and the synthetic empty target unde
 make check-purity   # boundary guarantee — run first
 make check-doctrine # canonical doctrine structure and active-surface parity
 make ship           # purity -> doctrine -> lint -> typecheck -> test, fail-closed
+make test-isolation # macOS Seatbelt denial and Coder/Tester separation proof
+make test-tessera   # real Tessera signatures and signed runtime-through-preview proof
 ```
 
 ## Invariants

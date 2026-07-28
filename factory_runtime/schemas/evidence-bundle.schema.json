@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/evidence-bundle/1",
+  "title": "Factory change evidence bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "target_digest",
+    "source_digest",
+    "candidate_digest",
+    "acceptance_tests_digest",
+    "ledger_head",
+    "phase_artifacts",
+    "trusted_artifact_digests",
+    "claims",
+    "checklist_results",
+    "surface_evidence",
+    "determinism_records"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "factory-evidence-bundle/1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "target_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "source_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "candidate_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "acceptance_tests_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "ledger_head": {
+      "$ref": "#/$defs/digest"
+    },
+    "phase_artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "$ref": "factory://schemas/phase-artifact/1"
+      }
+    },
+    "trusted_artifact_digests": {
+      "type": "object",
+      "minProperties": 3,
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claim_id",
+          "kind",
+          "backreference"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "requirement",
+              "constraint",
+              "task",
+              "test-assertion"
+            ]
+          },
+          "backreference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact_id",
+              "artifact_digest",
+              "item_id",
+              "intent_digest"
+            ],
+            "properties": {
+              "artifact_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "artifact_digest": {
+                "$ref": "#/$defs/digest"
+              },
+              "item_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "intent_digest": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "checklist_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/checklist_result"
+      }
+    },
+    "surface_evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/surface_evidence"
+      }
+    },
+    "determinism_records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/determinism_record"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "claimed_digest"
+      ],
+      "properties": {
+        "body": {
+          "type": "object"
+        },
+        "claimed_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "checklist_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "passed",
+        "detail",
+        "recorded_at",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "recorded_at": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "evidence": {
+          "$ref": "#/$defs/integrity"
+        }
+      }
+    },
+    "surface_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface_id",
+        "criticality",
+        "oracle_adequate",
+        "required_evidence_ids",
+        "evidence_digests"
+      ],
+      "properties": {
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criticality": {
+          "enum": [
+            "critical",
+            "standard",
+            "cosmetic"
+          ]
+        },
+        "oracle_adequate": {
+          "type": "boolean"
+        },
+        "required_evidence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "evidence_digests": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "determinism_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface_id",
+        "criticality",
+        "deterministic",
+        "flake_count",
+        "automatic_retry_count"
+      ],
+      "properties": {
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criticality": {
+          "enum": [
+            "critical",
+            "standard",
+            "cosmetic"
+          ]
+        },
+        "deterministic": {
+          "type": "boolean"
+        },
+        "flake_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "automatic_retry_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

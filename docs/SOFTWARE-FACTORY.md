@@ -19,7 +19,8 @@ not a claim that it enforces now.
 
 For this repository, the operational guide is the
 [`README.md` doctrine-to-code mapping](../README.md#doctrine--code-mapping). It is the
-authoritative statement of what `factory_core` currently enforces and what remains design only.
+authoritative statement of what `factory_core` and `factory_runtime` currently enforce and
+what remains design only.
 
 The discipline the factory imposes on the software it builds — that nothing is marked done on
 the strength of a description — applies to the factory's own description of itself.

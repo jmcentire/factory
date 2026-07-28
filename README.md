@@ -1,14 +1,15 @@
-# factory_core
+# Software Factory
 
-A founder-owned, **portable software-factory core**. It productizes a proven
+A founder-owned, **portable software-factory core and executable runtime**. It productizes a proven
 software-delivery discipline — content-addressed evidence, human-approval gates with
 segregation of duties, and a hard generic-core / target-as-data boundary — as a standalone,
-separately-shippable Python package that imports **nothing target-specific**.
+separately-shippable Python package that imports **nothing target-specific**. The pure
+`factory_core` policy layer is joined by `factory_runtime`, the impure orchestration boundary.
 
 ## The canonical doctrine
 
 The foundation of this repository is a written doctrine, and the code implements pieces of
-it. The doctrine is authoritative; `factory_core` is one (partial) implementation.
+it. The doctrine is authoritative; this repository reports its running subset below.
 
 - **[`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)** — the unified specification:
   exactly three roles (**Validator, Coder, Tester**), exactly three pre-build phases
@@ -34,7 +35,7 @@ disciplines and records **under** this doctrine.
 
 ## Doctrine → code mapping
 
-Each `factory_core` module implements a specific concept from the doctrine. The doctrine
+Each core and runtime module implements a specific concept from the doctrine. The doctrine
 demands this honesty (see the doctrine's "Status of this document": *a control specified is
 not a control running*), so the table marks what is **implemented** vs **doctrine-only**.
 
@@ -44,7 +45,7 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `evidence.py` + `checklist.py` | Reusable content-addressed evidence binding and checklist gates: every required item is independently recorded against the exact subject; missing/uncited is a visible gap, failed is negative evidence, and tampered/wrong-subject is an integrity failure. | **Implemented** (pure verifier; append timing/platform persistence remains external) |
 | `criticality.py` | §3.5 — the human-decided per-surface control profile, content address, declared side-effect closure, highest-class inheritance, and unclassified/invalid-classification → Critical default. It explicitly does not claim the supplied topology is complete. | **Implemented** (profile resolution; phase-2 topology enumeration remains external) |
 | `promotion.py` | The two-axis promotion gate — class-disposed oracle/evidence gaps, universal rejection of negative or mismatched evidence, deterministic zero-flake/zero-retry Critical evidence, Critical specialist review and two-human floor, Standard candidate-bound expiring risk acceptance, Cosmetic report-and-promote, signed tool-policy verification, and evidence-backed checklist evaluation. The attestation binds the exact profile plus every decision input and cited evidence/policy address. | **Implemented** |
-| `provenance.py` | Non-negotiable #7 and invariant-document identity — a verifier over exactly one externally trusted Product Specification, Architecture Specification, and Testing and Monitoring Strategy. Every downstream reference binds both the exact artifact digest and canonical item digest, so any amended artifact version invalidates old derived work. It distinguishes absent links from invalid ones and verifies provenance, not semantic equivalence. | **Implemented** (verifier + promotion wiring; phase authoring/signing is doctrine-only) |
+| `provenance.py` | Non-negotiable #7 and invariant-document identity — a verifier over exactly one externally trusted Product Specification, Architecture Specification, and Testing and Monitoring Strategy. Every downstream reference binds both the exact artifact digest and canonical item digest, so any amended artifact version invalidates old derived work. It distinguishes absent links from invalid ones and verifies provenance, not semantic equivalence. | **Implemented** (pure verifier + promotion wiring) |
 | `test_disposition.py` | The three-way disposition for a formerly passing test that now fails: a signed exact supersession authorizes a Tester-side update, retained exact behavior (including under a newly addressed artifact version) requires fixing the implementation and rebinding provenance, and silence/conflict routes to the human. | **Implemented** (pure classifier; lane routing remains orchestration) |
 | `tool_policy.py` | The run-scoped Allowed / Sign-off-required / Verboten policy: exact inventory coverage, phase-2/3 backreferences, independently approved content address, scope ceilings, fresh expiring human authorizations, unknown-tool denial, and content-addressed Verboten denial probes. | **Implemented** (pure pre-execution decision and verifier; credential/network removal and resource probes must be wired by the platform) |
 | `invariant_kernel.py` | The capability-delta IR + the composition gate — can individually-safe deltas compose into a forbidden configuration? (the platform-invariant side of the gate). | **Implemented** |
@@ -54,31 +55,73 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `roles.py` | Target RBAC bundles — capabilities as the atomic unit, roles as per-target named bundles, grants as per-target data. These target roles are not additional factory workflow roles. | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
 | `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical three-role/three-phase structure. | **Implemented** |
 
-**Honest split (implemented vs doctrine-only).** Phase 0 (the skeleton + purity guard) and
-the extractions (the invariant kernel; the contract/completeness modules; the SoD/merge-gate
-spine + deterministic intake gate; the intent-provenance verifier; the surface-criticality
-profile and promotion policy; evidence-backed checklists; invariant-version binding;
-existing-test disposition; and tool-policy enforcement) are **real, tested code**.
-The **orchestration engine, three live isolated lanes, collaborative phase-authoring loops,
-artifact signing/authority wiring, platform-enforced credential/network grants and denial
-probes, RBAC/SSO enforcement, and the build/demo pipeline are doctrine/design, not running** —
-they are specified in the docs above and are not wired here.
-A control specified is not a control running.
+### Executable runtime status
+
+| Runtime surface | What is enforcing now | Boundary that remains |
+|---|---|---|
+| `state.py` | Hash-chained lifecycle from intake through promotion; `run.json` is only a checked projection. Illegal skips, tampered ledgers/projections, run-bound receipt replay, and stale downstream phase artifacts after a specification defect refuse. Blocked clean-context attempts can re-enter building without inheriting failed lane artifacts. | The code has later states, but the shipped orchestrator intentionally stops at `preview`. |
+| `schema.py` + `schemas/` | Closed Draft 2020-12 contracts for authorized requests, genesis, receipts, the three invariant documents, and evidence bundles. | Semantic agreement remains human+Validator work. |
+| `tessera.py` + `authority.py` | Real Tessera Ed25519 envelope creation/validation; externally pinned founder genesis; unique enrolled keys; exact run/repository/action/subject/signer/capability/expiry/nonce receipt checks. | Key rotation/revocation and managed HSM/KMS custody are not wired. Signet is not a prerequisite or authority here. |
+| `workflow.py` | A change enters only through a canonical request whose signed subject includes the exact run and target digest. Each phase artifact must bind the authorized verbatim-source digest and requires distinct human and Validator receipts over its exact bytes. | The interactive human/Validator authoring UI and behavior ledger are not built. Artifacts currently enter through files/CLI. |
+| `isolation.py` + `lanes.py` | On macOS, deny-default Seatbelt profiles give Coder and Tester disjoint read/write grants and no network. Live forbidden read/write plus reachable loopback bind/connect probes must pass. Outputs reject links and special files. Validator alone receives copied outputs and runs the suite; automated repair receives only pass/fail. | This backend is macOS-only and fails closed elsewhere. Linux needs an independently qualified isolation backend before its lanes count as isolated. Agent/model launch commands and their narrow trusted-file grants are caller supplied. |
+| `evidence_plane.py` + `orchestrator.py` | Checklist items append when observed into a hash chain. Candidate and acceptance-test addresses are re-derived from the validating transition, surface citations resolve only to passed candidate-bound checklist evidence, and exact phase bytes plus Tester backreferences enter a Validator-signed Tessera bundle. A real end-to-end test reaches `preview`, including fail-then-clean-retry recovery. | Oracle-adequacy and determinism records are Validator inputs at this preview boundary. Signed phase-2 criticality-profile ingestion, fresh target deployment, live probes, specialist review, human approval, CI handoff, production promotion, rollback, correction baselines, and runtime tool/credential grants remain unwired. |
+| `.github/workflows/ci.yml` | Pinned action revisions, pinned Tessera commit, deterministic core gate, real Tessera tests, and a macOS kernel-isolation/full-runtime job. | This proves the repository’s synthetic vertical slice, not a target’s production deployment. |
+
+The honest boundary is therefore: **the generic bootstrap path is running through a signed
+preview over a synthetic target. The complete factory described by the doctrine is not.**
+There is no portal, collaborative phase-authoring loop, target deployment ladder, production
+promotion, managed identity system, or live SSO/RBAC integration yet.
+
+### Authorized-change bootstrap path
+
+This is the running, file-and-CLI intake path. It is the bootstrap answer to “how does a change
+become authorized?”; it is not the future collaborative UI.
+
+1. A founder creates a Tessera key, writes a `genesis` document that enrolls each human and
+   agent identity under a unique public key and minimum capability set, signs it as
+   `factory-genesis`, and distributes the root public key through an external trusted channel.
+   `factory verify-genesis` refuses a document that does not validate under that pinned key.
+2. A contributor writes an `authorization-request` before implementation. The closed schema
+   requires the exact `run_id`, repository, target digest, preserved verbatim request and its
+   digest, proposed outcome, and disturbed surfaces. Validate and address it:
+
+   ```bash
+   factory validate-document --schema authorization-request --input request.json
+   factory digest-json --input request.json
+   ```
+
+3. An enrolled human decides. For an authorization, they write an `authority-receipt` whose
+   action is `authorize-change` and whose subject is the request digest, then sign it without
+   exposing key material to Factory:
+
+   ```bash
+   factory tessera-wrap --payload receipt.json --kind factory-authority-receipt \
+     --key human.key --output receipt.tessera.json --tessera-bin /path/to/tessera
+   factory authorize-change --runs ./runs --run-id RUN --target-digest sha256:... \
+     --request request.json --receipt receipt.tessera.json \
+     --genesis genesis.tessera.json --root-public-key PUBLIC_KEY \
+     --tessera-bin /path/to/tessera
+   ```
+
+4. The human and Validator co-author each invariant document in order: Product Specification,
+   Architecture Specification, then Testing and Monitoring Strategy. Each document retains the
+   authorized verbatim-source digest. Both parties independently sign exact-subject receipts;
+   `factory ratify-phase` accepts the document only when the two enrolled identities, keys,
+   capabilities, run, action, subject, expiry, and nonces verify.
+5. After all three ratifications, `FactoryOrchestrator` accepts caller-supplied agent launch
+   commands and narrow trusted-file grants, runs Coder and Tester independently, lets only the
+   Validator execute the acceptance suite, and writes the signed preview bundle. The executable
+   worked example is `tests/test_tessera_cli_integration.py`; `make test-tessera` runs it with
+   real Ed25519 keys and the real Tessera binary.
+
+The founder genesis is the one explicit bootstrap authority. Subsequent request and phase
+authority is machine-verifiable. Signet is neither silently assumed nor required by this path.
 
 The defining constraint: `factory_core` is generic. Every per-target input — repo coordinates,
 working-agreement docs, compliance rules, role bindings, IdP config — is **data loaded at
 runtime through adapter seams**, never a code dependency. Point the factory at a new target by
 swapping a data-only target pack; the core does not change. Correctness test: delete every
 target pack and the core is still importable, testable, and green.
-
-This repository has completed **Phase 0 plus six generic extractions**:
-the core skeleton and purity guard, the invariant-kernel composition gate, the
-adapter-driven contract/completeness logic, and the SoD/merge-gate spine plus the
-deterministic intake gate, the provenance-of-intent verifier, and surface-criticality
-enforcement, followed by invariant/checklist/tool-policy/test-disposition controls. It is a
-real, tested foundation, not a running portal; the orchestration engine, three-phase authoring
-loops, lane isolation, platform capability grants, RBAC/SSO, build/demo, and affinity
-write-back are later phases.
 
 ## What's here
 
@@ -96,6 +139,12 @@ write-back are later phases.
 | `factory_core/adapters.py` | The five `typing.Protocol` seams for all target contact: `RepoAdapter`, `KnowledgeAdapter`, `ComplianceAdapter`, `IdpAdapter`, `ArtifactSink`. Interfaces only. |
 | `factory_core/roles.py` | The target role/capability model **schema**: a capability is the atomic unit, an RBAC role is a named bundle, and grants are **per-target data**. It is distinct from the three factory workflow roles. |
 | `factory_core/schemas/capability_delta.schema.json` | The neutral, target-agnostic **capability-delta IR** a spec declares for a change (nodes with abstract roles, flows with an abstract data-class, invariants by opaque id + degree). The analyzer composes it against the signed kernel + composition ledger. Names no target; all concrete vocabulary is per-target kernel data. |
+| `factory_runtime/state.py` | Persisted lifecycle ledger and checked projection, including phase-amendment invalidation and authority-receipt replay refusal. |
+| `factory_runtime/tessera.py` + `authority.py` | Real Tessera CLI boundary plus externally pinned genesis and subject-bound receipt verification. |
+| `factory_runtime/workflow.py` | Authorized-change intake and dual-receipt invariant-document ratification. |
+| `factory_runtime/isolation.py` + `lanes.py` | Qualified macOS Seatbelt enforcement and the separated Coder/Tester → Validator build loop. |
+| `factory_runtime/evidence_plane.py` + `orchestrator.py` | Append-as-observed checklist journal, reproducible evidence bundle, and executable path through signed preview. |
+| `factory_runtime/cli.py` | `factory` commands for schema validation, canonical JSON addressing, genesis verification, intake, phase ratification, status, projection rebuild, and Tessera wrapping. |
 | `scripts/check_core_purity.py` | The executable, fail-closed **anti-coupling guard** (import scan + token denylist + reverse-dependency assert), baseline-backed by `core_purity_baseline.json`. The token set is **data**, read from `core_purity_denylist.json` (empty on the generic core — nothing target-specific to catch; a consuming target fills in its own tokens as private config). |
 
 ## Quickstart
@@ -106,10 +155,15 @@ make check-purity # prove the core imports nothing target-specific
 make check-doctrine # prove active doctrine surfaces retain the canonical structure
 make test         # run the pytest suite
 make ship         # every gate, fail-closed: purity -> doctrine -> lint -> typecheck -> test
+make test-isolation # macOS: prove kernel-enforced Coder/Tester separation
+make test-tessera # build ../tessera first; prove real signatures and the runtime to preview
+factory --help    # executable intake/ratification/status boundary
 ```
 
 Nothing needs a target to run. The suite exercises the core end-to-end against a **synthetic
-empty target** fixture (`tests/fixtures/synthetic_target/`).
+empty target** fixture (`tests/fixtures/synthetic_target/`). The runtime integration additionally
+uses deterministic synthetic Coder/Tester programs; that proves orchestration and isolation,
+not model independence or semantic correctness.
 
 ## Practices & sync
 

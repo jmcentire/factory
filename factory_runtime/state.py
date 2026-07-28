@@ -1,0 +1,561 @@
+"""Persisted, fail-closed Factory run state.
+
+The hash-chained :class:`factory_core.manifest.Ledger` is authoritative. ``run.json`` is only
+a projection for convenient reads and is accepted only when it exactly matches a freshly
+re-derived ledger view. This keeps a stale or edited status file from becoming authority.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy
+
+RUN_SCHEMA_VERSION = "factory-run/1"
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class RunState(StrEnum):
+    """The only states an executable Factory run may occupy."""
+
+    INTAKE = "intake"
+    PRODUCT_SPECIFICATION_RATIFIED = "product-specification-ratified"
+    ARCHITECTURE_RATIFIED = "architecture-ratified"
+    OPERATIONAL_MATURITY_RATIFIED = "operational-maturity-ratified"
+    BUILDING = "building"
+    VALIDATING = "validating"
+    PREVIEW = "preview"
+    HUMAN_APPROVED = "human-approved"
+    CI = "ci"
+    PROMOTED = "promoted"
+    SPECIFICATION_DEFECT = "specification-defect"
+    BLOCKED = "blocked"
+
+
+ALLOWED_TRANSITIONS: Mapping[RunState, frozenset[RunState]] = {
+    RunState.INTAKE: frozenset({RunState.PRODUCT_SPECIFICATION_RATIFIED}),
+    RunState.PRODUCT_SPECIFICATION_RATIFIED: frozenset(
+        {
+            RunState.ARCHITECTURE_RATIFIED,
+            RunState.SPECIFICATION_DEFECT,
+        }
+    ),
+    RunState.ARCHITECTURE_RATIFIED: frozenset(
+        {
+            RunState.OPERATIONAL_MATURITY_RATIFIED,
+            RunState.SPECIFICATION_DEFECT,
+        }
+    ),
+    RunState.OPERATIONAL_MATURITY_RATIFIED: frozenset(
+        {
+            RunState.BUILDING,
+            RunState.SPECIFICATION_DEFECT,
+        }
+    ),
+    RunState.BUILDING: frozenset(
+        {
+            RunState.VALIDATING,
+            RunState.SPECIFICATION_DEFECT,
+            RunState.BLOCKED,
+        }
+    ),
+    RunState.VALIDATING: frozenset(
+        {
+            RunState.BUILDING,
+            RunState.PREVIEW,
+            RunState.SPECIFICATION_DEFECT,
+            RunState.BLOCKED,
+        }
+    ),
+    RunState.PREVIEW: frozenset(
+        {
+            RunState.HUMAN_APPROVED,
+            RunState.SPECIFICATION_DEFECT,
+            RunState.BLOCKED,
+        }
+    ),
+    RunState.HUMAN_APPROVED: frozenset(
+        {
+            RunState.CI,
+            RunState.SPECIFICATION_DEFECT,
+            RunState.BLOCKED,
+        }
+    ),
+    RunState.CI: frozenset(
+        {
+            RunState.PROMOTED,
+            RunState.SPECIFICATION_DEFECT,
+            RunState.BLOCKED,
+        }
+    ),
+    RunState.PROMOTED: frozenset(),
+    RunState.SPECIFICATION_DEFECT: frozenset(
+        {
+            RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            RunState.ARCHITECTURE_RATIFIED,
+            RunState.OPERATIONAL_MATURITY_RATIFIED,
+        }
+    ),
+    RunState.BLOCKED: frozenset(
+        {
+            RunState.BUILDING,
+            RunState.SPECIFICATION_DEFECT,
+        }
+    ),
+}
+
+_PHASE_STATE_KEYS: Mapping[RunState, str] = {
+    RunState.PRODUCT_SPECIFICATION_RATIFIED: "product-specification",
+    RunState.ARCHITECTURE_RATIFIED: "architecture",
+    RunState.OPERATIONAL_MATURITY_RATIFIED: "operational-maturity",
+}
+_PHASE_ORDER = (
+    "product-specification",
+    "architecture",
+    "operational-maturity",
+)
+
+
+class RunStateError(ValueError):
+    """A run could not be created, loaded, or transitioned without guessing."""
+
+
+@dataclass(frozen=True)
+class RunProjection:
+    """Checked projection of the authoritative transition ledger."""
+
+    run_id: str
+    state: str
+    target_digest: str
+    source_digest: str
+    phase_artifact_digests: Mapping[str, str]
+    ledger_head: str
+    created_at: int
+    updated_at: int
+    schema_version: str = RUN_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        body = asdict(self)
+        body["phase_artifact_digests"] = dict(self.phase_artifact_digests)
+        return body
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> RunProjection:
+        phase_raw = raw.get("phase_artifact_digests")
+        return cls(
+            run_id=str(raw.get("run_id", "")),
+            state=str(raw.get("state", "")),
+            target_digest=str(raw.get("target_digest", "")),
+            source_digest=str(raw.get("source_digest", "")),
+            phase_artifact_digests=(
+                {str(key): str(value) for key, value in phase_raw.items()}
+                if isinstance(phase_raw, Mapping)
+                else {}
+            ),
+            ledger_head=str(raw.get("ledger_head", "")),
+            created_at=_as_int(raw.get("created_at")),
+            updated_at=_as_int(raw.get("updated_at")),
+            schema_version=str(raw.get("schema_version", "")),
+        )
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _require_digest(value: str, field_name: str) -> None:
+    if not _DIGEST.fullmatch(value):
+        raise RunStateError(f"{field_name} must be a canonical sha256 digest")
+
+
+def _canonical_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _required_phase_keys(
+    state: RunState,
+    payload: Mapping[str, Any],
+) -> frozenset[str]:
+    if state is RunState.INTAKE:
+        return frozenset()
+    if state is RunState.PRODUCT_SPECIFICATION_RATIFIED:
+        return frozenset(_PHASE_ORDER[:1])
+    if state is RunState.ARCHITECTURE_RATIFIED:
+        return frozenset(_PHASE_ORDER[:2])
+    if state is RunState.SPECIFICATION_DEFECT:
+        defect_phase = str(payload.get("phase", ""))
+        if defect_phase not in _PHASE_ORDER:
+            raise RunStateError(
+                "specification-defect transition requires payload.phase naming the affected phase"
+            )
+        return frozenset(_PHASE_ORDER[: _PHASE_ORDER.index(defect_phase)])
+    return frozenset(_PHASE_ORDER)
+
+
+class RunStore:
+    """Filesystem-backed run store whose ledger, not projection, is authoritative."""
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
+        self.root = Path(root)
+        self._clock = clock or (lambda: int(time.time()))
+
+    def _run_dir(self, run_id: str) -> Path:
+        if not _RUN_ID.fullmatch(run_id):
+            raise RunStateError(
+                "run_id must start with an alphanumeric and contain only letters, numbers, "
+                "dot, underscore, or dash"
+            )
+        path = self.root / run_id
+        if path.is_symlink():
+            raise RunStateError(f"run directory cannot be a symlink: {run_id}")
+        return path
+
+    def _ledger(self, run_id: str) -> Ledger:
+        path = self._run_dir(run_id) / "ledger.jsonl"
+        if path.is_symlink():
+            raise RunStateError(f"run ledger cannot be a symlink: {run_id}")
+        return Ledger(str(path))
+
+    def _projection_path(self, run_id: str) -> Path:
+        path = self._run_dir(run_id) / "run.json"
+        if path.is_symlink():
+            raise RunStateError(f"run projection cannot be a symlink: {run_id}")
+        return path
+
+    def create(
+        self,
+        run_id: str,
+        *,
+        target_digest: str,
+        source_digest: str,
+        actor: str,
+        artifact_digests: Mapping[str, str] | None = None,
+        payload: Mapping[str, Any] | None = None,
+        approver_identity: str = "",
+        policy: SegregationPolicy | None = None,
+    ) -> RunProjection:
+        """Create the immutable intake/genesis transition for a new run."""
+
+        _require_digest(target_digest, "target_digest")
+        _require_digest(source_digest, "source_digest")
+        if not actor.strip():
+            raise RunStateError("actor is required")
+        supplied = dict(artifact_digests or {})
+        for key, value in supplied.items():
+            _require_digest(value, f"artifact_digests[{key!r}]")
+        run_dir = self._run_dir(run_id)
+        if run_dir.exists() and not run_dir.is_dir():
+            raise RunStateError(f"run path is not a directory: {run_id}")
+        if (
+            (run_dir / "ledger.jsonl").exists()
+            or (run_dir / "run.json").exists()
+        ):
+            raise RunStateError(f"run already exists: {run_id}")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        created_at = self._clock()
+        ledger = self._ledger(run_id)
+        ledger.append(
+            LedgerEntry(
+                capability_id=run_id,
+                from_state="",
+                to_state=RunState.INTAKE,
+                approver_identity=approver_identity,
+                artifact_digests={
+                    **supplied,
+                    "target": target_digest,
+                    "source": source_digest,
+                    "phase_artifacts": {},
+                },
+                payload={
+                    **dict(payload or {}),
+                    "run_schema_version": RUN_SCHEMA_VERSION,
+                },
+                actor=actor.strip(),
+                created_at=str(created_at),
+            ),
+            policy,
+        )
+        projection = self._derive(run_id)
+        self._write_projection(projection)
+        return projection
+
+    def load(self, run_id: str) -> RunProjection:
+        """Verify the ledger and require the convenience projection to match it exactly."""
+
+        derived = self._derive(run_id)
+        path = self._projection_path(run_id)
+        if not path.is_file():
+            raise RunStateError(
+                f"run projection missing for {run_id}; run an explicit projection rebuild"
+            )
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RunStateError(f"run projection is unreadable: {exc}") from exc
+        if not isinstance(raw, Mapping):
+            raise RunStateError("run projection must be a JSON object")
+        stored = RunProjection.from_dict(raw)
+        if _canonical_json(stored.to_dict()) != _canonical_json(derived.to_dict()):
+            raise RunStateError(
+                "run projection does not match the authoritative ledger (stale or tampered)"
+            )
+        return derived
+
+    def rebuild_projection(self, run_id: str) -> RunProjection:
+        """Re-derive and atomically replace a projection from an intact ledger."""
+
+        projection = self._derive(run_id)
+        self._write_projection(projection)
+        return projection
+
+    def consumed_authority_nonces(self, run_id: str) -> frozenset[str]:
+        """Return replay nonces only after the whole run ledger and projection verify."""
+
+        self.load(run_id)
+        nonces: set[str] = set()
+        for record in self._ledger(run_id).entries():
+            payload = record.get("payload")
+            if not isinstance(payload, Mapping):
+                raise RunStateError("run ledger entry has no payload object")
+            raw_nonces = payload.get("authority_receipt_nonces", [])
+            if not isinstance(raw_nonces, list):
+                raise RunStateError("authority_receipt_nonces must be an array")
+            nonces.update(str(nonce) for nonce in raw_nonces)
+        return frozenset(nonces)
+
+    def current_artifact_digests(self, run_id: str) -> Mapping[str, Any]:
+        """Return the latest verified artifact map without trusting a stale snapshot.
+
+        The second head check detects an append racing the projection read. Callers must retry
+        rather than bind evidence to a mixture of two lifecycle states.
+        """
+
+        projection = self.load(run_id)
+        entries = self._ledger(run_id).entries()
+        if not entries or entries[-1].get("entry_hash") != projection.ledger_head:
+            raise RunStateError("run ledger changed while artifact evidence was being read")
+        raw = entries[-1].get("artifact_digests")
+        if not isinstance(raw, Mapping):
+            raise RunStateError("latest run ledger entry has no artifact digest map")
+        return dict(raw)
+
+    def transition(
+        self,
+        run_id: str,
+        to_state: RunState | str,
+        *,
+        actor: str,
+        artifact_digests: Mapping[str, str] | None = None,
+        payload: Mapping[str, Any] | None = None,
+        implementer_identity: str = "",
+        verifier_identity: str = "",
+        approver_identity: str = "",
+        policy: SegregationPolicy | None = None,
+    ) -> RunProjection:
+        """Append one authorized state transition and refresh the checked projection."""
+
+        current = self.load(run_id)
+        try:
+            destination = RunState(to_state)
+            source = RunState(current.state)
+        except ValueError as exc:
+            raise RunStateError(f"unsupported run state: {exc}") from exc
+        if destination not in ALLOWED_TRANSITIONS[source]:
+            raise RunStateError(f"transition refused: {source} -> {destination}")
+        if not actor.strip():
+            raise RunStateError("actor is required")
+
+        supplied = dict(artifact_digests or {})
+        for key, value in supplied.items():
+            _require_digest(value, f"artifact_digests[{key!r}]")
+        phases = dict(current.phase_artifact_digests)
+        transition_payload = dict(payload or {})
+        phase_key = _PHASE_STATE_KEYS.get(destination)
+        if phase_key:
+            phase_digest = supplied.get(phase_key, "")
+            if not phase_digest:
+                raise RunStateError(
+                    f"{destination} requires artifact digest {phase_key!r}"
+                )
+            phases[phase_key] = phase_digest
+        required_phase_keys = _required_phase_keys(destination, transition_payload)
+        phases = {key: phases[key] for key in _PHASE_ORDER if key in required_phase_keys}
+        if set(phases) != set(required_phase_keys):
+            missing = sorted(required_phase_keys - phases.keys())
+            raise RunStateError(
+                f"{destination} requires prior ratified phase artifacts: {', '.join(missing)}"
+            )
+
+        now = self._clock()
+        self._ledger(run_id).append(
+            LedgerEntry(
+                capability_id=run_id,
+                from_state=source,
+                to_state=destination,
+                implementer_identity=implementer_identity,
+                verifier_identity=verifier_identity,
+                approver_identity=approver_identity,
+                artifact_digests={
+                    **supplied,
+                    "target": current.target_digest,
+                    "source": current.source_digest,
+                    "phase_artifacts": phases,
+                },
+                payload=transition_payload,
+                actor=actor.strip(),
+                created_at=str(now),
+            ),
+            policy,
+        )
+        projection = self._derive(run_id)
+        self._write_projection(projection)
+        return projection
+
+    def _derive(self, run_id: str) -> RunProjection:
+        ledger = self._ledger(run_id)
+        ok, detail = ledger.verify_chain()
+        if not ok:
+            raise RunStateError(f"run ledger verification failed: {detail}")
+        entries = ledger.entries()
+        if not entries:
+            raise RunStateError(f"run does not exist or has no ledger entries: {run_id}")
+
+        prior = ""
+        target_digest = ""
+        source_digest = ""
+        phase_artifacts: dict[str, str] = {}
+        created_at = 0
+        updated_at = 0
+        current = ""
+        consumed_nonces: set[str] = set()
+        for index, record in enumerate(entries):
+            if record.get("capability_id") != run_id:
+                raise RunStateError(f"ledger entry {index} belongs to another run")
+            destination_raw = str(record.get("to_state", ""))
+            try:
+                destination = RunState(destination_raw)
+            except ValueError as exc:
+                raise RunStateError(
+                    f"ledger entry {index} has unsupported state {destination_raw!r}"
+                ) from exc
+            source_raw = str(record.get("from_state", ""))
+            if index == 0:
+                if source_raw or destination is not RunState.INTAKE:
+                    raise RunStateError("run genesis must transition from empty to intake")
+            else:
+                if source_raw != prior:
+                    raise RunStateError(
+                        f"ledger entry {index} from_state does not match prior state"
+                    )
+                try:
+                    source = RunState(source_raw)
+                except ValueError as exc:
+                    raise RunStateError(
+                        f"ledger entry {index} has unsupported source state {source_raw!r}"
+                    ) from exc
+                if destination not in ALLOWED_TRANSITIONS[source]:
+                    raise RunStateError(
+                        f"ledger entry {index} records forbidden transition "
+                        f"{source} -> {destination}"
+                    )
+
+            digests = record.get("artifact_digests")
+            if not isinstance(digests, Mapping):
+                raise RunStateError(f"ledger entry {index} has no artifact digest map")
+            if index == 0:
+                target_digest = str(digests.get("target", ""))
+                source_digest = str(digests.get("source", ""))
+                _require_digest(target_digest, "target_digest")
+                _require_digest(source_digest, "source_digest")
+            elif (
+                digests.get("target") != target_digest
+                or digests.get("source") != source_digest
+            ):
+                raise RunStateError(f"ledger entry {index} changes the run subject")
+
+            phases_raw = digests.get("phase_artifacts")
+            if not isinstance(phases_raw, Mapping):
+                raise RunStateError(f"ledger entry {index} has no phase artifact map")
+            candidate_phases = {
+                str(key): str(value) for key, value in phases_raw.items()
+            }
+            payload_raw = record.get("payload")
+            if not isinstance(payload_raw, Mapping):
+                raise RunStateError(f"ledger entry {index} has no payload object")
+            raw_nonces = payload_raw.get("authority_receipt_nonces", [])
+            if not isinstance(raw_nonces, list):
+                raise RunStateError(
+                    f"ledger entry {index} authority_receipt_nonces must be an array"
+                )
+            entry_nonces = [str(nonce) for nonce in raw_nonces]
+            if any(not nonce.strip() for nonce in entry_nonces):
+                raise RunStateError(f"ledger entry {index} contains an empty authority nonce")
+            if len(entry_nonces) != len(set(entry_nonces)):
+                raise RunStateError(f"ledger entry {index} repeats an authority nonce")
+            replayed = sorted(set(entry_nonces) & consumed_nonces)
+            if replayed:
+                raise RunStateError(
+                    f"ledger entry {index} replays authority nonce(s): {', '.join(replayed)}"
+                )
+            consumed_nonces.update(entry_nonces)
+            required_phase_keys = _required_phase_keys(destination, payload_raw)
+            if set(candidate_phases) != set(required_phase_keys):
+                raise RunStateError(
+                    f"ledger entry {index} has phase artifacts inconsistent with {destination}"
+                )
+            for key, value in candidate_phases.items():
+                _require_digest(value, f"phase_artifacts[{key!r}]")
+            phase_artifacts = candidate_phases
+
+            stamp = _as_int(record.get("created_at"))
+            if stamp <= 0:
+                raise RunStateError(f"ledger entry {index} has no valid created_at")
+            if index == 0:
+                created_at = stamp
+            updated_at = stamp
+            current = destination
+            prior = destination
+
+        return RunProjection(
+            run_id=run_id,
+            state=current,
+            target_digest=target_digest,
+            source_digest=source_digest,
+            phase_artifact_digests=phase_artifacts,
+            ledger_head=ledger.head_hash(),
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+    def _write_projection(self, projection: RunProjection) -> None:
+        path = self._projection_path(projection.run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".run-", suffix=".json", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(projection.to_dict(), handle, sort_keys=True, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
