@@ -50,6 +50,17 @@ evidence bundle containing the exact sources consulted, their content hashes,
 tool invocations, tool versions, timestamps from external systems, and the final
 decision. A `PASS` record without this bundle is `UNKNOWN`, not proof.
 
+The bundle also records **who ran, under what, and how independently**: the model
+family and version of every agent that produced or judged the change, the
+directive/prompt version each ran under, and the independence tier the
+arrangement actually achieved (weakest, weak, moderate, stronger, strongest). The
+tier is derived from the recorded arrangement — shared context, open channel,
+model families, mechanical backing — never asserted. A claimed tier the record
+does not support is `BLOCKED:independence`, because a verdict from the moderate
+tier and one from the stronger tier are not the same evidence and nothing
+downstream can tell them apart. Without the model and directive versions, the
+requalification-on-change rule cannot be applied after the fact at all.
+
 The run tool policy is a phase-authorized enforcement projection, never a
 fourth intent source. Every inventory item has exactly one tier and phase-2/3
 backreference; every invocation is checked against its scope before execution;
@@ -133,6 +144,15 @@ obtained. A checked item without that citation is still unchecked.
    generated-spec drift is clean. Spec-first services prove code and runtime
    behavior still conform to the signed spec. Docs may say `IMPLEMENTED` only
    when they cite the enforcing artifact or live proof.
+   Document parity is a **gate the Validator owns, not an inspection checkbox**
+   (kernel I22): where a forcing mechanism exists it is used and its result
+   cited — generated artifacts (OpenAPI, stubs, types, knowledge export)
+   regenerated from the pinned SHA and diffed clean, and compliance/design
+   coverage proven by a test (every ≥Standard surface resolves to a named
+   control; every claimed-satisfied control resolves to enforcing evidence).
+   Where only inspection is possible, the basis and residual risk are declared.
+   A document silently out of parity is `BLOCKED:docs`, treated as negative
+   evidence — a confidently wrong document is worse than a missing one.
 
 5. **Tool and integration boundary.** Re-derive the platform's available tool,
    credential, network-route, and integration inventory. Confirm every item has
@@ -171,19 +191,50 @@ obtained. A checked item without that citation is still unchecked.
    canonical intent digest, rebind the test provenance to the new artifact
    digest without changing its assertion and fix the code. Inconvenience never
    authorizes a test edit.
+   Where the Tester forwent implementation-informed structural mode because no
+   signed interface contract anchored the oracle, the forgone branch-level depth
+   is the Validator's: run mutation checks on the Critical controls and state in
+   the decision package that structural depth was not purchased. Structural mode
+   claimed *without* a signed anchoring contract is `BLOCKED:oracle` — an oracle
+   that read the implementation is not independent evidence.
 
-8. **Fresh baseline and final gate.** The trusted baseline is green before new
-   tests are trusted, unless a pre-existing red is individually attributed and
-   recorded. In a correction, the negative control fails on broken main with at
-   least one failure on the defect, and the positive control passes on unrelated
-   main behavior. Tests actually reach the target they claim to exercise. The
-   final gate is re-run from a fresh checkout of the final SHA.
+8. **Fresh baseline, controls, and final gate.** The trusted baseline is green
+   before new tests are trusted, unless a pre-existing red is individually
+   attributed and recorded. In a correction, the negative control (**red-now**)
+   fails on broken main with at least one failure on the defect, and the positive
+   control (**green-now**) passes on unrelated main behavior. Classify **every
+   test that changed state against main individually**; an aggregate "both
+   controls satisfied" is not the record. A guard written to pass against main
+   that comes back red on behavior unrelated to the defect is a **suspected
+   over-constraint**: it is `BLOCKED:over-constraint` for the human, never
+   reclassified as forcing, and no implementation is driven to satisfy it. A
+   forcing test already green against main before implementation starts is the
+   negative control failing early and is reported immediately.
+   Before any repair is written, a **reproduction** in a disposable environment
+   must be recorded as having triggered the defect deliberately. A missing
+   reproduction is an evidence gap disposed by class; a reproduction that did not
+   reproduce routes to the human rather than authorizing the repair; and
+   reproduction-impossible is a declared lane condition that gates rather than a
+   step quietly skipped. Tests actually reach the target they claim to exercise.
+   The final gate is re-run from a fresh checkout of the final SHA.
 
 9. **Observability, monitoring, and operations.** Every new failure mode has
    structured logs, metrics/traces where applicable, alert routing, and a
    runbook. The Validator proves the observability is live or records the
    class-disposed gap. An alert with no runbook, a runbook with no alert, or a
    metric that is only declared but not emitted is incomplete.
+   Every monitor in the phase-3 monitor set is **spec-derived** and resolves a
+   backreference to the acceptance criterion or invariant it watches; an
+   unresolvable backreference is `BLOCKED:monitor-provenance`, because it is an
+   unauthorized assertion about production. A monitor derived from the diff is a
+   change detector, not an oracle, and does not satisfy the obligation. Critical
+   surfaces carry human-authored monitors; Standard and Cosmetic surfaces may take
+   generated ones. Monitor density is recorded and never gated. A triage
+   disposition proposing to delete, weaken, or silence a monitor is a
+   specification defect for the human — an agent evaluating an alert may not
+   quiet the monitor that produced it — and proposed-fix state is appended to the
+   monitor, not held in the agent. Notification is earned: a signal reaching a
+   human carries a human-actionable conclusion.
 
 10. **Deploy and live proof.** The same artifact digest is promoted through the
    ladder. The deployed revision, runtime configuration, expected schema heads,
@@ -197,6 +248,11 @@ obtained. A checked item without that citation is still unchecked.
     and never silently renew. Expiry or revocation invalidates dependent
     promotions and triggers re-validation. Critical has no exception mechanism;
     Cosmetic gaps are reports, not waivers. Accumulation is itself a risk signal.
+    The accountable-human seat on a Critical surface is filled from the target's
+    **named delegate roster** of enrolled humans, so a hazard-surface promotion
+    waits on any delegate rather than on one individual. An undeclared roster is
+    an evidence gap disposed by class — it means nobody decided who may ratify —
+    and an approver outside the roster is `BLOCKED:approval-authority`.
 
 12. **Rollback and forward authority.** `BLOCKED` output includes the applicable
     remediation tier: automated rollback allowed, on-call rollback allowed,
@@ -215,7 +271,7 @@ manifest: <digest>
 policy: <policy digest/version>
 evidence_bundle: <digest/path>
 findings:
-  - dimension: <local-state|kin|provenance|tool-policy|checklist|docs|contracts|migration|tests|observability|deploy|risk-acceptance|rollback|...>
+  - dimension: <local-state|kin|provenance|tool-policy|checklist|docs|contracts|migration|tests|oracle|over-constraint|reproduction|independence|monitor-provenance|observability|deploy|risk-acceptance|approval-authority|rollback|...>
     claim: <what is missing or proved>
     evidence: <source reference, command, file:line, matrix row, log/query id>
     owner: <role/person/system>
