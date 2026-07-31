@@ -247,6 +247,42 @@ than asking the human to proofread dense text.
 The loop continues until the specification is **specific enough to be implemented** and both
 parties agree it is.
 
+**Specific enough to be implemented is not detailed enough to be built one way.** The Product
+Specification asserts *what ought to be true* — a capability, a guarantee, an outcome the system
+must exhibit — and never *how*. This is stronger than *no implementation details*; it is **no
+implementation.** The anti-pattern is a mechanism wearing the shape of a requirement:
+
+> **Mechanism as requirement (rejected):** *"As a user I want a Continue button so I can
+> proceed."* This asserts a widget, not a need — the form of a story wrapped around an
+> implementation, with the intent left out.
+>
+> **Capability assertion (correct):** *"A user must be able to complete the task without hitting
+> a dead end they cannot escape."* The Coder — who holds the context of what the system can
+> actually do — may satisfy it with a Continue button, by removing the page that dead-ends, or by
+> any other means with the same effect. The need is asserted and met; the mechanism is chosen
+> where the context lives.
+
+The Validator will usually have reasoned its way to a technical solution — it drafts the
+architecture in phase 2, so it arrives at one. **That knowledge is not discarded; it is
+quarantined into a separate register.** The capability lives in the Product Specification; the
+Validator's arrived-at solution lives in the Architecture Specification as **technical
+guidance** — stated apart and explicitly as a *guide* the Coder may improve upon (for the
+example: *satisfy this by adding a Continue button to the page that currently dead-ends*), never
+a mandate. The one part of that register that binds is an interface or schema contract external
+parties build against, because there the mechanism *is* the promise — which is why §6 settles the
+schema as a first-class contract.
+
+**The separation is load-bearing because the oracle derives from the capability, never from the
+mechanism.** *"Does the user ever get stuck with no recourse?"* captures every way the system
+could strand a user, across every future refactor; *"Is there a Continue button?"* captures one
+fact, stays green while the user is stranded by some other path, and pins the suite to a
+mechanism the system may outgrow. This is the same distinction §6 draws between an oracle and a
+change detector. So phase 3 names a capability for verification and the Tester asserts the
+capability behind any named output — a failure code, a widget, an endpoint — treating that output
+as itself only where it is a ratified external contract others depend on. **Assert the need,
+guide the build, test the need:** a factory that tests the guide instead of the need has built a
+suite that is precise about the wrong thing.
+
 The Validator never invents an answer to a gap. A gap is a blocking question. An assumption is
 recorded only when it is explicitly stated, owned by a named human, bounded, and given an
 expiry.
@@ -380,9 +416,9 @@ authorize anything.
 
 | Artifact | Phase | Carries |
 |---|---|---|
-| **Product Specification** | 1 | What must be true that is not true today, itemized as observable assertable effects; the invariants; the quality and risk requirements |
-| **Architecture Specification** | 2 | Component boundaries, state ownership, dependency direction, transaction and trust boundaries, data topology, the database schema as a contract, deployment shape |
-| **Testing and Monitoring Strategy** | 3 | Acceptance tests, edge cases, failure dispositions, observability surface, alerts and owners, recovery posture, the artifact-applicability matrix |
+| **Product Specification** | 1 | What must be true that is not true today, itemized as observable assertable effects; the invariants; the quality and risk requirements. **Capability, not implementation** — the outcome asserted, never the mechanism that delivers it |
+| **Architecture Specification** | 2 | Component boundaries, state ownership, dependency direction, transaction and trust boundaries, data topology, the database schema as a contract, deployment shape; and the **technical guidance** — the Validator's arrived-at solution, offered to the Coder as a guide to improve upon, binding only where an external interface or schema contract makes the mechanism the promise |
+| **Testing and Monitoring Strategy** | 3 | Acceptance tests, edge cases, failure dispositions, observability surface, alerts and owners, recovery posture, the artifact-applicability matrix — each **capability named for verification**, so the Tester asserts the capability behind a named output rather than the output itself |
 
 **Invariant means four things.**
 
@@ -690,7 +726,7 @@ available.
 | | **Capability** | **Correction** |
 |---|---|---|
 | **Input** | A product ask | A defect, incident, failing test, alert, or anomaly |
-| **Phase 1 becomes** | What should be true that is not | **What is actually wrong** — symptom traced to cause, until the cause is specific enough to repair against |
+| **Phase 1 becomes** | What should be true that is not — the **capability**, never the mechanism | **What is actually wrong** — symptom traced to cause, until the cause is specific enough to repair against; the diagnosis names the failing behavior, not the fix |
 | **Phase 2 becomes** | Draft the architecture | Confirm the repair fits the settled architecture, or escalate |
 | **Phase 3** | Unchanged | Unchanged |
 | **Oracle source** | The spec alone | The spec **plus the running system**, correct on everything but the defect |

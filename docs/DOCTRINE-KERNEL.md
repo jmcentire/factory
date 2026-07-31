@@ -2,7 +2,8 @@
 
 > **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
 > three-role/three-phase doctrine revision, 2026-07-26, and Criticality amendment,
-> 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27.** An agent may still
+> 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27, and the
+> Validator-as-product-manager capability/technical-guidance amendment, 2026-07-30.** An agent may still
 > treat a statement as *more* protected than listed, never
 > less. Only the founder may move a statement down a tier or remove it. Changes to this file
 > pass through the Diff-Intent Gate
@@ -58,6 +59,7 @@ judgment. Four tiers:
 | I20 | Detection is exhaustive; notification is earned. A signal reaching a human carries a human-actionable conclusion, and an unactionable alert is answered with a better conclusion or a specification defect — never a quieter monitor. |
 | I21 | The accountable-human seat on a Critical surface is filled from an explicit **named delegate roster** of enrolled humans recorded per target. An undeclared roster is an evidence gap disposed of by class, never a permissive default. |
 | I22 | Document parity is a Validator-gated control, not an inspection checkbox: the Coder produces current docs/contracts/generated-artifacts/compliance-corpus, the Tester authors the parity tests, and the Validator gates from the pinned SHA. It is machine-forced where mechanizable — generated artifacts (OpenAPI, stubs, types, knowledge export) are regenerated and diffed clean, and compliance/design coverage is a test (every ≥Standard surface resolves to a named control; every claimed-satisfied control resolves to enforcing evidence); where only inspection is possible, the basis and residual risk are declared. A document silently out of parity is negative evidence, not an absent nicety. |
+| I23 | The Validator is the product manager: the Product Specification asserts **capability, not implementation** — an outcome, guarantee, or invariant the system must exhibit, never the mechanism that delivers it. This is *no implementation*, not merely *no implementation details*; a mechanism smuggled in as the shape of a requirement (a story asserting a widget) is rejected. The Validator's arrived-at solution is not discarded but **quarantined into a separate technical-guidance register** in the Architecture Specification, labeled and offered as a *guide* the Coder may improve upon — binding only where an external interface or schema contract makes the mechanism the promise. Tests and monitors derive from the **north-star capability, never the mechanism**; a named output is asserted as itself only where it is a ratified external contract others depend on, else the oracle asserts the capability behind it. Implementation-derived oracles are fragile by construction — they break on legitimate re-implementation and miss the failures the mechanism never anticipated. |
 
 ## Tier E — Epistemic
 
