@@ -8,4 +8,3 @@ The goal:
 - The validator validates the build, checks the tests, resolves issues, ensures compliance with specs.
 - Green-lit build shown to human user for approval in fresh environment.
 - Human accepts and change enters CI/CD and out to production.
-- There is a loop at play, so that if review feedback is provided (either by bot or human), the appropriate steps of the process are re-engaged.
