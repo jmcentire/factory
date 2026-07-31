@@ -6,11 +6,29 @@ import platform
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from factory_core.correction import LANE_CAPABILITY
+from factory_core.evidence import EvidenceIntegrity
+from factory_core.independence import (
+    INDEPENDENCE_STRONGER,
+    ROLE_CODER,
+    ROLE_TESTER,
+    ROLE_VALIDATOR,
+    STRUCTURAL_MODE_ISOLATED,
+    AgentIdentity,
+    IndependenceRecord,
+    StructuralModeRecord,
+)
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.monitors import (
+    MONITOR_AUTHORSHIP_HUMAN,
+    MONITOR_DERIVATION_SPECIFICATION,
+    Monitor,
+)
 from factory_core.provenance import PhaseArtifact
 from factory_runtime.authority import load_genesis
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
@@ -347,6 +365,56 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
             automatic_retry_count=0,
         ),
     )
+    structural_mode = StructuralModeRecord(
+        mode=STRUCTURAL_MODE_ISOLATED,
+        decision_package_note=(
+            "The synthetic lanes ran fully isolated, so branch-level depth was not purchased."
+        ),
+    )
+    independence = IndependenceRecord(
+        agents=(
+            AgentIdentity(
+                role=ROLE_CODER,
+                model_family="synthetic-a",
+                model_version="fixture-1",
+                directive_version="coder-fixture-1",
+            ),
+            AgentIdentity(
+                role=ROLE_TESTER,
+                model_family="synthetic-b",
+                model_version="fixture-1",
+                directive_version="tester-fixture-1",
+            ),
+            AgentIdentity(
+                role=ROLE_VALIDATOR,
+                model_family="synthetic-c",
+                model_version="fixture-1",
+                directive_version="validator-fixture-1",
+            ),
+        ),
+        shared_context=False,
+        channel_open=False,
+        claimed_tier=INDEPENDENCE_STRONGER,
+        structural_mode=replace(
+            structural_mode,
+            mutation_evidence=EvidenceIntegrity(
+                body=structural_mode.authority_body(),
+                claimed_digest=digest_obj(structural_mode.authority_body()),
+            ),
+        ),
+    )
+    monitors = (
+        Monitor(
+            monitor_id="monitor-synthetic-control-plane",
+            surface_id="synthetic-control-plane",
+            derivation=MONITOR_DERIVATION_SPECIFICATION,
+            authorship=MONITOR_AUTHORSHIP_HUMAN,
+            author_identity="human:founder",
+            backreference=product.backreference(product.items[0]),
+            actionable_conclusion="Page the control-plane owner with the unmet criterion.",
+            notifies_human=True,
+        ),
+    )
     orchestrator = FactoryOrchestrator(workflow)
     common_arguments = {
         "spec_path": build_spec_path,
@@ -361,6 +429,10 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "verifier_key_path": validator_key,
         "surface_evidence": surface_evidence,
         "determinism_records": determinism_records,
+        "lane": LANE_CAPABILITY,
+        "independence": independence,
+        "monitors": monitors,
+        "monitor_declared_unit_count": 75,
     }
     with pytest.raises(OrchestrationError, match="attempt_id"):
         orchestrator.build_and_validate(

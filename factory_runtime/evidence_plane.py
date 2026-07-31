@@ -14,9 +14,24 @@ from factory_core.checklist import (
     ChecklistReport,
     verify_checklist,
 )
+from factory_core.correction import (
+    LANE_CORRECTION,
+    LANES,
+    CorrectionRecord,
+    CorrectionReport,
+    verify_correction,
+)
+from factory_core.criticality import BASE_REQUIRED_EVIDENCE_IDS, ResolvedSurface
 from factory_core.evidence import EvidenceIntegrity
-from factory_core.manifest import Ledger, LedgerEntry, digest_obj
+from factory_core.independence import (
+    IndependenceRecord,
+    IndependenceReport,
+    verify_independence,
+)
+from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy, digest_obj
+from factory_core.monitors import Monitor, MonitorSetReport, verify_monitor_set
 from factory_core.provenance import (
+    IntentBackreference,
     PhaseArtifact,
     ProvenanceBundle,
     ProvenanceClaim,
@@ -74,6 +89,9 @@ class EvidenceBundleReport:
     blocking_issues: tuple[str, ...]
     gate_issues: tuple[str, ...]
     reports: tuple[str, ...]
+    independence: IndependenceReport | None = None
+    monitors: MonitorSetReport | None = None
+    correction: CorrectionReport | None = None
 
     @property
     def mechanically_satisfied(self) -> bool:
@@ -183,7 +201,13 @@ class ChecklistJournal:
 
 
 class EvidenceBundleAssembler:
-    """Re-derive the manifest from run ledger, invariant documents, and item evidence."""
+    """Re-derive the manifest from run ledger, invariant documents, and item evidence.
+
+    The bundle *is* the record, so the facts the doctrine says the record carries are required to
+    write one rather than disposed of by surface class: the declared lane, the independence tier
+    with each agent's model and directive version, and the monitor set. An absent record here is
+    not a gap in the evidence — it is a bundle that cannot be assembled.
+    """
 
     def __init__(self, runs_root: str | Path) -> None:
         self.runs_root = Path(runs_root)
@@ -199,7 +223,18 @@ class EvidenceBundleAssembler:
         required_checklist_item_ids: Sequence[str],
         surface_evidence: Sequence[SurfaceEvidence],
         determinism_records: Sequence[DeterminismRecord],
+        lane: str,
+        independence: IndependenceRecord,
+        monitors: Sequence[Monitor] = (),
+        monitor_declared_unit_count: int = 0,
+        correction: CorrectionRecord | None = None,
+        policy: SegregationPolicy | None = None,
     ) -> EvidenceBundleReport:
+        if lane not in LANES:
+            raise EvidencePlaneError(
+                f"the run lane must be declared as one of {LANES}, not {lane!r}: "
+                "a capability and a correction do not have the same oracle available"
+            )
         projection = self.store.load(run_id)
         if projection.state != RunState.VALIDATING:
             raise EvidencePlaneError(
@@ -239,10 +274,32 @@ class EvidenceBundleAssembler:
         )
         determinism_rows = tuple(determinism_records)
         blocking, gates, reports = self._evaluate_surfaces(surface_rows, determinism_rows)
-        blocking = tuple(dict.fromkeys((*evidence_binding_issues, *blocking)))
+
+        (
+            independence_report,
+            monitor_report,
+            correction_report,
+            record_findings,
+        ) = self._evaluate_records(
+            surface_rows,
+            provenance_report,
+            lane=lane,
+            independence=independence,
+            monitors=tuple(monitors),
+            monitor_declared_unit_count=monitor_declared_unit_count,
+            correction=correction,
+            policy=policy or SegregationPolicy(),
+        )
+        record_blocking, record_gates, record_reports = record_findings
+        blocking = tuple(
+            dict.fromkeys((*evidence_binding_issues, *blocking, *record_blocking))
+        )
+        gates = tuple(dict.fromkeys((*gates, *record_gates)))
+        reports = tuple(dict.fromkeys((*reports, *record_reports)))
         document = {
             "schema_version": "factory-evidence-bundle/1",
             "run_id": run_id,
+            "lane": lane,
             "target_digest": projection.target_digest,
             "source_digest": projection.source_digest,
             "candidate_digest": candidate_digest,
@@ -254,7 +311,15 @@ class EvidenceBundleAssembler:
             "checklist_results": [result.to_dict() for result in checklist_results],
             "surface_evidence": [record.to_dict() for record in surface_rows],
             "determinism_records": [record.to_dict() for record in determinism_rows],
+            "independence": {
+                **independence.to_dict(),
+                "derived_tier": independence_report.derived_tier,
+            },
+            "monitors": [monitor.to_dict() for monitor in monitors],
+            "monitor_declared_unit_count": monitor_declared_unit_count,
         }
+        if correction is not None:
+            document["correction"] = correction.to_dict()
         validate_document("evidence-bundle", document)
         return EvidenceBundleReport(
             document=document,
@@ -263,7 +328,146 @@ class EvidenceBundleAssembler:
             blocking_issues=blocking,
             gate_issues=gates,
             reports=reports,
+            independence=independence_report,
+            monitors=monitor_report,
+            correction=correction_report,
         )
+
+    def _evaluate_records(
+        self,
+        surfaces: Sequence[SurfaceEvidence],
+        provenance_report: ProvenanceReport,
+        *,
+        lane: str,
+        independence: IndependenceRecord,
+        monitors: Sequence[Monitor],
+        monitor_declared_unit_count: int,
+        correction: CorrectionRecord | None,
+        policy: SegregationPolicy,
+    ) -> tuple[
+        IndependenceReport,
+        MonitorSetReport,
+        CorrectionReport | None,
+        tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    ]:
+        """Verify the independence, monitor, and correction records this bundle must carry.
+
+        Monitor and correction absences are disposed by the surface class exactly as an evidence
+        gap is; integrity failures and negative findings block every class. The independence
+        record is different in kind — the bundle cannot claim a tier it did not record — so its
+        absences block here rather than being disposed.
+        """
+
+        resolved_references = tuple(
+            IntentBackreference(
+                artifact_id=claim.artifact_id,
+                artifact_digest=claim.artifact_digest,
+                item_id=claim.item_id,
+                intent_digest=claim.intent_digest,
+            )
+            for claim in provenance_report.resolved_claims
+        )
+        authority_available = provenance_report.satisfied
+
+        blocking: list[str] = []
+        gates: list[str] = []
+        reports: list[str] = []
+
+        independence_report = verify_independence(
+            independence,
+            resolved_backreferences=resolved_references,
+            authority_available=authority_available,
+        )
+        blocking.extend(f"independence-unrecorded:{code}" for code in independence_report.gaps)
+        blocking.extend(f"independence-failure:{code}" for code in independence_report.failures)
+        blocking.extend(
+            f"independence-integrity:{code}" for code in independence_report.integrity_issues
+        )
+        reports.extend(independence_report.reports)
+        reports.append(f"independence-tier-derived:{independence_report.derived_tier}")
+
+        resolved_surfaces = tuple(
+            ResolvedSurface(
+                surface_id=surface.surface_id,
+                component_id="",
+                declared_criticality=surface.criticality,
+                effective_criticality=surface.criticality,
+                decided_by="",
+                wrong_cost="",
+                required_evidence_ids=BASE_REQUIRED_EVIDENCE_IDS,
+                standard_flake_budget=0,
+                side_effect_surface_ids=(),
+            )
+            for surface in surfaces
+        )
+        monitor_report = verify_monitor_set(
+            monitors,
+            resolved_surfaces,
+            policy,
+            resolved_backreferences=resolved_references,
+            authority_available=authority_available,
+            declared_unit_count=monitor_declared_unit_count,
+        )
+        blocking.extend(f"monitor-integrity:{code}" for code in monitor_report.integrity_issues)
+        criticality_by_surface = {surface.surface_id: surface.criticality for surface in surfaces}
+        for surface_id, code in monitor_report.surface_gaps:
+            self._dispose(
+                criticality_by_surface.get(surface_id, "critical"),
+                f"{code}:{surface_id}",
+                blocking,
+                gates,
+                reports,
+            )
+        reports.extend(monitor_report.reports)
+
+        correction_report: CorrectionReport | None = None
+        if lane == LANE_CORRECTION:
+            correction_report = verify_correction(correction)
+            for code in correction_report.gaps:
+                for surface in surfaces:
+                    self._dispose(
+                        surface.criticality,
+                        f"correction-gap:{code}:{surface.surface_id}",
+                        blocking,
+                        gates,
+                        reports,
+                    )
+            blocking.extend(f"correction-failure:{code}" for code in correction_report.failures)
+            blocking.extend(
+                f"correction-integrity:{code}" for code in correction_report.integrity_issues
+            )
+            gates.extend(f"correction-review:{code}" for code in correction_report.gate_reasons)
+            reports.extend(f"correction:{code}" for code in correction_report.reports)
+        elif correction is not None:
+            reports.append("correction-record-outside-correction-lane")
+
+        return (
+            independence_report,
+            monitor_report,
+            correction_report,
+            (
+                tuple(dict.fromkeys(blocking)),
+                tuple(dict.fromkeys(gates)),
+                tuple(dict.fromkeys(reports)),
+            ),
+        )
+
+    @staticmethod
+    def _dispose(
+        criticality: str,
+        code: str,
+        blocking: list[str],
+        gates: list[str],
+        reports: list[str],
+    ) -> None:
+        """Class-dispose one absence: Critical blocks, Standard gates, Cosmetic reports."""
+
+        if criticality == "critical":
+            blocking.append(f"critical-gap:{code}")
+        elif criticality == "standard":
+            gates.append(f"standard-gap:{code}")
+        else:
+            reports.append(f"cosmetic-gap:{code}")
 
     def _bind_surface_evidence(
         self,

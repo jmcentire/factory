@@ -1,11 +1,46 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from factory_core.manifest import digest_obj
+from factory_core.correction import (
+    BASELINE_RESULT_FAILED,
+    BASELINE_RESULT_PASSED,
+    CONTROL_GREEN_NOW,
+    CONTROL_RED_NOW,
+    FAILURE_RELATION_DEFECT,
+    LANE_CAPABILITY,
+    LANE_CORRECTION,
+    REPRODUCTION_REPRODUCED,
+    ControlObservation,
+    CorrectionRecord,
+    ReproductionRecord,
+)
+from factory_core.evidence import EvidenceIntegrity
+from factory_core.independence import (
+    INDEPENDENCE_MODERATE,
+    INDEPENDENCE_STRONGER,
+    INDEPENDENCE_WEAKEST,
+    ROLE_CODER,
+    ROLE_TESTER,
+    ROLE_VALIDATOR,
+    STRUCTURAL_MODE_ISOLATED,
+    AgentIdentity,
+    IndependenceRecord,
+    StructuralModeRecord,
+)
+from factory_core.manifest import SegregationPolicy, digest_obj
+from factory_core.monitors import (
+    MONITOR_AUTHORSHIP_GENERATED,
+    MONITOR_AUTHORSHIP_HUMAN,
+    MONITOR_DERIVATION_SPECIFICATION,
+    Monitor,
+)
 from factory_core.provenance import (
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
@@ -21,6 +56,7 @@ from factory_runtime.evidence_plane import (
     EvidencePlaneError,
     SurfaceEvidence,
 )
+from factory_runtime.schema import DocumentValidationError
 from factory_runtime.state import RunState, RunStore
 
 TARGET = "sha256:" + ("1" * 64)
@@ -163,6 +199,121 @@ def _determinism(
     )
 
 
+def _policy() -> SegregationPolicy:
+    return SegregationPolicy(
+        human_ids=frozenset({"human:founder"}),
+        human_aliases={"human:founder": "human:founder"},
+        excluded_service_identities=frozenset({"agent:*"}),
+    )
+
+
+def _evidence(body: dict[str, Any]) -> EvidenceIntegrity:
+    return EvidenceIntegrity(body=body, claimed_digest=digest_obj(body))
+
+
+def _independence(
+    *,
+    tester_family: str = "family-b",
+    claimed_tier: str = INDEPENDENCE_STRONGER,
+) -> IndependenceRecord:
+    structural = StructuralModeRecord(
+        mode=STRUCTURAL_MODE_ISOLATED,
+        decision_package_note="No signed interface contract anchored the oracle.",
+    )
+    return IndependenceRecord(
+        agents=(
+            AgentIdentity(
+                role=ROLE_CODER,
+                model_family="family-a",
+                model_version="2026-07",
+                directive_version="coder-3",
+            ),
+            AgentIdentity(
+                role=ROLE_TESTER,
+                model_family=tester_family,
+                model_version="2026-07",
+                directive_version="tester-3",
+            ),
+            AgentIdentity(
+                role=ROLE_VALIDATOR,
+                model_family="family-c",
+                model_version="2026-07",
+                directive_version="validator-3",
+            ),
+        ),
+        shared_context=False,
+        channel_open=False,
+        claimed_tier=claimed_tier,
+        structural_mode=replace(
+            structural,
+            mutation_evidence=_evidence(structural.authority_body()),
+        ),
+    )
+
+
+def _monitor(
+    artifacts: Sequence[PhaseArtifact],
+    *,
+    authorship: str = MONITOR_AUTHORSHIP_HUMAN,
+    author: str = "human:founder",
+) -> Monitor:
+    product = artifacts[0]
+    return Monitor(
+        monitor_id="monitor-control-plane",
+        surface_id="control-plane",
+        derivation=MONITOR_DERIVATION_SPECIFICATION,
+        authorship=authorship,
+        author_identity=author,
+        backreference=product.backreference(product.items[0]),
+        actionable_conclusion="Page the control-plane owner with the unmet invariant.",
+        notifies_human=True,
+    )
+
+
+def _correction() -> CorrectionRecord:
+    reproduction = ReproductionRecord(
+        defect_id="defect-1",
+        result=REPRODUCTION_REPRODUCED,
+        environment_id="ephemeral-1",
+        disposable_environment=True,
+        recorded_before_repair=True,
+    )
+    return CorrectionRecord(
+        defect_id="defect-1",
+        baseline_available=True,
+        controls=(
+            ControlObservation(
+                test_id="forces-the-defect",
+                declared_role=CONTROL_RED_NOW,
+                baseline_result=BASELINE_RESULT_FAILED,
+                failure_relation=FAILURE_RELATION_DEFECT,
+            ),
+            ControlObservation(
+                test_id="guards-unrelated-behavior",
+                declared_role=CONTROL_GREEN_NOW,
+                baseline_result=BASELINE_RESULT_PASSED,
+            ),
+        ),
+        reproduction=replace(
+            reproduction,
+            evidence=_evidence(reproduction.authority_body()),
+        ),
+    )
+
+
+def _records(artifacts: Sequence[PhaseArtifact], **overrides: Any) -> dict[str, Any]:
+    """The records the bundle must carry: lane, independence, and the monitor set."""
+
+    values: dict[str, Any] = {
+        "lane": LANE_CAPABILITY,
+        "independence": _independence(),
+        "monitors": (_monitor(artifacts),),
+        "policy": _policy(),
+    }
+    values.update(overrides)
+    return values
+
+
 def test_checklist_is_hash_chained_and_missing_items_stay_visible(tmp_path: Path) -> None:
     journal = ChecklistJournal(
         tmp_path / "checklist.jsonl",
@@ -201,6 +352,7 @@ def test_bundle_rederives_phase_artifacts_provenance_checklist_and_surface_polic
         required_checklist_item_ids=("build", "tests"),
         surface_evidence=(_surface(),),
         determinism_records=(_determinism(),),
+        **_records(artifacts),
     )
 
     assert report.mechanically_satisfied is True
@@ -223,6 +375,7 @@ def test_critical_gap_or_flake_blocks_while_standard_gap_gates(tmp_path: Path) -
         required_checklist_item_ids=("build", "tests"),
         surface_evidence=(_surface(adequate=False, evidence=False),),
         determinism_records=(_determinism(deterministic=False, flakes=1, retries=1),),
+        **_records(artifacts),
     )
     assert "critical-evidence-gap:control-plane" in critical.blocking_issues
     assert "critical-nondeterminism:control-plane" in critical.blocking_issues
@@ -238,6 +391,7 @@ def test_critical_gap_or_flake_blocks_while_standard_gap_gates(tmp_path: Path) -
             _surface(criticality="standard", adequate=False, evidence=False),
         ),
         determinism_records=(_determinism(criticality="standard"),),
+        **_records(artifacts),
     )
     assert standard.blocking_issues == ()
     assert standard.gate_issues == ("standard-evidence-gap:control-plane",)
@@ -259,6 +413,7 @@ def test_bundle_rejects_unbound_candidate_and_fabricated_surface_evidence(
             required_checklist_item_ids=("build", "tests"),
             surface_evidence=(_surface(),),
             determinism_records=(_determinism(),),
+            **_records(artifacts),
         )
 
     fabricated = SurfaceEvidence(
@@ -276,6 +431,7 @@ def test_bundle_rejects_unbound_candidate_and_fabricated_surface_evidence(
         required_checklist_item_ids=("build", "tests"),
         surface_evidence=(fabricated,),
         determinism_records=(_determinism(),),
+        **_records(artifacts),
     )
     assert "surface-evidence-mismatch:control-plane:tests" in report.blocking_issues
     assert report.mechanically_satisfied is False
@@ -307,4 +463,234 @@ def test_bundle_refuses_phase_bytes_that_no_longer_match_the_run_ledger(
             required_checklist_item_ids=("build", "tests"),
             surface_evidence=(_surface(),),
             determinism_records=(_determinism(),),
+            **_records(artifacts),
         )
+
+
+def test_bundle_refuses_an_undeclared_or_unknown_lane(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+    assembler = EvidenceBundleAssembler(tmp_path)
+
+    for lane in ("", "hotfix"):
+        with pytest.raises(EvidencePlaneError, match="lane must be declared"):
+            assembler.assemble(
+                "run-1",
+                candidate_digest=CANDIDATE,
+                claims=(_claim(artifacts[0]),),
+                checklist_journal=_journal(tmp_path),
+                required_checklist_item_ids=("build", "tests"),
+                surface_evidence=(_surface(),),
+                determinism_records=(_determinism(),),
+                **_records(artifacts, lane=lane),
+            )
+
+
+def test_bundle_records_the_derived_tier_and_refuses_an_overclaim(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+    assembler = EvidenceBundleAssembler(tmp_path)
+
+    honest = assembler.assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts),
+    )
+    overclaimed = assembler.assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(
+            artifacts,
+            independence=_independence(tester_family="family-a"),
+        ),
+    )
+
+    assert honest.document["independence"]["derived_tier"] == INDEPENDENCE_STRONGER
+    assert honest.document["independence"]["agents"][0]["model_version"] == "2026-07"
+    assert honest.document["independence"]["agents"][0]["directive_version"] == "coder-3"
+    assert (
+        f"independence-integrity:independence-tier-overclaimed:"
+        f"{INDEPENDENCE_STRONGER}:{INDEPENDENCE_MODERATE}" in overclaimed.blocking_issues
+    )
+    assert overclaimed.mechanically_satisfied is False
+
+
+def test_an_unrecorded_independence_arrangement_cannot_produce_a_bundle(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+
+    # The bundle is the record, and the closed schema refuses to write one that omits the model,
+    # directive version, or tier: an unrecorded arrangement is not a weaker record, it is an
+    # unusable one.
+    with pytest.raises(DocumentValidationError, match="independence"):
+        EvidenceBundleAssembler(tmp_path).assemble(
+            "run-1",
+            candidate_digest=CANDIDATE,
+            claims=(_claim(artifacts[0]),),
+            checklist_journal=_journal(tmp_path),
+            required_checklist_item_ids=("build", "tests"),
+            surface_evidence=(_surface(),),
+            determinism_records=(_determinism(),),
+            **_records(artifacts, independence=IndependenceRecord()),
+        )
+
+
+def test_a_recorded_but_unisolated_arrangement_blocks_the_bundle(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+    leaky = replace(
+        _independence(claimed_tier=INDEPENDENCE_WEAKEST),
+        shared_context=True,
+        channel_open=True,
+    )
+
+    report = EvidenceBundleAssembler(tmp_path).assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts, independence=leaky),
+    )
+
+    # Schema-valid and honestly claimed, but the arrangement itself violates the separation.
+    assert report.document["independence"]["derived_tier"] == INDEPENDENCE_WEAKEST
+    assert "independence-failure:independence-coder-tester-channel-open" in report.blocking_issues
+    assert report.mechanically_satisfied is False
+
+
+def test_monitor_coverage_is_class_disposed_at_the_bundle_boundary(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+    assembler = EvidenceBundleAssembler(tmp_path)
+    journal = _journal(tmp_path)
+
+    def _uncovered(criticality: str) -> object:
+        return assembler.assemble(
+            "run-1",
+            candidate_digest=CANDIDATE,
+            claims=(_claim(artifacts[0]),),
+            checklist_journal=journal,
+            required_checklist_item_ids=("build", "tests"),
+            surface_evidence=(_surface(criticality=criticality),),
+            determinism_records=(_determinism(criticality=criticality),),
+            **_records(artifacts, monitors=()),
+        )
+
+    critical = _uncovered("critical")
+    standard = _uncovered("standard")
+    cosmetic = _uncovered("cosmetic")
+
+    assert (
+        "critical-gap:monitor-coverage-missing:control-plane" in critical.blocking_issues
+    )
+    assert "standard-gap:monitor-coverage-missing:control-plane" in standard.gate_issues
+    assert "cosmetic-gap:monitor-coverage-missing:control-plane" in cosmetic.reports
+    assert standard.blocking_issues == () and cosmetic.blocking_issues == ()
+
+
+def test_a_generated_monitor_on_a_critical_surface_blocks_the_bundle(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+
+    report = EvidenceBundleAssembler(tmp_path).assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(
+            artifacts,
+            monitors=(_monitor(artifacts, authorship=MONITOR_AUTHORSHIP_GENERATED),),
+        ),
+    )
+
+    assert (
+        "critical-gap:critical-monitor-not-human-authored:monitor-control-plane:control-plane"
+        in report.blocking_issues
+    )
+
+
+def test_monitor_authorship_resolves_against_the_signed_roster(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+
+    report = EvidenceBundleAssembler(tmp_path).assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts, monitors=(_monitor(artifacts, author="agent:validator"),)),
+    )
+
+    # An enrolled agent identity never resolves as the human author of a critical monitor.
+    assert (
+        "monitor-integrity:monitor-author-not-enrolled-human:monitor-control-plane"
+        in report.blocking_issues
+    )
+
+
+def test_the_correction_lane_bundle_carries_its_controls_and_reproduction(
+    tmp_path: Path,
+) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+    assembler = EvidenceBundleAssembler(tmp_path)
+    journal = _journal(tmp_path)
+
+    complete = assembler.assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=journal,
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts, lane=LANE_CORRECTION, correction=_correction()),
+    )
+    without_record = assembler.assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=journal,
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts, lane=LANE_CORRECTION),
+    )
+
+    assert complete.mechanically_satisfied is True
+    assert complete.document["correction"]["defect_id"] == "defect-1"
+    assert complete.correction is not None and complete.correction.satisfied is True
+    assert (
+        "critical-gap:correction-gap:correction-record-missing:control-plane"
+        in without_record.blocking_issues
+    )
+
+
+def test_a_capability_bundle_reports_a_stray_correction_record(tmp_path: Path) -> None:
+    _, artifacts = _ratified_run(tmp_path)
+
+    report = EvidenceBundleAssembler(tmp_path).assemble(
+        "run-1",
+        candidate_digest=CANDIDATE,
+        claims=(_claim(artifacts[0]),),
+        checklist_journal=_journal(tmp_path),
+        required_checklist_item_ids=("build", "tests"),
+        surface_evidence=(_surface(),),
+        determinism_records=(_determinism(),),
+        **_records(artifacts, lane=LANE_CAPABILITY, correction=_correction()),
+    )
+
+    assert "correction-record-outside-correction-lane" in report.reports
+    assert report.correction is None
+    assert report.mechanically_satisfied is True

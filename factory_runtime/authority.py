@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from factory_core.manifest import SegregationPolicy
 from factory_runtime.schema import validate_document
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError, VerifiedEnvelope
 
@@ -48,6 +49,29 @@ class AuthorityPolicy:
 
     def principal(self, identity: str) -> Principal | None:
         return self.principals.get(identity)
+
+    def segregation_policy(self) -> SegregationPolicy:
+        """Project the signed genesis roster onto the core's identity-resolution shape.
+
+        Enrollment is positive and denial wins: an enrolled human resolves as a human, and every
+        enrolled agent identity is excluded so it can never resolve as one. Any identity the
+        genesis does not enroll resolves as nothing at all.
+        """
+
+        humans = frozenset(
+            principal.identity
+            for principal in self.principals.values()
+            if principal.kind == "human"
+        )
+        return SegregationPolicy(
+            human_ids=humans,
+            human_aliases={identity.lower(): identity for identity in humans},
+            excluded_service_identities=frozenset(
+                principal.identity
+                for principal in self.principals.values()
+                if principal.kind != "human"
+            ),
+        )
 
 
 @dataclass(frozen=True)

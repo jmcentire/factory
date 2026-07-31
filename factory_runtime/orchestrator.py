@@ -9,7 +9,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from factory_core.correction import CorrectionRecord
+from factory_core.independence import IndependenceRecord
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.monitors import Monitor
 from factory_core.provenance import ProvenanceClaim
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
@@ -162,6 +165,11 @@ class FactoryOrchestrator:
         verifier_key_path: str | Path,
         surface_evidence: Sequence[SurfaceEvidence],
         determinism_records: Sequence[DeterminismRecord],
+        lane: str,
+        independence: IndependenceRecord,
+        monitors: Sequence[Monitor] = (),
+        monitor_declared_unit_count: int = 0,
+        correction: CorrectionRecord | None = None,
     ) -> BuildOutcome:
         if not _ATTEMPT_ID.fullmatch(attempt_id):
             raise OrchestrationError(
@@ -341,6 +349,14 @@ class FactoryOrchestrator:
                 required_checklist_item_ids=BUILD_CHECKLIST,
                 surface_evidence=surface_evidence,
                 determinism_records=determinism_records,
+                lane=lane,
+                independence=independence,
+                monitors=monitors,
+                monitor_declared_unit_count=monitor_declared_unit_count,
+                correction=correction,
+                # Monitor authorship resolves against the signed genesis roster, so
+                # "human-authored" is an enrolled human rather than a label.
+                policy=self.workflow.policy.segregation_policy(),
             )
             if not report.mechanically_satisfied:
                 projection = self.workflow.store.transition(

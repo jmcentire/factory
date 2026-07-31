@@ -110,6 +110,88 @@ def test_evidence_bundle_resolves_the_phase_artifact_schema() -> None:
                 "automatic_retry_count": 0,
             }
         ],
+        "lane": "capability",
+        "independence": {
+            "agents": [
+                {
+                    "role": role,
+                    "model_family": f"family-{role}",
+                    "model_version": "2026-07",
+                    "directive_version": f"{role}-3",
+                }
+                for role in ("coder", "tester", "validator")
+            ],
+            "shared_context": False,
+            "channel_open": False,
+            "mechanism_ids": [],
+            "claimed_tier": "stronger",
+            "derived_tier": "stronger",
+            "structural_mode": {
+                "mode": "isolated",
+                "contract_backreference": None,
+                "mutation_evidence": {
+                    "body": {"structural_mode": "isolated"},
+                    "claimed_digest": DIGEST,
+                },
+                "decision_package_note": "Branch depth was not purchased.",
+            },
+        },
+        "monitors": [
+            {
+                "monitor_id": "monitor-surface",
+                "surface_id": "surface",
+                "derivation": "specification",
+                "authorship": "human",
+                "author_identity": "human:founder",
+                "backreference": {
+                    "artifact_id": "product",
+                    "artifact_digest": trusted["product"],
+                    "item_id": item["item_id"],
+                    "intent_digest": digest_obj(
+                        {"canonical_statement": item["canonical_statement"]}
+                    ),
+                },
+                "actionable_conclusion": "Page the surface owner.",
+                "notifies_human": True,
+                "fix_references": [],
+            }
+        ],
+        "monitor_declared_unit_count": 75,
     }
 
     validate_document("evidence-bundle", document)
+
+
+def test_the_bundle_schema_refuses_a_diff_derived_monitor_and_an_unrecorded_tier() -> None:
+    """The record cannot carry a change detector, or omit what makes a verdict comparable."""
+
+    monitor = {
+        "monitor_id": "monitor-surface",
+        "surface_id": "surface",
+        "derivation": "implementation",
+        "authorship": "human",
+        "author_identity": "human:founder",
+        "backreference": {
+            "artifact_id": "product",
+            "artifact_digest": DIGEST,
+            "item_id": "item",
+            "intent_digest": DIGEST,
+        },
+        "actionable_conclusion": "Page the surface owner.",
+        "notifies_human": True,
+        "fix_references": [],
+    }
+    schema = load_schema("evidence-bundle")
+    monitor_schema = schema["$defs"]["monitor"]
+    independence_schema = schema["$defs"]["independence"]
+
+    assert monitor_schema["properties"]["derivation"] == {"const": "specification"}
+    assert monitor["derivation"] not in ("specification",)
+    for required in ("claimed_tier", "derived_tier", "agents", "structural_mode"):
+        assert required in independence_schema["required"]
+    assert independence_schema["properties"]["agents"]["items"]["required"] == [
+        "role",
+        "model_family",
+        "model_version",
+        "directive_version",
+    ]

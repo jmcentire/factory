@@ -17,7 +17,10 @@
     "claims",
     "checklist_results",
     "surface_evidence",
-    "determinism_records"
+    "determinism_records",
+    "lane",
+    "independence",
+    "monitors"
   ],
   "properties": {
     "schema_version": {
@@ -77,34 +80,12 @@
               "requirement",
               "constraint",
               "task",
-              "test-assertion"
+              "test-assertion",
+              "monitor"
             ]
           },
           "backreference": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "artifact_id",
-              "artifact_digest",
-              "item_id",
-              "intent_digest"
-            ],
-            "properties": {
-              "artifact_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "artifact_digest": {
-                "$ref": "#/$defs/digest"
-              },
-              "item_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "intent_digest": {
-                "$ref": "#/$defs/digest"
-              }
-            }
+            "$ref": "#/$defs/backreference"
           }
         }
       }
@@ -129,6 +110,28 @@
       "items": {
         "$ref": "#/$defs/determinism_record"
       }
+    },
+    "lane": {
+      "enum": [
+        "capability",
+        "correction"
+      ]
+    },
+    "independence": {
+      "$ref": "#/$defs/independence"
+    },
+    "monitors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/monitor"
+      }
+    },
+    "monitor_declared_unit_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "correction": {
+      "$ref": "#/$defs/correction"
     }
   },
   "$defs": {
@@ -255,6 +258,320 @@
         "automatic_retry_count": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "backreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "artifact_digest",
+        "item_id",
+        "intent_digest"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "item_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "intent_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "independence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agents",
+        "shared_context",
+        "channel_open",
+        "mechanism_ids",
+        "claimed_tier",
+        "structural_mode",
+        "derived_tier"
+      ],
+      "properties": {
+        "agents": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "model_family",
+              "model_version",
+              "directive_version"
+            ],
+            "properties": {
+              "role": {
+                "enum": [
+                  "coder",
+                  "tester",
+                  "validator"
+                ]
+              },
+              "model_family": {
+                "type": "string",
+                "minLength": 1
+              },
+              "model_version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "directive_version": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "shared_context": {
+          "type": "boolean"
+        },
+        "channel_open": {
+          "type": "boolean"
+        },
+        "mechanism_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "claimed_tier": {
+          "enum": [
+            "weakest",
+            "weak",
+            "moderate",
+            "stronger",
+            "strongest"
+          ]
+        },
+        "derived_tier": {
+          "enum": [
+            "weakest",
+            "weak",
+            "moderate",
+            "stronger",
+            "strongest"
+          ]
+        },
+        "structural_mode": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "contract_backreference",
+            "mutation_evidence",
+            "decision_package_note"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "isolated",
+                "implementation-informed"
+              ]
+            },
+            "contract_backreference": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/backreference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mutation_evidence": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/integrity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "decision_package_note": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "monitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "monitor_id",
+        "surface_id",
+        "derivation",
+        "authorship",
+        "author_identity",
+        "backreference",
+        "actionable_conclusion",
+        "notifies_human",
+        "fix_references"
+      ],
+      "properties": {
+        "monitor_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "derivation": {
+          "const": "specification"
+        },
+        "authorship": {
+          "enum": [
+            "human",
+            "generated"
+          ]
+        },
+        "author_identity": {
+          "type": "string"
+        },
+        "backreference": {
+          "$ref": "#/$defs/backreference"
+        },
+        "actionable_conclusion": {
+          "type": "string"
+        },
+        "notifies_human": {
+          "type": "boolean"
+        },
+        "fix_references": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "correction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defect_id",
+        "baseline_available",
+        "controls",
+        "reproduction"
+      ],
+      "properties": {
+        "defect_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseline_available": {
+          "type": "boolean"
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test_id",
+              "declared_role",
+              "baseline_result",
+              "failure_relation"
+            ],
+            "properties": {
+              "test_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "declared_role": {
+                "enum": [
+                  "red-now",
+                  "green-now"
+                ]
+              },
+              "baseline_result": {
+                "enum": [
+                  "failed",
+                  "passed"
+                ]
+              },
+              "failure_relation": {
+                "enum": [
+                  "",
+                  "defect",
+                  "unrelated"
+                ]
+              }
+            }
+          }
+        },
+        "reproduction": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "defect_id",
+                "result",
+                "environment_id",
+                "disposable_environment",
+                "recorded_before_repair",
+                "impossibility_condition",
+                "evidence"
+              ],
+              "properties": {
+                "defect_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "result": {
+                  "enum": [
+                    "reproduced",
+                    "not-reproduced",
+                    "impossible"
+                  ]
+                },
+                "environment_id": {
+                  "type": "string"
+                },
+                "disposable_environment": {
+                  "type": "boolean"
+                },
+                "recorded_before_repair": {
+                  "type": "boolean"
+                },
+                "impossibility_condition": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/integrity"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }
