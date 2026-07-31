@@ -174,6 +174,136 @@ def test_checklist_item_cannot_be_satisfied_by_recollection(tmp_path: Path) -> N
     assert "checklist-cited-evidence-rule-missing" in errors
 
 
+def test_the_red_guard_rule_cannot_be_softened_back_into_an_expectation(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "**A green guard that comes back red is not a forcing test.**",
+            "A green guard that comes back red usually means the spec moved.",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert (
+        "control-rule-missing:A green guard that comes back red is not a forcing test." in errors
+    )
+
+
+def test_the_operational_control_names_cannot_be_dropped(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    row = (
+        "| **Negative** | **red-now** | The spec is not too weak | New tests must **fail** "
+        "against current broken main, at least one failing on the defect | The spec did not "
+        "catch the bug — rejected |"
+    )
+    assert row in source
+    doctrine.write_text(
+        source.replace(
+            row,
+            "| **Negative** | The spec is not too weak | New tests must **fail** against "
+            "current broken main | The spec did not catch the bug — rejected |",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert "control-rule-missing:red-now" in errors
+
+
+def test_the_independence_tier_ladder_cannot_collapse_back_to_a_binary(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    row = (
+        "| **Moderate** | Same model, no shared context, **no channel** | Tuning to the oracle. "
+        "Still shares the frame. |"
+    )
+    assert row in source
+    doctrine.write_text(source.replace(row, ""), encoding="utf-8")
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("independence-tier-map-mismatch:") for error in errors)
+
+
+def test_a_monitor_may_not_become_authorized_without_resolution(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "**A monitor whose backreference does\nnot resolve is an unauthorized assertion "
+            "about production.**",
+            "A monitor should usually cite the criterion it watches.",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("monitor-rule-missing:") for error in errors)
+
+
+def test_the_triage_silencing_prohibition_cannot_be_removed(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "> **An agent that evaluates an alert may not delete or weaken the monitor that "
+            "produced it.**",
+            "> An agent that evaluates an alert may tune the monitor that produced it.",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("triage-rule-missing:") for error in errors)
+
+
+def test_the_reproduction_requirement_cannot_become_optional(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "**A defect is reproduced in a disposable environment before any repair is written, "
+            "and the\nreproduction is recorded.**",
+            "A defect is usually reproduced before a repair is written.",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("reproduction-rule-missing:") for error in errors)
+
+
+def test_per_agent_model_recording_cannot_leave_the_evidence_plane(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    doctrine.write_text(
+        source.replace(
+            "- **The model and version of every agent that produced or judged the change**, the",
+            "- The agents involved, and the",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("evidence-plane-record-missing:") for error in errors)
+
+
 def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) -> None:
     root = _copy_guard_surface(tmp_path)
     new_surface = root / "docs" / "new-operating-guide.md"

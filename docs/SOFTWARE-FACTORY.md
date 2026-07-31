@@ -147,6 +147,28 @@ criteria are one artifact both consume. If you tell two parties to build "someth
 expect the tests to pass, you have specified nothing and the passing tests mean nothing.
 **Shared spec, no shared channel** is the whole shape.
 
+### The Validator judges against a spec it helped write
+
+**This is a real limitation rather than a clean separation.** It is accepted because the
+alternative — a second agent holding the human relationship — reintroduces the translation
+boundary it was meant to remove, and adds one.
+
+Three things bound it. The human signs the spec, so the artifact being judged against carries
+human authority rather than the Validator's. The behavior ledger converts the spec into concrete
+behaviors the human recognized as right, which is a check on the translation that does not run
+through the Validator's judgment. And the verbatim-and-ratify rule means the transformation was
+reviewed against its source, not accepted on its own coherence.
+
+None of the three catches a mistranslation the human also failed to recognize. That case is
+unreached, it is stated in §14, and it is the reason the ledger is load-bearing rather than a
+nicety.
+
+> Concretely: a Validator that mistranslated the human's intent in phase 1 will judge
+> conformance to its own mistranslation and find it satisfied, and every mechanism downstream
+> confirms it. This is the §5 translation-boundary problem, and the front gate does not catch it
+> because the front gate is the same party. Naming it is the point — an unnamed
+> self-referentiality is the shape §14 spends its length warning about.
+
 ### Why the Validator runs the tests
 
 Neither the Coder nor the Tester executes the other's artifact. The Coder cannot run the tests
@@ -193,6 +215,13 @@ change.
 it is deliberate: cosmetic must be an assertion someone made, never a default arrived at by
 omission. Given the enumeration failure class in §14, a surface nobody classified is precisely
 the surface nobody thought about.
+
+**Monitor authorship is class-scoped.** A Critical surface carries **human-authored monitors**,
+because an auto-generated monitor is opaque, and when something goes seriously wrong the
+instrumentation you reach for must be instrumentation you understand. Standard and cosmetic
+surfaces take generated monitors. This is the same reason the critical class has no waiver — not
+distrust of the generator, but a refusal to have the only instrument on a hazard surface be one
+nobody can read under pressure.
 
 Criticality is not a claim about how likely a change is to be wrong. It is a claim about **what
 being wrong costs**, which is why it governs disposition rather than depth. The factory
@@ -260,6 +289,12 @@ implementation is operational maturity decided by accident.** An error dispositi
 by an implementer under deadline is a runtime guess. A monitoring surface added after an
 incident is a monitoring surface shaped by one incident.
 
+It is also agreed with the human rather than left to implementers because **tight observability
+breeds customer empathy.** When every slow load and every bad output fires a notification, the
+team experiences the product the way its users do, and defects nobody would have prioritized
+become visible. That is a property of the surface someone chose, not a side effect of whatever
+the implementer happened to instrument.
+
 What is settled here:
 
 - The acceptance criteria, as observable assertable effects
@@ -269,12 +304,64 @@ What is settled here:
   exhaustion behavior, and the rationale
 - The edge cases and the boundary conditions
 - The observability surface, the alerts, and who owns each
+- **The monitor set**, each monitor carrying a resolvable backreference to the acceptance
+  criterion or invariant it watches, and each carrying its authorship under the class rule in
+  §3.5
 - The SLOs, recovery objectives, security and privacy outcomes, retention and deletion
   behavior, accessibility, compatibility, data-residency constraints, and cost ceilings
 - The artifact-applicability matrix
 
 **A failure with no specified disposition is a gap phase 3 must close, not a decision an agent
 makes at runtime.**
+
+### Monitors are spec-derived, not diff-derived
+
+Generating the monitor set is the right move — the alternative is agreeing an observability
+surface here and then relying on humans to build it under deadline, which is where operational
+maturity reliably goes to die. One published account scaled from ten hand-written monitors to
+over a thousand and caught 40 real defects in the first week, several within minutes of a user
+triggering them.
+
+The correction to make before adopting it is where the monitor's expectation comes from.
+
+> A monitor derived from the implementation asserts what the code does. It is a **change
+> detector** — excellent at catching drift from yesterday's behavior, structurally incapable of
+> catching behavior that was wrong on day one, because the baseline it learned was the wrongness.
+>
+> A monitor derived from an acceptance criterion or an invariant is an **oracle**. It asserts
+> what was agreed, and it fires when production stops matching the spec rather than when
+> production stops matching itself.
+
+This is the same distinction §6 already draws for tests: an expectation inferred from the code
+passes whenever the code is self-consistent, including when the code is wrong. The distinction
+does not change because the artifact is a monitor.
+
+**Every monitor carries a resolvable backreference** to the criterion or invariant it watches,
+under non-negotiable 7 exactly as a test assertion does. **A monitor whose backreference does
+not resolve is an unauthorized assertion about production.**
+
+Monitor density is a diagnostic, never a target. Record it; do not gate on it — a density
+target produces monitors written to increase the count.
+
+### The triage agent may not silence the monitor
+
+The published pattern routes a firing monitor to an agent that assesses scope: real issue, push
+a fix; noise, tune or delete the monitor. **The second branch is the writer controlling the
+judge, relocated to the observability layer.**
+
+> **An agent that evaluates an alert may not delete or weaken the monitor that produced it.**
+> Deletion and threshold changes are **proposals**, raised as specification defects against the
+> phase-3 monitor set and ratified by a human, exactly as any other change to a signed artifact.
+
+The reason is that the cheapest available path to a quiet channel is deletion, and nothing in
+the triage step distinguishes *this threshold is badly calibrated* from *this is correctly
+detecting something expensive to fix.* Both present as noise to the party that would have to do
+the work. **Silencing is a change to the oracle, so it goes through the specification-defect
+path.**
+
+**State lives on the monitor rather than in the agent.** When a fix is proposed, the reference is
+appended to the monitor so a subsequent trigger finds it and stands down. That is the
+coordination pattern; it is not a substitute for the ratification rule above.
 
 ### After the phases
 
@@ -470,6 +557,30 @@ precision control. A verification plane that only accumulates agreement produces
 findings at a rate and precision that guarantees they are bypassed, which is the alert wall
 rebuilt inside the thing meant to replace it.
 
+### Independence is graded, not binary
+
+Separate prompts to the same model are not strong independence, but independence is not a
+property you either have or do not. It is a scale, and knowing where you are on it changes what
+the evidence is worth.
+
+| Tier | Arrangement | What it defends against |
+|---|---|---|
+| **Weakest** | Same model, separate prompts, shared context | Almost nothing. Shares blind spots and the frame. |
+| **Weak** | Same model, separate prompts, no shared context | Careless error. Still shares the frame. |
+| **Moderate** | Same model, no shared context, **no channel** | Tuning to the oracle. Still shares the frame. |
+| **Stronger** | **Different model families**, no shared context, no channel | Frame is no longer guaranteed shared. Correlated misreading becomes less likely rather than merely unobserved. |
+| **Strongest** | Reproducible mechanism — type system, schema validator, policy engine, differential test | Does not have a frame to share. |
+
+Different model families across the Coder and Tester lanes is a concrete and cheap improvement
+over same-model separation, and it is worth taking where the option exists. It is not a
+substitute for the mechanical base; **a frame can be shared through the specification itself
+regardless of what generated the agents.**
+
+**The tier is recorded in the manifest**, because a verdict produced at the moderate tier and one
+produced at the stronger tier are not the same evidence, and nothing downstream can tell them
+apart otherwise. A claimed tier that the recorded arrangement does not support is not a weaker
+verdict; it is a false one, and it blocks.
+
 ### Determinism is class-scoped, and retry is search
 
 **A non-deterministic test is not evidence on a critical surface.**
@@ -613,19 +724,58 @@ Classification happens here:
 misdiagnosis sets the whole repair against the wrong target, and everything downstream will
 conform to it.
 
+### Reproduction is the correction flow's negative control
+
+**A defect is reproduced in a disposable environment before any repair is written, and the
+reproduction is recorded.** The reproduction failing is the negative control for a production
+defect: it establishes that the fault is real, that it is understood well enough to trigger
+deliberately, and that the eventual fix has something to be verified against.
+
+A repair written against a defect nobody reproduced is a repair against a hypothesis. Where
+reproduction is impossible — a race that will not reproduce, an environment-specific fault —
+**that is a stated condition of the lane and it gates**, rather than a step quietly skipped.
+
+A reproduction that does not reproduce is not a clean bill of health either. It means the
+diagnosis, the environment, or the report is wrong, and it routes back to the human rather than
+authorizing a repair against the original hypothesis.
+
 ### The two controls
 
 In a correction, the Tester authors against the one oracle this flow trusts — **the pre-defect
 behavior of main** — and the Validator verifies both controls before trusting anything
 downstream.
 
-| Control | Proves | Test | Failure means |
-|---|---|---|---|
-| **Negative** | The spec is not too weak | New tests must **fail** against current broken main, at least one failing on the defect | The spec did not catch the bug — rejected |
-| **Positive** | The spec is not too strong | New tests must **pass** against main on all behavior unrelated to the defect | The spec forbids a behavior the working system already exhibits — an over-constraint — rejected |
+| Control | Operational name | Proves | Test | Failure means |
+|---|---|---|---|---|
+| **Negative** | **red-now** | The spec is not too weak | New tests must **fail** against current broken main, at least one failing on the defect | The spec did not catch the bug — rejected |
+| **Positive** | **green-now** | The spec is not too strong | New tests must **pass** against main on all behavior unrelated to the defect | The spec forbids a behavior the working system already exhibits — an over-constraint — rejected |
 
-**The residue they cannot catch** — a fix that legitimately changes previously-correct behavior
-because the old behavior was also wrong — is flagged by the positive control as an
+Lead with the operational names. *Red-now* and *green-now* say what the test does today against
+main, which is the thing the author has to get right; *negative* and *positive* name the control's
+logical role, which is the thing the reader has to understand. Both terms stay.
+
+**A green guard that comes back red is not a forcing test.** When a test written to pass against
+main fails against main for a reason unrelated to the defect, it is a **suspected
+over-constraint** and it stops. Do not reclassify it. Do not drive an implementation to satisfy
+it. Raise it to the human, who confirms either that the behavior it forbids was also wrong — in
+which case a signed artifact must say so before the test stands — or that the test is wrong and
+is corrected.
+
+The asymmetry is deliberate: a forcing test misread as a guard produces a test nobody wrote for
+a defect nobody found, which is noise. **A guard misread as forcing produces working behavior
+deliberately broken, with a green suite defending it.** The two look identical in the run — same
+red signal, opposite meaning — and the natural move, reclassifying the guard as forcing and
+driving the Coder to make it pass, is the factory silently encoding a change to
+previously-correct behavior. That is precisely the case the positive control exists to route to
+a human.
+
+**The recognition check runs at test-writing time.** When the Tester finds that a test it expected
+to force red is already green against main, before the Coder starts, it says so immediately. That
+is the negative control failing early, and it is a cheap recurring signal that the defect is
+misunderstood or already fixed — available before any implementation effort is spent.
+
+**The residue the controls cannot catch** — a fix that legitimately changes previously-correct
+behavior because the old behavior was also wrong — is flagged by the positive control as an
 over-constraint. That is the correct outcome: it routes to a human who confirms the old
 behavior was also wrong.
 
@@ -836,6 +986,21 @@ the anomalies and the places the factory departed from a standard pattern.**
 Findings reaching that package have already survived refutation, with the verdict recorded
 either way.
 
+### Detect everything, notify selectively
+
+Refutation-before-reporting is a rule about findings. It applies to production signal in exactly
+the same form.
+
+> The system watches every signal it can afford to watch. **Every alert that reaches a human
+> means something.** Detection is cheap and should be exhaustive; notification is expensive and
+> should be earned.
+
+A monitor that fires without a human-actionable conclusion is the alert wall, and **a team that
+learns to ignore noisy monitors learns to ignore noisy agents at exactly the same rate.** Note
+which way this cuts: the remedy for an unactionable alert is a better conclusion or a
+specification defect against the monitor set, never a quieter monitor chosen by the party the
+alert inconveniences.
+
 ### Who decides
 
 | Actor | Produces |
@@ -855,6 +1020,10 @@ gap, never for a Critical one.
 **The authoritative record of a change is not the ticket.** The ticket is mutable
 project-management state, and a release record that can be edited is not evidence.
 
+The separation is enforced by where the bytes live rather than by convention: **working
+coordination between the roles is ephemeral and never committed; the durable record is committed
+and content-addressed.** Scratch that cannot be cited cannot become an authority by accident.
+
 Each candidate has a **content-addressed change-evidence manifest**: digests of the source, the
 phase artifacts, the control policy, the artifact, and the configuration; the verifier identity
 and version; the spec-control results including the negative-control baseline and
@@ -872,6 +1041,21 @@ also records:
   side effects, and the class-required evidence set for each
 - For every critical surface, the determinism record — whether any test on it flaked during
   this run, whether an automatic retry occurred, and the disposition
+- **The model and version of every agent that produced or judged the change**, the
+  **prompt/directive version** each ran under, and the **independence tier** of the arrangement
+  they ran in (§6)
+- The monitor set with each monitor's backreference, derivation, and authorship class, and every
+  triage disposition raised against it
+- In a correction, the reproduction record and the classification of every test that changed
+  state against main
+
+**Recording the verifier's identity per change is what makes the requalification rule in §13
+enforceable.** Without it, a model or prompt swap is undetectable after the fact: you cannot tell
+which verdicts predate the swap, so "requalify on change" degrades into a policy nobody can
+audit. One published account found that one model family was a materially better triage
+evaluator than another at filtering noise, and found it by accident. **Verdict quality is
+model-dependent**, and recording the model is what turns that from an anecdote into something a
+requalification suite can measure.
 
 The same artifact digest is promoted through the environments, and **promotion verifies that
 every cited fact matches its authoritative source** rather than trusting the manifest's own
@@ -895,7 +1079,10 @@ software lifecycle rather than above it, and it carries the same obligations it 
 
 Its prompts, models, tools, and policies are versioned, and **a change to a model or a prompt
 triggers a requalification suite** before that change is trusted, because a model swap can
-silently alter behavior across every build. Its runs are reproducible from recorded manifests.
+silently alter behavior across every build. That rule is only enforceable because §12 records
+the model, the version, and the directive version of every agent that produced or judged each
+change: the requalification boundary is a fact about the manifest, not a memory of when the swap
+happened. Its runs are reproducible from recorded manifests.
 Its execution is sandboxed with isolation whose enforcement is verified rather than assumed.
 It is hardened against repository-content and prompt-injection attacks, because **an
 instruction hidden in a file or a ticket is not a human directive** and must be treated with
@@ -1174,9 +1361,14 @@ database schema, acceptance criteria.
 artifacts, never from the implementation. A test whose expectation came from the code passes
 whenever the code is self-consistent.
 
+**Independence is graded, not binary.** Five tiers, weakest to strongest, and the tier the run
+actually achieved is recorded in the manifest along with each agent's model, version, and
+directive version. A claimed tier the arrangement does not support blocks. *(Full table in §6.)*
+
 **No agent silently reinterprets the spec.** A contradiction is raised as a specification
 defect, the current version stays frozen, and the human and Validator resolve it in the phase
-it belongs to.
+it belongs to. **This includes silencing a monitor:** deleting or weakening one is a change to the
+oracle, so it is a proposal a human ratifies, never a triage decision.
 
 ### The eight non-negotiables
 
@@ -1205,6 +1397,10 @@ reports and promotes.
 
 Every gate is an explicit checklist. Each satisfied item cites individually content-addressed
 evidence recorded when obtained; an unchecked or uncited item remains a visible gap.
+
+**Detection is exhaustive; notification is earned.** Every alert that reaches a human means
+something, and an unactionable alert is answered with a better conclusion or a specification
+defect — never with a quieter monitor.
 
 ### Retry is recovery, not search
 
@@ -1235,6 +1431,14 @@ human, and the only role that talks to both of the others.**
 You are also the translation boundary. Everything downstream consumes your interpretation of
 the human's intent, and nothing downstream can catch an error you introduce by conformance
 checking. Behave accordingly.
+
+**You judge against a spec you helped write.** That is a real limitation, not a clean separation,
+and you do not get to resolve it by being careful. What bounds it is external: the human signs
+the spec, the behavior ledger converts your translation into concrete behaviors the human
+recognized as right, and verbatim-and-ratify means your transformation was reviewed against its
+source rather than accepted on its own coherence. Treat all three as load-bearing rather than
+ceremonial, because they are the only checks on your own translation that do not run through your
+judgment.
 
 ### Procedure
 
@@ -1291,8 +1495,34 @@ not carry it, blocks promotion regardless of whether the suite is green.
 **Own mutation evidence.** Remove each high-consequence control and confirm at least one test
 fails. This is yours because an agent mutation-testing its own work defeats the separation.
 
-**Verify both controls** in a correction: the negative control failed against the recorded
-baseline on the defect, and the positive control passed against main on unrelated behavior.
+**Verify both controls** in a correction: the negative control (red-now) failed against the
+recorded baseline on the defect, and the positive control (green-now) passed against main on
+unrelated behavior.
+
+**Confirm the classification of every test that changed state against main**, not merely that
+both controls were satisfied in aggregate. A guard that came back red is a suspected
+over-constraint routed to the human; it is never promoted to a forcing test, and no
+implementation is driven to satisfy it. An aggregate verdict cannot distinguish the two, which is
+why the per-test classification is the record.
+
+**Require the reproduction before the repair.** In a correction, confirm a recorded reproduction
+in a disposable environment triggered the defect deliberately before any repair was written.
+Where reproduction was impossible, confirm that condition is stated and gate on it rather than
+accepting the step as skipped.
+
+**Verify the monitor set.** Each monitor resolves its backreference to the criterion or invariant
+it watches; a monitor that resolves to nothing is an unauthorized assertion about production and
+blocks. Each monitor is spec-derived, and each Critical surface carries human-authored monitors.
+A triage proposal to delete or weaken a monitor is a specification defect for the human, never a
+change you accept. Record monitor density; never gate on it.
+
+**Record the independence tier and the verifier identities.** Write into the manifest the model
+and version of every agent that produced or judged the change, the directive version each ran
+under, and the tier of the arrangement they ran in. A claimed tier the recorded arrangement does
+not support blocks. Where the Tester forwent structural mode for lack of a signed interface
+contract, the branch-level depth it would have bought is yours: run mutation checks on the
+critical controls and state plainly in the decision package that structural depth was not
+purchased.
 
 **Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
 including side effects. Do not let diff size stand in for that judgment.
@@ -1439,8 +1669,28 @@ mutation check meant to catch exactly that.
 the schema contract.
 
 **In a correction, satisfy both controls.** Your tests must fail against the current broken
-main with at least one failing on the defect, and pass against main on every behavior unrelated
-to the defect.
+main with at least one failing on the defect (**red-now**), and pass against main on every
+behavior unrelated to the defect (**green-now**).
+
+**Declare each test's control role before it runs, and say so immediately when the role does not
+hold.** A test you expected to force red that is already green against main is the negative
+control failing early — report it before any implementation effort is spent, because it means the
+defect is misunderstood or already fixed. A test you expected to pass against main that comes back
+red is a **suspected over-constraint** for the human.
+
+**Structural mode is a tiered choice, not a default.** Implementation-informed testing — reading
+the code to hunt uncovered branches, races, transaction errors — buys depth and opens a channel
+through which the implementation can contaminate the oracle.
+
+- Where a **signed interface contract** anchors the oracle, structural mode is safe: the
+  expectations are pinned to the contract, and reading the implementation adds depth without
+  moving the target.
+- Where **no such contract exists** — greenfield, or a shared interface neither party has
+  ratified — **total isolation is the correct trade.** Forgo structural depth. An oracle that has
+  read the implementation is not independent evidence, and depth bought that way is not depth.
+
+Record which mode you ran in. When structural mode is forgone, the coverage it would have
+provided becomes the Validator's obligation.
 
 **Write deterministically on critical surfaces.** No time dependence, no ordering dependence,
 no shared mutable fixture, no network to anything outside the disposable environment, no
@@ -1465,6 +1715,13 @@ decision without a resolvable backreference to the artifact bearing it.** You do
 your own tests' sensitivity — mutation evidence is the Validator's. You never add a retry, a
 rerun, or a tolerance window to a test on a critical surface to make it stable. Stabilizing a
 flaky critical test by rerunning it converts evidence into sampling.
+
+**You never reclassify a green guard as a forcing test because it came back red. A red guard is
+raised, not repurposed.** Reclassifying it makes the factory encode a change to previously-correct
+behavior and defends that change with a green suite.
+
+You never read the implementation to buy structural depth where no signed interface contract
+anchors your expectations.
 
 Where the spec is ambiguous about intent, **raise a specification defect rather than encoding
 your guess as the oracle.** A test asserting an intent nobody agreed judges the work against a
@@ -1507,6 +1764,89 @@ against the trusted baseline; the Validator verifies both before trusting anythi
 ---
 
 ## Appendix B — Changelog
+
+### Errata — controls, independence tiers, monitors, reproduction — 2026-07-29
+
+Sources: an adversarially-verified mapping of this specification against an operating practice,
+and a published account of agent-maintained observability. Corrections first, then additions.
+
+**Corrected the positive control's unnamed failing leg.** Both controls were stated as
+expectations, with nothing said about a test that was *supposed* to pass against main coming back
+red for a reason unrelated to the defect. The default behavior was the dangerous one: a red guard
+and a forcing red test carry the same signal and opposite meanings, and reclassifying the guard
+drives an implementation to break previously-correct behavior with a green suite defending it.
+A red guard is now a **suspected over-constraint** that stops and routes to a human, the Tester is
+prohibited from repurposing it, and the Validator confirms the classification of every test that
+changed state against main rather than checking the controls in aggregate.
+
+**Named the Validator's self-referentiality.** The Validator co-authors the spec and then judges
+against it. Both halves are right in isolation, but the document never said so, and an unnamed
+self-referentiality is the shape §14 warns about. It is now stated as a real limitation with its
+three external bounds — the human's signature, the behavior ledger, and verbatim-and-ratify —
+and with the case none of them reaches stated plainly.
+
+**Independence became graded.** Five tiers replace a binary property, different model families
+across the Coder and Tester lanes is named as the cheap available improvement, and the tier is
+recorded in the manifest because verdicts from different tiers are not the same evidence. A
+claimed tier the recorded arrangement does not support is a false verdict, not a weak one.
+
+**Structural test mode became a tiered choice.** Reading the implementation to hunt branches buys
+depth and opens a contamination channel. It is safe only where a signed interface contract anchors
+the oracle; otherwise total isolation is correct and the forgone branch depth becomes the
+Validator's mutation-check obligation, stated in the decision package.
+
+**Added the monitor set to phase 3, spec-derived.** A monitor derived from the diff asserts what
+the code does and cannot catch behavior that was wrong on day one; a monitor derived from a
+criterion or invariant is an oracle. Each monitor carries a resolvable backreference under
+non-negotiable 7 exactly as a test assertion does, and one that does not resolve is an
+unauthorized assertion about production. Monitor authorship is class-scoped: Critical surfaces
+carry human-authored monitors.
+
+**Prohibited the triage agent from silencing the monitor.** Routing a firing monitor to an agent
+that may delete or tune it is the writer controlling the judge, relocated to the observability
+layer. Deletion and threshold changes are proposals ratified by a human through the
+specification-defect path; state lives on the monitor so a proposed fix stands down a subsequent
+trigger.
+
+**Made reproduction the correction flow's negative control.** A defect is reproduced in a
+disposable environment and the reproduction recorded before any repair is written. Where
+reproduction is impossible, that is a stated condition of the lane and it gates.
+
+**Added per-change verifier identity to the manifest.** Model and version of every agent that
+produced or judged the change, the directive version each ran under, and the independence tier.
+Without these the §13 requalification rule is unenforceable after the fact. The one field
+observation behind it — that one model family filtered triage noise better than another — was
+found by accident rather than by measurement, which is the argument for recording the model, not
+evidence about which model to pick.
+
+**Extended refutation-before-reporting to production signal.** Detection is exhaustive;
+notification is earned. Every alert that reaches a human means something.
+
+**Adopted operational vocabulary.** *Green-now* and *red-now* lead over *positive* and *negative*
+because they name what the test does today against main; both terms are kept. The recognition
+check — a forcing test already green before the Coder starts — is named as the negative control
+failing early. Ephemeral coordination versus the durable content-addressed record is stated as a
+property of where the bytes live rather than a convention.
+
+#### Considered and declined
+
+- **Monitor density as a target.** One monitor per 75 lines is a striking diagnostic and a
+  terrible goal; made a target it produces monitors written to increase the count. Density is
+  recorded and never gated.
+- **The source assessment's severity ranking.** It placed four theoretical failures above the one
+  with a field incident behind it. **Rank by incidence, not by category** — fabricated provenance
+  has happened here, was caught only because the one person who could refute it looked, and its
+  fix is smaller than any of the four ranked above it.
+- **The refutation statistic as a confidence signal.** Refutation bites hard on *defect* claims
+  and barely at all on *absence* claims, so a single rate over a mixed population reads as
+  confidence it has not earned. **Report refutation rates by claim type or not at all.**
+- **In-loop human ratification on every hazard-surface merge, as stated.** The principle is right;
+  the mechanism makes every hazard merge block on one person's availability, a cost nobody had
+  agreed to pay. Resolved by the founder on 2026-07-29 as a **named delegate roster**: the
+  accountable-human seat is filled from an explicit list of enrolled humans recorded per target,
+  so a hazard merge waits on any delegate rather than on one individual. An undeclared roster is
+  not a permissive default — it means nobody decided who may ratify, and it is disposed of as an
+  evidence gap by class.
 
 ### Invariants, tools, test disposition, and checklist gates — 2026-07-27
 

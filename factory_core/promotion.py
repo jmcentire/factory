@@ -10,6 +10,11 @@ only the doctrine:
 * every requirement resolves to one exact version of the three invariant documents;
 * a signed tool policy is required and every rule resolves to phase-2/3 authority;
 * gate items count only when individually cited by subject-bound evidence;
+* the independence tier is derived from the recorded arrangement, and a claim above it is false
+  rather than weak;
+* every monitor is spec-derived and resolves its own authority, and a Critical surface's monitors
+  are human-authored;
+* a correction shows both controls, per-test, plus a reproduction recorded before the repair;
 * missing oracle/evidence links are gaps disposed by class;
 * malformed, mismatched, or negative evidence blocks every class;
 * Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
@@ -29,7 +34,7 @@ evaluation time and externally trusted identity roster.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +42,13 @@ from factory_core.checklist import (
     ChecklistItemResult,
     ChecklistReport,
     verify_checklist,
+)
+from factory_core.correction import (
+    LANE_CORRECTION,
+    LANES,
+    CorrectionRecord,
+    CorrectionReport,
+    verify_correction,
 )
 from factory_core.criticality import (
     BASE_REQUIRED_EVIDENCE_IDS,
@@ -50,8 +62,19 @@ from factory_core.criticality import (
     resolve_criticality,
 )
 from factory_core.evidence import EvidenceIntegrity
+from factory_core.independence import (
+    IndependenceRecord,
+    IndependenceReport,
+    verify_independence,
+)
 from factory_core.manifest import SegregationPolicy, digest_obj
-from factory_core.provenance import ProvenanceBundle, provenance_issue_is_gap
+from factory_core.monitors import Monitor, MonitorSetReport, verify_monitor_set
+from factory_core.provenance import (
+    IntentBackreference,
+    ProvenanceBundle,
+    ProvenanceReport,
+    provenance_issue_is_gap,
+)
 from factory_core.tool_policy import (
     ToolPolicyBundle,
     tool_policy_issue_is_gap,
@@ -278,9 +301,15 @@ class RiskAcceptance:
 
 @dataclass(frozen=True)
 class PromotionRequest:
-    """All evidence and authority records for one exact candidate."""
+    """All evidence and authority records for one exact candidate.
+
+    ``lane`` is declared rather than inferred. A capability and a correction do not have the same
+    oracle available, and guessing which one produced this candidate would guess which controls
+    apply to it.
+    """
 
     candidate_digest: str = ""
+    lane: str = ""
     disturbed_surface_ids: tuple[str, ...] = ()
     observations: tuple[SurfaceObservation, ...] = ()
     gates: tuple[GateOutcome, ...] = ()
@@ -293,14 +322,21 @@ class PromotionRequest:
     evidence: EvidenceIntegrity | None = None
     provenance: ProvenanceBundle | None = None
     tool_policy: ToolPolicyBundle | None = None
+    independence: IndependenceRecord | None = None
+    monitors: tuple[Monitor, ...] = ()
+    monitor_declared_unit_count: int = 0
+    correction: CorrectionRecord | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
         risk_raw = raw.get("risk_acceptance")
         provenance_raw = raw.get("provenance")
         tool_policy_raw = raw.get("tool_policy")
+        independence_raw = raw.get("independence")
+        correction_raw = raw.get("correction")
         return cls(
             candidate_digest=str(raw.get("candidate_digest", "")),
+            lane=normalize_label(str(raw.get("lane", ""))),
             disturbed_surface_ids=_as_str_tuple(raw.get("disturbed_surface_ids")),
             observations=tuple(
                 SurfaceObservation.from_dict(item)
@@ -331,6 +367,23 @@ class PromotionRequest:
             tool_policy=(
                 ToolPolicyBundle.from_dict(tool_policy_raw)
                 if isinstance(tool_policy_raw, Mapping)
+                else None
+            ),
+            independence=(
+                IndependenceRecord.from_dict(independence_raw)
+                if isinstance(independence_raw, Mapping)
+                else None
+            ),
+            monitors=tuple(
+                Monitor.from_dict(item) for item in _mapping_sequence(raw.get("monitors"))
+            ),
+            monitor_declared_unit_count=_as_int(
+                raw.get("monitor_declared_unit_count"),
+                field_name="monitor_declared_unit_count",
+            ),
+            correction=(
+                CorrectionRecord.from_dict(correction_raw)
+                if isinstance(correction_raw, Mapping)
                 else None
             ),
         )
@@ -421,8 +474,13 @@ def promotion_attestation_subject(
         if request.risk_acceptance is not None
         else None
     )
+    monitors = sorted(
+        (monitor.to_dict() for monitor in request.monitors),
+        key=lambda item: str(item["monitor_id"]),
+    )
     return {
         "candidate_digest": request.candidate_digest,
+        "lane": normalize_label(request.lane),
         "criticality_profile_digest": profile.content_digest,
         "disturbed_surface_ids": sorted(
             normalize_label(surface_id)
@@ -430,6 +488,12 @@ def promotion_attestation_subject(
             if normalize_label(surface_id)
         ),
         "gates": gates,
+        "monitors": monitors,
+        "monitor_declared_unit_count": request.monitor_declared_unit_count,
+        "independence": (
+            request.independence.to_dict() if request.independence is not None else None
+        ),
+        "correction": (request.correction.to_dict() if request.correction is not None else None),
         "implementer": normalize_label(request.implementer),
         "verifier": normalize_label(request.verifier),
         "approvers": sorted(normalize_label(approver) for approver in request.approvers),
@@ -493,6 +557,10 @@ class PromotionDecision:
     checklist: ChecklistReport
     criticality: CriticalityResolution
     surfaces: tuple[SurfaceDecision, ...]
+    lane: str = ""
+    independence: IndependenceReport | None = None
+    monitors: MonitorSetReport | None = None
+    correction: CorrectionReport | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -509,6 +577,12 @@ class PromotionDecision:
             "checklist": self.checklist.to_dict(),
             "criticality": self.criticality.to_dict(),
             "surfaces": [surface.to_dict() for surface in self.surfaces],
+            "lane": self.lane,
+            "independence": (
+                self.independence.to_dict() if self.independence is not None else None
+            ),
+            "monitors": self.monitors.to_dict() if self.monitors is not None else None,
+            "correction": self.correction.to_dict() if self.correction is not None else None,
         }
 
 
@@ -614,6 +688,7 @@ def decide_promotion(
                 hard_reasons.append(f"tool-policy-invalid:{issue}")
 
     provenance_issues: tuple[str, ...]
+    provenance_report: ProvenanceReport | None = None
     if request.provenance is None:
         provenance_issues = ("provenance-missing",)
         gap_all("provenance-missing")
@@ -649,6 +724,51 @@ def decide_promotion(
         for surface_id in negatives:
             negative(surface_id, failure)
     reports.extend(checklist_report.reports)
+
+    # Only references a provenance verifier already resolved against a trusted phase artifact may
+    # anchor a monitor or a structural-mode contract, so neither can vouch for its own authority.
+    # When provenance itself did not verify, that defect keeps its own disposition and a
+    # downstream reference to it is an absence rather than a second, harder failure.
+    resolved_references = _resolved_backreferences(provenance_report)
+    authority_available = provenance_report is not None and provenance_report.satisfied
+
+    independence_report = verify_independence(
+        request.independence,
+        resolved_backreferences=resolved_references,
+        authority_available=authority_available,
+    )
+    for gap in independence_report.gaps:
+        gap_all(gap)
+    hard_reasons.extend(f"independence-failure:{code}" for code in independence_report.failures)
+    hard_reasons.extend(
+        f"independence-integrity:{code}" for code in independence_report.integrity_issues
+    )
+    reports.extend(independence_report.reports)
+    reports.append(f"independence-tier-derived:{independence_report.derived_tier}")
+
+    monitor_report = verify_monitor_set(
+        request.monitors,
+        resolution.surfaces,
+        policy,
+        resolved_backreferences=resolved_references,
+        authority_available=authority_available,
+        declared_unit_count=request.monitor_declared_unit_count,
+    )
+    for surface_id, code in monitor_report.surface_gaps:
+        if surface_id in gaps:
+            gaps[surface_id].append(code)
+        else:
+            gap_all(code)
+    hard_reasons.extend(f"monitor-integrity:{code}" for code in monitor_report.integrity_issues)
+    reports.extend(monitor_report.reports)
+
+    correction_report = _evaluate_lane(
+        request,
+        gap_all=gap_all,
+        hard_reasons=hard_reasons,
+        gate_reasons=gate_reasons,
+        reports=reports,
+    )
 
     observations: dict[str, SurfaceObservation] = {}
     for captured_observation in request.observations:
@@ -838,6 +958,33 @@ def decide_promotion(
     if approver_count < required_approvers:
         hard_reasons.append(f"insufficient-approvers:{approver_count}/{required_approvers}")
 
+    critical_ids = {
+        surface_id
+        for surface_id, surface in surface_by_id.items()
+        if surface.effective_criticality == CRITICALITY_CRITICAL
+    }
+    if critical_ids:
+        # The accountable-human seat on a hazard surface is filled from a decided roster. An
+        # undeclared roster means nobody decided who may ratify, which is an absence rather than
+        # a permission; an approver outside a declared roster is an authority failure.
+        roster: set[str] = set()
+        for delegate in sorted(profile.critical_ratification_delegates):
+            resolved_delegate = policy.resolve_human(delegate)
+            if resolved_delegate is None:
+                hard_reasons.append(
+                    f"critical-delegate-not-enrolled-human:{normalize_label(delegate)}"
+                )
+                continue
+            roster.add(resolved_delegate)
+        if not roster:
+            for surface_id in sorted(critical_ids):
+                gaps[surface_id].append("critical-ratification-delegates-undeclared")
+        else:
+            hard_reasons.extend(
+                f"approver-outside-delegate-roster:{approver}"
+                for approver in sorted(distinct_approvers - roster)
+            )
+
     for surface_id, findings in negatives.items():
         hard_reasons.extend(f"negative-evidence:{surface_id}:{finding}" for finding in findings)
 
@@ -846,11 +993,7 @@ def decide_promotion(
         for surface_id, surface in surface_by_id.items()
         if surface.effective_criticality == CRITICALITY_CRITICAL and gaps[surface_id]
     }
-    critical_surface_ids = {
-        surface_id
-        for surface_id, surface in surface_by_id.items()
-        if surface.effective_criticality == CRITICALITY_CRITICAL
-    }
+    critical_surface_ids = critical_ids
     standard_gap_ids = {
         surface_id
         for surface_id, surface in surface_by_id.items()
@@ -961,7 +1104,62 @@ def decide_promotion(
         checklist=checklist_report,
         criticality=resolution,
         surfaces=surface_decisions,
+        lane=normalize_label(request.lane),
+        independence=independence_report,
+        monitors=monitor_report,
+        correction=correction_report,
     )
+
+
+def _resolved_backreferences(
+    report: ProvenanceReport | None,
+) -> tuple[IntentBackreference, ...]:
+    """Rebuild the exact references a provenance verifier resolved against trusted artifacts."""
+
+    if report is None:
+        return ()
+    return tuple(
+        IntentBackreference(
+            artifact_id=claim.artifact_id,
+            artifact_digest=claim.artifact_digest,
+            item_id=claim.item_id,
+            intent_digest=claim.intent_digest,
+        )
+        for claim in report.resolved_claims
+    )
+
+
+def _evaluate_lane(
+    request: PromotionRequest,
+    *,
+    gap_all: Callable[[str], None],
+    hard_reasons: list[str],
+    gate_reasons: list[str],
+    reports: list[str],
+) -> CorrectionReport | None:
+    """Apply the lane's own controls, and refuse to guess which lane produced the candidate."""
+
+    lane = normalize_label(request.lane)
+    if not lane:
+        gap_all("lane-undeclared")
+    elif lane not in LANES:
+        hard_reasons.append(f"lane-unknown:{lane}")
+
+    if lane != LANE_CORRECTION:
+        if request.correction is not None:
+            reports.append("correction-record-outside-correction-lane")
+        return None
+
+    correction_report = verify_correction(request.correction)
+    for gap in correction_report.gaps:
+        gap_all(f"correction-gap:{gap}")
+    hard_reasons.extend(f"correction-failure:{code}" for code in correction_report.failures)
+    hard_reasons.extend(
+        f"correction-integrity:{code}" for code in correction_report.integrity_issues
+    )
+    gate_reasons.extend(f"correction-review:{code}" for code in correction_report.gate_reasons)
+    reports.extend(f"correction:{code}" for code in correction_report.reports)
+    return correction_report
 
 
 def _validate_quarantine(

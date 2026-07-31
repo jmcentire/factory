@@ -163,11 +163,20 @@ class CriticalityProfile:
 
     A target may raise the critical distinct-human approval floor but cannot lower the
     doctrine floor of two.
+
+    ``critical_ratification_delegates`` is the named roster that fills the accountable-human seat
+    on a Critical surface. The principle it implements — an agent never occupies that seat — was
+    adopted with an explicit availability cost: a hazard-surface promotion waits on *any* named
+    delegate rather than on one individual, because a rule that blocks on one person's calendar is
+    a rule that gets suspended the first time it is inconvenient. An empty roster is not a
+    permissive default; it means nobody decided who may ratify, and the promotion layer disposes
+    of that as an evidence gap by class.
     """
 
     surfaces: tuple[SurfaceControl, ...] = ()
     required_gate_ids: frozenset[str] = frozenset()
     critical_min_approvers: int = CRITICAL_APPROVER_FLOOR
+    critical_ratification_delegates: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -175,6 +184,15 @@ class CriticalityProfile:
             "required_gate_ids",
             frozenset(
                 normalize_label(item) for item in self.required_gate_ids if normalize_label(item)
+            ),
+        )
+        object.__setattr__(
+            self,
+            "critical_ratification_delegates",
+            frozenset(
+                item.strip()
+                for item in self.critical_ratification_delegates
+                if item.strip()
             ),
         )
 
@@ -194,6 +212,9 @@ class CriticalityProfile:
                 field_name="critical_min_approvers",
                 default=CRITICAL_APPROVER_FLOOR,
             ),
+            critical_ratification_delegates=frozenset(
+                _as_str_tuple(raw.get("critical_ratification_delegates"))
+            ),
         )
 
     @property
@@ -205,6 +226,7 @@ class CriticalityProfile:
             "surfaces": [surface.to_dict() for surface in self.surfaces],
             "required_gate_ids": sorted(self.required_gate_ids),
             "critical_min_approvers": self.critical_min_approvers,
+            "critical_ratification_delegates": sorted(self.critical_ratification_delegates),
         }
 
     @property

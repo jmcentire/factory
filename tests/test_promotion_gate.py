@@ -8,6 +8,20 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from factory_core.correction import (
+    BASELINE_RESULT_FAILED,
+    BASELINE_RESULT_PASSED,
+    CONTROL_GREEN_NOW,
+    CONTROL_RED_NOW,
+    FAILURE_RELATION_DEFECT,
+    FAILURE_RELATION_UNRELATED,
+    LANE_CAPABILITY,
+    LANE_CORRECTION,
+    REPRODUCTION_REPRODUCED,
+    ControlObservation,
+    CorrectionRecord,
+    ReproductionRecord,
+)
 from factory_core.criticality import (
     CRITICAL_APPROVER_FLOOR,
     CRITICALITY_COSMETIC,
@@ -16,7 +30,27 @@ from factory_core.criticality import (
     CriticalityProfile,
     SurfaceControl,
 )
+from factory_core.independence import (
+    INDEPENDENCE_MODERATE,
+    INDEPENDENCE_STRONGER,
+    INDEPENDENCE_STRONGEST,
+    INDEPENDENCE_WEAKEST,
+    ROLE_CODER,
+    ROLE_TESTER,
+    ROLE_VALIDATOR,
+    STRUCTURAL_MODE_ISOLATED,
+    AgentIdentity,
+    IndependenceRecord,
+    StructuralModeRecord,
+)
 from factory_core.manifest import SegregationPolicy, digest_obj
+from factory_core.monitors import (
+    MONITOR_AUTHORSHIP_GENERATED,
+    MONITOR_AUTHORSHIP_HUMAN,
+    MONITOR_DERIVATION_IMPLEMENTATION,
+    MONITOR_DERIVATION_SPECIFICATION,
+    Monitor,
+)
 from factory_core.promotion import (
     DISPOSITION_BLOCK,
     DISPOSITION_GATE,
@@ -35,6 +69,7 @@ from factory_core.promotion import (
     promotion_attestation_subject,
 )
 from factory_core.provenance import (
+    CLAIM_MONITOR,
     CLAIM_REQUIREMENT,
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
@@ -102,7 +137,11 @@ def _control(
     )
 
 
-def _profile(*, surfaces: tuple[SurfaceControl, ...] | None = None) -> CriticalityProfile:
+def _profile(
+    *,
+    surfaces: tuple[SurfaceControl, ...] | None = None,
+    delegates: frozenset[str] = frozenset({"alice", "bob", "carol"}),
+) -> CriticalityProfile:
     return CriticalityProfile(
         surfaces=surfaces
         or (
@@ -111,6 +150,7 @@ def _profile(*, surfaces: tuple[SurfaceControl, ...] | None = None) -> Criticali
             _control("cosmetic-surface", CRITICALITY_COSMETIC),
         ),
         required_gate_ids=frozenset({"tests", "build"}),
+        critical_ratification_delegates=delegates,
     )
 
 
@@ -201,12 +241,139 @@ def _good_provenance() -> ProvenanceBundle:
             intent_digest=item.intent_digest,
         ),
     )
+    # A monitor is an assertion about production and resolves on the same terms as a test
+    # assertion, so the phase-3 criterion it watches is a claim in the same bundle.
+    monitor_claim = ProvenanceClaim(
+        claim_id="monitor-1",
+        kind=CLAIM_MONITOR,
+        backreference=artifacts[2].backreference(artifacts[2].items[0]),
+    )
     return ProvenanceBundle(
         artifacts=artifacts,
-        claims=(claim,),
+        claims=(claim, monitor_claim),
         trusted_artifact_digests={
             artifact.artifact_id: artifact.content_digest for artifact in artifacts
         },
+    )
+
+
+def _monitor_backreference(provenance: ProvenanceBundle | None = None) -> IntentBackreference:
+    authority = provenance or _good_provenance()
+    operations = authority.artifacts[2]
+    return operations.backreference(operations.items[0])
+
+
+def _isolated_structural_mode() -> StructuralModeRecord:
+    record = StructuralModeRecord(
+        mode=STRUCTURAL_MODE_ISOLATED,
+        decision_package_note=(
+            "No signed interface contract anchored the oracle, so branch depth was not purchased."
+        ),
+    )
+    return replace(record, mutation_evidence=_evidence(record.authority_body()))
+
+
+def _independence(
+    *,
+    coder_family: str = "family-a",
+    tester_family: str = "family-b",
+    claimed_tier: str = INDEPENDENCE_STRONGER,
+    shared_context: bool = False,
+    channel_open: bool = False,
+    mechanism_ids: tuple[str, ...] = (),
+    structural: StructuralModeRecord | None = None,
+) -> IndependenceRecord:
+    return IndependenceRecord(
+        agents=(
+            AgentIdentity(
+                role=ROLE_CODER,
+                model_family=coder_family,
+                model_version="2026-07",
+                directive_version="coder-directive-3",
+            ),
+            AgentIdentity(
+                role=ROLE_TESTER,
+                model_family=tester_family,
+                model_version="2026-07",
+                directive_version="tester-directive-3",
+            ),
+            AgentIdentity(
+                role=ROLE_VALIDATOR,
+                model_family="family-c",
+                model_version="2026-07",
+                directive_version="validator-directive-3",
+            ),
+        ),
+        shared_context=shared_context,
+        channel_open=channel_open,
+        mechanism_ids=mechanism_ids,
+        claimed_tier=claimed_tier,
+        structural_mode=structural if structural is not None else _isolated_structural_mode(),
+    )
+
+
+def _monitor(
+    surface_id: str,
+    *,
+    derivation: str = MONITOR_DERIVATION_SPECIFICATION,
+    authorship: str = MONITOR_AUTHORSHIP_HUMAN,
+    author: str = "carol",
+    backreference: IntentBackreference | None = None,
+    provenance: ProvenanceBundle | None = None,
+    notifies_human: bool = True,
+    actionable_conclusion: str = "Page the surface owner with the unmet criterion.",
+) -> Monitor:
+    return Monitor(
+        monitor_id=f"monitor-{surface_id}",
+        surface_id=surface_id,
+        derivation=derivation,
+        authorship=authorship,
+        author_identity=author,
+        backreference=backreference or _monitor_backreference(provenance),
+        actionable_conclusion=actionable_conclusion,
+        notifies_human=notifies_human,
+    )
+
+
+def _reproduction(*, defect_id: str = "defect-1") -> ReproductionRecord:
+    record = ReproductionRecord(
+        defect_id=defect_id,
+        result=REPRODUCTION_REPRODUCED,
+        environment_id="ephemeral-1",
+        disposable_environment=True,
+        recorded_before_repair=True,
+    )
+    return replace(record, evidence=_evidence(record.authority_body()))
+
+
+def _correction(
+    *,
+    defect_id: str = "defect-1",
+    controls: tuple[ControlObservation, ...] | None = None,
+    reproduction: ReproductionRecord | None = None,
+    baseline_available: bool = True,
+) -> CorrectionRecord:
+    return CorrectionRecord(
+        defect_id=defect_id,
+        baseline_available=baseline_available,
+        controls=controls
+        if controls is not None
+        else (
+            ControlObservation(
+                test_id="forces-the-defect",
+                declared_role=CONTROL_RED_NOW,
+                baseline_result=BASELINE_RESULT_FAILED,
+                failure_relation=FAILURE_RELATION_DEFECT,
+            ),
+            ControlObservation(
+                test_id="guards-unrelated-behavior",
+                declared_role=CONTROL_GREEN_NOW,
+                baseline_result=BASELINE_RESULT_PASSED,
+            ),
+        ),
+        reproduction=reproduction
+        if reproduction is not None
+        else _reproduction(defect_id=defect_id),
     )
 
 
@@ -362,8 +529,10 @@ def _request(
     selected_profile = profile or _profile()
     evidence_overridden = "evidence" in overrides
     tool_policy_overridden = "tool_policy" in overrides
+    monitors_overridden = "monitors" in overrides
     values: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
+        "lane": LANE_CAPABILITY,
         "disturbed_surface_ids": ("standard-surface",),
         "observations": (_observation("standard-surface"),),
         "gates": _passing_gates(),
@@ -375,12 +544,19 @@ def _request(
         "evidence": None,
         "provenance": _good_provenance(),
         "tool_policy": None,
+        "independence": _independence(),
     }
     values.update(overrides)
+    authority = values["provenance"]
+    bundle = authority if isinstance(authority, ProvenanceBundle) else None
     if not tool_policy_overridden:
-        authority = values["provenance"]
-        values["tool_policy"] = _good_tool_policy(
-            authority if isinstance(authority, ProvenanceBundle) else None
+        values["tool_policy"] = _good_tool_policy(bundle)
+    if not monitors_overridden:
+        # The monitor set covers every surface the change disturbs; individual tests override it
+        # to exercise a specific monitor defect.
+        values["monitors"] = tuple(
+            _monitor(surface_id, provenance=bundle)
+            for surface_id in values["disturbed_surface_ids"]
         )
     request = PromotionRequest(**values)
     if evidence_overridden:
@@ -1009,6 +1185,7 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
                 }
             ],
             "required_gate_ids": ["tests", "build"],
+            "critical_ratification_delegates": ["alice", "bob", "carol"],
         }
     )
     review = _review("critical-surface", profile=profile)
@@ -1017,6 +1194,10 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     tool_policy = _good_tool_policy(provenance)
     raw_request: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
+        "lane": LANE_CAPABILITY,
+        "independence": _independence().to_dict(),
+        "monitors": [_monitor("critical-surface", provenance=provenance).to_dict()],
+        "monitor_declared_unit_count": 75,
         "disturbed_surface_ids": ["critical-surface"],
         "observations": [
             {
@@ -1069,6 +1250,331 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     assert serialized["surfaces"][0]["flake_count"] == 0
     assert serialized["surfaces"][0]["automatic_retry_count"] == 0
     assert serialized["criticality"]["surfaces"][0]["effective_criticality"] == "critical"
+    assert serialized["lane"] == LANE_CAPABILITY
+    assert serialized["independence"]["derived_tier"] == INDEPENDENCE_STRONGER
+    assert serialized["independence"]["claimed_tier"] == INDEPENDENCE_STRONGER
+    assert serialized["monitors"]["monitor_ids"] == ["monitor-critical-surface"]
+    # Density is carried into the record and compared against nothing.
+    assert serialized["monitors"]["density"] == 1 / 75
+    assert serialized["correction"] is None
+
+
+def test_an_undeclared_lane_is_a_class_disposed_gap_and_an_unknown_lane_blocks() -> None:
+    undeclared = decide_promotion(_request(lane=""), _roster(), _profile())
+    unknown = decide_promotion(_request(lane="hotfix"), _roster(), _profile())
+    cosmetic = decide_promotion(
+        _request(
+            lane="",
+            disturbed_surface_ids=("cosmetic-surface",),
+            observations=(_observation("cosmetic-surface"),),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert undeclared.disposition == DISPOSITION_GATE
+    assert "standard-gap-requires-risk-acceptance:standard-surface" in undeclared.reasons
+    assert "lane-undeclared" in undeclared.surfaces[0].gaps
+    assert unknown.disposition == DISPOSITION_BLOCK
+    assert "lane-unknown:hotfix" in unknown.reasons
+    assert cosmetic.allowed is True
+
+
+def test_the_correction_lane_carries_both_controls_and_a_reproduction() -> None:
+    complete = decide_promotion(
+        _request(lane=LANE_CORRECTION, correction=_correction()),
+        _roster(),
+        _profile(),
+    )
+    without_record = decide_promotion(
+        _request(lane=LANE_CORRECTION, correction=None),
+        _roster(),
+        _profile(),
+    )
+    without_reproduction = decide_promotion(
+        _request(
+            lane=LANE_CORRECTION,
+            correction=CorrectionRecord(
+                defect_id="defect-1",
+                baseline_available=True,
+                controls=_correction().controls,
+            ),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert complete.allowed is True, complete.reasons
+    assert complete.correction is not None and complete.correction.satisfied is True
+    assert "correction-gap:correction-record-missing" in without_record.surfaces[0].gaps
+    assert "correction-gap:reproduction-missing" in without_reproduction.surfaces[0].gaps
+
+
+def test_a_red_guard_gates_the_correction_promotion_for_a_human() -> None:
+    red_guard = ControlObservation(
+        test_id="guards-unrelated-behavior",
+        declared_role=CONTROL_GREEN_NOW,
+        baseline_result=BASELINE_RESULT_FAILED,
+        failure_relation=FAILURE_RELATION_UNRELATED,
+    )
+    forcing = ControlObservation(
+        test_id="forces-the-defect",
+        declared_role=CONTROL_RED_NOW,
+        baseline_result=BASELINE_RESULT_FAILED,
+        failure_relation=FAILURE_RELATION_DEFECT,
+    )
+
+    decision = decide_promotion(
+        _request(
+            lane=LANE_CORRECTION,
+            correction=_correction(controls=(forcing, red_guard)),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == DISPOSITION_GATE
+    assert (
+        "correction-review:suspected-over-constraint:guards-unrelated-behavior"
+        in decision.reasons
+    )
+
+
+def test_a_repair_whose_reproduction_was_recorded_after_the_fact_blocks() -> None:
+    late = replace(_reproduction(), recorded_before_repair=False)
+    late = replace(late, evidence=_evidence(late.authority_body()))
+
+    decision = decide_promotion(
+        _request(lane=LANE_CORRECTION, correction=_correction(reproduction=late)),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "correction-failure:reproduction-not-recorded-before-repair" in decision.reasons
+
+
+def test_a_correction_record_outside_the_correction_lane_is_reported() -> None:
+    decision = decide_promotion(
+        _request(lane=LANE_CAPABILITY, correction=_correction()),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.allowed is True
+    assert "correction-record-outside-correction-lane" in decision.reports
+    assert decision.correction is None
+
+
+def test_an_unresolved_monitor_backreference_blocks_even_a_cosmetic_surface() -> None:
+    provenance = _good_provenance()
+    fabricated = _monitor(
+        "cosmetic-surface",
+        provenance=provenance,
+        backreference=replace(_monitor_backreference(provenance), item_id="absent"),
+    )
+
+    decision = decide_promotion(
+        _request(
+            provenance=provenance,
+            disturbed_surface_ids=("cosmetic-surface",),
+            observations=(_observation("cosmetic-surface"),),
+            monitors=(fabricated,),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert (
+        "monitor-integrity:monitor-backreference-unresolved:monitor-cosmetic-surface"
+        in decision.reasons
+    )
+
+
+def test_a_diff_derived_monitor_blocks_and_an_uncovered_critical_surface_has_no_waiver() -> None:
+    profile = _profile()
+    diff_monitor = _monitor("standard-surface", derivation=MONITOR_DERIVATION_IMPLEMENTATION)
+    diff_derived = decide_promotion(
+        _request(monitors=(diff_monitor,)),
+        _roster(),
+        profile,
+    )
+    generated_on_critical = decide_promotion(
+        _critical_request(
+            profile=profile,
+            monitors=(_monitor("critical-surface", authorship=MONITOR_AUTHORSHIP_GENERATED),),
+        ),
+        _roster(),
+        profile,
+    )
+    uncovered = decide_promotion(
+        _critical_request(profile=profile, monitors=()),
+        _roster(),
+        profile,
+    )
+
+    assert "monitor-integrity:monitor-diff-derived:monitor-standard-surface" in diff_derived.reasons
+    assert generated_on_critical.disposition == DISPOSITION_BLOCK
+    assert (
+        "critical-gap:critical-surface:critical-monitor-not-human-authored:monitor-critical-surface"
+        in generated_on_critical.reasons
+    )
+    assert "critical-gap:critical-surface:monitor-coverage-missing" in uncovered.reasons
+
+
+def test_monitor_density_is_recorded_without_a_threshold() -> None:
+    sparse = decide_promotion(
+        _request(monitor_declared_unit_count=10_000),
+        _roster(),
+        _profile(),
+    )
+
+    assert sparse.allowed is True
+    assert sparse.monitors is not None and sparse.monitors.density == 1 / 10_000
+    assert "monitor-density-recorded:1/10000" in sparse.reports
+
+
+def test_an_overclaimed_independence_tier_blocks_every_class() -> None:
+    decision = decide_promotion(
+        _request(
+            disturbed_surface_ids=("cosmetic-surface",),
+            observations=(_observation("cosmetic-surface"),),
+            independence=_independence(
+                coder_family="family-a",
+                tester_family="family-a",
+                claimed_tier=INDEPENDENCE_STRONGER,
+            ),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert (
+        f"independence-integrity:independence-tier-overclaimed:"
+        f"{INDEPENDENCE_STRONGER}:{INDEPENDENCE_MODERATE}" in decision.reasons
+    )
+
+
+def test_an_unrecorded_independence_arrangement_is_a_gap_and_an_open_channel_blocks() -> None:
+    unrecorded = decide_promotion(_request(independence=None), _roster(), _profile())
+    channel = decide_promotion(
+        _request(
+            independence=_independence(channel_open=True, claimed_tier=INDEPENDENCE_WEAKEST),
+        ),
+        _roster(),
+        _profile(),
+    )
+    mechanical = decide_promotion(
+        _request(
+            independence=_independence(
+                mechanism_ids=("schema-validator",),
+                claimed_tier=INDEPENDENCE_STRONGEST,
+            ),
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert "independence-record-missing" in unrecorded.surfaces[0].gaps
+    assert "independence-failure:independence-coder-tester-channel-open" in channel.reasons
+    assert mechanical.allowed is True
+    assert f"independence-tier-derived:{INDEPENDENCE_STRONGEST}" in mechanical.reports
+
+
+def test_the_verdict_records_the_derived_tier_and_every_agent_version() -> None:
+    incomplete = decide_promotion(
+        _request(
+            independence=replace(
+                _independence(),
+                agents=(
+                    AgentIdentity(role=ROLE_CODER, model_family="family-a"),
+                    AgentIdentity(
+                        role=ROLE_TESTER,
+                        model_family="family-b",
+                        model_version="2026-07",
+                        directive_version="tester-directive-3",
+                    ),
+                    AgentIdentity(
+                        role=ROLE_VALIDATOR,
+                        model_family="family-c",
+                        model_version="2026-07",
+                        directive_version="validator-directive-3",
+                    ),
+                ),
+            )
+        ),
+        _roster(),
+        _profile(),
+    )
+
+    assert "independence-model-version-unrecorded:coder" in incomplete.surfaces[0].gaps
+    assert "independence-directive-version-unrecorded:coder" in incomplete.surfaces[0].gaps
+    assert incomplete.independence is not None
+    assert incomplete.independence.derived_tier == INDEPENDENCE_STRONGER
+
+
+def test_critical_promotion_requires_a_declared_delegate_roster() -> None:
+    undeclared = _profile(delegates=frozenset())
+    unenrolled = _profile(delegates=frozenset({"triage-bot"}))
+    narrow = _profile(delegates=frozenset({"alice"}))
+
+    without_roster = decide_promotion(
+        _critical_request(profile=undeclared),
+        _roster(),
+        undeclared,
+    )
+    agent_delegate = decide_promotion(
+        _critical_request(profile=unenrolled),
+        _roster(),
+        unenrolled,
+    )
+    outside_roster = decide_promotion(
+        _critical_request(profile=narrow),
+        _roster(),
+        narrow,
+    )
+
+    assert (
+        "critical-gap:critical-surface:critical-ratification-delegates-undeclared"
+        in without_roster.reasons
+    )
+    assert "critical-delegate-not-enrolled-human:triage-bot" in agent_delegate.reasons
+    # Bob approved but is not on the roster: the seat is filled from the decided list.
+    assert "approver-outside-delegate-roster:bob" in outside_roster.reasons
+
+
+def test_a_standard_change_needs_no_delegate_roster() -> None:
+    undeclared = _profile(delegates=frozenset())
+
+    decision = decide_promotion(_request(profile=undeclared), _roster(), undeclared)
+
+    assert decision.allowed is True, decision.reasons
+
+
+def test_the_attestation_binds_the_lane_monitors_independence_and_correction() -> None:
+    profile = _profile()
+    signed = _request(lane=LANE_CORRECTION, correction=_correction(), profile=profile)
+
+    swapped_monitors = decide_promotion(replace(signed, monitors=()), _roster(), profile)
+    swapped_lane = decide_promotion(replace(signed, lane=LANE_CAPABILITY), _roster(), profile)
+    swapped_independence = decide_promotion(
+        replace(signed, independence=_independence(claimed_tier=INDEPENDENCE_MODERATE)),
+        _roster(),
+        profile,
+    )
+    swapped_correction = decide_promotion(replace(signed, correction=None), _roster(), profile)
+
+    for decision in (
+        swapped_monitors,
+        swapped_lane,
+        swapped_independence,
+        swapped_correction,
+    ):
+        assert "attestation-subject-mismatch" in decision.reasons
+        assert decision.disposition == DISPOSITION_BLOCK
 
 
 def _runs(text: str) -> set[str]:

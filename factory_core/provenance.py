@@ -68,6 +68,10 @@ CLAIM_REQUIREMENT = "requirement"
 CLAIM_CONSTRAINT = "constraint"
 CLAIM_TASK = "task"
 CLAIM_TEST_ASSERTION = "test-assertion"
+# A production monitor is an assertion about the running system, so it resolves here on exactly
+# the same terms as a test assertion. A monitor whose backreference does not resolve is an
+# unauthorized assertion about production, not merely an undocumented one.
+CLAIM_MONITOR = "monitor"
 
 SUPPORTED_CLAIM_KINDS: frozenset[str] = frozenset(
     {
@@ -75,6 +79,7 @@ SUPPORTED_CLAIM_KINDS: frozenset[str] = frozenset(
         CLAIM_CONSTRAINT,
         CLAIM_TASK,
         CLAIM_TEST_ASSERTION,
+        CLAIM_MONITOR,
     }
 )
 

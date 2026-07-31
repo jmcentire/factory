@@ -75,6 +75,16 @@ EXPECTED_INVARIANT_ARTIFACT_ROWS: tuple[str, ...] = (
 )
 EXPECTED_TOOL_TIER_ROWS: tuple[str, ...] = ("Allowed", "Sign-off required", "Verboten")
 
+EXPECTED_INDEPENDENCE_TIER_ROWS: tuple[str, ...] = (
+    "Weakest",
+    "Weak",
+    "Moderate",
+    "Stronger",
+    "Strongest",
+)
+
+EXPECTED_CONTROL_ROWS: tuple[str, ...] = ("Negative", "Positive")
+
 EXPECTED_NON_NEGOTIABLES: tuple[str, ...] = (
     "Fail closed on the hazards",
     "Single authoritative owner per fact",
@@ -347,6 +357,95 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     ):
         if required not in existing_test:
             errors.append(f"existing-test-disposition-missing:{required}")
+
+    # The errata's corrections and additions are structural, not decorative: each one closes a
+    # failing leg that the prose previously left to inference.
+    controls = _section_lines(canonical, 3, "The two controls")
+    control_rows = _table_first_column(controls)
+    if control_rows != EXPECTED_CONTROL_ROWS:
+        errors.append(f"correction-control-map-mismatch:{control_rows!r}")
+    controls_text = _normalized("\n".join(controls))
+    for required in (
+        "red-now",
+        "green-now",
+        "A green guard that comes back red is not a forcing test.",
+        "suspected over-constraint",
+        "The recognition check runs at test-writing time.",
+    ):
+        if required not in controls_text:
+            errors.append(f"control-rule-missing:{required}")
+
+    reproduction = _normalized(
+        "\n".join(
+            _section_lines(canonical, 3, "Reproduction is the correction flow's negative control")
+        )
+    )
+    for required in (
+        "A defect is reproduced in a disposable environment before any repair is written",
+        "that is a stated condition of the lane and it gates",
+    ):
+        if required not in reproduction:
+            errors.append(f"reproduction-rule-missing:{required}")
+
+    self_reference = _normalized(
+        "\n".join(
+            _section_lines(
+                canonical,
+                3,
+                "The Validator judges against a spec it helped write",
+            )
+        )
+    )
+    if "This is a real limitation rather than a clean separation." not in self_reference:
+        errors.append("validator-self-reference-limitation-missing")
+
+    independence = _section_lines(canonical, 3, "Independence is graded, not binary")
+    independence_rows = _table_first_column(independence)
+    if independence_rows != EXPECTED_INDEPENDENCE_TIER_ROWS:
+        errors.append(f"independence-tier-map-mismatch:{independence_rows!r}")
+    independence_text = _normalized("\n".join(independence))
+    if "The tier is recorded in the manifest" not in independence_text:
+        errors.append("independence-tier-recording-rule-missing")
+
+    monitors = _normalized(
+        "\n".join(_section_lines(canonical, 3, "Monitors are spec-derived, not diff-derived"))
+    )
+    for required in (
+        "A monitor whose backreference does not resolve is an unauthorized assertion about "
+        "production.",
+        "Monitor density is a diagnostic, never a target.",
+    ):
+        if required not in monitors:
+            errors.append(f"monitor-rule-missing:{required}")
+
+    triage = _normalized(
+        "\n".join(_section_lines(canonical, 3, "The triage agent may not silence the monitor"))
+    )
+    for required in (
+        "An agent that evaluates an alert may not delete or weaken the monitor that produced it.",
+        "State lives on the monitor rather than in the agent.",
+    ):
+        if required not in triage:
+            errors.append(f"triage-rule-missing:{required}")
+
+    notification = _normalized(
+        "\n".join(_section_lines(canonical, 3, "Detect everything, notify selectively"))
+    )
+    if "Every alert that reaches a human means something." not in notification:
+        errors.append("notification-earned-rule-missing")
+
+    criticality_monitors = _normalized("\n".join(criticality_section))
+    if "Monitor authorship is class-scoped." not in criticality_monitors:
+        errors.append("class-scoped-monitor-authorship-missing")
+
+    evidence_plane = _normalized("\n".join(_section_lines(canonical, 2, "12. The evidence plane")))
+    for required in (
+        "The model and version of every agent that produced or judged the change",
+        "the **independence tier** of the arrangement they ran in",
+        "working coordination between the roles is ephemeral and never committed",
+    ):
+        if required not in evidence_plane:
+            errors.append(f"evidence-plane-record-missing:{required}")
 
     tools = _section_lines(canonical, 3, "Tools and integrations")
     tool_rows = _table_first_column(tools)
