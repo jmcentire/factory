@@ -30,6 +30,12 @@ construction — the purity guard will (and must) reject it.
   absence-vs-integrity issue classification, including whole-artifact version binding.
 - `factory_core/test_disposition.py` — signed-supersession / regression / ambiguity classifier
   for formerly passing tests.
+- `factory_core/independence.py` — the five-tier independence ladder derived from the recorded
+  arrangement, per-agent model/directive versions, and the structural-depth trade.
+- `factory_core/monitors.py` / `triage.py` — spec-derived monitors with resolvable authority and
+  class-scoped authorship, and triage that cannot silence the monitor it evaluated.
+- `factory_core/correction.py` — red-now/green-now controls, the suspected-over-constraint rule,
+  and reproduction before repair.
 - `factory_core/tool_policy.py` — signed Allowed / Sign-off-required / Verboten run-policy and
   scoped pre-execution decision.
 - `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
@@ -82,7 +88,22 @@ make test-tessera   # real signing + runtime-through-preview proof
   external integration obligation.
 - **Surface criticality** — human-decided Critical/Standard/Cosmetic per surface; declared side
   effects inherit the highest class; unclassified is Critical; a Critical gap has no waiver and
-  Critical evidence has zero flake/retry tolerance.
+  Critical evidence has zero flake/retry tolerance. The accountable-human seat on a Critical
+  surface is filled from a named delegate roster; an undeclared roster is a gap, not a
+  permission.
+- **Graded independence** — the tier is *derived* from the recorded arrangement (shared context,
+  open channel, model families, mechanical backing), never asserted; every agent that produced
+  or judged the change records its model, version, and directive version; a claim above the
+  derived tier blocks; an open Coder↔Tester channel is negative evidence for every class.
+- **Spec-derived monitors** — every monitor resolves a backreference to the criterion or
+  invariant it watches (unresolvable is an unauthorized assertion about production), a
+  diff-derived monitor is a change detector and cannot satisfy the obligation, Critical surfaces
+  carry human-authored monitors resolved against the enrolled roster, and density is recorded but
+  never gated. An agent evaluating an alert may not delete, weaken, or silence the monitor that
+  produced it — that is a human-ratified specification defect.
+- **Correction controls** — red-now/green-now classified per test; a green guard that comes back
+  red is a *suspected over-constraint* that stops for a human and is never reclassified as
+  forcing; a defect is reproduced in a disposable environment before any repair is written.
 - **Doctrine parity** — active docs retain exactly Validator/Coder/Tester, the three phases, all
   eight non-negotiables, and the structural criticality/determinism policy; historical records
   are not rewritten.
