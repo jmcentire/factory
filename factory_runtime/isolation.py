@@ -54,6 +54,31 @@ def _path_filter(path: Path) -> str:
     return f"({operator} {_scheme_string(str(resolved))})"
 
 
+def _interpreter_read_paths() -> tuple[Path, ...]:
+    """Return the paths the running interpreter must read to start.
+
+    Factory currently runs every lane command through ``sys.executable``. Under a virtualenv,
+    CPython needs both the environment at ``sys.prefix`` and the installation at
+    ``sys.base_prefix``. Deriving those locations keeps the deny-default profile portable across
+    Homebrew, python.org, virtualenv, and hosted-runner layouts without granting the filesystem
+    root. These read-only locations are part of the host's trusted computing base: an actor that
+    can replace the interpreter already controls Factory before Seatbelt starts. They are
+    resolved by the parent process, before any sandboxed lane runs.
+    """
+
+    candidates = (
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(sys.executable).resolve().parent,
+    )
+    seen: dict[Path, None] = {}
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.parent != resolved and resolved.is_dir():
+            seen.setdefault(resolved, None)
+    return tuple(seen)
+
+
 class MacOSSandbox:
     """Deny-by-default macOS Seatbelt wrapper with explicit filesystem grants."""
 
@@ -69,6 +94,9 @@ class MacOSSandbox:
             raise IsolationError("the macOS sandbox backend is unavailable on this platform")
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
             raise IsolationError(f"sandbox executable is unavailable: {self.executable}")
+        self.interpreter_read_paths = _interpreter_read_paths()
+        if not self.interpreter_read_paths:
+            raise IsolationError("the trusted interpreter has no safe readable path grant")
 
     def run(
         self,
@@ -230,7 +258,8 @@ print(json.dumps(result, sort_keys=True))
         writable_paths: Sequence[Path],
     ) -> str:
         read_filters = "\n    ".join(
-            _path_filter(path) for path in (*readable_paths, *writable_paths)
+            _path_filter(path)
+            for path in (*self.interpreter_read_paths, *readable_paths, *writable_paths)
         )
         write_filters = "\n    ".join(_path_filter(path) for path in writable_paths)
         return f"""(version 1)

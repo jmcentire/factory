@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from factory_runtime.isolation import IsolationError, MacOSSandbox
+from factory_runtime.isolation import (
+    IsolationError,
+    MacOSSandbox,
+    _interpreter_read_paths,
+)
 from factory_runtime.lanes import IsolatedBuildLoop, temporary_build_loop_root
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
@@ -52,6 +56,27 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
         "passed": True,
         "spec_digest": coder_evidence["spec_digest"],
     }
+
+
+def test_interpreter_read_paths_cover_the_running_interpreter() -> None:
+    granted = _interpreter_read_paths()
+
+    assert granted, "an interpreter with no readable grant cannot start inside the sandbox"
+    for required in (Path(sys.prefix), Path(sys.base_prefix)):
+        resolved = required.resolve()
+        assert any(
+            resolved == path or resolved.is_relative_to(path) for path in granted
+        ), f"{required} is not covered by {granted}"
+    assert all(path.parent != path for path in granted)
+
+
+def test_interpreter_read_paths_cover_pyvenv_cfg_under_a_venv() -> None:
+    if sys.prefix == sys.base_prefix:
+        pytest.skip("not running under a virtualenv")
+
+    marker = Path(sys.prefix) / "pyvenv.cfg"
+    assert marker.is_file()
+    assert any(marker.is_relative_to(path) for path in _interpreter_read_paths())
 
 
 def test_macos_backend_fails_closed_off_macos() -> None:
