@@ -1,5 +1,8 @@
 # Factory build plan — revised
 
+> **Status: unratified proposal.** Merging this document would preserve a design for review; it
+> would not amend doctrine, perform the genesis ceremony, or authorize implementation.
+
 We build one real vertical slice, with Factory as the authoritative supervisor. We do not begin by
 wiring every tool together or declaring Signet mandatory.
 
@@ -20,8 +23,9 @@ Human ↔ surfaces (CLI first; Slack, portal later — capability parity, one AP
         │  · factory_core ledger —   │  the chain + write-time SoD policy
         │    every event, machine    │
         │    speed, no keys          │
-        │  · Tessera — Ed25519       │  signed anchors at human authority acts;
-        │    signed anchor documents │  each carries the LEDGER HEAD DIGEST only
+        │  · Tessera — Ed25519       │  signed anchors for human authority acts
+        │    signed anchor documents │  and independent Validator attestations;
+        │                             │  each carries the LEDGER HEAD DIGEST only
         └─────────────┬──────────────┘
                       │
               Artifact storage + CI/CD
@@ -40,7 +44,8 @@ Two corrections to my earlier shorthand:
 
 ## The evidence rule
 
-**Sign human authority acts. Chain machine evidence. Anchor the chain at each authority act.**
+**Sign human authority acts and independent Validator attestations. Chain machine evidence.
+Anchor the chain at each signed checkpoint.**
 
 Neither component can do the other's job, and this is why:
 
@@ -58,7 +63,7 @@ elsewhere.
 **What is signed** (low frequency, human-mediated, key ceremony fits):
 
 - the genesis document, the enrolled-principal set, the policy digest
-- each phase-artifact ratification (human + Validator)
+- each phase artifact, with a human approval receipt and a distinct Validator attestation receipt
 - each approval and risk acceptance
 - the promoted artifact digest
 
@@ -79,14 +84,15 @@ runtime repo.
 
 ## Build order
 
-Status is a statement about the tree at `97e44c3`, not about intent.
+Status is a proposal snapshot reviewed against the PR's current base, not a promise that later
+changes to `main` are already reflected here.
 
 | Slice | Status | Deliverable | Proof before advancing |
 |---|---|---|---|
 | **0. Genesis** | machinery delivered; ceremony not performed | CI in the repo; one founder-signed Tessera genesis defining the initial trust root, bootstrap scope, policy digest, and enrolled principals; the interim enrollment registry | Verified against a root fingerprint held outside the candidate branch; an unmapped identity is denied, not defaulted |
 | **1. Local gate** | **delivered** | Authorization-request, phase-artifact, receipt, and evidence-bundle schemas; adapter registry; anchor verification; a runnable local gate | A contributor can predict acceptance locally; altered signatures, digests, citations, subjects, or anchor heads fail |
 | **2. Supervisor** | **delivered** | `factory_runtime`: persisted run state, transition rules, event ledger, agent executor and sandbox ports | Restarting mid-run resumes from evidence; impossible transitions refuse |
-| **3. Three phases** | not started | CLI-first interactive Product Spec, Architecture Spec, and Testing/Monitoring Strategy loops, behind a declared channel port | Each preserves verbatim input, produces behavior-ledger confirmation, and ends in human+Validator signatures anchored to the ledger head |
+| **3. Three phases** | not started | CLI-first interactive Product Spec, Architecture Spec, and Testing/Monitoring Strategy loops, behind a declared channel port | Each preserves verbatim input, produces behavior-ledger confirmation, and ends in human approval plus an independent Validator attestation anchored to the ledger head |
 | **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests; Tester cannot read implementation; Validator alone combines and executes; the chosen lane is recorded as evidence |
 | **5. Live gate** | not started | Evidence collection, mutation checks, ephemeral preview, human approval, CI promotion of the exact artifact digest, and an enforcement point that can refuse a merge | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against |
 | **6. Signet** | not started (scope reduced — see below) | Qualified receipt issuance and verification, key custody, revocation, capability evaluation | Tampered signature, wrong issuer, wrong subject digest, missing capability, expiry, revocation, and replay all deny |
@@ -119,7 +125,7 @@ re-invent them under the plan's provisional names.
 - **The schemas** are `factory_runtime/schemas/{genesis,authorization-request,authority-receipt,phase-artifact,evidence-bundle}.schema.json`.
 - **The supervisor** is `factory_runtime/` (~3.3k lines): `state.py` holds `RunState` and
   `ALLOWED_TRANSITIONS`; `orchestrator`, `isolation`, `lanes`, `evidence_plane`, `authority`,
-  `tessera`, `workflow`, and `cli` are the rest. Thirty-four test modules cover it, including
+  `tessera`, `workflow`, and `cli` are the rest. The test suite covers it, including
   `test_isolated_build_loop.py`, `test_tessera_cli_integration.py`, and `test_runtime_state.py`.
 
 **Caveat on "delivered."** These slices are delivered against the synthetic target only. Their
@@ -152,10 +158,11 @@ specification-defect    a frozen spec awaiting a newly signed version
 blocked                 a run that cannot legally proceed
 ```
 
-Each `*-ratified`, `human-approved`, and `promoted` transition is a **signed anchor point**. The
-others are chained events. `specification-defect` is itself an anchor point: it freezes the
-current version, creates a newly signed one, and invalidates every downstream artifact derived
-from the old digest.
+Each `*-ratified` transition requires a human approval receipt and a distinct enrolled non-human
+Validator receipt over the exact artifact bytes. `human-approved` and `promoted` are also signed
+anchor points. The other transitions are chained events. `specification-defect` is itself an
+anchor point: it freezes the current version, creates a newly signed one, and invalidates every
+downstream artifact derived from the old digest.
 
 ### The bootstrap
 
@@ -169,10 +176,13 @@ the PR branch being judged. The private key is unavailable to agents.
 Genesis authorizes only construction and activation of the gate. Once enough humans are enrolled and
 CI plus denial probes pass, the system irreversibly switches from `bootstrap` to `enforcing`.
 
-**Key custody follows the SoD model, or the signatures are theatre.** Three tiers: the root key is
-offline and human-only; anchor-signing keys are held by enrolled humans and exercised at
-ratification, never by a lane; no agent identity holds a signing key at any tier. A signature is
-worth exactly what its custody is worth, which is the second reason to sign few things.
+**Key custody follows the SoD model, or the signatures are theatre.** The root key is offline and
+human-only. Human authority keys are held by enrolled humans and exercised for approval, never by
+a build lane. A Validator may hold a separate enrolled non-human attestation key, restricted to
+verification capabilities; it is not a human approval key and must be distinct from the
+implementer and approver identities. Coder and Tester identities receive no human authority key.
+A signature is worth exactly what its key policy authorizes, which is the second reason to sign
+few things.
 
 **"Enough humans" is a number: three.** Below three enrolled principals the SoD triad — implementer
 ≠ verifier ≠ approver — is unsatisfiable, so `enforcing` is unreachable by arithmetic rather than by
