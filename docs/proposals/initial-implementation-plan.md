@@ -110,10 +110,31 @@ re-invent them under the plan's provisional names.
   not a chore.
 - **The local gate is `make ship`**, fail-closed in order: purity → doctrine → lint → typecheck
   → test. There is no `factory gate` or `make gate`; earlier drafts of this plan named commands
-  that do not exist. One footgun: the `Makefile` invokes bare `python3`, so on a machine whose
-  `python3` predates 3.11 the very first gate dies on `import tomllib` in
-  `scripts/check_core_purity.py`. CI pins 3.12; local contributors need a venv. "A contributor
-  can predict acceptance locally" is slice 1's proof, so this is in scope, not cosmetic.
+  that do not exist. The interpreter is now detected and guarded: `PY` resolves to `python3.12`
+  when it is on `PATH` and falls back to `python3` otherwise, and `check-python` — a prerequisite
+  of every gate — refuses anything below the `requires-python` floor, reporting
+  `check_python: GREEN — …` / `RED — …` in the same shape as `check_core_purity` and
+  `check_doctrine_sync`, rather than letting a pre-3.12 `python3` reach `check_core_purity.py`
+  and die on `import tomllib`. Because detection goes through `PATH`, an activated venv wins over a system
+  install, which is the intent: prefer a conforming interpreter, do not escape the environment
+  the contributor chose. `PY` is authoritative for the tools too — `ruff` and `mypy` run as
+  `$(PY) -m`, so a gate cannot silently lint under a different interpreter than it tests under.
+  `make show-python` reports what detection resolved to.
+- **Local runs use a repo-managed virtualenv.** `make <anything>` creates `.venv` on first use,
+  keeps it in sync whenever `pyproject.toml` is newer than its stamp, and runs every gate out of
+  it — no activation step, and no way for two contributors to be testing against different
+  dependency sets. Management is skipped when `CI` is set or when `PY` was given explicitly, so
+  the runner keeps provisioning its own interpreter and the workflow needed no change.
+- **The isolation sandbox now derives the interpreter grant instead of hardcoding it.**
+  `isolation.py`'s Seatbelt profile is `deny default`, and it allowlisted `/opt/homebrew`,
+  `/usr/local`, `/bin`, and `/private/etc` — an approximation of "wherever the interpreter
+  lives" that held only for a Homebrew interpreter. Every sandboxed command is `sys.executable`,
+  so under a venv the child died in `init_import_site` reading `pyvenv.cfg` before any lane code
+  ran. The grant is now derived from `sys.prefix`, `sys.base_prefix`, and the resolved
+  executable's directory. This is a precondition of isolation, not a relaxation of it: a sandbox
+  that cannot read the interpreter is not stricter, only unusable. The denial probes — forbidden
+  read, forbidden write, bind, connect — still pass unchanged, which is what makes that claim
+  checkable rather than rhetorical.
 - **Genesis is machinery, not yet a ceremony.** `genesis.schema.json`, `verify-genesis`, the
   roster projection in `authority.py:54`, and real Tessera signing under
   `test_tessera_cli_integration.py` all exist. What does *not* exist is a founder-signed genesis
@@ -360,6 +381,7 @@ proposals:
 | "Why Signet comes later" rewritten | `signet-cred`'s capability verification was fixed upstream at `7f71a87`; the surviving defect is `signet-sdk::check_authority`, and it grants unconditionally rather than "structurally pending another layer." The plan was both stale and too charitable. |
 | `crates/` prefix restored on signet and tessera paths | The cited paths did not resolve as written. |
 | External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
+| Interpreter detected and floor enforced in the `Makefile` (applied, not proposed) | `make ship` resolved `PY` to bare `python3` and `lint`/`typecheck` bypassed `PY` entirely. `PY` now prefers `python3.12` and falls back to `python3`, `check-python` gates every target, and the tools run through `$(PY) -m`. Verified across five paths: preferred version found; activated venv preferred over system; fallback to a conforming `python3`; refusal of 3.9.20 with a "not on PATH" hint; and explicit `PY=` still overriding detection. |
 
 Proposed for your ratification — reject individually:
 
@@ -369,7 +391,7 @@ Proposed for your ratification — reject individually:
 | SPL (`jmcentire/agent-safe`) as the capability-policy evaluator, vendored not depended on | Slice 6 lists "capability evaluation" with nothing behind it. SPL is a total, gas-metered evaluator that travels in the token, and `tool_policy.py` already has the scoped-and-expiring grant shape it evaluates. Vendoring keeps `factory_core` stdlib-only. |
 | The CI Tessera pin (`83883e62`) treated as a ratification act | The pin *is* the verifier trust boundary. If bumping it is a routine chore, the trust root moves without a decision. |
 | "Delivered against the synthetic target" stated explicitly per slice | Otherwise the status column reads as "proven," and proof 1 below silently loses its purpose. |
-| Pin the interpreter in the `Makefile` as a slice-1 fix | `make ship` calls bare `python3`, so on a pre-3.11 `python3` the first gate dies on `import tomllib`. Slice 1's proof is that a contributor can predict acceptance *locally*; a gate that only runs in CI does not satisfy it. |
+| Local environment is a repo-managed venv, and the sandbox derives its interpreter grant (applied, not proposed) | Slice 1's proof is that a contributor can predict acceptance *locally*, and `make ship` had never been green on a developer machine: the interpreter floor was unenforced, and the one gate that did run refused any venv. Both are now fixed, and `make ship` is green locally end to end (330 passed, 3 skipped) as well as under a simulated CI interpreter. The sandbox change is the one to review deliberately — it widens a `deny default` profile — but it restores a precondition the hardcoded allowlist was already trying to express, and the denial probes still pass. |
 | "Enough humans" fixed at three | The SoD triad is unsatisfiable below three; `enforcing` should be unreachable by arithmetic, not by judgment. |
 | Key custody tiers in the bootstrap | A signature is worth its custody. Root offline, anchor keys human-held, no agent holds a key at any tier. |
 | An enforcement point in slice 5 | Nothing in the draft can refuse a merge. "CI promotion" is not a gate; a required check with branch protection is. |
