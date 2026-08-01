@@ -1,9 +1,5 @@
 # Factory build plan — revised
 
-> Revision of `jeremys_plan.md`. Two decisions are now settled (evidence architecture; Pact
-> placement) and are written in as settled. Everything else marked in the appendix is a proposed
-> delta for your ratification, not a change made on your behalf.
-
 We build one real vertical slice, with Factory as the authoritative supervisor. We do not begin by
 wiring every tool together or declaring Signet mandatory.
 
