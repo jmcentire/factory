@@ -46,7 +46,7 @@ Neither component can do the other's job, and this is why:
 
 | | `factory_core/manifest.py` | Tessera |
 |---|---|---|
-| Imports | `hashlib`, `hmac`, `json` — **no key material, no signatures** | Ed25519 (`crates/tessera-core/src/crypto.rs`), per-mutation + whole-document |
+| Imports | `hashlib`, `hmac`, `json` — **no key material, no signatures** | Ed25519 (`tessera/crates/tessera-core/src/crypto.rs`), per-mutation + whole-document |
 | Answers | *was this allowed to be written* — SoD refusal, deny-wins identity, enrolled-human approver | *who vouched for this* — authenticated authorship, multi-actor, replay from genesis |
 | Cannot | root a chain in a trust authority; a self-derived chain has no root | express segregation of duties at all |
 
@@ -202,9 +202,9 @@ or OS controls.
 ### Pact's placement
 
 **Planning on every change; implementation opt-in.** Pact's `PLANNING_PHASES` are already a named
-constant (`scheduler.py:61` — `interview`, `shape`, `decompose`, `diagnose`), and v1's default `pact
-run` stops before implementing. Factory drives the planning phases and never passes `--implement`
-except where the lane policy says so.
+constant (`pact/src/pact/scheduler.py:61` — `interview`, `shape`, `decompose`, `diagnose`), and
+v1's default `pact run` stops before implementing. Factory drives the planning phases and never
+passes `--implement` except where the lane policy says so.
 
 - **Lane selection is data, not judgment.** Criticality is already a property of the surface,
   assigned by a human at design formalization and inherited by every change that disturbs it.
@@ -216,8 +216,8 @@ except where the lane policy says so.
 - **The lane is recorded in the manifest**, so "Pact is worth 10× on Critical surfaces" becomes a
   measurable Epistemic-tier claim (correction rate and denial rate per lane) instead of folklore.
 - **Test material is firewalled from the Coder.** `decompose` emits contracts *and* tests —
-  Pact's own comment says so (`scheduler.py:65`: "artifacts (contracts, tests) first appear in
-  decompose"). Contracts are legitimately shared — the spec is shared. Pact's test output routes
+  Pact's own comment says so (`pact/src/pact/scheduler.py:65`: "artifacts (contracts, tests)
+  first appear in decompose"). Contracts are legitimately shared — the spec is shared. Pact's test output routes
   to the Tester/oracle side only. If it reaches the Coder inside the shared bundle, oracle
   independence is theatre.
 
@@ -228,15 +228,15 @@ upstream and the other is in a different crate than stated. The corrected pictur
 **smaller**, not larger.
 
 **`signet-cred` is a real credential engine.** As of `7f71a87` (2026-06-20, "Harden capability
-verification and fail-close issuance", #5), `crates/signet-cred/src/capability.rs` genuinely
+verification and fail-close issuance", #5), `signet/crates/signet-cred/src/capability.rs` genuinely
 verifies: `verify_capability_for_context` constructs an `Ed25519CapabilityVerifier`, calls
 `verify_strict` over `header || payload`, then runs `validate_capability_time_window`
 (iat/nbf/exp consistency, not merely expiry) and `validate_capability_context`.
-`crates/signet-cred/src/authority.rs` does real sign/verify for authority offers, multi-authority
+`signet/crates/signet-cred/src/authority.rs` does real sign/verify for authority offers, multi-authority
 delegation chains, and user acceptances, with tests for tampering, wrong keys, broken chain links,
 and expired offers. Nothing here needs building; it needs *qualifying*.
 
-**The defect is one function in a different crate.** `crates/signet-sdk/src/authority.rs`
+**The defect is one function in a different crate.** `signet/crates/signet-sdk/src/authority.rs`
 `check_authority` computes a SHA-256 binding over `(signet_id, authority)` and then discards it:
 
 ```rust
@@ -301,12 +301,13 @@ Three specific lessons to extract in proof 3, all preserving the import boundary
 - **Demo provisioning discipline** — operation-manifest claim for idempotency; quarantine on crash
   rather than auto-retry, because minting an environment is not idempotent and retry orphans it; a
   TTL reaper that guarantees no preview outlives its window.
-- **The seam slice 5 must close** — reeve's `merge-executor.ts` documents it exactly: "the actual git
-  merge + entry into the CI/CD pipeline is a RECORDED NO-OP here." The decision path is real; the
-  execution is not. That is precisely the gap.
-- **Spec-defect handling already implemented** — reeve's `spec-version.ts` and `oracle-freeze.ts`
-  implement freeze / re-sign / invalidate-downstream-by-digest, with the oracle's `specDigest`
-  re-derived so the binding cannot be forged.
+- **The seam slice 5 must close** — `reeve/src/factory/merge-executor.ts:27` documents it exactly:
+  "the actual git merge + entry into the CI/CD pipeline is a RECORDED NO-OP here." The decision
+  path is real; the execution is not. That is precisely the gap.
+- **Spec-defect handling already implemented** — `reeve/src/factory/spec-version.ts` and
+  `reeve/src/factory/oracle-freeze.ts` implement freeze / re-sign /
+  invalidate-downstream-by-digest, with the oracle's `specDigest` re-derived
+  (`oracle-freeze.ts:91`) so the binding cannot be forged.
 
 ## Architecture decisions needing ratification
 
@@ -348,6 +349,7 @@ proposals:
 | Real `RunState` names, plus `specification-defect` and `blocked` | The plan said `phase-1/2/3-ratified`; the code says `product-specification-ratified`, `architecture-ratified`, `operational-maturity-ratified`, and models two states the plan omitted. |
 | "Why Signet comes later" rewritten | `signet-cred`'s capability verification was fixed upstream at `7f71a87`; the surviving defect is `signet-sdk::check_authority`, and it grants unconditionally rather than "structurally pending another layer." The plan was both stale and too charitable. |
 | `crates/` prefix restored on signet and tessera paths | The cited paths did not resolve as written. |
+| External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
 
 Proposed for your ratification — reject individually:
 
