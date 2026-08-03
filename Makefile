@@ -132,7 +132,7 @@ test-tessera: check-python ## run the real Tessera CLI integration proof
 	FACTORY_TESSERA_BIN="$(FACTORY_TESSERA_BIN)" \
 		$(PY) -m pytest tests/test_tessera_cli_integration.py
 
-lint: check-python ## ruff over factory_core / scripts / tests
+lint: check-python ## ruff over factory_core / factory_runtime / scripts / tests
 	$(PY) -m ruff check factory_core factory_runtime scripts tests
 
 typecheck: check-python ## mypy over factory_core / scripts
