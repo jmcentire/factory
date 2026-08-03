@@ -234,7 +234,9 @@ artifact derived from the old digest — also doctrine ahead of code, since it h
 driver and is reached only by test bookkeeping (`tests/test_runtime_state.py:172`).
 
 `blocked` is the exception among the off-happy-path states and should not be lumped in with the
-others: it is genuinely driven, from five sites in `factory_runtime/orchestrator.py`, and a real
+others: it is genuinely driven, from four `store.transition` call sites in
+`factory_runtime/orchestrator.py` (a fifth `RunState.BLOCKED` reference, at line 182, is the
+membership test that lets a blocked attempt resume, not a driver), and a real
 failing build is asserted to reach it (`tests/test_tessera_cli_integration.py:453`).
 
 ### The bootstrap
@@ -492,7 +494,7 @@ proposals:
 | `crates/` prefix restored on signet and tessera paths | The cited paths did not resolve as written. |
 | External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
 | `human-approved` and `promoted` marked as doctrine ahead of code | The plan stated "`human-approved` and `promoted` are also signed anchor points" as flat fact. Verified at `94e7bb1`: those two states have zero production callers, `RunStore.transition` requires only a non-empty `actor` for them, and `approver_identity` defaults to `""`. Stating an unenforced requirement in the same voice as an enforced one is the error that makes a status column unreliable — and it hid the fact that slice 5, not slice 3, is the next load-bearing work. |
-| `blocked` distinguished from the other off-happy-path states | Grouping it with `specification-defect` understated it. `blocked` is genuinely driven from five sites in `orchestrator.py` and a real failing build reaches it (`test_tessera_cli_integration.py:453`); `specification-defect` has no production driver at all. |
+| `blocked` distinguished from the other off-happy-path states | Grouping it with `specification-defect` understated it. `blocked` is genuinely driven from four `store.transition` call sites in `orchestrator.py` and a real failing build reaches it (`test_tessera_cli_integration.py:453`); `specification-defect` has no production driver at all. |
 | Proof 1 recorded as attempted with a result, not pending | It has been run as far as the code allows. Leaving it listed as future work would have lost its finding, which is the whole reason the proof exists. |
 | Proof 2's premise expired | `factory_core/registry.py` is on `main` at `cba4f7f`; `glue/adapter-registry-readonly-git` is a stale duplicate. The plan asked to rebuild through the intake a change that had already landed by the ordinary route. |
 | Reeve demoted from target of record to prior art; Wander `sync` named as first target | Stated by the founder-adjacent scope owner during this revision. The build order had encoded the opposite, which pushed the actual target behind all seven slices. |
