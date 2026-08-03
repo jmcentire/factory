@@ -85,7 +85,14 @@ runtime repo.
 ## Build order
 
 Status is a proposal snapshot reviewed against the PR's current base, not a promise that later
-changes to `main` are already reflected here.
+changes to `main` are already reflected here. This revision is verified against `94e7bb1`, where
+`make ship` is green (330 passed, 3 skipped) and `make test-tessera` is green against the real
+signing binary.
+
+Six slices additionally depend on founder-owned decisions that are open in
+[issue #4](https://github.com/jmcentire/factory/issues/4); see *Founder-owned decisions this plan
+is blocked on* below. A slice marked "not started" whose governing decision is unanswered is
+blocked, not merely unscheduled, and the distinction matters for sequencing.
 
 | Slice | Status | Deliverable | Proof before advancing |
 |---|---|---|---|
@@ -94,9 +101,9 @@ changes to `main` are already reflected here.
 | **2. Supervisor** | **delivered** | `factory_runtime`: persisted run state, transition rules, event ledger, agent executor and sandbox ports | Restarting mid-run resumes from evidence; impossible transitions refuse |
 | **3. Three phases** | not started | CLI-first interactive Product Spec, Architecture Spec, and Testing/Monitoring Strategy loops, behind a declared channel port | Each preserves verbatim input, produces behavior-ledger confirmation, and ends in human approval plus an independent Validator attestation anchored to the ledger head |
 | **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests; Tester cannot read implementation; Validator alone combines and executes; the chosen lane is recorded as evidence |
-| **5. Live gate** | not started | Evidence collection, mutation checks, ephemeral preview, human approval, CI promotion of the exact artifact digest, and an enforcement point that can refuse a merge | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against |
+| **5. Live gate** | not started; its three states exist but are unenforced — see *The unenforced tail* | Evidence collection, mutation checks, ephemeral preview, human approval, CI promotion of the exact artifact digest, and an enforcement point that can refuse a merge | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against |
 | **6. Signet** | not started (scope reduced — see below) | Qualified receipt issuance and verification, key custody, revocation, capability evaluation | Tampered signature, wrong issuer, wrong subject digest, missing capability, expiry, revocation, and replay all deny |
-| **7. First live external target** | not started | One target beyond reeve, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything |
+| **7. First live target** | not started | The Wander **`sync` team** as the first of numerous Wander targets, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything, *and* the onboarding path is cheap enough that the second Wander target does not repeat the first one's cost |
 
 ### What slices 0–2 already are
 
@@ -154,6 +161,38 @@ proof columns are asserted by the suite, not yet by a real run — which is what
 for. Delivered means the surface exists and its tests pass; it does not mean the slice has been
 exercised end to end on real work.
 
+### The unenforced tail of the happy path
+
+Proof 1 has now been run as far as it goes, and this is its result. It is recorded here rather
+than only in the proofs section because it changes a status column.
+
+`test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evidence` walks
+`intake` → `preview` with real authority, real isolation, and real evidence, and asserts a
+terminal `RunState.PREVIEW` (`tests/test_tessera_cli_integration.py:463`). The signing is real:
+the test *skips* rather than fails when `FACTORY_TESSERA_BIN` is unset, and the configured
+binary is present. **Past `preview` there is no driver at all:**
+
+- `HUMAN_APPROVED`, `CI`, and `PROMOTED` appear nowhere in `factory_runtime` outside the
+  transition table in `state.py`. Zero production callers.
+- The only code that walks them is `tests/test_runtime_state.py:66`, which hand-cranks
+  `store.transition(...)` through the state names with `actor="validator"` — including
+  `human-approved`.
+- `RunStore.transition` requires an artifact digest only for the three `*-ratified` states
+  (`_PHASE_STATE_KEYS`, `factory_runtime/state.py:117`). For `human-approved`, `ci`, and
+  `promoted` it requires a non-empty `actor` string and nothing else: no receipt, no signature,
+  no distinct approver, and `approver_identity` defaults to `""`.
+
+The consequence for sequencing is that the happy path is six-ninths real, and the missing third
+is precisely the part that carries authority. **Slice 5, not slice 3, is where the next
+load-bearing code work is** — slice 3's phase loops extend a path that already functions, while
+slice 5 supplies transitions that currently do not exist outside a test's bookkeeping.
+
+This is not an argument that the `SegregationPolicy` is absent. It is applied at ledger append
+(`state.py:426`), and a stricter configured policy may well refuse an empty-identity promote.
+What is verified is that nothing on the promote path *supplies* identities, so the default
+configuration never exercises it. Whether a stricter policy would in fact refuse is untested and
+is a slice-5 obligation to demonstrate rather than assume.
+
 ### The run state
 
 `RunState` in `factory_runtime/state.py` is the authority. The states are:
@@ -180,10 +219,23 @@ blocked                 a run that cannot legally proceed
 ```
 
 Each `*-ratified` transition requires a human approval receipt and a distinct enrolled non-human
-Validator receipt over the exact artifact bytes. `human-approved` and `promoted` are also signed
-anchor points. The other transitions are chained events. `specification-defect` is itself an
-anchor point: it freezes the current version, creates a newly signed one, and invalidates every
-downstream artifact derived from the old digest.
+Validator receipt over the exact artifact bytes. This is enforced: those three states are the
+entries in `_PHASE_STATE_KEYS` and a missing artifact digest refuses the transition.
+
+`human-approved` and `promoted` are *doctrinally* signed anchor points and are **not yet enforced
+as such**. The earlier revision of this document stated the requirement without marking it
+aspirational, which read as a description of the code. As of `94e7bb1` those two transitions
+require a non-empty `actor` string and nothing further; see *The unenforced tail of the happy
+path* above. Making them anchor points in fact is a slice-5 deliverable.
+
+The other transitions are chained events. `specification-defect` is itself an anchor point: it
+freezes the current version, creates a newly signed one, and invalidates every downstream
+artifact derived from the old digest — also doctrine ahead of code, since it has no production
+driver and is reached only by test bookkeeping (`tests/test_runtime_state.py:172`).
+
+`blocked` is the exception among the off-happy-path states and should not be lumped in with the
+others: it is genuinely driven, from five sites in `factory_runtime/orchestrator.py`, and a real
+failing build is asserted to reach it (`tests/test_tessera_cli_integration.py:453`).
 
 ### The bootstrap
 
@@ -322,12 +374,25 @@ Two things to settle before adopting it (see ratification item 7):
 
 ### First three proofs
 
-1. Run the complete flow against the synthetic target already in Factory.
-2. Reauthorize and rebuild Jon's adapter-registry change from PR #2 through the new intake.
-3. Make Reeve the first live target, extracting lessons from its existing intake, architecture loop,
-   oracle, gate, and demo surfaces without importing Reeve code into `factory_core`.
+1. **Run** — attempted, and it terminates at `preview`. The flow is exercised end to end from
+   `intake` to `preview` against the synthetic target with real signing; the three states past
+   `preview` have no driver. Result recorded under *The unenforced tail of the happy path* above.
+   The remainder of this proof is blocked on slice 5, not on scheduling.
+2. **Reauthorize** — the premise has expired. This proof was "reauthorize and rebuild Jon's
+   adapter-registry change from PR #2 through the new intake," but that content is already on
+   `main`: `factory_core/registry.py` was added by `cba4f7f`, and the
+   `glue/adapter-registry-readonly-git` branch is now a stale duplicate of it (`f0a72f6`, same
+   subject, different SHA). The change that was nominated as the first authorized change landed
+   by the ordinary route instead. Two honest options: retire this proof, or replace it with a
+   *new* small change chosen to be the first thing through the intake. The second is worth more,
+   because a proof that reprocesses already-merged content cannot fail in the way that matters.
+3. **First live target** — the Wander `sync` team, extracting lessons from reeve's existing
+   intake, architecture loop, oracle, gate, and demo surfaces without importing reeve code into
+   `factory_core`. Reeve is **prior art, not a target of record**: it is the reference
+   implementation whose disciplines were generalized into this core, and it is explicitly not
+   what this factory is being built to serve.
 
-Three specific lessons to extract in proof 3, all preserving the import boundary:
+Three specific lessons to extract from reeve for proof 3, all preserving the import boundary:
 
 - **Demo provisioning discipline** — operation-manifest claim for idempotency; quarantine on crash
   rather than auto-retry, because minting an environment is not idempotent and retry orphans it; a
@@ -340,6 +405,48 @@ Three specific lessons to extract in proof 3, all preserving the import boundary
   invalidate-downstream-by-digest, with the oracle's `specDigest` re-derived
   (`oracle-freeze.ts:91`) so the binding cannot be forged.
 
+## Founder-owned decisions this plan is blocked on
+
+[Issue #4](https://github.com/jmcentire/factory/issues/4) enumerates governance decisions that
+only the founder can make, and its Aug-1 comment states plainly that they remain open even though
+the issue's original evidence table is now historical. Several of them gate slices in the table
+above, so they belong in this document rather than only in the issue. Deduplicated against this
+plan's own ratification list, so each is answered once:
+
+| Decision | Asked in | Gates |
+|---|---|---|
+| Where authorization lives | issue #4 BQ1 | any change entering through the intake |
+| Proposal/ship capability vocabulary and receipt issuer | issue #4 BQ2 | slices 0, 5, 6 |
+| Who may hold proposal vs. ship authority | issue #4 BQ3, BQ6 | slice 0; the SoD floor |
+| How enrollment reaches the core without breaching the seam | issue #4 BQ4 **+ this plan's channel port** | slices 0, 3 — **and colliding, see below** |
+| Whether a reduced phase form exists | issue #4 BQ5 | slice 3; the cost of every small change |
+| How forked contributors consume the authorization record | issue #4 BQ7 | any external contribution |
+
+### The sixth seam has two claimants
+
+This plan proposes a channel port "declared before slice 3." Issue #4 BQ4 independently asks
+whether Signet reaches the core through `IdpAdapter`, a sixth seam by explicit redesign, or from
+outside the core entirely. **These are two proposals for the same slot, in two documents, neither
+citing the other.**
+
+The slot is not free, and neither proposal is additive. `factory_core/adapters.py:10` states "The
+seams are the whole target surface. There is deliberately no sixth: anything a target needs the
+factory to do must fit one of these, or the boundary has been breached," and
+`tests/test_adapters.py:73::test_there_are_exactly_five_seams` enforces it. Either proposal must
+therefore amend a stated invariant *and* delete a guard test, and whichever lands first silently
+answers BQ4 on behalf of the other.
+
+The decision to make is upstream of both: **is five an invariant, or a design point?** This plan
+takes no position on the answer and withdraws any claim to the slot until that is settled.
+
+### One deliverable is on the wrong side of the boundary
+
+Issue #4's deliverable 7 — receipt verification against payload hash plus required capabilities —
+is implemented, but per the issue's Aug-2 comment it is implemented on *reeve* main at `2344645`,
+not in Factory. Since reeve is prior art rather than a target of record, a control living only
+there means every future Wander target reimplements it. Whether it crosses back into the core is
+an open question this plan cannot answer for the founder, and it is not currently on any slice.
+
 ## Architecture decisions needing ratification
 
 1. Factory owns the runtime state machine.
@@ -351,8 +458,11 @@ Three specific lessons to extract in proof 3, all preserving the import boundary
    `signet-sdk::check_authority` is import-guarded off every Critical path; the consumption ledger
    that unblocks one-time capabilities is ours to build.
 5. Surfaces are renderers over one API at capability parity, behind a declared channel port.
-6. The system is not deployed beyond reeve until slice 7, and blocks nothing until its false-block
-   rate is measured.
+6. The first live target is the Wander `sync` team — the first of numerous Wander targets — and
+   the gate blocks nothing until its false-block rate is measured. Reeve is prior art, not a
+   deployment target. **This ordering is the one worth arguing about:** as written, every slice
+   before 7 delivers value only inside this repository, which puts the actual target last. See
+   *An advisory conformance tier below slice 7* in the proposed table.
 7. Capability *policy* is evaluated by SPL (`jmcentire/agent-safe`) carried inside the token,
    vendored as a single file rather than added as a runtime dependency — distinct from Signet,
    which answers identity and vouching.
@@ -381,6 +491,12 @@ proposals:
 | "Why Signet comes later" rewritten | `signet-cred`'s capability verification was fixed upstream at `7f71a87`; the surviving defect is `signet-sdk::check_authority`, and it grants unconditionally rather than "structurally pending another layer." The plan was both stale and too charitable. |
 | `crates/` prefix restored on signet and tessera paths | The cited paths did not resolve as written. |
 | External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
+| `human-approved` and `promoted` marked as doctrine ahead of code | The plan stated "`human-approved` and `promoted` are also signed anchor points" as flat fact. Verified at `94e7bb1`: those two states have zero production callers, `RunStore.transition` requires only a non-empty `actor` for them, and `approver_identity` defaults to `""`. Stating an unenforced requirement in the same voice as an enforced one is the error that makes a status column unreliable — and it hid the fact that slice 5, not slice 3, is the next load-bearing work. |
+| `blocked` distinguished from the other off-happy-path states | Grouping it with `specification-defect` understated it. `blocked` is genuinely driven from five sites in `orchestrator.py` and a real failing build reaches it (`test_tessera_cli_integration.py:453`); `specification-defect` has no production driver at all. |
+| Proof 1 recorded as attempted with a result, not pending | It has been run as far as the code allows. Leaving it listed as future work would have lost its finding, which is the whole reason the proof exists. |
+| Proof 2's premise expired | `factory_core/registry.py` is on `main` at `cba4f7f`; `glue/adapter-registry-readonly-git` is a stale duplicate. The plan asked to rebuild through the intake a change that had already landed by the ordinary route. |
+| Reeve demoted from target of record to prior art; Wander `sync` named as first target | Stated by the founder-adjacent scope owner during this revision. The build order had encoded the opposite, which pushed the actual target behind all seven slices. |
+| The channel-port proposal withdrawn rather than restated | It claimed a slot that issue #4 BQ4 is actively deliberating, and presented as additive a change that must amend `adapters.py:10` and delete a guard test. |
 | Interpreter detected and floor enforced in the `Makefile` (applied, not proposed) | `make ship` resolved `PY` to bare `python3` and `lint`/`typecheck` bypassed `PY` entirely. `PY` now prefers `python3.12` and falls back to `python3`, `check-python` gates every target, and the tools run through `$(PY) -m`. Verified across five paths: preferred version found; activated venv preferred over system; fallback to a conforming `python3`; refusal of 3.9.20 with a "not on PATH" hint; and explicit `PY=` still overriding detection. |
 
 Proposed for your ratification — reject individually:
@@ -395,8 +511,10 @@ Proposed for your ratification — reject individually:
 | "Enough humans" fixed at three | The SoD triad is unsatisfiable below three; `enforcing` should be unreachable by arithmetic, not by judgment. |
 | Key custody tiers in the bootstrap | A signature is worth its custody. Root offline, anchor keys human-held, no agent holds a key at any tier. |
 | An enforcement point in slice 5 | Nothing in the draft can refuse a merge. "CI promotion" is not a gate; a required check with branch protection is. |
-| Channel port declared before slice 3 | `factory_core` has five seams and no channel seam, yet the three phases are inherently conversational and you want Slack + portal + CLI at parity. That is one seam with N renderers — better decided before three renderers exist. |
-| Slice 7, and the statement that deployment starts after it | No target beyond reeve appears in the draft. Wander deployment is a real scope and should be visible as one, not implied. |
+| ~~Channel port declared before slice 3~~ — **withdrawn pending the seam-count decision** | The reasoning still holds: the three phases are inherently conversational and CLI + Slack + portal are one seam with N renderers, better decided before three renderers exist. What was wrong was proposing it as though the slot were free. It collides with issue #4 BQ4 and cannot be granted without amending `adapters.py:10` and deleting `test_adapters.py:73`. Resubmit once "is five an invariant?" is answered. |
+| An advisory conformance tier below slice 7 | As written, no slice delivers anything outside this repository until the last one, which puts the actual target last. Several `factory_core` modules — `contract.py`, `completeness.py`, `comprehensiveness.py`, and `criticality.py`'s classification model — are pure functions over data arriving through read-only seams and produce *documents*, not enforcement. They need no genesis, enrollment, Signet, promotion, isolation, or Pact. A read-only advisory tier would let the Wander `sync` team get findings long before the gate can refuse anything, and would test the disciplines against a real team before machinery is built to enforce them. Not free: the target-side extraction that feeds `caller_edges` and `provider_operations` is real work the core deliberately does not own. Explicitly *not* proposed for `monitors.py` or `promotion.py`, which require phase artifacts and oracle adequacy respectively. |
+| Replace proof 2 with a new small change rather than retiring it | The adapter-registry content already landed on `main` at `cba4f7f`, so reprocessing it cannot fail in the way that matters. A first-authorized-change proof needs a change that has not already been merged. |
+| Slice 7 names the Wander `sync` team as the first of numerous Wander targets | The draft treated reeve as the target of record and Wander deployment as implied follow-on scope. It is the reverse: reeve is prior art, and Wander is what this is for. Naming `sync` as *first of many* also puts weight on the onboarding path, since a per-target cost that does not amortize fails at target three regardless of how well target one goes. |
 | False-block rate as the slice-7 gate | A governance gate that wrongly blocks even a few percent of changes gets switched off by the organization, permanently. |
 | Pact test output firewalled from the Coder | `decompose` emits contracts and tests together; contracts are shared, tests must not be. A five-line policy now, an expensive silent failure later. |
 | Three named reeve lessons in proof 3 | "Extract lessons" is unactionable; these three are specific, cited, and preserve the import boundary. |
