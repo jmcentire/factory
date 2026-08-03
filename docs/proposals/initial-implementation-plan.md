@@ -110,9 +110,9 @@ re-invent them under the plan's provisional names.
   not a chore.
 - **The local gate is `make ship`**, fail-closed in order: purity → doctrine → lint → typecheck
   → test. There is no `factory gate` or `make gate`; earlier drafts of this plan named commands
-  that do not exist. The interpreter is now detected and guarded: `PY` resolves to `python3.12`
-  when it is on `PATH` and falls back to `python3` otherwise, and `check-python` — a prerequisite
-  of every gate — refuses anything below the `requires-python` floor, reporting
+  that do not exist. The interpreter is now detected and guarded: the bootstrap interpreter prefers `python3.12`
+  when it is on `PATH` and falls back to `python3` otherwise; locally, `PY` then defaults to the repo-managed `.venv/bin/python`
+  (unless `CI` is set or `PY` is given explicitly), and `check-python` — a prerequisite of every gate — refuses anything below the `requires-python` floor, reporting
   `check_python: GREEN — …` / `RED — …` in the same shape as `check_core_purity` and
   `check_doctrine_sync`, rather than letting a pre-3.12 `python3` reach `check_core_purity.py`
   and die on `import tomllib`. Because detection goes through `PATH`, an activated venv wins over a system
