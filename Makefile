@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority ship
 
 .DEFAULT_GOAL := help
 
@@ -144,10 +144,13 @@ check-purity: check-python ## the anti-coupling guard (core imports nothing targ
 check-doctrine: check-python ## structural parity for active doctrine surfaces
 	$(PY) scripts/check_doctrine_sync.py
 
+check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's authority seam
+	$(PY) scripts/check_forbidden_authority.py
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine lint typecheck test ## run every gate (purity -> doctrine -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-authority lint typecheck test ## run every gate (purity -> doctrine -> authority -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

@@ -125,6 +125,16 @@ _PHASE_ORDER = (
     "operational-maturity",
 )
 
+# The anchor states past `preview`. Each names the artifact digest that transition MUST carry,
+# in the same fail-closed shape `_PHASE_STATE_KEYS` uses for the three ratified states. Without
+# these keys the two doctrinal anchor points required nothing but a non-empty actor string, so
+# "the artifact shown to the human is byte-for-byte the artifact promoted" had nothing recording
+# which artifact the human saw.
+_ANCHOR_STATE_KEYS: Mapping[RunState, str] = {
+    RunState.HUMAN_APPROVED: "candidate",
+    RunState.PROMOTED: "promoted-artifact",
+}
+
 
 class RunStateError(ValueError):
     """A run could not be created, loaded, or transitioned without guessing."""
@@ -142,6 +152,7 @@ class RunProjection:
     ledger_head: str
     created_at: int
     updated_at: int
+    approved_candidate_digest: str = ""
     schema_version: str = RUN_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -165,6 +176,7 @@ class RunProjection:
             ledger_head=str(raw.get("ledger_head", "")),
             created_at=_as_int(raw.get("created_at")),
             updated_at=_as_int(raw.get("updated_at")),
+            approved_candidate_digest=str(raw.get("approved_candidate_digest", "")),
             schema_version=str(raw.get("schema_version", "")),
         )
 
@@ -396,6 +408,32 @@ class RunStore:
                     f"{destination} requires artifact digest {phase_key!r}"
                 )
             phases[phase_key] = phase_digest
+
+        # Anchor states carry authority, not just an actor. Each check is fail-closed: an
+        # omission refuses the transition rather than recording an unauthorized anchor.
+        anchor_key = _ANCHOR_STATE_KEYS.get(destination)
+        if anchor_key and not supplied.get(anchor_key, ""):
+            raise RunStateError(f"{destination} requires artifact digest {anchor_key!r}")
+        if destination is RunState.HUMAN_APPROVED:
+            approver = approver_identity.strip()
+            if not approver:
+                raise RunStateError(f"{destination} requires an approver identity")
+            if approver == implementer_identity.strip():
+                raise RunStateError(
+                    "approver and implementer must be distinct identities for human approval"
+                )
+        if destination is RunState.PROMOTED:
+            approved = current.approved_candidate_digest
+            if not approved:
+                raise RunStateError(
+                    f"{destination} requires a previously approved candidate digest"
+                )
+            if supplied.get(anchor_key or "", "") != approved:
+                raise RunStateError(
+                    "promoted artifact does not match the approved candidate digest "
+                    "(the artifact promoted must be byte-for-byte what was approved)"
+                )
+
         required_phase_keys = _required_phase_keys(destination, transition_payload)
         phases = {key: phases[key] for key in _PHASE_ORDER if key in required_phase_keys}
         if set(phases) != set(required_phase_keys):
@@ -441,6 +479,7 @@ class RunStore:
         prior = ""
         target_digest = ""
         source_digest = ""
+        approved_candidate = ""
         phase_artifacts: dict[str, str] = {}
         created_at = 0
         updated_at = 0
@@ -490,6 +529,17 @@ class RunStore:
                 or digests.get("source") != source_digest
             ):
                 raise RunStateError(f"ledger entry {index} changes the run subject")
+
+            if destination is RunState.HUMAN_APPROVED:
+                approved_candidate = str(digests.get("candidate", ""))
+                _require_digest(approved_candidate, f"ledger entry {index} candidate digest")
+            elif destination is RunState.PROMOTED:
+                promoted = str(digests.get("promoted-artifact", ""))
+                _require_digest(promoted, f"ledger entry {index} promoted-artifact digest")
+                if promoted != approved_candidate:
+                    raise RunStateError(
+                        f"ledger entry {index} promotes a digest that was never approved"
+                    )
 
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):
@@ -543,6 +593,7 @@ class RunStore:
             ledger_head=ledger.head_hash(),
             created_at=created_at,
             updated_at=updated_at,
+            approved_candidate_digest=approved_candidate,
         )
 
     def _write_projection(self, projection: RunProjection) -> None:

@@ -13,6 +13,7 @@ SOURCE = "sha256:" + ("2" * 64)
 PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
+CANDIDATE = "sha256:" + ("a" * 64)
 
 
 class _Clock:
@@ -68,18 +69,31 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
     _ratify_all(store)
 
-    for state in (
-        RunState.BUILDING,
-        RunState.VALIDATING,
-        RunState.PREVIEW,
-        RunState.HUMAN_APPROVED,
-        RunState.CI,
-        RunState.PROMOTED,
-    ):
+    for state in (RunState.BUILDING, RunState.VALIDATING, RunState.PREVIEW):
         store.transition("run-1", state, actor="validator")
+
+    # The two anchor states carry authority. This previously walked them with nothing but
+    # actor="validator" — a validator human-approving its own run — which is exactly the hole
+    # the anchor controls close. See tests/test_runtime_anchor_states.py for the refusals.
+    store.transition(
+        "run-1",
+        RunState.HUMAN_APPROVED,
+        actor="validator",
+        artifact_digests={"candidate": CANDIDATE},
+        implementer_identity="coder",
+        approver_identity="human-approver",
+    )
+    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.PROMOTED,
+        actor="validator",
+        artifact_digests={"promoted-artifact": CANDIDATE},
+    )
 
     loaded = RunStore(tmp_path, clock=_Clock()).load("run-1")
     assert loaded.state == RunState.PROMOTED
+    assert loaded.approved_candidate_digest == CANDIDATE
     assert loaded.phase_artifact_digests == {
         "product-specification": PRODUCT,
         "architecture": ARCHITECTURE,
