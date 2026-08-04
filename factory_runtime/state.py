@@ -193,6 +193,36 @@ def _require_digest(value: str, field_name: str) -> None:
         raise RunStateError(f"{field_name} must be a canonical sha256 digest")
 
 
+def _require_approval_identities(
+    approver_identity: str,
+    implementer_identity: str,
+    *,
+    context: str,
+) -> None:
+    """Human approval needs both identities present and distinct.
+
+    ``LedgerEntry`` enforces distinctness only among the identities *actually present*, which is
+    the right general default — a draft edit has no approver. ``human-approved`` is the state
+    where that default is too weak: comparing an approver against an absent implementer proves
+    nothing, so an approval with no recorded implementer would satisfy an SoD check vacuously.
+    I2 requires implementer ≠ approver, so both are mandatory here and the transition fails
+    closed without them.
+    """
+    approver = approver_identity.strip()
+    implementer = implementer_identity.strip()
+    if not approver:
+        raise RunStateError(f"{context} requires an approver identity")
+    if not implementer:
+        raise RunStateError(
+            f"{context} requires an implementer identity: distinctness from an absent "
+            "implementer is unverifiable, not satisfied"
+        )
+    if approver == implementer:
+        raise RunStateError(
+            "approver and implementer must be distinct identities for human approval"
+        )
+
+
 def _canonical_json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -415,13 +445,9 @@ class RunStore:
         if anchor_key and not supplied.get(anchor_key, ""):
             raise RunStateError(f"{destination} requires artifact digest {anchor_key!r}")
         if destination is RunState.HUMAN_APPROVED:
-            approver = approver_identity.strip()
-            if not approver:
-                raise RunStateError(f"{destination} requires an approver identity")
-            if approver == implementer_identity.strip():
-                raise RunStateError(
-                    "approver and implementer must be distinct identities for human approval"
-                )
+            _require_approval_identities(
+                approver_identity, implementer_identity, context=str(destination)
+            )
         if destination is RunState.PROMOTED:
             approved = current.approved_candidate_digest
             if not approved:
@@ -533,6 +559,15 @@ class RunStore:
             if destination is RunState.HUMAN_APPROVED:
                 approved_candidate = str(digests.get("candidate", ""))
                 _require_digest(approved_candidate, f"ledger entry {index} candidate digest")
+                # `_derive` is the authority, so it must refuse what `transition` refuses. The
+                # hash chain catches an edited entry; it does not catch one appended through the
+                # ledger directly, which chains validly and would otherwise project as a
+                # legitimate approval.
+                _require_approval_identities(
+                    str(record.get("approver_identity", "")),
+                    str(record.get("implementer_identity", "")),
+                    context=f"ledger entry {index} human approval",
+                )
             elif destination is RunState.PROMOTED:
                 promoted = str(digests.get("promoted-artifact", ""))
                 _require_digest(promoted, f"ledger entry {index} promoted-artifact digest")

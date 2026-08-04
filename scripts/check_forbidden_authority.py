@@ -74,8 +74,14 @@ def _module_head(name: str) -> str:
 
 def check_file(path: Path, display: str) -> list[Finding]:
     """Scan one module for banned imports and banned identifier references."""
+    # A fail-closed guard must not exit on a traceback: an unreadable or non-UTF-8 module is a
+    # file the ban could not be checked against, which is a finding, not a crash.
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [Finding("unreadable", display, 0, f"could not read (fail closed): {exc}")]
+    try:
+        tree = ast.parse(source, filename=str(path))
     except SyntaxError as exc:
         return [Finding("parse", display, exc.lineno or 0, f"could not parse (fail closed): {exc}")]
 

@@ -104,3 +104,16 @@ def test_the_real_tessera_seam_is_not_caught(tmp_path: Path) -> None:
 def test_a_missing_package_fails_closed(tmp_path: Path) -> None:
     findings = GUARD.run([tmp_path / "does_not_exist"])
     assert findings, "a missing scan root must fail closed rather than report green"
+
+
+def test_an_undecodable_file_is_a_finding_not_a_crash(tmp_path: Path) -> None:
+    # A guard that raises instead of reporting turns "could not check this file" into a broken
+    # build with no location. Fail closed with a finding.
+    pkg = tmp_path / "candidate_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "candidate.py").write_bytes(b"\xff\xfe invalid utf-8 \x00")
+
+    findings = GUARD.run([pkg])
+    assert findings, "an unreadable module must produce a finding"
+    assert any(f.kind == "unreadable" for f in findings)

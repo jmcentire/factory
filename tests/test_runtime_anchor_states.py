@@ -1,8 +1,9 @@
-"""The three anchor transitions past `preview` must carry authority, not just an actor string.
+"""The two anchor transitions past `preview` must carry authority, not just an actor string.
 
-Before these controls, `human-approved`, `ci`, and `promoted` required a non-empty `actor` and
-nothing else: no artifact digest, no distinct approver, and no binding between what a human
-approved and what was ultimately promoted. That made slice 5's proof condition — "the artifact
+Before these controls, `human-approved` and `promoted` required a non-empty `actor` and nothing
+else: no artifact digest, no distinct approver, and no binding between what a human
+approved and what was ultimately promoted. (`ci` sits between them and carries no authority
+requirement of its own; it gains none here.) That made slice 5's proof condition — "the artifact
 shown to the human is byte-for-byte the artifact promoted" — unenforceable, because nothing
 recorded which artifact the human saw.
 
@@ -132,3 +133,60 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
     reloaded = RunStore(tmp_path, clock=_Clock()).load("run-1")
     assert reloaded.state == RunState.PROMOTED
     assert reloaded.approved_candidate_digest == CANDIDATE
+
+
+def test_human_approval_without_an_implementer_identity_is_refused(tmp_path: Path) -> None:
+    """A distinctness check against an empty implementer proves nothing.
+
+    `LedgerEntry` enforces distinctness only among identities actually present, which is the
+    right general default. `human-approved` is a state where the implementer IS a required
+    signer: without one recorded, "approved by someone other than whoever built it" is
+    unverifiable, so it fails closed rather than passing vacuously.
+    """
+    store = _run_at_preview(tmp_path)
+    with pytest.raises(RunStateError, match="implementer"):
+        store.transition(
+            "run-1",
+            RunState.HUMAN_APPROVED,
+            actor="validator",
+            artifact_digests={"candidate": CANDIDATE},
+            approver_identity="human-approver",
+        )
+
+
+def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Path) -> None:
+    """`_derive` is the authority, so it must re-check what `transition` refuses.
+
+    The hash chain already catches an *edited* entry. This covers the other route: an entry
+    appended through the ledger directly, bypassing `transition`, which chains validly and so
+    would otherwise project as a legitimate approval.
+    """
+    from factory_core.manifest import LedgerEntry
+
+    store = _run_at_preview(tmp_path)
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.PREVIEW,
+            to_state=RunState.HUMAN_APPROVED,
+            implementer_identity="coder",
+            approver_identity="",  # no approver: transition() would refuse this
+            artifact_digests={
+                "candidate": CANDIDATE,
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": {
+                    "product-specification": PRODUCT,
+                    "architecture": ARCHITECTURE,
+                    "operational-maturity": OPERATIONS,
+                },
+            },
+            payload={},
+            actor="validator",
+            created_at="200",
+        ),
+        None,
+    )
+
+    with pytest.raises(RunStateError, match="approver"):
+        store.rebuild_projection("run-1")
