@@ -207,6 +207,18 @@ def _require_approval_identities(
     nothing, so an approval with no recorded implementer would satisfy an SoD check vacuously.
     I2 requires implementer ≠ approver, so both are mandatory here and the transition fails
     closed without them.
+
+    N.B. — an open doctrine question sits on top of this, raised by issue #4 (2026-08-05). The
+    founder ratified three distinct enrolled principals for the SoD triad at ``enforcing`` while
+    stating that n=1 is a legitimate bootstrap state and is where the project currently is.
+    Those two cannot both hold with the implementer *recorded*: ``LedgerEntry.validate_sod``
+    refuses any two present-and-equal identities unconditionally, in the core, under I2. So a
+    lone human who implements and approves cannot reach ``human-approved`` at all — and before
+    this control, n=1 reached it only by leaving ``implementer_identity`` empty, which is exactly
+    the vacuous pass closed above. Recording the collapse honestly needs either an amendment to
+    I2 or a represented-and-visible collapse; both are the founder's to decide, and neither is
+    invented here. ``test_human_approval_by_the_implementer_is_refused`` pins the current
+    behavior so the answer lands in one place.
     """
     approver = approver_identity.strip()
     implementer = implementer_identity.strip()

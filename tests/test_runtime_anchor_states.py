@@ -10,6 +10,13 @@ recorded which artifact the human saw.
 These tests are the enforcement. They exercise `RunStore.transition` directly, which is the
 lowest level the guarantee has to hold at: a control that only lives in the workflow layer can be
 bypassed by anything holding a store.
+
+This is a floor, NOT the destination. Per issue #4 (2026-08-05) the intended shape for these
+transitions is a signed move record — prior-state hash, operation, new-state hash, actor key, and
+a signature over all four — verified by re-derivation rather than by trusting a declared outcome,
+with receipt verification against payload hash and required capabilities living in the core. An
+artifact digest plus two present-and-distinct identity strings is what can be enforced today; it
+is deliberately weaker than that, and it does not foreclose it.
 """
 
 from __future__ import annotations
@@ -89,6 +96,15 @@ def test_human_approval_without_an_approver_identity_is_refused(tmp_path: Path) 
 
 
 def test_human_approval_by_the_implementer_is_refused(tmp_path: Path) -> None:
+    """This is also the n=1 bootstrap case, and it is the open question of issue #4.
+
+    A lone human who implements and approves lands here. The refusal is what I2 says and what
+    ``LedgerEntry.validate_sod`` enforces in the core; it is NOT a rule this control invented.
+    But the founder's 2026-08-05 answer holds that n=1 is legitimate and current, so this test
+    is the single place that changes if I2 is amended or a recorded collapse is introduced.
+    Before these controls, this case "passed" by omitting the implementer entirely — see
+    ``test_human_approval_without_an_implementer_identity_is_refused``.
+    """
     store = _run_at_preview(tmp_path)
     with pytest.raises(RunStateError, match="distinct"):
         _approve(store, approver_identity="coder", implementer_identity="coder")
