@@ -7,6 +7,7 @@ import pytest
 
 from factory_core.manifest import SegregationError, SegregationPolicy
 from factory_runtime.state import RunState, RunStateError, RunStore
+from tests.conftest import ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -34,19 +35,28 @@ def _ratify_all(store: RunStore) -> None:
         "run-1",
         RunState.PRODUCT_SPECIFICATION_RATIFIED,
         actor="validator",
-        artifact_digests={"product-specification": PRODUCT},
+        artifact_digests={
+            "product-specification": PRODUCT,
+            **ratification_receipts("product-specification"),
+        },
     )
     store.transition(
         "run-1",
         RunState.ARCHITECTURE_RATIFIED,
         actor="validator",
-        artifact_digests={"architecture": ARCHITECTURE},
+        artifact_digests={
+            "architecture": ARCHITECTURE,
+            **ratification_receipts("architecture"),
+        },
     )
     store.transition(
         "run-1",
         RunState.OPERATIONAL_MATURITY_RATIFIED,
         actor="validator",
-        artifact_digests={"operational-maturity": OPERATIONS},
+        artifact_digests={
+            "operational-maturity": OPERATIONS,
+            **ratification_receipts("operational-maturity"),
+        },
     )
 
 
@@ -170,7 +180,13 @@ def test_specification_defect_can_only_resume_through_a_ratified_phase(tmp_path:
         "run-1",
         RunState.ARCHITECTURE_RATIFIED,
         actor="validator",
-        artifact_digests={"architecture": amended},
+        artifact_digests={
+            "architecture": amended,
+            # A receipt binds to one subject digest, so the amended version needs its own pair;
+            # the store refuses the receipts recorded for the version the defect invalidated.
+            "architecture:human-receipt": "sha256:" + ("7" * 64),
+            "architecture:validator-receipt": "sha256:" + ("8" * 64),
+        },
     )
     assert projection.phase_artifact_digests["architecture"] == amended
     assert "operational-maturity" not in projection.phase_artifact_digests
@@ -199,7 +215,10 @@ def test_sod_overlap_is_refused_at_transition_write(tmp_path: Path) -> None:
             "run-1",
             RunState.PRODUCT_SPECIFICATION_RATIFIED,
             actor="validator",
-            artifact_digests={"product-specification": PRODUCT},
+            artifact_digests={
+            "product-specification": PRODUCT,
+            **ratification_receipts("product-specification"),
+        },
             implementer_identity="agent-validator",
             verifier_identity="agent-validator",
             approver_identity="human-1",

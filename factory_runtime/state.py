@@ -12,7 +12,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -235,6 +235,75 @@ def _require_approval_identities(
         )
 
 
+#: The two receipts a `*-ratified` entry must name, keyed `{phase}:{role}-receipt` — the keys
+#: `WorkflowEngine.ratify_phase` already records the verified envelope digests under.
+_RATIFICATION_RECEIPT_ROLES = ("human", "validator")
+
+
+def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
+    """Every ratification-receipt digest already recorded in a run's ledger."""
+    seen: set[str] = set()
+    for record in records:
+        digests = record.get("artifact_digests")
+        if not isinstance(digests, Mapping):
+            continue
+        for key, value in digests.items():
+            if str(key).endswith(tuple(f":{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES)):
+                seen.add(str(value))
+    return seen
+
+
+def _require_ratification_receipts(
+    digests: Mapping[str, Any],
+    phase_key: str,
+    *,
+    context: str,
+    already_recorded: Collection[str] = (),
+) -> set[str]:
+    """A ratification names a human receipt and a distinct Validator receipt, or it is refused.
+
+    The store does not — and must not — verify a signature: no key material lives in
+    ``manifest.py`` and verification belongs behind the Tessera seam, where
+    ``WorkflowEngine.ratify_phase`` does it against the exact artifact digest, run id, expected
+    signer, and consumed nonces. What the store owns is *admissibility*: an entry that does not
+    name both receipts is not a ratification, so the transition fails closed rather than recording
+    one. Without this the requirement lived only in the workflow layer, and a control that lives
+    only in the workflow layer is bypassable by anything holding a store.
+
+    The three digests must be distinct. Two names for one envelope is one receipt — the same
+    collapse ``ratify_phase`` refuses when the human and Validator ratifier identities match — and
+    a receipt whose digest equals the artifact's cannot be an envelope containing a signature over
+    that artifact. Either equality means the map was padded to satisfy the check.
+
+    A receipt already recorded in this run cannot ratify again. A receipt is bound to one subject
+    digest, so re-presenting one after a ``specification-defect`` would be a receipt over the bytes
+    that defect just invalidated — "any new signed version invalidates old derived work," enforced
+    where the re-ratification is written rather than trusted to the caller. Returns the two digests
+    so a caller walking a ledger can accumulate them.
+    """
+    values = [str(digests.get(phase_key, ""))]
+    receipts: set[str] = set()
+    for role in _RATIFICATION_RECEIPT_ROLES:
+        key = f"{phase_key}:{role}-receipt"
+        value = str(digests.get(key, "")).strip()
+        if not value:
+            raise RunStateError(f"{context} requires artifact digest {key!r}")
+        _require_digest(value, f"artifact_digests[{key!r}]")
+        if value in already_recorded:
+            raise RunStateError(
+                f"{context} reuses receipt digest {value} already recorded in this run: a receipt "
+                "binds to one subject digest and cannot ratify a second version of it"
+            )
+        values.append(value)
+        receipts.add(value)
+    if len(set(values)) != len(values):
+        raise RunStateError(
+            f"{context} requires the artifact digest and both receipt digests to be distinct: "
+            "one envelope cited twice is one receipt, not two"
+        )
+    return receipts
+
+
 def _canonical_json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -449,6 +518,12 @@ class RunStore:
                 raise RunStateError(
                     f"{destination} requires artifact digest {phase_key!r}"
                 )
+            _require_ratification_receipts(
+                supplied,
+                phase_key,
+                context=str(destination),
+                already_recorded=_recorded_receipt_digests(self._ledger(run_id).entries()),
+            )
             phases[phase_key] = phase_digest
 
         # Anchor states carry authority, not just an actor. Each check is fail-closed: an
@@ -523,6 +598,7 @@ class RunStore:
         updated_at = 0
         current = ""
         consumed_nonces: set[str] = set()
+        recorded_receipts: set[str] = set()
         for index, record in enumerate(entries):
             if record.get("capability_id") != run_id:
                 raise RunStateError(f"ledger entry {index} belongs to another run")
@@ -567,6 +643,18 @@ class RunStore:
                 or digests.get("source") != source_digest
             ):
                 raise RunStateError(f"ledger entry {index} changes the run subject")
+
+            derived_phase_key = _PHASE_STATE_KEYS.get(destination)
+            if derived_phase_key:
+                # Same reason as the anchor states below: the chain proves an entry was not
+                # edited, not that it was written through `transition`. A direct append chains
+                # validly and would otherwise project as a ratification with no receipts.
+                recorded_receipts |= _require_ratification_receipts(
+                    digests,
+                    derived_phase_key,
+                    context=f"ledger entry {index} ratification",
+                    already_recorded=recorded_receipts,
+                )
 
             if destination is RunState.HUMAN_APPROVED:
                 approved_candidate = str(digests.get("candidate", ""))
