@@ -12,11 +12,13 @@ surface: anything a target needs the factory to do must fit one of these, or the
 been breached.
 
 The *count* is a design decision, not a boundary condition. Five is where the decision sits
-today. The set moves only by an explicit decision recorded in two places — this declaration and
-the guard that pins it (``tests/test_adapters.py``) — so a seam can never be added as a side
-effect of whichever proposal merges first, and an added seam is argued on its own merits rather
-than against a slot only one claimant can occupy. An earlier revision of this docstring stated
-"there is deliberately no sixth"; that read as a boundary condition and it was not one.
+today. Moving the set means amending every place it is declared — this tuple, the guard that pins
+it from outside the module (``tests/test_adapters.py``), ``factory_core.target.ADAPTER_KINDS``,
+and ``factory_core.registry.KIND_TO_PROTOCOL`` — which is deliberately more than one edit: a seam
+can then never be added as a side effect of whichever proposal merges first, and an added seam is
+argued on its own merits rather than against a slot only one claimant can occupy. An earlier
+revision of this docstring stated "there is deliberately no sixth"; that read as a boundary
+condition and it was not one.
 
 Docstrings track the Factory Portal PRD v2 §6.2. Method sets are versioned with the core so a
 target pack can declare the core version it targets.
