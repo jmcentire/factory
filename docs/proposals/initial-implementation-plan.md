@@ -116,7 +116,7 @@ outside a test's bookkeeping.
 | **2. Supervisor** | **delivered** | `factory_runtime`: persisted run state, transition rules, event ledger, agent executor and sandbox ports | Restarting mid-run resumes from evidence; impossible transitions refuse |
 | **3. Three phases** | not started | CLI-first interactive Product Spec, Architecture Spec, and Testing/Monitoring Strategy loops, behind a declared channel port | Each preserves verbatim input, produces behavior-ledger confirmation, and ends in human approval plus an independent Validator attestation anchored to the ledger head |
 | **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; **per-lane cryptogram sections** so the Coder structurally cannot receive test material; **determinism as a lane requirement**; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests *because it holds no key that decrypts them*; Tester cannot read implementation; Validator alone combines and executes; a lane that cannot reproduce a run is refused, not warned; the chosen lane is recorded as evidence |
-| **5. Live gate** | **next**; its three states exist but are unenforced — see *The unenforced tail* | Evidence collection, mutation checks, a **real staging surface** a human reviews in, approve / request-changes / abandon **before** merge, a required check plus branch protection as the enforcement point, CI/CD running *after* approval and able to fail independently, promotion of the exact artifact digest, and receipt verification in the core (migrated from reeve `2344645`) | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against; CI failing after an approval blocks promotion rather than being outvoted by it |
+| **5. Live gate** | **next**; its three states exist but are unenforced — see *The unenforced tail* | Evidence collection, mutation checks, a **real staging surface** a human reviews in, approve / request-changes / abandon **before** merge, a required check plus branch protection as the enforcement point, CI/CD running *after* approval and able to fail independently, promotion of the exact artifact digest, receipt verification in the core (migrated from reeve `2344645`), and the phase-ratification receipt requirement moved down from `workflow.py` to `RunStore.transition` | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against; CI failing after an approval blocks promotion rather than being outvoted by it |
 | **6. Signet** | not started (scope reduced — see below) | Qualified receipt issuance and verification, key custody, revocation, capability evaluation | Tampered signature, wrong issuer, wrong subject digest, missing capability, expiry, revocation, and replay all deny |
 | **7. First live target** | not started; **this ordering is superseded — see below** | A **Wander** target, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything, *and* the onboarding path is cheap enough that the second Wander target does not repeat the first one's cost |
 
@@ -241,8 +241,27 @@ blocked                 a run that cannot legally proceed
 ```
 
 Each `*-ratified` transition requires a human approval receipt and a distinct enrolled non-human
-Validator receipt over the exact artifact bytes. This is enforced: those three states are the
-entries in `_PHASE_STATE_KEYS` and a missing artifact digest refuses the transition.
+Validator receipt over the exact artifact bytes — **and the layer that enforces that matters.**
+
+`WorkflowEngine.ratify_phase` (`factory_runtime/workflow.py:233`) does the real work: it verifies
+both receipts through `verify_receipt` against the exact artifact digest and run id, refuses
+identical human and Validator ratifiers, refuses a human ratifier who is not an enrolled human and
+a Validator ratifier who is not an enrolled non-human, and threads consumed nonces so a receipt
+cannot be replayed. That is the control.
+
+`RunStore.transition` enforces something weaker: the three states are the entries in
+`_PHASE_STATE_KEYS`, so a missing *artifact digest* refuses the transition and phase ordering is
+checked — but no receipt is required. A caller holding a store can therefore reach a `*-ratified`
+state with `artifact_digests={phase: digest}` and nothing else, which is exactly what
+`tests/test_runtime_state.py:30`'s `_ratify_all` does.
+
+**That is the same defect class as the unenforced tail, one layer up**, and it is worth stating
+plainly because the fix for the anchor states was justified on precisely this ground: a control that
+lives only in the workflow layer is bypassable by anything holding a store. The ratified states are
+still workflow-only. Moving the receipt requirement down to `RunStore.transition` — the receipt
+envelope digests are already written into `artifact_digests` under `{phase}:human-receipt` and
+`{phase}:validator-receipt` keys, so the store has what it needs to demand them — belongs with the
+slice-5 work and the deliverable-7 migration, not with a documentation correction.
 
 `human-approved` and `promoted` are *doctrinally* signed anchor points and are **not yet enforced
 as such**. The earlier revision of this document stated the requirement without marking it
@@ -638,6 +657,7 @@ proposals:
 | External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
 | `human-approved` and `promoted` marked as doctrine ahead of code | The plan stated "`human-approved` and `promoted` are also signed anchor points" as flat fact. Verified at `94e7bb1`: those two states have zero production callers, `RunStore.transition` requires only a non-empty `actor` for them, and `approver_identity` defaults to `""`. Stating an unenforced requirement in the same voice as an enforced one is the error that makes a status column unreliable — and it hid the fact that slice 5, not slice 3, is the next load-bearing work. |
 | `blocked` distinguished from the other off-happy-path states | Grouping it with `specification-defect` understated it. `blocked` is genuinely driven from four `store.transition` call sites in `orchestrator.py` and a real failing build reaches it (`test_tessera_cli_integration.py:453`); `specification-defect` has no production driver at all. |
+| The layer that enforces `*-ratified` receipts named, and the store's weaker guarantee stated | The document said receipts are required and "this is enforced," then cited `_PHASE_STATE_KEYS` — which enforces a digest, not a receipt. Receipt verification is `workflow.py:233`; `RunStore.transition` will reach a ratified state on `artifact_digests` alone, as `tests/test_runtime_state.py:30` does. Conflating the two repeats the error this revision exists to fix, and it hides that the ratified states have the same workflow-only-enforcement weakness the anchor states were just fixed for. Raised by Copilot on PR #8. |
 | Proof 1 recorded as attempted with a result, not pending | It has been run as far as the code allows. Leaving it listed as future work would have lost its finding, which is the whole reason the proof exists. |
 | Proof 2's premise expired | `factory_core/registry.py` is on `main` at `cba4f7f`; `glue/adapter-registry-readonly-git` is a stale duplicate. The plan asked to rebuild through the intake a change that had already landed by the ordinary route. |
 | Reeve repositioned from target of record to prior art and proving surface; Wander named as the target of record | Confirmed by the founder on 2026-08-05. The build order had encoded the opposite, which pushed the primary target behind all seven slices. The previous revision over-corrected by calling reeve "explicitly not what this factory is being built to serve" — reeve and MEA are consumers too; Wander is primary. |
