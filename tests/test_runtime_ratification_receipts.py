@@ -363,3 +363,75 @@ def test_a_whitespace_padded_receipt_digest_is_refused(tmp_path: Path) -> None:
     )
     with pytest.raises(RunStateError, match="canonical sha256 digest"):
         store.load("run-1")
+
+
+def test_a_receipt_key_cannot_be_parked_on_another_phases_ratification(tmp_path: Path) -> None:
+    """A receipt key belongs only to the ratification of its own phase.
+
+    This closes the gap Copilot flagged on PR #11.  The reuse rule counts a receipt digest as
+    spent by key *suffix* anywhere in the ledger, but the ratification check only reaches the two
+    keys of the phase being ratified.  So a receipt parked under some other phase's key spent the
+    digest on the write path while `_derive` never saw it as spent -- and a directly-appended
+    ledger could then reuse it where `transition` refuses to.
+    """
+    store = _store(tmp_path)
+    with pytest.raises(RunStateError, match="ratify nothing here"):
+        _ratify(store, **_receipts("architecture"))
+
+
+def test_a_receipt_key_cannot_ride_a_non_ratifying_transition(tmp_path: Path) -> None:
+    """Same rule, the other placement: a transition that ratifies nothing carries no receipts."""
+    store = _store(tmp_path)
+    _ratify(store)
+    store.transition(
+        "run-1",
+        RunState.ARCHITECTURE_RATIFIED,
+        actor="validator",
+        artifact_digests={"architecture": ARCHITECTURE, **_receipts("architecture")},
+    )
+    store.transition(
+        "run-1",
+        RunState.OPERATIONAL_MATURITY_RATIFIED,
+        actor="validator",
+        artifact_digests={"operational-maturity": OPERATIONS, **_receipts("operational-maturity")},
+    )
+    with pytest.raises(RunStateError, match="ratify nothing here"):
+        store.transition(
+            "run-1",
+            RunState.BUILDING,
+            actor="validator",
+            artifact_digests=_receipts("candidate"),
+        )
+
+
+def test_derive_refuses_a_receipt_key_that_ratifies_nothing(tmp_path: Path) -> None:
+    """`_derive` refuses the stray placement too, or the write-path refusal is bypassable.
+
+    The whole point of the derive-side checks: the hash chain proves an entry was not edited, not
+    that it was written through `transition`.  If `transition` refuses the parking move and
+    `_derive` admits it, the two paths disagree about what is admissible -- which is the defect
+    class, not a detail of it.
+    """
+    store = _store(tmp_path)
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.INTAKE,
+            to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            artifact_digests={
+                "product-specification": PRODUCT,
+                **_receipts("product-specification"),
+                # parked: spends the architecture receipts one entry early
+                **_receipts("architecture"),
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": {"product-specification": PRODUCT},
+            },
+            actor="validator",
+            created_at="101",
+        )
+    )
+    # `rebuild_projection`, not `load`: `load` also trips the stale-projection check, and a
+    # projection mismatch is not a demonstration that the ENTRY is inadmissible.
+    with pytest.raises(RunStateError, match="ratify nothing here"):
+        store.rebuild_projection("run-1")

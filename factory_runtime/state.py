@@ -239,6 +239,24 @@ def _require_approval_identities(
 #: `WorkflowEngine.ratify_phase` already records the verified envelope digests under.
 _RATIFICATION_RECEIPT_ROLES = ("human", "validator")
 
+#: The key suffixes that make a digest a ratification receipt, wherever it appears.
+_RECEIPT_KEY_SUFFIXES = tuple(f":{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES)
+
+
+def _receipt_keys(digests: Mapping[str, Any]) -> set[str]:
+    """The receipt-shaped keys in one artifact-digest map, by suffix alone."""
+    return {str(key) for key in digests if str(key).endswith(_RECEIPT_KEY_SUFFIXES)}
+
+
+def _receipt_digests_in(digests: Mapping[str, Any]) -> set[str]:
+    """The receipt digests one artifact-digest map spends.
+
+    The single rule for "this digest has been used as a receipt". Both paths accumulate through
+    it -- `transition` over the whole ledger, `_derive` entry by entry -- so neither can end up
+    with a narrower notion of what is already spent than the other.
+    """
+    return {str(digests[key]) for key in _receipt_keys(digests)}
+
 
 def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
     """Every ratification-receipt digest already recorded in a run's ledger."""
@@ -247,10 +265,39 @@ def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
         digests = record.get("artifact_digests")
         if not isinstance(digests, Mapping):
             continue
-        for key, value in digests.items():
-            if str(key).endswith(tuple(f":{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES)):
-                seen.add(str(value))
+        seen |= _receipt_digests_in(digests)
     return seen
+
+
+def _require_receipts_belong_here(
+    digests: Mapping[str, Any], phase_key: str | None, *, context: str
+) -> None:
+    """A receipt digest may only appear on the ratification of the phase it ratifies.
+
+    N.B. This exists because the reuse rule counts a receipt digest as spent by key *suffix*
+    anywhere in the ledger (``_recorded_receipt_digests``), while the ratification check only ever
+    reaches the two keys belonging to the phase being ratified. Without this, a receipt-shaped key
+    parked on some other entry -- another phase's ratification, or any non-ratifying transition --
+    would spend a digest on the write path that ``_derive`` never sees as spent, so a
+    directly-appended ledger could reuse it where ``transition`` refuses to. Two paths disagreeing
+    about what is admissible is the whole defect class the derive-side checks exist to close, so
+    close it by construction: there is exactly one place a receipt key is meaningful, and every
+    other placement is refused rather than silently counted.
+
+    ``WorkflowEngine.ratify_phase`` records exactly the two keys for the phase it ratified, so
+    nothing on the real path is affected.
+    """
+    allowed = (
+        {f"{phase_key}:{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES}
+        if phase_key
+        else set()
+    )
+    stray = sorted(_receipt_keys(digests) - allowed)
+    if stray:
+        raise RunStateError(
+            f"{context} records receipt digest(s) {stray} that ratify nothing here: a receipt key "
+            "belongs only to the ratification of its own phase"
+        )
 
 
 def _require_ratification_receipts(
@@ -523,6 +570,7 @@ class RunStore:
         phases = dict(current.phase_artifact_digests)
         transition_payload = dict(payload or {})
         phase_key = _PHASE_STATE_KEYS.get(destination)
+        _require_receipts_belong_here(supplied, phase_key, context=str(destination))
         if phase_key:
             phase_digest = supplied.get(phase_key, "")
             if not phase_digest:
@@ -656,11 +704,14 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} changes the run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
+            _require_receipts_belong_here(
+                digests, derived_phase_key, context=f"ledger entry {index}"
+            )
             if derived_phase_key:
                 # Same reason as the anchor states below: the chain proves an entry was not
                 # edited, not that it was written through `transition`. A direct append chains
                 # validly and would otherwise project as a ratification with no receipts.
-                recorded_receipts |= _require_ratification_receipts(
+                _require_ratification_receipts(
                     digests,
                     derived_phase_key,
                     context=f"ledger entry {index} ratification",
@@ -679,6 +730,10 @@ class RunStore:
                         f"ledger entry {index} disagrees with itself about the "
                         f"{derived_phase_key!r} artifact digest"
                     )
+            # Accumulated by the same rule `transition` reads the ledger with, and for every entry
+            # rather than only the ratifying ones, so the two paths cannot disagree about which
+            # digests are spent.
+            recorded_receipts |= _receipt_digests_in(digests)
 
             if destination is RunState.HUMAN_APPROVED:
                 approved_candidate = str(digests.get("candidate", ""))
