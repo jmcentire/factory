@@ -735,9 +735,21 @@ class RunStore:
             # digests are spent.
             recorded_receipts |= _receipt_digests_in(digests)
 
+            # Read from the same table `transition` reads, not by naming the two states again.
+            # N.B. The digest requirement is generic on the write path (`_ANCHOR_STATE_KEYS`) and
+            # was destination-by-destination here. Nothing was unenforced -- the table has exactly
+            # the two entries both paths spell out -- but adding a third would have been picked up
+            # by `transition` and silently skipped by `_derive`, and `_derive` being the weaker of
+            # the two is the defect class these checks exist to close.
+            derived_anchor_key = _ANCHOR_STATE_KEYS.get(destination)
+            if derived_anchor_key:
+                _require_digest(
+                    str(digests.get(derived_anchor_key, "")),
+                    f"ledger entry {index} {derived_anchor_key} digest",
+                )
+
             if destination is RunState.HUMAN_APPROVED:
                 approved_candidate = str(digests.get("candidate", ""))
-                _require_digest(approved_candidate, f"ledger entry {index} candidate digest")
                 # `_derive` is the authority, so it must refuse what `transition` refuses. The
                 # hash chain catches an edited entry; it does not catch one appended through the
                 # ledger directly, which chains validly and would otherwise project as a
@@ -749,7 +761,6 @@ class RunStore:
                 )
             elif destination is RunState.PROMOTED:
                 promoted = str(digests.get("promoted-artifact", ""))
-                _require_digest(promoted, f"ledger entry {index} promoted-artifact digest")
                 if promoted != approved_candidate:
                     raise RunStateError(
                         f"ledger entry {index} promotes a digest that was never approved"

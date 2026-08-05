@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from factory_runtime.state import RunState, RunStateError, RunStore
+from factory_runtime.state import _ANCHOR_STATE_KEYS, RunState, RunStateError, RunStore
 from tests.conftest import ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
@@ -211,4 +211,56 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
     )
 
     with pytest.raises(RunStateError, match="approver"):
+        store.rebuild_projection("run-1")
+
+
+@pytest.mark.parametrize("anchor_state", sorted(_ANCHOR_STATE_KEYS, key=str))
+def test_derive_requires_every_anchor_digest_the_write_path_requires(
+    tmp_path: Path, anchor_state: RunState
+) -> None:
+    """Driven off `_ANCHOR_STATE_KEYS` so the table, not this file, decides the coverage.
+
+    `transition` enforces the anchor digest generically from that table; `_derive` used to name
+    the two states individually.  Both had the same two entries, so nothing was unenforced -- but
+    a third entry would have been enforced on the write path and skipped by `_derive`, and
+    `_derive` is the authority.  Parametrizing off the table means adding an anchor state without
+    covering `_derive` fails here rather than shipping a one-sided control.
+    """
+    from factory_core.manifest import LedgerEntry
+
+    store = _run_at_preview(tmp_path)
+    anchor_key = _ANCHOR_STATE_KEYS[anchor_state]
+    phase_artifacts = {
+        "product-specification": PRODUCT,
+        "architecture": ARCHITECTURE,
+        "operational-maturity": OPERATIONS,
+    }
+    # Walk to the state before the one under test, then append its entry with the anchor digest
+    # omitted -- the one thing `transition` would have refused.
+    prior = RunState.PREVIEW
+    if anchor_state is not RunState.HUMAN_APPROVED:
+        _approve(store)
+        store.transition("run-1", RunState.CI, actor="validator")
+        prior = RunState.CI
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=prior,
+            to_state=anchor_state,
+            implementer_identity="coder",
+            approver_identity="human-approver",
+            artifact_digests={
+                # no `anchor_key`: that is the omission under test
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": phase_artifacts,
+            },
+            payload={},
+            actor="validator",
+            created_at="300",
+        ),
+        None,
+    )
+
+    with pytest.raises(RunStateError, match=f"{anchor_key} digest"):
         store.rebuild_projection("run-1")
