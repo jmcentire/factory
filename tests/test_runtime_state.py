@@ -216,9 +216,9 @@ def test_sod_overlap_is_refused_at_transition_write(tmp_path: Path) -> None:
             RunState.PRODUCT_SPECIFICATION_RATIFIED,
             actor="validator",
             artifact_digests={
-            "product-specification": PRODUCT,
-            **ratification_receipts("product-specification"),
-        },
+                "product-specification": PRODUCT,
+                **ratification_receipts("product-specification"),
+            },
             implementer_identity="agent-validator",
             verifier_identity="agent-validator",
             approver_identity="human-1",

@@ -275,19 +275,30 @@ def _require_ratification_receipts(
     a receipt whose digest equals the artifact's cannot be an envelope containing a signature over
     that artifact. Either equality means the map was padded to satisfy the check.
 
+    The phase artifact digest is required here too, not only by the caller. ``transition`` checks
+    it before calling; ``_derive`` reads a map an appender controls, and an entry that omitted the
+    top-level digest would otherwise reach the distinctness check with an empty artifact value —
+    which is what makes "no receipt equals the artifact digest" meaningful in the first place.
+
     A receipt already recorded in this run cannot ratify again. A receipt is bound to one subject
     digest, so re-presenting one after a ``specification-defect`` would be a receipt over the bytes
     that defect just invalidated — "any new signed version invalidates old derived work," enforced
     where the re-ratification is written rather than trusted to the caller. Returns the two digests
     so a caller walking a ledger can accumulate them.
     """
-    values = [str(digests.get(phase_key, ""))]
+    artifact = str(digests.get(phase_key, ""))
+    if not artifact:
+        raise RunStateError(f"{context} requires artifact digest {phase_key!r}")
+    _require_digest(artifact, f"artifact_digests[{phase_key!r}]")
+    values = [artifact]
     receipts: set[str] = set()
     for role in _RATIFICATION_RECEIPT_ROLES:
         key = f"{phase_key}:{role}-receipt"
-        value = str(digests.get(key, "")).strip()
+        value = str(digests.get(key, ""))
         if not value:
-            raise RunStateError(f"{context} requires artifact digest {key!r}")
+            raise RunStateError(f"{context} requires receipt digest {key!r}")
+        # Validated unstripped, on purpose: whitespace around a digest would let the check pass
+        # on a value that is not the one recorded in the entry.
         _require_digest(value, f"artifact_digests[{key!r}]")
         if value in already_recorded:
             raise RunStateError(
@@ -655,6 +666,19 @@ class RunStore:
                     context=f"ledger entry {index} ratification",
                     already_recorded=recorded_receipts,
                 )
+                # The entry records the ratified artifact twice — at the top level and in the
+                # phase map. `transition` writes one value into both; two records of the same
+                # digest that disagree is inadmissible rather than a matter of which one wins.
+                phases_declared = digests.get("phase_artifacts")
+                if (
+                    isinstance(phases_declared, Mapping)
+                    and str(phases_declared.get(derived_phase_key, ""))
+                    != str(digests.get(derived_phase_key, ""))
+                ):
+                    raise RunStateError(
+                        f"ledger entry {index} disagrees with itself about the "
+                        f"{derived_phase_key!r} artifact digest"
+                    )
 
             if destination is RunState.HUMAN_APPROVED:
                 approved_candidate = str(digests.get("candidate", ""))

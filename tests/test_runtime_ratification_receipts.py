@@ -282,3 +282,84 @@ def test_derive_refuses_a_ledger_that_reuses_a_receipt(tmp_path: Path) -> None:
     )
     with pytest.raises(RunStateError, match="reuses receipt digest"):
         store.load("run-1")
+
+
+def test_derive_refuses_a_ratification_entry_that_omits_the_artifact_digest(
+    tmp_path: Path,
+) -> None:
+    """The helper requires the phase digest itself, not just the receipts.
+
+    `transition` checks it before calling, but `_derive` reads a map an appender controls. Without
+    this, an entry could omit the top-level digest and reach the distinctness check with an empty
+    artifact value — which is what makes "no receipt equals the artifact digest" mean anything.
+    """
+    store = _store(tmp_path)
+    receipts = _receipts("product-specification")
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.INTAKE,
+            to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            artifact_digests={
+                # no top-level "product-specification": only the phase map carries it
+                **receipts,
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": {"product-specification": PRODUCT},
+            },
+            actor="validator",
+            created_at="101",
+        )
+    )
+    with pytest.raises(RunStateError, match="requires artifact digest"):
+        store.load("run-1")
+
+
+def test_derive_refuses_an_entry_that_disagrees_with_itself_about_the_artifact(
+    tmp_path: Path,
+) -> None:
+    """The ratified digest is recorded twice; two records that disagree are inadmissible."""
+    store = _store(tmp_path)
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.INTAKE,
+            to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            artifact_digests={
+                "product-specification": PRODUCT,
+                **_receipts("product-specification"),
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": {"product-specification": AMENDED},
+            },
+            actor="validator",
+            created_at="101",
+        )
+    )
+    with pytest.raises(RunStateError, match="disagrees with itself"):
+        store.load("run-1")
+
+
+def test_a_whitespace_padded_receipt_digest_is_refused(tmp_path: Path) -> None:
+    """Validated unstripped: a padded value is not the value recorded in the entry."""
+    store = _store(tmp_path)
+    padded = " " + HUMAN_RECEIPT + " "
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.INTAKE,
+            to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            artifact_digests={
+                "product-specification": PRODUCT,
+                "product-specification:human-receipt": padded,
+                "product-specification:validator-receipt": VALIDATOR_RECEIPT,
+                "target": TARGET,
+                "source": SOURCE,
+                "phase_artifacts": {"product-specification": PRODUCT},
+            },
+            actor="validator",
+            created_at="101",
+        )
+    )
+    with pytest.raises(RunStateError, match="canonical sha256 digest"):
+        store.load("run-1")
