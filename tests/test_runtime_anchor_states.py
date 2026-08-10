@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from factory_runtime.state import _ANCHOR_STATE_KEYS, RunState, RunStateError, RunStore
+from tests.conftest import ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -54,7 +55,12 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         (RunState.ARCHITECTURE_RATIFIED, "architecture", ARCHITECTURE),
         (RunState.OPERATIONAL_MATURITY_RATIFIED, "operational-maturity", OPERATIONS),
     ):
-        store.transition("run-1", state, actor="validator", artifact_digests={key: digest})
+        store.transition(
+            "run-1",
+            state,
+            actor="validator",
+            artifact_digests={key: digest, **ratification_receipts(key)},
+        )
     store.transition("run-1", RunState.BUILDING, actor="validator")
     store.transition("run-1", RunState.VALIDATING, actor="validator")
     store.transition("run-1", RunState.PREVIEW, actor="validator")

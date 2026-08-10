@@ -58,6 +58,7 @@ from factory_runtime.evidence_plane import (
 )
 from factory_runtime.schema import DocumentValidationError
 from factory_runtime.state import RunState, RunStore
+from tests.conftest import ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -122,7 +123,10 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
             "run-1",
             state,
             actor="validator",
-            artifact_digests={artifact.phase: artifact.content_digest},
+            artifact_digests={
+                artifact.phase: artifact.content_digest,
+                **ratification_receipts(artifact.phase),
+            },
         )
     store.transition("run-1", RunState.BUILDING, actor="validator")
     store.transition(
