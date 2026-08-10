@@ -123,3 +123,12 @@ make test-tessera   # real signing + runtime-through-preview proof
 Capture durable decisions/constraints/key-files to kindex with `audience=team`; they export to
 `.kin/knowledge.jsonl` and ship with the code. Coordination scratch is ephemeral — never
 commit it. Search `.kin`/kindex before changing shared surfaces.
+
+Every Validator-kicked run begins with a **research phase (Phase A0)**: search the graph
+first, fetch the authoritative documentation for whatever the run touches, and capture
+each source as a kindex node — provenance (URL/version, fetch date), run tag, domain
+tags, and a one-line annotation of what it constrains for this run — linked to the
+constraints and decisions it informs. Dispatches cite these nodes so the Coder and
+Tester inherit ground truth instead of re-deriving it. Kindex is context, never
+authority: research nodes inform artifacts; only signed artifacts authorize. See
+`docs/HARNESS.md` (memory layer) and the `/validate` skill's Phase A0.

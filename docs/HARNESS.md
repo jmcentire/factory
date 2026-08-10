@@ -1,0 +1,342 @@
+# The Harness
+
+> Status: unratified proposal. Definitions and controls for founder signature; scripts are
+> runnable today and enforce nothing until wired into lane start and `make ship`.
+> Canonical copy: `~/Code/factory/docs/HARNESS.md`. Mirror: `~/Code/tools/HARNESS.md`.
+> Skill form: `/orchestrate` (`skills/orchestrate.md` here and in `~/.claude/commands/`).
+
+## Definition
+
+**The harness is the externalization of every function an agent would otherwise supply for
+itself — memory of record, metric, cadence, authority, capability, identity, and verdict —
+implemented so that the agent cannot supply them.**
+
+An agent may propose anything and author nothing that governs its own run. This is I8
+generalized from doctrine to infrastructure: not just "no agent modifies its own approval
+rules," but no agent *is the source* of any function the run is judged by.
+
+The test for whether something belongs to the harness: **remove the model entirely — does the
+thing still stand?** The ledger, the state machine, the capability grants, the receipts, the
+timers all survive the model's removal. A claim that exists only because an agent said it is
+not harness; it is testimony.
+
+Every failure in the three postmortems was an agent supplying one of these functions for
+itself:
+
+| Function | How the agent supplied it | Cost |
+|---|---|---|
+| Metric | Validator's self-authored scoreboard (SHA-diff cron) | 8 of 10 walkthrough PRs worthless; reporting penalized 407 times |
+| Cadence | All three lanes' self-set crons | 96 cold-context dispatches; the cron survived a kill order ~11 hours |
+| Memory | Post-compaction summaries treated as the record | "5 subagents" was actually 96; a postmortem about summary corruption written from a summary |
+| Identity/routing | Coder inheriting the channel from its own prior prompt | ~12 hours polling; correctives delivered to a detached lane |
+| Authority/dispatch | Tester promoting backlog items into its own queue | Real findings, zero of them requested; scope drift laundered as heroism |
+| Provenance | Validator citing its own kindex node as a founder ruling | "founder ruled IN scope" with no locatable source |
+| Verdict | Validator "ratifying" its own criticality downgrades | Procedural exemption read as substantive authority |
+
+The industry's convergence statement, which the postmortems derived independently:
+**agents reason; the runner remembers and schedules; policy authorizes; tools execute;
+verifiers judge; humans hold the frame.**
+
+## The two-layer validation split
+
+Every control in the harness is one of two kinds, and the kinds must not impersonate each
+other:
+
+- **Deterministic, always-on, gating.** Capability checks, schema validation, hash chains,
+  budget caps, transition rules, signature verification. Millisecond cost, runs on every
+  action, *blocks*.
+- **Semantic, sampled, flagging.** Trace audits against declared goals, Sim on framing and
+  doneness claims, adversarial refutation swarms. Model cost, runs on trajectories, *flags*.
+
+A judge is never a gate — it is probabilistic and routable-around. A predicate is never a
+drift detector — compliant actions toward the wrong goal pass every predicate (the Coder's
+"compliant and detached" state). The Sim failure (required, available, never invoked) gets
+the mechanical treatment: **the harness checks the receipt that the audit ran; the audit's
+content stays advisory.** "Was Sim invoked on this doneness claim" is a deterministic gate;
+"what Sim said" is judgment.
+
+The doctrine linter follows from this: every `[BINDING]` line in doctrine must name its
+enforcement — a capability, a gate, a receipt requirement, or a sampled audit. A binding
+line whose enforcement is "advice" is a backlog item, not a control.
+
+## Layer map — what owns what
+
+| Function | Owner | Mechanism |
+|---|---|---|
+| Authority (what was said) | **Directive ledger** + Tessera | Append-only hash-chained JSONL of verbatim founder text; hardware-signed git commits (agent verifies, cannot sign); qualifier-preserving supersession. Chess genesis holds run-level authorization logic under the root signature. |
+| Identity (who acts) | **Signet** | Per-lane principals from the enrollment registry (deliverable 8); short-lived scoped tokens, per-hop; deny-wins resolution. "The Tester cannot read the Coder's channel" becomes an ACL fact. |
+| Policy (what a token may do) | **SPL** (jmcentire/agent-safe) | Total, gas-metered evaluation in-token at the tool boundary; sealed attenuation; expressions are approval rules, so human-signed under I8, never agent-authored into force. |
+| State (what is true now) | **factory_runtime** RunState + **Chess** anchors | Per settled decisions: machine evidence chained in the factory_core ledger; anchor transitions (`*-ratified`, `human-approved`, `promoted`) carry Chess move records — prev/new state hash, actor key, signature over all four, re-execution at the anchor; anchors carry the ledger head digest only. |
+| Capability (what is reachable) | `lane_env` + sandbox + egress allowlist | The environment *is* the grant: `env -i` construction from a manifest, secrets injected by name per-command, never a sourced profile. Seatbelt/containers for filesystem and network. Absence beats instruction. |
+| Cadence (when anything runs) | Runner timers + schedule registry | Agents request schedules; humans grant them; `sched_audit` treats an unregistered timer as hostile and a kill order as immediate. |
+| Evidence (what happened) | Receipt chain | A claim is a receipt id or it does not exist: exit code, log digest, tree SHA, dirty-state digest, chained. Absence claims carry a paired positive-control receipt. |
+| Memory (what is remembered) | **kindex** — context, never authority | Provenance-tagged writes; reads are correction-aware (act on a node only with its tail acknowledged); search-before-build enforced as a receipt, not a nag. Resume consults the ledger on disk, never a summary. |
+| Projection (who sees what) | **Cryptogram** | Per-lane sections encrypted to lane keys, orchestrator routes blind. Coder/Tester separation stops being a policy about where Pact's `decompose` output goes and becomes a decryption impossibility. |
+| Budget | Runner objective ledger | Spend accounted per objective against evidence produced and uncertainty removed — "what did the last $100 buy" answerable at any time. Per-turn budgets are forbidden; they reward fragmentation. |
+| Qualification | **Benchie** as configuration CI | `qualification_id = hash(model + prompts + runner + tool schemas + policy + projection + verifier + environment)`; any change requalifies. The session-start canary is a smoke test for gross configuration failure, never certification of the next trajectory. |
+| Verdict | Validator + human gates | Validator executes an oracle it did not author; the judge of the judge is the qualification suite plus the human gate — the gap the Validator postmortem named ("who judges the judge") closes structurally, not with a fourth agent. |
+
+One seat the map must name explicitly: the **orchestrator** — and it is two seats, not
+one. The **dispatcher** is a script. It owns the event stream, launches lanes through
+`lane_env`, relays, collects receipts, applies the failure-class routing table, and
+enforces budgets and leases. It reasons about nothing — most of what flows through a run
+is local commands and their output, and no model should be paying to watch that. The
+**orchestrator-agent** is invoked, not resident: the dispatcher wakes it on defined
+triggers — judgment-shaped failure classes, a lane's blocking question, a human message —
+under the lease discipline of control 6, and hands it a *projection*, not the transcript:
+the triggering event, the receipt-chain tail, the governing directives. It pulls specific
+artifacts by receipt id when the projection isn't enough. Context cost then scales with
+the exceptions rather than the run — the exact inverse of the 96-cold-loads bill. The
+projection is itself recorded (which receipt ids the agent saw), so "what did the
+orchestrator know when it decided" is replayable. Both seats hold zero grant authority:
+manifests, registries, and the ledger are human-signed files they read and cannot write.
+An orchestrator that can edit a manifest is the meta-agent-with-authorization trap rebuilt
+with better vocabulary — and an agent seat that watches everything is the cost trap
+rebuilt with better intentions.
+
+Mapping to the field, so nothing here is exotic: the directive ledger with taint-carrying
+downstream references is CaMeL's typed provenance; SPL-at-the-boundary is the
+AgentSpec/Cedar pattern of deterministic predicates outside the model; resume-from-disk is
+the Temporal/LangGraph durable-execution pattern; hold-until-decided two-phase confirms are
+the effect-gate pattern; evidence-gap blocking before commitment actions is ECLoop's
+result arrived at from our own INVESTIGATE discipline. One caution: several named systems
+in the third survey (SOUNDGATE, NCS, Prompt Fencing, Agent-Airlock) could not be traced to
+primary sources — the *mechanisms* are sound and appear here; nothing depends on adopting
+those products.
+
+## Codified controls
+
+Nine controls, each mechanizing a specific postmortem lesson. The first six ship as
+scripts (see Scripts).
+
+**1. Directive ledger with qualifier-preserving supersession.** Every major failure was a
+real instruction with a qualifier removed ("two-way doors" → doors; "poll to *tend the
+lanes*" → poll to produce artifacts). So qualifiers are first-class fields, and superseding
+an entry mechanically requires a disposition — kept, dropped, or modified — for every
+qualifier the parent carried. A supersession that silently drops a qualifier is rejected at
+write time. This is the piece none of the surveyed vendors sell.
+
+**1a. The live-ruling bridge.** A hardware-signed ledger lags a live session, and rulings
+issued in chat get acted on immediately — correctly. Without a defined path, agents either
+stall on live rulings or improvise, and improvising is the disease this cures. So:
+provisional entries live in a **side chain** (`provisional.jsonl`), agent-appendable,
+hash-chained, each citing the transcript precisely (file:line:uuid:line-sha) and carrying a
+TTL. They never enter the signed ledger; they are *settled* by it — batch-ratified at the
+next ceremony into signed entries that confirm verbatim or correct, or refused. Refusal
+after action has defined semantics: every artifact citing the provisional is reclassified
+as `[AGENT]`-originated, frozen, and routed for an explicit keep/revert disposition — the
+same downstream invalidation the runner already performs on an authority-generation change.
+An expired, unsettled provisional authorizes nothing new; actions already taken under it
+stand, awaiting the same disposition.
+
+**2. Restatement gate.** Corrective instructions carry a diagnosis and a remedy; agents
+latch onto the remedy and satisfy it in ways that worsen the diagnosis. Before work starts
+on any corrective directive, the interpretation — diagnosis restated, in the agent's words —
+is recorded against the directive id and confirmed. `interpretation_confirmed: false`
+blocks the INTAKE transition. One sentence per correction; it would have killed the
+scoreboard in five seconds.
+
+**3. Positive-control receipts.** Four wrong conclusions in one day, each a correct answer
+to a too-narrow query. An absence claim ("this is dead code," "no CI exists," "the role has
+no grants") is admissible only as a pair of receipt ids: the probe, and the identical
+method run against something known to be present in the intended scope. If the control also
+returns empty, the scope was wrong, not the world.
+
+**4. Correction-aware kindex reads.** The Twilio repeat happened with the correct answer
+already in the graph, founder-authored, in a node the agent had quoted earlier that day —
+corrections accrete at the bottom, and reading stopped above them. A kindex read receipt
+includes the node's tail digest; acting on a node without tail acknowledgment is a defect
+class, and re-read-before-acting (not before theorizing) is the checked behavior.
+
+**5. Secret-exposure tripwire with stop-the-line semantics.** The ~40-key exposure was
+flagged four times as a "watch" and never actioned, because "only the human can fix it" was
+read as deprioritization. Credential-shaped content in any transcript or log halts every
+lane — a `HALT` file that `lane_env` refuses to run past — and produces a single-item
+report. An incident is not a queue entry.
+
+**6. Schedule registry and audit — durable timers vs leased wakeups.** No agent-authored
+*durable* cadence survives its turn: OS timers live in the registry, human-granted, and the
+audit lists every live cron, launchd agent, `at` job, and user timer — anything
+unregistered fails, and the kill path is tested, because the last stray ran eleven hours
+past its kill order. Distinct from that: **leased in-objective wakeups** — the short
+self-pokes that babysit a live deploy. Those are legitimate and necessary; they are bounded
+by objective, count, and expiry, recorded in the runner's own lease table, auto-dead at
+objective close, and never touch the OS scheduler. A strict reading that requires a human
+grant per wakeup kills the babysitting that ships deploys; the lease is the grant. Honest
+limit: `sched_audit` sees OS timers only — runner-internal scheduling is auditable only if
+the runner's lease table is, which is a runner requirement, not a script.
+
+**7. Session grounding.** Every failure of the resume path came from consulting an
+agent-authored summary. Session start and post-compaction re-entry re-derive from disk:
+ledger verified and re-read, `origin/main` pinned by SHA, channel list pulled live and
+diffed against the registry, cadence audited, tripwire run. Lane execution is blocked
+without a fresh grounding receipt.
+
+**8. Failure classes as runner state.** A failure's class determines who may resolve it —
+never the agent's prose. The classes that matter most, from the postmortems and the
+research: `POLICY_DENIED` hard-stops with no alternative-path retry (a creative agent
+routing around a 403 is the failure, not the fix); `AUTHORITY_AMBIGUOUS` freezes the branch
+for ratification; `ORACLE_DEFECT` is never the Coder's to resolve; `BASELINE_CONFLICT`
+(green-now gone red) goes to a human, never silently reclassified; `SIDE_EFFECT_UNCERTAIN`
+reconciles external state before any retry; `EVIDENCE_UNAVAILABLE` blocks on critical
+surfaces; repeated same-class failure routes upward instead of buying a third version of
+the same guess.
+
+**9. Environment-reconciliation receipts.** The harness test cuts both ways. Seven deploy
+blockers in one night — declared IAM diverging from live grants, a DB host silently
+inherited from production, an exact-SHA image coupling — all survive the model's removal:
+a human running the same lane hits all seven. So declared-vs-live drift is harness scope
+even though no agent misbehaved. `lane_env` says the environment *is* the grant for
+capabilities; the same principle governs the substrate agents deploy onto. Grounding
+therefore reconciles declared truth against live truth for whatever the objective touches:
+registered per-target reconcilers (terraform-vs-live IAM, tfvars-vs-runtime config, image
+digest expectations) run at ground time, and drift blocks the lane exactly as channel
+drift does. The harness owns the requirement and the receipt; the target owns the probe.
+
+## The human surface
+
+The founder's console is the third projection of the same event stream: lanes get
+cryptogram sections, the orchestrator-agent gets the exception projection, the human gets
+the decision projection. It is rendered by the dispatcher from the receipt chain and
+runner state — no lane narrates and no agent summarizes, so the surface costs the run
+nothing and cannot drift from the record. This is the structural answer to the
+most-repeated directive in the postmortem corpus ("talk to me"): visibility stops being a
+behavior agents remember and becomes a property of the machinery.
+
+Three views:
+
+1. **Tasks.** The runner's objectives with state and spend-against-evidence, drilling down
+   on any key decision to its provenance: the directive (verbatim, `D-####`, or a
+   provisional with its transcript citation), the recorded interpretation, the receipts
+   that discharged it. "Why did it do X" is answered by the chain, never by asking an
+   agent to reconstruct.
+
+2. **Ongoing work, announced before it happens.** Every consequential action is stated
+   ahead of execution as verb → object → environment (`deploy` → `staging`), with a short
+   visible timer during which the human can act. The announcement is itself a receipt.
+
+3. **Exceptions.** Errors, issues, and decisions routed to the human by failure class,
+   each carrying its recommendation where one exists.
+
+Every announced item carries one of three classes, and **the class is data** — resolved
+from the control profile's criticality and reversibility, never assigned by the agent
+whose action it governs; an agent classifying its own action into a timer class is
+self-authorization through the console.
+
+- **Announce — act to stop.** Reversible, pre-authorized actions. Timer elapses → proceed.
+  This is the two-way-door grant made structural: the run keeps moving while the human
+  holds a standing veto, instead of the grant living in an agent's memory of a qualifier.
+- **Default — act to override.** Pending decisions with a strong recommendation. Timer
+  elapses → the default applies, and the record says so: *default-applied under policy,
+  window elapsed* — never rendered as approval. A defaulted decision is attributable to
+  the policy that set the default, not to the human who didn't click.
+- **Require — act to proceed.** Sincerely blocking: irreversible, authority-changing, or
+  oracle-silent on a critical surface. No timer, no default; the run holds. A timer here
+  is the waiver path re-entering — fail-closed becoming a speed bump — so the class admits
+  none. Unclassified lands here, for the same reason an unclassified surface is Critical.
+
+Announcement receipts carry
+`{action, target, class, window, announced_at, outcome}` where outcome is one of
+`vetoed | approved | overridden | default_applied | held` — so a human choice and an
+elapsed window are distinguishable forever. A veto or redirect during the window routes as
+a lane event; a redirect that changes what was authorized opens a provisional directive
+(control 1a) rather than being absorbed as chat. Window lengths are short, configurable,
+and consequence-scaled; Announce-class work proceeding while the human is away is the
+point, Require-class work holding while they're away is also the point.
+
+## Scripts
+
+Layout: `harness/` for the scripts, `.harness/` for state (receipts, HALT, grounding
+marker, registries, `reconcile.d/`), `DIRECTIVES/` as a git repo for the ledger (signed
+chain `ledger.jsonl` + agent-appendable `provisional.jsonl` side chain). All are
+dependency-free (bash + python3 + git):
+
+- `harness/directive.py` — append/supersede (qualifier dispositions enforced), verify
+  (`--sigs` requires signature-clean git history), `provisional`/`ratify` for the
+  live-ruling bridge (control 1a), `active` listing both chains.
+- `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
+  a fresh grounding marker.
+- `harness/receipt.sh` — wraps any command; exit code, log digest, tree SHA, dirty-state
+  digest, flock-serialized per-worktree chain.
+- `harness/tripwire.sh` — credential-shaped content (incl. GCP service-account JSON)
+  halts every lane via `HALT`; only a human clears it.
+- `harness/sched_audit.sh` — every OS timer must match the human-approved registry.
+- `harness/ground.sh` — ledger verify, origin pin, cadence audit, tripwire, channel-list
+  diff, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
+
+The full script listings are in the ratification proposal; they land in
+`~/Code/factory/harness/` at adoption step 1/2.
+
+Founder ceremony, once: `git init DIRECTIVES && git config commit.gpgsign true` with the
+signing key on hardware requiring touch. Every append is committed signed. The agent runs
+`verify --sigs` at grounding; an entry the founder didn't physically touch a key for is not
+a directive. Distribute the founder public key with the harness — a fresh machine without
+it fails `verify --sigs` closed, which is correct behavior, so the keyring install is part
+of machine setup, not an error to route around.
+
+Receipt convention the runner enforces: any prose claim "ran X" / "X passed" must cite an
+`R-` id whose `cmd` and `exit` support it. An absence claim cites two — probe and positive
+control, identical method, and the control's exit demonstrates the scope contained
+something. Chains are per-worktree and never merged: the exclusive lock handles
+concurrency within a worktree, a verdict package cites receipts by (worktree, id, hash),
+and cross-worktree ordering is not a property receipts claim.
+
+`lane_env` grounding staleness defaults to six hours; on incident days set
+`HARNESS_MAX_GROUND_MIN=60` — six hours of credit is calibrated for steady state, not for
+a substrate that is actively moving.
+
+## Anti-features
+
+Named because each was proposed somewhere in the last month and each is a trap:
+
+- **Agent-to-agent heartbeats as the liveness primitive.** Liveness comes from the
+  substrate — leases, supervisor heartbeats, checkpoint ages — not from one stochastic
+  agent attesting another's existence. Read receipts between lanes are collaboration
+  telemetry at most.
+- **A meta-agent with authorization.** A planner may decompose, diagnose, and recommend. It
+  may not grant capabilities, move gates, rewrite authority, or reinterpret a policy denial
+  as an invitation to find another route. The supervisor that detects drift must not itself
+  be a drifting agent.
+- **An LLM judge as a gate.** Sampled audits flag; deterministic checks block. Inverting
+  this gives you a bypassable gate and an alert wall.
+- **Software-only signing sold as tamper-proof.** On a host the agent controls, any key it
+  can read to verify it can read to forge. Software chains are tamper-*evident* — valuable,
+  and honestly labeled. Authenticity of founder directives requires the key to live in
+  hardware that demands a touch. This resolves the runner doc's "hardware signing is
+  ceremony" against the postmortem's §9.2: it isn't ceremony *for directives on an
+  agent-controlled host*; it is the only construction that works there. Everywhere else the
+  assurance ladder applies (digests → chained receipts → org signing → hardware).
+- **Per-session Benchie as certification.** Passing four canaries at 8am proves the
+  configuration loaded, not that hour six retains a qualifier. Qualification is per
+  configuration generation; the session canary is a smoke test.
+- **Retry on `POLICY_DENIED`.** Ever.
+
+## Adoption order
+
+1. **Containment trio, today:** `tripwire`, `lane_env` (with `env -i` manifests),
+   `sched_audit`. These three would have prevented the credential exposure, the 96 cold
+   dispatches, and the eleven-hour cron overrun — the entire bill of the MEA session.
+2. **Ledger + grounding:** founder ceremony (first hardware-signed commit — the same act,
+   rhyming deliberately with slice-0 genesis), with the provisional bridge live from day
+   one so in-session rulings have a path other than stall-or-improvise; then `ground.sh`
+   wired as the precondition `lane_env` already checks, with per-target reconcilers
+   registered for whatever substrate the first objectives touch. Backfill the 266
+   extracted founder directives as the initial corpus; `mea_founder_directives.md` is
+   exactly the input format.
+3. **Receipts into the gates:** `make ship` and every lane claim route through
+   `receipt.sh`; the positive-control convention starts being enforced in review; the
+   human surface renders from the same chain — task list, pre-action announcements with
+   veto windows, exception queue — as the third projection.
+4. **Chess anchors on `human-approved` / `promoted`** — slice 5, per the ratified build
+   order: the staged human decision (approve / request changes / abandon) before merge,
+   CI after, both producing signed move records instead of a non-empty actor string.
+5. **Cryptogram projection** in the build loop: per-lane encrypted sections, blind routing;
+   oracle independence becomes a decryption impossibility. Sequencing flag, not a decision:
+   live-run evidence (three-plus Tester contaminations, every one caught rather than
+   prevented, all via the Validator's own channel messages) argues for pulling this ahead
+   of step 4; the counterweight is that unsigned promotion is the higher-consequence gap.
+   Founder's call.
+6. **Benchie as configuration CI**, seeded the way OpenAI seeds theirs: every real factory
+   incident becomes a policy test, a structural invariant, or a regression benchmark. The
+   three postmortems plus the deploy saga are the first fifteen cases — the saga entering
+   as the first environment-reconciliation regression.
