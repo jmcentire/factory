@@ -3,6 +3,16 @@
 > **Status: unratified proposal.** Merging this document would preserve a design for review; it
 > would not amend doctrine, perform the genesis ceremony, or authorize implementation.
 
+> **Second revision, against the 2026-08-05 answers on [issue #4](https://github.com/jmcentire/factory/issues/4).**
+> Nine items moved from open to decided and are folded in below: the seam count is a design point
+> (so the channel-port proposal is un-withdrawn and argued on its merits); slice 5 is next and its
+> enforcement point is specified; deliverable 7 comes back into the core; Wander is the target of
+> record with reeve and MEA as further consumers; Tessera means real Tessera at pin `83883e62`;
+> the three-principal SoD floor is ratified for `enforcing` with n=1 legitimate as the bootstrap
+> state; design-in-the-loop is a chosen gap and is now stated as one. Two architectures — **Chess**
+> and **Cryptogram** — are adopted by direction rather than proposed here, and get their own
+> section. Six governance items remain open and the founder is settling them together.
+
 We build one real vertical slice, with Factory as the authoritative supervisor. We do not begin by
 wiring every tool together or declaring Signet mandatory.
 
@@ -85,7 +95,19 @@ runtime repo.
 ## Build order
 
 Status is a proposal snapshot reviewed against the PR's current base, not a promise that later
-changes to `main` are already reflected here.
+changes to `main` are already reflected here. This revision is verified against `94e7bb1`, where
+`make ship` is green (330 passed, 3 skipped) and `make test-tessera` is green against the real
+signing binary.
+
+Slices still depend on founder-owned decisions in
+[issue #4](https://github.com/jmcentire/factory/issues/4); see *Founder-owned decisions* below,
+which now separates the decided from the still-open. A slice marked "not started" whose governing
+decision is unanswered is blocked, not merely unscheduled, and the distinction matters for
+sequencing.
+
+**Slice 5 is next, by direction.** Not slice 3. The phase loops extend a path that already
+functions; slice 5 supplies the transitions that carry authority and currently do not exist
+outside a test's bookkeeping.
 
 | Slice | Status | Deliverable | Proof before advancing |
 |---|---|---|---|
@@ -93,10 +115,17 @@ changes to `main` are already reflected here.
 | **1. Local gate** | **delivered** | Authorization-request, phase-artifact, receipt, and evidence-bundle schemas; adapter registry; anchor verification; a runnable local gate | A contributor can predict acceptance locally; altered signatures, digests, citations, subjects, or anchor heads fail |
 | **2. Supervisor** | **delivered** | `factory_runtime`: persisted run state, transition rules, event ledger, agent executor and sandbox ports | Restarting mid-run resumes from evidence; impossible transitions refuse |
 | **3. Three phases** | not started | CLI-first interactive Product Spec, Architecture Spec, and Testing/Monitoring Strategy loops, behind a declared channel port | Each preserves verbatim input, produces behavior-ledger confirmation, and ends in human approval plus an independent Validator attestation anchored to the ledger head |
-| **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests; Tester cannot read implementation; Validator alone combines and executes; the chosen lane is recorded as evidence |
-| **5. Live gate** | not started | Evidence collection, mutation checks, ephemeral preview, human approval, CI promotion of the exact artifact digest, and an enforcement point that can refuse a merge | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against |
+| **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; **per-lane cryptogram sections** so the Coder structurally cannot receive test material; **determinism as a lane requirement**; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests *because it holds no key that decrypts them*; Tester cannot read implementation; Validator alone combines and executes; a lane that cannot reproduce a run is refused, not warned; the chosen lane is recorded as evidence |
+| **5. Live gate** | **next**; its three states exist but are unenforced — see *The unenforced tail* | Evidence collection, mutation checks, a **real staging surface** a human reviews in, approve / request-changes / abandon **before** merge, a required check plus branch protection as the enforcement point, CI/CD running *after* approval and able to fail independently, promotion of the exact artifact digest, receipt verification in the core (migrated from reeve `2344645`), and the phase-ratification receipt requirement moved down from `workflow.py` to `RunStore.transition` | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against; CI failing after an approval blocks promotion rather than being outvoted by it |
 | **6. Signet** | not started (scope reduced — see below) | Qualified receipt issuance and verification, key custody, revocation, capability evaluation | Tampered signature, wrong issuer, wrong subject digest, missing capability, expiry, revocation, and replay all deny |
-| **7. First live external target** | not started | One target beyond reeve, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything |
+| **7. First live target** | not started; **this ordering is superseded — see below** | A **Wander** target, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything, *and* the onboarding path is cheap enough that the second Wander target does not repeat the first one's cost |
+
+**Wander is the target of record**, by direction. Reeve and MEA also consume the factory; Wander is
+primary. That makes the ordering above wrong rather than merely debatable: as written, every slice
+before 7 delivers value only inside this repository, so the actual target is the last thing that
+happens. Reeve stays valuable as prior art and as a proving surface, and it is not the destination.
+The advisory conformance tier proposed below is how the primary target starts receiving value before
+the gate can refuse anything; naming the specific first Wander team is not settled here.
 
 ### What slices 0–2 already are
 
@@ -154,6 +183,38 @@ proof columns are asserted by the suite, not yet by a real run — which is what
 for. Delivered means the surface exists and its tests pass; it does not mean the slice has been
 exercised end to end on real work.
 
+### The unenforced tail of the happy path
+
+Proof 1 has now been run as far as it goes, and this is its result. It is recorded here rather
+than only in the proofs section because it changes a status column.
+
+`test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evidence` walks
+`intake` → `preview` with real authority, real isolation, and real evidence, and asserts a
+terminal `RunState.PREVIEW` (`tests/test_tessera_cli_integration.py:463`). The signing is real:
+the test *skips* rather than fails when `FACTORY_TESSERA_BIN` is unset, and the configured
+binary is present. **Past `preview` there is no driver at all:**
+
+- `HUMAN_APPROVED`, `CI`, and `PROMOTED` appear nowhere in `factory_runtime` outside the
+  transition table in `state.py`. Zero production callers.
+- The only code that walks them is `tests/test_runtime_state.py:66`, which hand-cranks
+  `store.transition(...)` through the state names with `actor="validator"` — including
+  `human-approved`.
+- `RunStore.transition` requires an artifact digest only for the three `*-ratified` states
+  (`_PHASE_STATE_KEYS`, `factory_runtime/state.py:117`). For `human-approved`, `ci`, and
+  `promoted` it requires a non-empty `actor` string and nothing else: no receipt, no signature,
+  no distinct approver, and `approver_identity` defaults to `""`.
+
+The consequence for sequencing is that the happy path is six-ninths real, and the missing third
+is precisely the part that carries authority. **Slice 5, not slice 3, is where the next
+load-bearing code work is** — slice 3's phase loops extend a path that already functions, while
+slice 5 supplies transitions that currently do not exist outside a test's bookkeeping.
+
+This is not an argument that the `SegregationPolicy` is absent. It is applied at ledger append
+(`state.py:426`), and a stricter configured policy may well refuse an empty-identity promote.
+What is verified is that nothing on the promote path *supplies* identities, so the default
+configuration never exercises it. Whether a stricter policy would in fact refuse is untested and
+is a slice-5 obligation to demonstrate rather than assume.
+
 ### The run state
 
 `RunState` in `factory_runtime/state.py` is the authority. The states are:
@@ -180,10 +241,44 @@ blocked                 a run that cannot legally proceed
 ```
 
 Each `*-ratified` transition requires a human approval receipt and a distinct enrolled non-human
-Validator receipt over the exact artifact bytes. `human-approved` and `promoted` are also signed
-anchor points. The other transitions are chained events. `specification-defect` is itself an
-anchor point: it freezes the current version, creates a newly signed one, and invalidates every
-downstream artifact derived from the old digest.
+Validator receipt over the exact artifact bytes — **and the layer that enforces that matters.**
+
+`WorkflowEngine.ratify_phase` (`factory_runtime/workflow.py:233`) does the real work: it verifies
+both receipts through `verify_receipt` against the exact artifact digest and run id, refuses
+identical human and Validator ratifiers, refuses a human ratifier who is not an enrolled human and
+a Validator ratifier who is not an enrolled non-human, and threads consumed nonces so a receipt
+cannot be replayed. That is the control.
+
+`RunStore.transition` enforces something weaker: the three states are the entries in
+`_PHASE_STATE_KEYS`, so a missing *artifact digest* refuses the transition and phase ordering is
+checked — but no receipt is required. A caller holding a store can therefore reach a `*-ratified`
+state with `artifact_digests={phase: digest}` and nothing else, which is exactly what
+`tests/test_runtime_state.py:30`'s `_ratify_all` does.
+
+**That is the same defect class as the unenforced tail, one layer up**, and it is worth stating
+plainly because the fix for the anchor states was justified on precisely this ground: a control that
+lives only in the workflow layer is bypassable by anything holding a store. The ratified states are
+still workflow-only. Moving the receipt requirement down to `RunStore.transition` — the receipt
+envelope digests are already written into `artifact_digests` under `{phase}:human-receipt` and
+`{phase}:validator-receipt` keys, so the store has what it needs to demand them — belongs with the
+slice-5 work and the deliverable-7 migration, not with a documentation correction.
+
+`human-approved` and `promoted` are *doctrinally* signed anchor points and are **not yet enforced
+as such**. The earlier revision of this document stated the requirement without marking it
+aspirational, which read as a description of the code. As of `94e7bb1` those two transitions
+require a non-empty `actor` string and nothing further; see *The unenforced tail of the happy
+path* above. Making them anchor points in fact is a slice-5 deliverable.
+
+The other transitions are chained events. `specification-defect` is itself an anchor point: it
+freezes the current version, creates a newly signed one, and invalidates every downstream
+artifact derived from the old digest — also doctrine ahead of code, since it has no production
+driver and is reached only by test bookkeeping (`tests/test_runtime_state.py:172`).
+
+`blocked` is the exception among the off-happy-path states and should not be lumped in with the
+others: it is genuinely driven, from four `store.transition` call sites in
+`factory_runtime/orchestrator.py` (a fifth `RunState.BLOCKED` reference, at line 182, is the
+membership test that lets a blocked attempt resume, not a driver), and a real
+failing build is asserted to reach it (`tests/test_tessera_cli_integration.py:453`).
 
 ### The bootstrap
 
@@ -205,12 +300,31 @@ implementer and approver identities. Coder and Tester identities receive no huma
 A signature is worth exactly what its key policy authorizes, which is the second reason to sign
 few things.
 
-**"Enough humans" is a number: three.** Below three enrolled principals the SoD triad — implementer
-≠ verifier ≠ approver — is unsatisfiable, so `enforcing` is unreachable by arithmetic rather than by
-policy.
+**"Enough humans" is a number: three — as the condition for `enforcing`, not as a floor on
+legitimacy.** Ratified: `enforcing` requires three distinct enrolled principals for the SoD triad,
+so it is unreachable by arithmetic rather than by policy. Explicitly *not* ratified: any reading
+where n=1 is illegitimate. One human wearing all three hats is the bootstrap state and is where the
+project currently is; three genuinely distinct humans is the `enforcing` state. Both are real.
 
-Actual Tessera already has the necessary signing and verification engine and CLI operations
-(`keygen`, `create`, `sign`, `validate`, `inspect`, `apply`).
+**The n=1 case and I2 collide in the code, and the collision is unresolved.**
+`LedgerEntry.validate_sod` (`factory_core/manifest.py:209`) refuses any two *present-and-equal*
+identities unconditionally, under I2 — "no role verifies/approves its own work." So a lone human
+who implements and then approves cannot record `human-approved` with the implementer present at
+all. Before the anchor controls (PR #9), n=1 reached that state only by leaving
+`implementer_identity` empty, which satisfied the SoD check *vacuously* rather than legitimately.
+Closing the vacuous pass therefore makes the bootstrap state fail loudly. Three ways out, and the
+choice is the founder's: amend I2 for levels below `enforcing`; represent the collapse explicitly
+(one identity plus a recorded collapse marker and the conformance level it was recorded under, so
+the ledger says what happened); or accept that `human-approved` is unreachable until a second
+principal is enrolled. Nothing in `factory_core` or `factory_runtime` currently knows what
+`enforcing` *is*, so a conformance level has to exist before option 1 or 2 can be implemented.
+
+**Tessera means real Tessera** — `jmcentire/tessera`, the Rust workspace — and not a lighter
+substitute assembled from the convenient parts. It already has the necessary signing and
+verification engine and CLI operations (`keygen`, `create`, `sign`, `validate`, `inspect`,
+`apply`). Pin `83883e62` is the trust boundary; bumping it is a ratification act, ratified as
+stated. Exemplar's `TesseraSeal` stays excluded on capability grounds — it has no signature field —
+and the import guard enforcing that stays.
 
 ### The isolated loop
 
@@ -229,6 +343,14 @@ For each run:
 `signet-eval` can enforce declarative tool policy inside each lane, but only as defense in depth. Its
 own documentation correctly says same-UID agents can bypass it; real separation requires containers
 or OS controls.
+
+**Steps 1–6 are a routing policy, and a routing policy is the wrong kind of control.** Containers
+plus a rule about where `decompose` output goes means the firewall holds exactly as long as bundle
+assembly is correct. Cryptogram replaces it: the run document carries per-lane sections, each
+encrypted for one lane under an ephemeral keypair and bound to the run id so a section cannot be
+lifted into another run, and the orchestrator routes envelopes it cannot decrypt. The Coder then
+cannot receive test material even when bundle assembly is wrong — a state that cannot occur rather
+than a risk that is managed. See *Chess and Cryptogram* below.
 
 ### Pact's placement
 
@@ -305,29 +427,108 @@ further attenuation down a delegation chain, set membership and comparison predi
 predicates, and hash-chain offline budgets, in ~150 lines per evaluator across six languages
 including Python.
 
+**Adopted.** SPL is the capability-policy evaluator. It is *not* a third-party evaluator we happen
+to be using: `jmcentire/agent-safe` and `signet-eval` are both spin-offs of Signet (signet.tools),
+which is the frame to reason in. The split stands — Signet answers *who vouched for this identity*,
+SPL answers *what this token is allowed to do* — and neither substitutes for the other.
+
 This is squarely the "capability evaluation" half of slice 6, and it bears directly on
 `factory_core/tool_policy.py`, whose Sign-off-required grants are already scoped and expiring, and
-on per-lane tool grants. The two fit together cleanly: Signet answers *who vouched for this
-identity*, SPL answers *what this token is allowed to do*, and neither substitutes for the other.
+on per-lane tool grants.
 
-Two things to settle before adopting it (see ratification item 7):
+Two ratified conditions:
 
-- **Purity.** `factory_core` is stdlib-only plus `jsonschema`. An SPL evaluator is either a new
-  runtime dependency requiring an allowlist entry and a justification, or a vendored single file.
-  Vendoring a 150-line total-evaluation function is the cheaper of the two and keeps the
-  dependency surface honest.
-- **Name collision.** `wandercom/agent-safe` is an unrelated Wander repo about Pact agent runtime
-  budgets and target-repo adapters. Any reference to "agent-safe" in Factory must be
-  fully qualified, or someone will wire up the wrong one.
+- **An SPL expression is an approval rule.** Under I8, no agent may author one into force. An
+  expression carried inside a token gets the same human-signature treatment as any other doctrine
+  mutation — an agent may draft one and may never put one into effect.
+- **Every reference is fully qualified.** `wandercom/agent-safe` is an unrelated Wander repo about
+  Pact agent runtime budgets and target-repo adapters. A bare "agent-safe" anywhere in Factory is a
+  defect, because someone will wire up the wrong one.
+
+One thing still to settle, and it is ours rather than the founder's: **pinned reference versus
+vendored copy.** `factory_core` is stdlib-only plus `jsonschema`, so a dependency needs an allowlist
+entry and a justification, while a vendored 150-line total evaluator keeps the dependency surface
+honest and forks the source. Whichever holds up better under the purity guard is the one to take;
+the earlier revision presented vendoring as settled, and it is not.
+
+Also to verify before either: that `jmcentire/agent-safe` is the origin and not a clone.
+
+### Chess and Cryptogram
+
+Two architectures from the privacy book, adopted by direction rather than proposed here. They are
+the answer to provenance and behavior proof, and they replace two things this plan had been solving
+adjacently.
+
+**Chess (ch. 13) is the shape the run states should have had.** A document is a genesis block plus
+an append-only chain of moves; each move records `prev_state_hash`, the operation, `new_state_hash`,
+the actor's public key, and a signature over all four. Verification is five steps: check the actor's
+signature; check the declared previous-state hash against the actual previous state; re-execute the
+operation in a sandbox against that previous state; check that the independently computed new state
+hashes to the declared value; then execute the authorization logic defined in the genesis code to
+confirm the actor was permitted the operation. **The validator never trusts a declared outcome — it
+recomputes.**
+
+That is precisely the control missing from `human-approved`, `ci`, and `promoted`, which accept a
+non-empty actor string. It also relocates chain integrity: it becomes a property of the ledger
+rather than of the code that walks it.
+
+- **Step 3 is what turns "the tests passed" into something replayable**, and it comes with an honest
+  caveat: re-execution against a hashed prior state buys tamper-evidence unconditionally and
+  computational proof only where the run is deterministic. Test execution generally is not — clock,
+  network, ordering, parallelism. So the hard part is not the cryptography, it is making lanes
+  reproducible, which is why **determinism is a lane requirement in slice 4 and not an aspiration.**
+- **Step 5 is SPL, reached from the other direction.** Chess puts authorization logic in the genesis
+  code and has the validator execute it; our design puts policy in the token. Genesis already
+  carries a policy digest, so signing the transition table itself into genesis is the upgrade
+  available to us. The homoiconicity argument in that chapter is also the case for S-expressions:
+  code and data hash as one uniform structure, with no format conversion to introduce ambiguity at
+  signing or verification time.
+
+**One conflict, settled deliberately rather than by drift.** Chess verifies by replaying the entire
+chain from genesis. This plan's evidence rule deliberately does the opposite — sign anchors, chain
+machine evidence, each anchor carrying the ledger head digest only, precisely so there are not two
+chains. Per-move signing plus full replay will not survive our event volume. **What we take:** the
+move-record *shape* for anchor transitions (prior-state hash, operation, new-state hash, actor key,
+signature over all four), re-derivation instead of declared outcomes, and replay *between* anchors
+with each anchor treated as a checkpoint. **What we do not take:** per-move signing of every ledger
+append, and replay from genesis. That is the explicit statement of which parts of Chess are adopted.
+
+**Cryptogram (ch. 11) belongs to the isolated build loop, not here.** A workflow document is
+fragmented into sections, each encrypted for one recipient under an ephemeral keypair and bound to
+the workflow id so a section cannot be lifted into another workflow, routed by a delegator that
+reads the envelope and cannot read the contents. The store cannot see the shipping address because
+it cannot decrypt it, not because it promised not to look. Applied to slice 4, it converts "if tests
+reach the Coder, oracle independence is theatre" from a managed risk into a state that cannot occur.
+
+### Design in the loop
+
+The factory has no phase for design. That is chosen, not overlooked, and it is stated here so it
+does not get discovered later as a defect. The three phases are Product Spec, Architecture Spec, and
+Testing/Monitoring Strategy; none of them is a design loop, and nothing in the criticality or
+promotion model expects design artifacts. A change that needs design does it outside the factory and
+brings the result in as phase-1 input.
 
 ### First three proofs
 
-1. Run the complete flow against the synthetic target already in Factory.
-2. Reauthorize and rebuild Jon's adapter-registry change from PR #2 through the new intake.
-3. Make Reeve the first live target, extracting lessons from its existing intake, architecture loop,
-   oracle, gate, and demo surfaces without importing Reeve code into `factory_core`.
+1. **Run** — attempted, and it terminates at `preview`. The flow is exercised end to end from
+   `intake` to `preview` against the synthetic target with real signing; the three states past
+   `preview` have no driver. Result recorded under *The unenforced tail of the happy path* above.
+   The remainder of this proof is blocked on slice 5, not on scheduling.
+2. **Reauthorize** — the premise has expired. This proof was "reauthorize and rebuild Jon's
+   adapter-registry change from PR #2 through the new intake," but that content is already on
+   `main`: `factory_core/registry.py` was added by `cba4f7f`, and the
+   `glue/adapter-registry-readonly-git` branch is now a stale duplicate of it (`f0a72f6`, same
+   subject, different SHA). The change that was nominated as the first authorized change landed
+   by the ordinary route instead. Two honest options: retire this proof, or replace it with a
+   *new* small change chosen to be the first thing through the intake. The second is worth more,
+   because a proof that reprocesses already-merged content cannot fail in the way that matters.
+3. **First live target** — a Wander target, extracting lessons from reeve's existing intake,
+   architecture loop, oracle, gate, and demo surfaces without importing reeve code into
+   `factory_core`. **Wander is the target of record**; reeve and MEA also consume the factory.
+   Reeve's role in this proof is prior art and proving surface — it is the reference implementation
+   whose disciplines were generalized into this core — and it is not the destination.
 
-Three specific lessons to extract in proof 3, all preserving the import boundary:
+Three specific lessons to extract from reeve for proof 3, all preserving the import boundary:
 
 - **Demo provisioning discipline** — operation-manifest claim for idempotency; quarantine on crash
   rather than auto-retry, because minting an environment is not idempotent and retry orphans it; a
@@ -340,6 +541,63 @@ Three specific lessons to extract in proof 3, all preserving the import boundary
   invalidate-downstream-by-digest, with the oracle's `specDigest` re-derived
   (`oracle-freeze.ts:91`) so the binding cannot be forged.
 
+## Founder-owned decisions
+
+[Issue #4](https://github.com/jmcentire/factory/issues/4) enumerates governance decisions only the
+founder can make. The 2026-08-05 comment answers several; the rest are being settled together
+because they fall out of the Chess/Cryptogram framing above. Both halves are recorded here, because
+a plan that lists only what is still blocked loses the answers.
+
+**Answered, and folded into this document:**
+
+| Decision | Answer | Landed in |
+|---|---|---|
+| Is five seams an invariant? | A design point. The declared set moves by explicit decision; the count is not a boundary condition | PR #10 (`adapters.py` docstring plus a declared-set guard); both claimants argued on merit |
+| Which slice is next | Slice 5, not slice 3 | Build order, slice 5 marked **next** |
+| What the enforcement point is | A required check plus branch protection and a real staging surface; human approves / requests changes / abandons **before** merge; CI/CD runs after and can fail independently. CI promotion is not a gate | Slice 5 deliverable and proof columns |
+| Deliverable 7's side of the boundary | Core. Target-side means every target reimplements a control | Slice 5; migration from reeve `2344645` |
+| Target of record | Wander, primary. Reeve and MEA also consume; reeve is prior art and a proving surface | Slice 7 note; proof 3 |
+| Tessera | Real `jmcentire/tessera`, the Rust workspace. Pin `83883e62` is the trust boundary and bumping it is a ratification act. `TesseraSeal` stays banned; the guard stays | *The bootstrap* |
+| The three-human floor | Ratified for `enforcing`; n=1 is the legitimate bootstrap state and is where we are | *The bootstrap*, with the I2 collision stated |
+| Design in the loop | A chosen gap, to be stated rather than discovered | *Design in the loop* |
+| SPL | Adopted; a Signet spin-off, not a third-party evaluator. Two conditions: I8 governs authoring an expression into force, and every reference is fully qualified | *Policy evaluation* |
+
+**Still open, and being settled together:**
+
+| Decision | Asked in | Gates |
+|---|---|---|
+| Where authorization lives | issue #4 BQ1 | any change entering through the intake |
+| Proposal/ship capability vocabulary and receipt issuer | issue #4 BQ2 | slices 0, 5, 6 |
+| Who may hold proposal vs. ship authority | issue #4 BQ3, BQ6 | slice 0 |
+| How enrollment reaches the core, now that the seam count is a design point | issue #4 BQ4 | slice 0 |
+| Whether a reduced phase form exists | issue #4 BQ5 | slice 3; the cost of every small change |
+| How forked contributors consume the authorization record | issue #4 BQ7 | any external contribution |
+
+One consequence of BQ5 staying open is worth stating rather than discovering: check 8 of the
+authorization-request validator (`phase_form_granted`) fails closed, so the validator ships with a
+branch that permanently refuses `reduced` until the answer arrives. That is the correct failure
+direction and it is an interim state, not the design.
+
+### The sixth seam: resolved, and both claimants live
+
+**Five was a design decision, not a boundary condition.** So the count moves by explicit decision
+rather than by whichever proposal merges first, and the guard now enforces the *declared set* rather
+than the cardinality: `adapters.py` amended and `test_there_are_exactly_five_seams` replaced by a
+declared-set guard in PR #10, which grants no seam to either claimant.
+
+Both claimants — BQ4's enrollment/authority reach, and this plan's channel port — are therefore
+decided on their own merits against the declared set. Neither answers the other by landing first.
+The channel port is **un-withdrawn** as a live proposal on that basis; the reasoning it was
+withdrawn for ("the slot is not free") no longer holds.
+
+### Deliverable 7 comes back across the seam
+
+Receipt verification against payload hash and required capabilities belongs in the core. It is
+implemented on *reeve* main at `2344645`, and target-side is the wrong shape: every target would
+reimplement a control. **Plan the migration from reeve `2344645` into Factory** — it is now a slice-5
+deliverable rather than an open question. Verified absent today: no `payload_digest` and no receipt
+verification anywhere in `factory_core/*.py`.
+
 ## Architecture decisions needing ratification
 
 1. Factory owns the runtime state machine.
@@ -351,11 +609,18 @@ Three specific lessons to extract in proof 3, all preserving the import boundary
    `signet-sdk::check_authority` is import-guarded off every Critical path; the consumption ledger
    that unblocks one-time capabilities is ours to build.
 5. Surfaces are renderers over one API at capability parity, behind a declared channel port.
-6. The system is not deployed beyond reeve until slice 7, and blocks nothing until its false-block
-   rate is measured.
-7. Capability *policy* is evaluated by SPL (`jmcentire/agent-safe`) carried inside the token,
-   vendored as a single file rather than added as a runtime dependency — distinct from Signet,
-   which answers identity and vouching.
+6. **Wander is the target of record**; reeve and MEA also consume the factory, and the gate blocks
+   nothing until its false-block rate is measured. The slice-7 ordering is superseded: it put the
+   primary target last. See *An advisory conformance tier below slice 7* in the proposed table for
+   how the primary target starts receiving value earlier.
+7. Capability *policy* is evaluated by SPL (`jmcentire/agent-safe`) carried inside the token —
+   a Signet spin-off, distinct from Signet, which answers identity and vouching. An SPL expression
+   is an approval rule: under I8 no agent may author one into force. Pinned reference versus
+   vendored copy is unsettled; see *Policy evaluation*.
+8. **Chess supplies the shape of an anchor transition and Cryptogram supplies the lane firewall.**
+   Adopted by direction, with the parts taken and not taken stated explicitly in
+   *Chess and Cryptogram*. Determinism becomes a lane requirement in slice 4 as a consequence.
+9. **The factory has no design phase**, by choice. Stated so it is not later found as a defect.
 
 ---
 
@@ -368,6 +633,15 @@ Settled per your direction:
 | Tessera anchors rather than envelopes everything; the evidence rule; the anchor constraint | Your ratification of option C |
 | Tessera identified as `jmcentire/tessera`, with exemplar's `TesseraSeal` excluded by capability | Your correction; verified — the exemplar model has no signature field |
 | Pact: planning primary, implementation opt-in for sensitive work | Your answer on cost and placement |
+| The seam count is a design point; the guard enforces the declared set | Your 2026-08-05 answer. Both sixth-seam claimants are argued on merit against that set |
+| Slice 5 is next, and its enforcement point is a required check plus branch protection plus a real staging surface, with approval before merge and CI after | Your 2026-08-05 answer. "CI promotion" standing in for a gate is explicitly rejected |
+| Deliverable 7 — receipt verification — comes back into the core, migrated from reeve `2344645` | Your 2026-08-05 answer: target-side means every target reimplements a control |
+| Wander is the target of record; reeve and MEA also consume | Your 2026-08-05 answer. The build order had the primary target last |
+| Real Tessera (`jmcentire/tessera`), pin `83883e62` as a ratification act | Your 2026-08-05 answer, ratified as stated. A lighter substitute was an artifact of drafting, not a decision |
+| Three distinct enrolled principals at `enforcing`; n=1 legitimate as the bootstrap state | Your 2026-08-05 answer. The arithmetic was right; the floor is not a minimum on legitimacy |
+| SPL adopted, as a Signet spin-off, under two conditions (I8 authorship, fully-qualified references) | Your 2026-08-05 answer |
+| Chess and Cryptogram adopted, with the parts taken stated explicitly | Your 2026-08-05 answer, including the instruction to state which parts of Chess we take |
+| Design in the loop recorded as a chosen gap | Your 2026-08-05 answer |
 
 Corrected in this revision — these were errors in the previous version of this document, not
 proposals:
@@ -381,6 +655,13 @@ proposals:
 | "Why Signet comes later" rewritten | `signet-cred`'s capability verification was fixed upstream at `7f71a87`; the surviving defect is `signet-sdk::check_authority`, and it grants unconditionally rather than "structurally pending another layer." The plan was both stale and too charitable. |
 | `crates/` prefix restored on signet and tessera paths | The cited paths did not resolve as written. |
 | External citations qualified with their repository (`pact/…`, `reeve/…`, `signet/…`, `tessera/…`) | The cited paths did not resolve as written, and a bare `scheduler.py:61` reads as a file in *this* repo when it is Pact's. A citation a reader cannot locate is not evidence. |
+| `human-approved` and `promoted` marked as doctrine ahead of code | The plan stated "`human-approved` and `promoted` are also signed anchor points" as flat fact. Verified at `94e7bb1`: those two states have zero production callers, `RunStore.transition` requires only a non-empty `actor` for them, and `approver_identity` defaults to `""`. Stating an unenforced requirement in the same voice as an enforced one is the error that makes a status column unreliable — and it hid the fact that slice 5, not slice 3, is the next load-bearing work. |
+| `blocked` distinguished from the other off-happy-path states | Grouping it with `specification-defect` understated it. `blocked` is genuinely driven from four `store.transition` call sites in `orchestrator.py` and a real failing build reaches it (`test_tessera_cli_integration.py:453`); `specification-defect` has no production driver at all. |
+| The layer that enforces `*-ratified` receipts named, and the store's weaker guarantee stated | The document said receipts are required and "this is enforced," then cited `_PHASE_STATE_KEYS` — which enforces a digest, not a receipt. Receipt verification is `workflow.py:233`; `RunStore.transition` will reach a ratified state on `artifact_digests` alone, as `tests/test_runtime_state.py:30` does. Conflating the two repeats the error this revision exists to fix, and it hides that the ratified states have the same workflow-only-enforcement weakness the anchor states were just fixed for. Raised by Copilot on PR #8. |
+| Proof 1 recorded as attempted with a result, not pending | It has been run as far as the code allows. Leaving it listed as future work would have lost its finding, which is the whole reason the proof exists. |
+| Proof 2's premise expired | `factory_core/registry.py` is on `main` at `cba4f7f`; `glue/adapter-registry-readonly-git` is a stale duplicate. The plan asked to rebuild through the intake a change that had already landed by the ordinary route. |
+| Reeve repositioned from target of record to prior art and proving surface; Wander named as the target of record | Confirmed by the founder on 2026-08-05. The build order had encoded the opposite, which pushed the primary target behind all seven slices. The previous revision over-corrected by calling reeve "explicitly not what this factory is being built to serve" — reeve and MEA are consumers too; Wander is primary. |
+| The channel-port withdrawal itself reversed | Withdrawing it was right while the slot looked contested and wrong once the count turned out to be a design point. Recorded rather than silently un-withdrawn, because the reasoning for the withdrawal is what changed, not the proposal. |
 | Interpreter detected and floor enforced in the `Makefile` (applied, not proposed) | `make ship` resolved `PY` to bare `python3` and `lint`/`typecheck` bypassed `PY` entirely. `PY` now prefers `python3.12` and falls back to `python3`, `check-python` gates every target, and the tools run through `$(PY) -m`. Verified across five paths: preferred version found; activated venv preferred over system; fallback to a conforming `python3`; refusal of 3.9.20 with a "not on PATH" hint; and explicit `PY=` still overriding detection. |
 
 Proposed for your ratification — reject individually:
@@ -388,15 +669,14 @@ Proposed for your ratification — reject individually:
 | Proposed | Why |
 |---|---|
 | Interim enrollment registry in slice 0; unmapped identity denied | Genesis enrolls principals, but with Signet deferred nothing says where the Google/GitHub/Slack/Linear mapping lives. Whoever can edit it defeats SoD, so it is Critical by §3.5's own enumeration. |
-| SPL (`jmcentire/agent-safe`) as the capability-policy evaluator, vendored not depended on | Slice 6 lists "capability evaluation" with nothing behind it. SPL is a total, gas-metered evaluator that travels in the token, and `tool_policy.py` already has the scoped-and-expiring grant shape it evaluates. Vendoring keeps `factory_core` stdlib-only. |
-| The CI Tessera pin (`83883e62`) treated as a ratification act | The pin *is* the verifier trust boundary. If bumping it is a routine chore, the trust root moves without a decision. |
+| Pinned reference or vendored copy for SPL | SPL itself is ratified; this half was left to us. Vendoring a ~150-line total evaluator keeps `factory_core` stdlib-only and forks the source; a pin needs an allowlist entry and a justification but tracks upstream fixes. Recommending vendoring, and not treating that as settled. |
 | "Delivered against the synthetic target" stated explicitly per slice | Otherwise the status column reads as "proven," and proof 1 below silently loses its purpose. |
 | Local environment is a repo-managed venv, and the sandbox derives its interpreter grant (applied, not proposed) | Slice 1's proof is that a contributor can predict acceptance *locally*, and `make ship` had never been green on a developer machine: the interpreter floor was unenforced, and the one gate that did run refused any venv. Both are now fixed, and `make ship` is green locally end to end (330 passed, 3 skipped) as well as under a simulated CI interpreter. The sandbox change is the one to review deliberately — it widens a `deny default` profile — but it restores a precondition the hardcoded allowlist was already trying to express, and the denial probes still pass. |
-| "Enough humans" fixed at three | The SoD triad is unsatisfiable below three; `enforcing` should be unreachable by arithmetic, not by judgment. |
 | Key custody tiers in the bootstrap | A signature is worth its custody. Root offline, anchor keys human-held, no agent holds a key at any tier. |
-| An enforcement point in slice 5 | Nothing in the draft can refuse a merge. "CI promotion" is not a gate; a required check with branch protection is. |
-| Channel port declared before slice 3 | `factory_core` has five seams and no channel seam, yet the three phases are inherently conversational and you want Slack + portal + CLI at parity. That is one seam with N renderers — better decided before three renderers exist. |
-| Slice 7, and the statement that deployment starts after it | No target beyond reeve appears in the draft. Wander deployment is a real scope and should be visible as one, not implied. |
+| Channel port declared before slice 3 — **un-withdrawn** | The three phases are inherently conversational and CLI + Slack + portal are one seam with N renderers, better decided before three renderers exist. It was withdrawn on the grounds that the slot was not free; the seam count is a design point, so that reasoning is gone. It is back as an ordinary proposal, argued against the declared set on its own merits, and it does not answer BQ4's enrollment reach by landing. |
+| An advisory conformance tier below slice 7 | **The ordering change itself is directed, not proposed** — the primary target cannot be the last thing that happens. This is the cheapest mechanism for it. Several `factory_core` modules — `contract.py`, `completeness.py`, `comprehensiveness.py`, and `criticality.py`'s classification model — are pure functions over data arriving through read-only seams and produce *documents*, not enforcement. They need no genesis, enrollment, Signet, promotion, isolation, or Pact. A read-only advisory tier lets a Wander team get findings long before the gate can refuse anything, and tests the disciplines against a real team before machinery is built to enforce them. Not free: the target-side extraction that feeds `caller_edges` and `provider_operations` is real work the core deliberately does not own. Explicitly *not* proposed for `monitors.py` or `promotion.py`, which require phase artifacts and oracle adequacy respectively. |
+| Replace proof 2 with a new small change rather than retiring it | The adapter-registry content already landed on `main` at `cba4f7f`, so reprocessing it cannot fail in the way that matters. A first-authorized-change proof needs a change that has not already been merged. |
+| Slice 7 names a specific first Wander team | Wander as target of record is settled; *which* team goes first is not, and this document should not decide it. Naming a first-of-many puts the weight on the onboarding path either way, since a per-target cost that does not amortize fails at target three regardless of how well target one goes. |
 | False-block rate as the slice-7 gate | A governance gate that wrongly blocks even a few percent of changes gets switched off by the organization, permanently. |
 | Pact test output firewalled from the Coder | `decompose` emits contracts and tests together; contracts are shared, tests must not be. A five-line policy now, an expensive silent failure later. |
 | Three named reeve lessons in proof 3 | "Extract lessons" is unactionable; these three are specific, cited, and preserve the import boundary. |
