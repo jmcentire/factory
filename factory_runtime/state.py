@@ -125,6 +125,16 @@ _PHASE_ORDER = (
     "operational-maturity",
 )
 
+# The anchor states past `preview`. Each names the artifact digest that transition MUST carry,
+# in the same fail-closed shape `_PHASE_STATE_KEYS` uses for the three ratified states. Without
+# these keys the two doctrinal anchor points required nothing but a non-empty actor string, so
+# "the artifact shown to the human is byte-for-byte the artifact promoted" had nothing recording
+# which artifact the human saw.
+_ANCHOR_STATE_KEYS: Mapping[RunState, str] = {
+    RunState.HUMAN_APPROVED: "candidate",
+    RunState.PROMOTED: "promoted-artifact",
+}
+
 
 class RunStateError(ValueError):
     """A run could not be created, loaded, or transitioned without guessing."""
@@ -142,6 +152,7 @@ class RunProjection:
     ledger_head: str
     created_at: int
     updated_at: int
+    approved_candidate_digest: str = ""
     schema_version: str = RUN_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -165,6 +176,7 @@ class RunProjection:
             ledger_head=str(raw.get("ledger_head", "")),
             created_at=_as_int(raw.get("created_at")),
             updated_at=_as_int(raw.get("updated_at")),
+            approved_candidate_digest=str(raw.get("approved_candidate_digest", "")),
             schema_version=str(raw.get("schema_version", "")),
         )
 
@@ -179,6 +191,48 @@ def _as_int(value: Any) -> int:
 def _require_digest(value: str, field_name: str) -> None:
     if not _DIGEST.fullmatch(value):
         raise RunStateError(f"{field_name} must be a canonical sha256 digest")
+
+
+def _require_approval_identities(
+    approver_identity: str,
+    implementer_identity: str,
+    *,
+    context: str,
+) -> None:
+    """Human approval needs both identities present and distinct.
+
+    ``LedgerEntry`` enforces distinctness only among the identities *actually present*, which is
+    the right general default — a draft edit has no approver. ``human-approved`` is the state
+    where that default is too weak: comparing an approver against an absent implementer proves
+    nothing, so an approval with no recorded implementer would satisfy an SoD check vacuously.
+    I2 requires implementer ≠ approver, so both are mandatory here and the transition fails
+    closed without them.
+
+    N.B. — an open doctrine question sits on top of this, raised by issue #4 (2026-08-05). The
+    founder ratified three distinct enrolled principals for the SoD triad at ``enforcing`` while
+    stating that n=1 is a legitimate bootstrap state and is where the project currently is.
+    Those two cannot both hold with the implementer *recorded*: ``LedgerEntry.validate_sod``
+    refuses any two present-and-equal identities unconditionally, in the core, under I2. So a
+    lone human who implements and approves cannot reach ``human-approved`` at all — and before
+    this control, n=1 reached it only by leaving ``implementer_identity`` empty, which is exactly
+    the vacuous pass closed above. Recording the collapse honestly needs either an amendment to
+    I2 or a represented-and-visible collapse; both are the founder's to decide, and neither is
+    invented here. ``test_human_approval_by_the_implementer_is_refused`` pins the current
+    behavior so the answer lands in one place.
+    """
+    approver = approver_identity.strip()
+    implementer = implementer_identity.strip()
+    if not approver:
+        raise RunStateError(f"{context} requires an approver identity")
+    if not implementer:
+        raise RunStateError(
+            f"{context} requires an implementer identity: distinctness from an absent "
+            "implementer is unverifiable, not satisfied"
+        )
+    if approver == implementer:
+        raise RunStateError(
+            "approver and implementer must be distinct identities for human approval"
+        )
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
@@ -396,6 +450,28 @@ class RunStore:
                     f"{destination} requires artifact digest {phase_key!r}"
                 )
             phases[phase_key] = phase_digest
+
+        # Anchor states carry authority, not just an actor. Each check is fail-closed: an
+        # omission refuses the transition rather than recording an unauthorized anchor.
+        anchor_key = _ANCHOR_STATE_KEYS.get(destination)
+        if anchor_key and not supplied.get(anchor_key, ""):
+            raise RunStateError(f"{destination} requires artifact digest {anchor_key!r}")
+        if destination is RunState.HUMAN_APPROVED:
+            _require_approval_identities(
+                approver_identity, implementer_identity, context=str(destination)
+            )
+        if destination is RunState.PROMOTED:
+            approved = current.approved_candidate_digest
+            if not approved:
+                raise RunStateError(
+                    f"{destination} requires a previously approved candidate digest"
+                )
+            if supplied.get(anchor_key or "", "") != approved:
+                raise RunStateError(
+                    "promoted artifact does not match the approved candidate digest "
+                    "(the artifact promoted must be byte-for-byte what was approved)"
+                )
+
         required_phase_keys = _required_phase_keys(destination, transition_payload)
         phases = {key: phases[key] for key in _PHASE_ORDER if key in required_phase_keys}
         if set(phases) != set(required_phase_keys):
@@ -441,6 +517,7 @@ class RunStore:
         prior = ""
         target_digest = ""
         source_digest = ""
+        approved_candidate = ""
         phase_artifacts: dict[str, str] = {}
         created_at = 0
         updated_at = 0
@@ -490,6 +567,37 @@ class RunStore:
                 or digests.get("source") != source_digest
             ):
                 raise RunStateError(f"ledger entry {index} changes the run subject")
+
+            # Read from the same table `transition` reads, not by naming the two states again.
+            # N.B. The digest requirement is generic on the write path (`_ANCHOR_STATE_KEYS`) and
+            # was destination-by-destination here. Nothing was unenforced -- the table has exactly
+            # the two entries both paths spell out -- but adding a third would have been picked up
+            # by `transition` and silently skipped by `_derive`, and `_derive` being the weaker of
+            # the two is the defect class these checks exist to close.
+            derived_anchor_key = _ANCHOR_STATE_KEYS.get(destination)
+            if derived_anchor_key:
+                _require_digest(
+                    str(digests.get(derived_anchor_key, "")),
+                    f"ledger entry {index} {derived_anchor_key} digest",
+                )
+
+            if destination is RunState.HUMAN_APPROVED:
+                approved_candidate = str(digests.get("candidate", ""))
+                # `_derive` is the authority, so it must refuse what `transition` refuses. The
+                # hash chain catches an edited entry; it does not catch one appended through the
+                # ledger directly, which chains validly and would otherwise project as a
+                # legitimate approval.
+                _require_approval_identities(
+                    str(record.get("approver_identity", "")),
+                    str(record.get("implementer_identity", "")),
+                    context=f"ledger entry {index} human approval",
+                )
+            elif destination is RunState.PROMOTED:
+                promoted = str(digests.get("promoted-artifact", ""))
+                if promoted != approved_candidate:
+                    raise RunStateError(
+                        f"ledger entry {index} promotes a digest that was never approved"
+                    )
 
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):
@@ -543,6 +651,7 @@ class RunStore:
             ledger_head=ledger.head_hash(),
             created_at=created_at,
             updated_at=updated_at,
+            approved_candidate_digest=approved_candidate,
         )
 
     def _write_projection(self, projection: RunProjection) -> None:
