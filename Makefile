@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority check-harness ship
 
 .DEFAULT_GOAL := help
 
@@ -147,10 +147,22 @@ check-doctrine: check-python ## structural parity for active doctrine surfaces
 check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's authority seam
 	$(PY) scripts/check_forbidden_authority.py
 
+# The harness gate is syntactic + chain-integrity only: scripts parse, are executable,
+# and any local directive ledger verifies. Behavioral enforcement (forced-negative
+# drills) lives in tests/test_harness_scripts.py and runs under `test`.
+check-harness: check-python ## harness scripts parse/executable; local ledger chains verify
+	@bash -n harness/lane_env.sh harness/receipt.sh harness/tripwire.sh \
+		harness/sched_audit.sh harness/ground.sh
+	@$(PY) -m py_compile harness/directive.py
+	@for s in harness/*.sh; do test -x "$$s" || { echo "not executable: $$s" >&2; exit 1; }; done
+	@if [ -f DIRECTIVES/ledger.jsonl ] || [ -f DIRECTIVES/provisional.jsonl ]; then \
+		DIRECTIVE_LEDGER=DIRECTIVES/ledger.jsonl $(PY) harness/directive.py verify; fi
+	@echo "check-harness: GREEN — harness scripts parse; ledger chains verify"
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-authority lint typecheck test ## run every gate (purity -> doctrine -> authority -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-authority check-harness lint typecheck test ## run every gate (purity -> doctrine -> authority -> harness -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

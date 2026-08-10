@@ -1,0 +1,31 @@
+# .harness/target.conf — the target's declared world (copy to target.conf per target).
+# proof.sh refuses to run without the real file: a factory that cannot bring the
+# system up cannot prove "done", and that gap is declared, never silently passed.
+#
+# provision: brings the environment up. Runs with PROOF_DIR exported — write any
+#   setup evidence there. For a web app this might be `docker compose up -d --wait`
+#   or a script that mints a disposable preview environment. NEVER production.
+# probe: named entry points exercised for real, one per line, `name:: command`.
+#   Each is receipted; nonzero exit = proof failure. Screenshots, videos, DB
+#   checks out of band, curl hits — anything that captures proof-of-doing.
+# access: where a human finds entry points, URLs, and credentials docs to click
+#   and test after the run.
+# teardown: always runs, even after failure.
+#
+# Example (web service):
+# provision: docker compose -f compose.preview.yml up -d --wait
+# probe: health:: curl -fsS http://localhost:8080/healthz
+# probe: create-item:: curl -fsS -X POST http://localhost:8080/items -d '{"name":"x"}' -H 'content-type: application/json'
+# probe: item-in-db:: psql "$PREVIEW_DSN" -tAc "select count(*) from items where name='x'" | grep -qx 1
+# probe: screenshot:: npx playwright screenshot http://localhost:8080 "$PROOF_DIR/home.png"
+# access: docs/preview-access.md
+# teardown: docker compose -f compose.preview.yml down -v
+#
+# Example (this repo — a library: its "environment" is the gate suite in a fresh
+# checkout, which endgame.sh already runs; a target.conf is still worth declaring
+# once there is a consuming service to stand up):
+# provision: true
+# probe: import:: .venv/bin/python -c 'import factory_core, factory_runtime'
+# probe: cli:: .venv/bin/python -m factory_runtime.cli status --help
+# access: README.md
+# teardown: true

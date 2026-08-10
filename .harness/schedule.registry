@@ -1,0 +1,12 @@
+# .harness/schedule.registry — human-approved OS timers, one extended regex per line.
+# sched_audit.sh fails on any live cron / launchd agent / at job / user timer that
+# matches nothing here. Agents may PROPOSE lines; only the founder commits them.
+# An empty registry means: no third-party timers are approved on this substrate.
+#
+# Workstation baseline [PROPOSED by agent 2026-08-09 — UNRATIFIED until the founder
+# commits this file]: user-level launchd agents that ship with tools already in use
+# on this machine. Narrow by name, not by wildcard. Delete any line you don't grant.
+^com\.docker\.
+^com\.microsoft\.
+^com\.google\.keystone
+^homebrew\.mxcl\.
