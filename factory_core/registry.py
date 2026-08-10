@@ -83,8 +83,8 @@ class AdapterRegistry:
         """Register ``provider`` as the implementation of seam ``kind`` selected by ``name``.
 
         ``kind`` must be one of the seams the core owns; anything else is refused (a target can
-        never invent a sixth seam). A later registration for the same ``(kind, name)`` replaces
-        the earlier one."""
+        never invent a seam outside the declared set). A later registration for the same
+        ``(kind, name)`` replaces the earlier one."""
         if kind not in KIND_TO_PROTOCOL:
             raise AdapterResolutionError(
                 f"unknown adapter seam {kind!r}; the core owns exactly {tuple(ADAPTER_KINDS)}"

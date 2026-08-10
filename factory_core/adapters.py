@@ -1,4 +1,4 @@
-"""factory_core.adapters — the five target-contact seams (interfaces only).
+"""factory_core.adapters — the declared target-contact seams (interfaces only).
 
 Every point where the factory touches a target is mediated by one of these
 ``typing.Protocol`` seams, resolved at runtime from a signed ``TargetManifest`` by *name*,
@@ -7,8 +7,18 @@ implementations selected by the manifest. Because these are Protocols, a target 
 conforms structurally — it need not import the core to satisfy a seam — which is what keeps
 the dependency arrow pointing consumer -> factory and never the reverse.
 
-The seams are the whole target surface. There is deliberately no sixth: anything a target
-needs the factory to do must fit one of these, or the boundary has been breached.
+``ADAPTER_PROTOCOLS`` below is the DECLARED SET, and the declared set is the whole target
+surface: anything a target needs the factory to do must fit one of these, or the boundary has
+been breached.
+
+The *count* is a design decision, not a boundary condition. Five is where the decision sits
+today. Moving the set means amending every place it is declared — this tuple, the guard that pins
+it from outside the module (``tests/test_adapters.py``), ``factory_core.target.ADAPTER_KINDS``,
+and ``factory_core.registry.KIND_TO_PROTOCOL`` — which is deliberately more than one edit: a seam
+can then never be added as a side effect of whichever proposal merges first, and an added seam is
+argued on its own merits rather than against a slot only one claimant can occupy. An earlier
+revision of this docstring stated "there is deliberately no sixth"; that read as a boundary
+condition and it was not one.
 
 Docstrings track the Factory Portal PRD v2 §6.2. Method sets are versioned with the core so a
 target pack can declare the core version it targets.
@@ -166,7 +176,9 @@ class ArtifactSink(Protocol):
         ...
 
 
-#: The complete set of seams. Any target contact must go through exactly one of these.
+#: The declared set of seams. Any target contact must go through exactly one of these.
+#: Editing this tuple is the decision; ``tests/test_adapters.py`` refuses a change made here
+#: and nowhere else, and refuses a Protocol defined in this module that never reached the set.
 ADAPTER_PROTOCOLS: tuple[type, ...] = (
     RepoAdapter,
     KnowledgeAdapter,
