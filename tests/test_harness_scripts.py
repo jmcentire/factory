@@ -394,6 +394,26 @@ def test_tester_projection_is_interface_only(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Genericity — the target is data; the factory checkout is never the implicit root
+# --------------------------------------------------------------------------
+
+
+def test_factory_refuses_a_non_git_target(tmp_path: Path) -> None:
+    not_a_repo = tmp_path / "plain-dir"
+    not_a_repo.mkdir()
+    r = run(["bash", str(HARNESS / "factory.sh"), "runx", "some task",
+             "--repo", str(not_a_repo)], tmp_path, {})
+    assert r.returncode == 64
+    assert "not a git repository" in r.stderr and "target" in r.stderr
+
+
+def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
+    r = run(["bash", str(HARNESS / "factory.sh"), "runx", "some task",
+             "--repo", str(tmp_path / "nope")], tmp_path, {})
+    assert r.returncode == 64 and "does not exist" in r.stderr
+
+
+# --------------------------------------------------------------------------
 # Proof-of-done — declared environment, receipted evidence
 # --------------------------------------------------------------------------
 

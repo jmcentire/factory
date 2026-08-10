@@ -9,17 +9,29 @@
 # Coder/Tester windows are opened later by dispatch_lane.sh, only downstream of the
 # three signed phase artifacts. The orchestrator-agent is invoked, not resident.
 set -euo pipefail
-RUN="${1:?usage: factory.sh <run-name> <task-text-or-file> [--budget <usd>] [--audit-interval <min>]}"
+RUN="${1:?usage: factory.sh <run-name> <task-text-or-file> [--repo <path>] [--budget <usd>] [--audit-interval <min>]}"
 TASK_IN="${2:?task text or file}"; shift 2
-BUDGET=""; AUDIT_MIN="45"
+BUDGET=""; AUDIT_MIN="45"; REPO_ARG=""
 while [ $# -gt 0 ]; do case "$1" in
+  --repo) REPO_ARG="$2"; shift 2 ;;
   --budget) BUDGET="$2"; shift 2 ;;
   --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
   *) echo "unknown arg: $1" >&2; exit 64 ;;
 esac; done
 
 D="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$D/.." && pwd)"
+# The factory is generic; the TARGET is data. All run state, config, and authority
+# roots (.harness/, DIRECTIVES/) live with the target project, never with the
+# factory checkout. Default target: the invoking directory's repo.
+REPO="${REPO_ARG:-$PWD}"
+[ -d "$REPO" ] || { echo "target repo does not exist: $REPO" >&2; exit 64; }
+REPO="$(cd "$REPO" && pwd)"
+git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  echo "target is not a git repository: $REPO — the factory is generic; the target" >&2
+  echo "is data. Point --repo at the project this run builds." >&2
+  exit 64
+}
+cd "$REPO"
 H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
 [ -e "$ROOT" ] && { echo "run '$RUN' already exists at $ROOT" >&2; exit 65; }
 tmux has-session -t "$RUN" 2>/dev/null && { echo "tmux session '$RUN' already live" >&2; exit 65; }

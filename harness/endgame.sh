@@ -11,7 +11,10 @@ SHA="${2:?final sha}"; shift 2
 BRANCHES=("$@")
 H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
 D="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$D/.." && pwd)"
+# The target repo comes from the run record — the factory checkout is never the
+# implicit target. Run this from the target project's root (where .harness lives).
+[ -f "$ROOT/run.json" ] || { echo "no run.json at $ROOT — run from the target repo root" >&2; exit 64; }
+REPO=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")
 FRESH="$ROOT/endgame/checkout"
 FAILED=0
 say() { printf '%s\n' "$*"; }

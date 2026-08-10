@@ -1,5 +1,12 @@
 # DIRECTIVES — the founder directive ledger
 
+**Per-project by construction.** The factory is generic; the target is data — so
+every target project carries its *own* `DIRECTIVES/` ledger at its root (this
+copy exists because the factory dogfoods itself as a target). The founder's
+hardware key is per-founder, not per-project: one key signs many ledgers; the
+ceremony below runs once per project ledger. `DIRECTIVE_LEDGER` points the
+harness at a nonstandard location when needed.
+
 This directory is its own git repository (nested; the factory repo ignores it).
 It holds two chains:
 

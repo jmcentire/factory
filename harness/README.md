@@ -37,6 +37,22 @@
 | Click-and-test proof | `proof.sh <run>` reads `.harness/target.conf` (see `target.conf.example`): a declared provision script, real entry-point probes (HTTP hits, CLI runs, out-of-band DB checks, screenshot/video captures — each receipted, outputs kept as evidence), access instructions for the human, teardown always. No target.conf = a **declared gap**, never a quiet pass. |
 | Postmortem | `postmortem.py --root .harness/runs/<run>` — derives every number from recorded artifacts or prints UNDERIVED; per-agent feedback collected by the Validator, coordination-vs-build split for the next iteration. |
 
+## Genericity: the target is data
+
+The scripts here are generic machinery. Every root they act on is **per-project
+data living with the target**, never with the factory checkout:
+
+- `--repo <path>` on `factory.sh` names the target (default: the invoking
+  directory's repo). Run state lands in the **target's** `.harness/runs/<run>/`.
+- The target carries its own `.harness/` (schedule.registry, reconcile.d/,
+  projection.conf, target.conf) and its own `DIRECTIVES/` ledger repo.
+- Env seams: `HARNESS_DIR`, `DIRECTIVE_LEDGER`, `HARNESS_SECRETS`,
+  `HARNESS_PROJECTION_CONF`, `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`.
+- The founder's hardware signing key is per-**founder**, not per-project: one key
+  signs many project ledgers; each project's ledger root is its own chain.
+- This repo's own `.harness/` and `DIRECTIVES/` exist because the factory
+  dogfoods itself as a target — they govern factory runs against factory.
+
 ## Scripts (control number from docs/HARNESS.md)
 
 - `directive.py` — control 1/1a: verbatim hash-chained ledger, qualifier-preserving
