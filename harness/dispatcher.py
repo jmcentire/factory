@@ -98,6 +98,7 @@ class Dispatcher:
         self.promises: dict[str, tuple[float, int, int, str]] = {}
         self.last_audit = time.monotonic()
         self.repo_dirty_seen: set[str] = set()
+        self.ignition_dirty: set[str] | None = None  # baseline, set on first pass
         try:
             cfg = json.loads((root / "run.json").read_text())
         except (OSError, json.JSONDecodeError):
@@ -121,13 +122,29 @@ class Dispatcher:
             self.wake_orchestrator(body)
 
     def wake_orchestrator(self, trigger: dict[str, object]) -> None:
-        """Invoked, not resident: hand the agent a projection, not the transcript."""
+        """Invoked, not resident: hand the agent a projection, not the transcript.
+
+        SINGLE-FLIGHT. Without this, one busy minute spawns a seat per event and
+        they file contradictory records against each other — batch0 had three live
+        at once, one of which filed remediation from a stale snapshot that a sibling
+        had already overtaken (upstream finding #5). A wake that arrives while a
+        seat is working is COALESCED: the running seat reads events.jsonl and sees
+        it anyway, so dropping the duplicate loses no information.
+        """
         wake = self.harness / "orchestrator_wake.sh"
-        if wake.exists():
-            subprocess.Popen(
-                [str(wake), self.run, json.dumps(trigger)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+        if not wake.exists():
+            return
+        proc = getattr(self, "_wake_proc", None)
+        if proc is not None and proc.poll() is None:
+            self.coalesced_wakes = getattr(self, "coalesced_wakes", 0) + 1
+            print(f"[wake coalesced] a seat is still working "
+                  f"({self.coalesced_wakes} since it started); not spawning a rival")
+            return
+        self._wake_proc = subprocess.Popen(
+            [str(wake), self.run, json.dumps(trigger)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.coalesced_wakes = 0
 
     # -- observe --------------------------------------------------------------
     def windows(self) -> list[str]:
@@ -231,8 +248,22 @@ class Dispatcher:
                     wake=True,
                 )
         # 3. Triumvirate bypass: the target repo moving with no coder lane dispatched.
+        # Compared against an IGNITION SNAPSHOT, not against clean: a run legitimately
+        # starts on a dirty tree (preflight infra, config the run itself needs), and
+        # comparing to clean re-fires on that same pre-existing dirt every cycle —
+        # batch0 burned five orchestrator wakes on exactly this (upstream finding #2).
+        # Harness bookkeeping is excluded outright: .harness/ churn is the detector
+        # watching its own notes and calling it lane work.
         _, dispatches = self.counts()
-        dirty = sh(["git", "-C", self.repo, "status", "--porcelain"])
+        dirty_now = {ln[3:] for ln in
+                     sh(["git", "-C", self.repo, "status", "--porcelain"]).splitlines()
+                     if ln.strip() and not ln[3:].startswith((".harness/", ".factory/"))}
+        if self.ignition_dirty is None:
+            self.ignition_dirty = dirty_now      # first pass establishes the baseline
+            dirty_new: set[str] = set()
+        else:
+            dirty_new = dirty_now - self.ignition_dirty
+        dirty = "\n".join(sorted(dirty_new))
         digest = hashlib.sha256(dirty.encode()).hexdigest()
         if dirty.strip() and digest not in self.repo_dirty_seen:
             self.repo_dirty_seen.add(digest)
@@ -241,9 +272,9 @@ class Dispatcher:
             if not has_coder:
                 self.event(
                     "triumvirate_bypass_suspected",
-                    "target repo working tree is changing but no coder lane was ever "
-                    "dispatched — the Validator may be doing lane work itself "
-                    "(orchestrate-never-execute, fucked_up §13.5)",
+                    "paths changed since ignition with no coder lane ever dispatched, "
+                    f"excluding harness bookkeeping: {dirty[:300]} — the Validator may "
+                    "be doing lane work itself (orchestrate-never-execute, §13.5)",
                     wake=True,
                 )
 

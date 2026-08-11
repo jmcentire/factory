@@ -44,5 +44,49 @@ printf '{"ts":"%s","run":"%s","from":"%s","to":"%s","results":%s,"sha256":"%s"}\
   "$(date -u +%FT%TZ)" "$RUN" "$FROM" "$TO" "$RESULTS" "$DIGEST" >> "$ROOT/injections.jsonl"
 
 if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent"; exit 0; fi
-tmux send-keys -t "$RUN:$TO" "$MSG" Enter
+
+# Delivery hardening (batch0 findings INC-3/INC-4, three distinct defects):
+#
+# 1. A pane hosting a SHELL parses the message as a command — injected text is
+#    arbitrary execution in the repo cwd, and backticks command-substitute. Refuse
+#    unless the target is running an agent, or INJECT_ALLOW_SHELL=1 declares a
+#    deliberate mailbox sink.
+# 2. Agent TUIs treat a large send-keys burst as a bracketed paste and ABSORB the
+#    trailing Enter, so the message sits in the input box unsubmitted (observed:
+#    two lanes stalled ~20 minutes). Send Enter as a separate, delayed keypress,
+#    then a second one to clear a collapsed-paste confirmation.
+# 3. Payloads past the tty line-buffer limit wedge the terminal and silently
+#    discard everything after, including the Enter. Refuse oversized payloads.
+LIMIT="${INJECT_MAX_CHARS:-1000}"
+if [ "${#MSG}" -gt "$LIMIT" ]; then
+  echo "refusing: message is ${#MSG} chars, over the $LIMIT-char delivery limit —" >&2
+  echo "oversized injections wedge the tty line buffer and drop everything after," >&2
+  echo "including the Enter. Split it, or write a file and inject the path." >&2
+  exit 78
+fi
+TARGET_CMD=$(tmux display -p -t "$RUN:$TO" '#{pane_current_command}' 2>/dev/null || echo "")
+[ -n "$TARGET_CMD" ] || { echo "refusing: no live pane at $RUN:$TO" >&2; exit 76; }
+case "$TARGET_CMD" in
+  claude|codex|node|python*|agy) ;;
+  *)
+    if [ "${INJECT_ALLOW_SHELL:-0}" != "1" ]; then
+      echo "refusing: $RUN:$TO is running '$TARGET_CMD', not an agent — injected text" >&2
+      echo "would be PARSED AS A COMMAND in that pane's cwd. Set INJECT_ALLOW_SHELL=1" >&2
+      echo "only for a deliberate non-executing sink (e.g. 'cat >> inbox.log')." >&2
+      exit 77
+    fi ;;
+esac
+
+tmux send-keys -t "$RUN:$TO" -l -- "$MSG"      # -l: literal, no key-name parsing
+sleep "${INJECT_SUBMIT_DELAY:-2}"
+tmux send-keys -t "$RUN:$TO" Enter
+sleep 1
+tmux send-keys -t "$RUN:$TO" Enter             # clears a collapsed-paste prompt
+
+# Verify submission rather than assuming it: the input box must not still hold it.
+sleep 1
+if tmux capture-pane -p -t "$RUN:$TO" 2>/dev/null | grep -qF "${MSG:0:40}" \
+   && tmux capture-pane -p -t "$RUN:$TO" 2>/dev/null | grep -q "^❯.*${MSG:0:20}"; then
+  echo "WARNING: message may still be unsubmitted in $RUN:$TO — check the pane" >&2
+fi
 echo "injected -> $RUN:$TO ($DIGEST)"

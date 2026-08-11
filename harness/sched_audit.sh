@@ -18,12 +18,18 @@ else
       systemctl --user list-timers --no-legend 2>/dev/null | awk '{print $NF}' || true
   } | sed '/^\s*$/d' > "$tmp"
 fi
+# The registry is human-authored, so it carries comments and blank lines; grep -Ef
+# treats every line as a pattern, and a bracketed comment is an invalid character
+# range that makes grep fail the WHOLE file — silently unregistering everything.
+# Strip comments/blanks into a patterns-only temp file before matching.
+pat=$(mktemp)
+[ -f "$REG" ] && sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$REG" > "$pat"
 bad=0
 while IFS= read -r line; do
-  if [ -f "$REG" ] && grep -qEf "$REG" <<<"$line"; then continue; fi
+  if [ -s "$pat" ] && grep -qEf "$pat" <<<"$line"; then continue; fi
   echo "UNREGISTERED: $line"; bad=1
 done < "$tmp"
-rm -f "$tmp"
+rm -f "$tmp" "$pat"
 if [ $bad -ne 0 ]; then
   echo "agents do not own timers — register these in $REG or kill them"; exit 3
 fi
