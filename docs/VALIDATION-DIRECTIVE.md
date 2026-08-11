@@ -59,7 +59,17 @@ model families, mechanical backing — never asserted. A claimed tier the record
 does not support is `BLOCKED:independence`, because a verdict from the moderate
 tier and one from the stronger tier are not the same evidence and nothing
 downstream can tell them apart. Without the model and directive versions, the
-requalification-on-change rule cannot be applied after the fact at all.
+requalification-on-change rule cannot be applied after the fact at all. In run
+`batch0` (kindex 0.30.0/0.30.1; records under `.factory/runs/batch0/`) the
+arrangement recorded Moderate — Coder, Tester and Validator all one model family
+— and a single cross-family reader layered on top of those lanes found a
+requirement surface all three had read identically and all missed. Three readings
+of one specification are one reading. That is evidence about **reviewers**, not
+about lanes: at least one reviewer is drawn from outside the family running the
+lanes, without condition, because a reviewer is cheap. **Across the lanes** —
+Coder and Tester — different families are the cheap improvement, taken wherever
+the option exists; `stronger` remains an argument until a run records a verdict
+actually produced that way.
 
 The run tool policy is a phase-authorized enforcement projection, never a
 fourth intent source. Every inventory item has exactly one tier and phase-2/3
@@ -74,6 +84,30 @@ trusted-verifier set, Tester artifacts, invariant kernel, approval rules,
 control-applicability rules, sandbox permissions, or source-of-truth adapters.
 Those are factory-policy changes and require a separate policy-change lane with
 an independent verifier.
+
+The Validator's own output is not exempt from adversarial review. A **ruling** —
+resolving a spec conflict by accepting an implementation deviation, reclassifying
+a control, or declaring a requirement satisfied by a substitute — is a design
+change, not a clerical one. It is recorded with the deviation it accepts and the
+requirement it is measured against, and it is reviewed by a party that did not
+make it, from outside its own model family where that option exists, before
+anything is promoted on its authority. The Validator attacking its own ruling
+does not discharge that review. An unreviewed ruling on a Critical surface is
+`BLOCKED:independence`. A ruling is additionally a specification amendment only
+where it changes what a requirement *means*; then it also takes the
+specification-defect path, and every artifact derived from the superseded version
+is invalidated and re-derived. In batch0 the Validator resolved the decay-cadence
+conflict by accepting a one-day gate before decay applies; the gate reintroduced
+the exact schedule-dependence the requirement existed to remove, nothing reviewed
+the ruling, and it shipped.
+
+The same applies to the Validator's assessment of its own run. A self-assessment
+— after-action review, evidence summary, doneness claim — is evidence only after
+an adversary has attacked it, exactly as a green test is evidence only once
+something has proven it can go red for the right reason. The batch0 after-action
+review, written by its only reader, omitted the largest failure of the run — the
+loss of the run leader for over twelve hours — until a cross-family audit was
+commissioned against it and its findings appended rather than merged.
 
 ## Decision states
 
@@ -180,10 +214,16 @@ obtained. A checked item without that citation is still unchecked.
    acceptance suite derived from the frozen phase artifacts while structurally
    isolated from the Coder, invariant-kernel counterexamples, live probes, or a
    review record with a documented objection/refutation path. The Validator,
-   not the Tester, produces mutation evidence for Critical controls. A review
-   that merely says "looks good" is not adversarial evidence. Critical tests are
-   deterministic, have automatic retry disabled, and remain failed after any
-   flake; the later green run is a second observation, not an erasure.
+   not the Tester, produces mutation evidence for Critical controls, and each
+   mutation must redden **the specific test that carries the requirement it
+   targets**; a mutation that reddens some other control has proved nothing
+   about that requirement. In batch0 the falsifiability spot-check broke the
+   decay fold and watched the closed-form test go red while the cadence test —
+   the one carrying the requirement — stayed green, so the check passed with the
+   gap fully intact. A review that merely says "looks good" is not adversarial
+   evidence. Critical tests are deterministic, have automatic retry disabled, and
+   remain failed after any flake; the later green run is a second observation,
+   not an erasure.
    For every test that passed on the baseline and now fails, an exact signed
    supersession authorizes a Tester-side update, unchanged authority requires a
    code fix, and artifact silence or conflicting supersession routes to the
@@ -197,6 +237,20 @@ obtained. A checked item without that citation is still unchecked.
    the decision package that structural depth was not purchased. Structural mode
    claimed *without* a signed anchoring contract is `BLOCKED:oracle` — an oracle
    that read the implementation is not independent evidence.
+   Oracle quality is a **pass in its own right, run before any oracle result is
+   trusted**, never inferred from green controls. For every control carrying a
+   requirement the Validator shows that the fixture actually reaches the code
+   path under test, that the assertion discriminates between the requirement met
+   and unmet, and that the test fails at base *for the reason the requirement
+   names*. Red-now proves a test *can* fail; it does not prove the test is
+   *about* the requirement. A control that fails at base for an unrelated reason
+   and passes at head for an unrelated reason is `BLOCKED:oracle` even with both
+   controls satisfied and mutation evidence on file. The batch0 run's headline
+   requirement — cadence-independent weight decay — was carried by a fixture that
+   cold-started both databases and then made immediate calls, so every compared
+   call was a no-op: it failed at base for the wrong reason, passed at head for
+   the wrong reason, every gate in the run stayed green, and an adversary reading
+   the fixture found it only after release.
 
 8. **Fresh baseline, controls, and final gate.** The trusted baseline is green
    before new tests are trusted, unless a pre-existing red is individually
@@ -215,7 +269,9 @@ obtained. A checked item without that citation is still unchecked.
    reproduction is an evidence gap disposed by class; a reproduction that did not
    reproduce routes to the human rather than authorizing the repair; and
    reproduction-impossible is a declared lane condition that gates rather than a
-   step quietly skipped. Tests actually reach the target they claim to exercise.
+   step quietly skipped. Tests actually reach the target they claim to exercise
+   — proved by the oracle-quality pass of item 7, never inferred from a satisfied
+   red-now/green-now pair.
    The final gate is re-run from a fresh checkout of the final SHA.
 
 9. **Observability, monitoring, and operations.** Every new failure mode has
@@ -235,6 +291,20 @@ obtained. A checked item without that citation is still unchecked.
    quiet the monitor that produced it — and proposed-fix state is appended to the
    monitor, not held in the agent. Notification is earned: a signal reaching a
    human carries a human-actionable conclusion.
+   Two monitor-design defects are `BLOCKED:observability` wherever they appear —
+   in the phase-3 monitor set or in the run's own liveness watch. A monitor that
+   **deduplicates by content** cannot report a repeated event, and repeated
+   events are exactly what an iterative process produces: dedup keys on
+   `(event, occurrence-index)` or a monotonic cursor, never on payload alone. A
+   liveness detector **watches the principal, not a surface** that can be
+   repurposed or outlive it; a check pointed at a pane, port, file, or inbox
+   reports healthy against a dead seat. Both fired in batch0: the run leader's
+   watcher filtered the round-2 `__DONE__` it was explicitly waiting on because
+   round 1 had already emitted that string, and the harness liveness check
+   watched a pane that had been repurposed into a passive mailbox sink, so it
+   reported alive while the seat was dead. The Validator was then absent for over
+   twelve hours with both lanes finished and idle, and the human — not any
+   control — recovered the run.
 
 10. **Deploy and live proof.** The same artifact digest is promoted through the
    ladder. The deployed revision, runtime configuration, expected schema heads,
@@ -253,6 +323,16 @@ obtained. A checked item without that citation is still unchecked.
     waits on any delegate rather than on one individual. An undeclared roster is
     an evidence gap disposed by class — it means nobody decided who may ratify —
     and an approver outside the roster is `BLOCKED:approval-authority`.
+    **An incident record states the luck.** An incident closed as *contained, no
+    impact* names the control that contained it. Where no control did — the
+    injected prose was parsed by a shell and happened not to be harmful, the
+    forged principal identity happened to carry benign content, the concurrent
+    duplicate seats happened to file recoverable records — the record says exactly
+    that and the hazard stays open as an uncontrolled residual rather than closed
+    as handled. All three of those are batch0 incidents closed as contained and
+    none of the three was contained by a mechanism. A containment claim naming no
+    control is `BLOCKED:risk-acceptance`: it overstates the controls, and the next
+    run promotes against one that does not exist.
 
 12. **Rollback and forward authority.** `BLOCKED` output includes the applicable
     remediation tier: automated rollback allowed, on-call rollback allowed,

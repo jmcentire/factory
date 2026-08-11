@@ -70,7 +70,14 @@ AGENT="${AGENT:-claude}"
 OLLAMA_MODEL="${OLLAMA_LANE_MODEL:-glm-5.2:cloud}"
 case "$AGENT" in
   claude) LANE_CMD="claude \"$SKILL - $BRIEF\"" ;;
-  codex)  LANE_CMD="codex \"$ROLE_BRIEF\"" ;;
+  # A lane's tool policy cannot be enforced by dispatch TEXT: an agent obeys its
+  # global startup instructions BEFORE it reads any dispatch. In run v8 the codex
+  # tester correctly reported that its oracle was contaminated before DISPATCH.md
+  # could be opened — the operator's global AGENTS.md mandates a knowledge-graph
+  # tag+search "in every session", and that graph holds the defect detail under
+  # test. Isolation must therefore be established at LAUNCH: a lane-only home with
+  # no MCP servers and lane-appropriate global instructions.
+  codex)  LANE_CMD="CODEX_HOME='${CODEX_LANE_HOME:-$HOME/.codex-lane}' codex \"$ROLE_BRIEF\"" ;;
   gemini) LANE_CMD="agy -i \"$ROLE_BRIEF\"" ;;
   ollama) LANE_CMD="ollama launch opencode --model '$OLLAMA_MODEL'" ;;
   *) echo "unknown --agent '$AGENT' (claude|codex|gemini|ollama)" >&2; exit 64 ;;

@@ -607,10 +607,20 @@ the evidence is worth.
 | **Stronger** | **Different model families**, no shared context, no channel | Frame is no longer guaranteed shared. Correlated misreading becomes less likely rather than merely unobserved. |
 | **Strongest** | Reproducible mechanism — type system, schema validator, policy engine, differential test | Does not have a frame to share. |
 
-Different model families across the Coder and Tester lanes is a concrete and cheap improvement
-over same-model separation, and it is worth taking where the option exists. It is not a
-substitute for the mechanical base; **a frame can be shared through the specification itself
-regardless of what generated the agents.**
+**Across the lanes — the Coder and the Tester — different model families are a concrete and
+cheap improvement over same-model separation, and worth taking where the option exists.** It is
+not a substitute for the mechanical base; **a frame can be shared through the specification
+itself regardless of what generated the agents.** The *Stronger* row is an argument from
+structure: no completed run has yet produced a verdict from cross-family lanes, and the first
+run to exercise them is in progress.
+
+**Across the reviewers — the party layered on top of the lanes — at least one reviewer is drawn
+from outside the family running them, unconditionally, because a reviewer is cheap.** That one
+is evidenced. The batch0 run recorded the **Moderate** tier — Coder, Tester, and Validator were
+one model family throughout — and a reviewer drawn from a different family found a requirement
+surface all three had read identically and all missed, at a cost far below the defect it caught.
+**Same-family reviewers inherit the frame: three readings of one specification are one reading.**
+What that run evidences is cross-family *review*; it says nothing about cross-family lanes.
 
 **The tier is recorded in the manifest**, because a verdict produced at the moderate tier and one
 produced at the stronger tier are not the same evidence, and nothing downstream can tell them
@@ -660,6 +670,22 @@ changing the target.
 specification defect with contradictory evidence; the current version stays frozen; the human
 and the Validator resolve it in the phase it belongs to; and an approved amendment produces a
 new signed version that invalidates and reruns all affected work.
+
+**A ruling that resolves a conflict by accepting a deviation is reviewed before anything is
+built on it.** The Validator answering from the spec is translation. The Validator resolving a
+disagreement between the spec and the implementation *in favor of the implementation* arrives
+carrying the authority of the seat rather than of a signed artifact, so it is recorded with the
+deviation it accepts and the requirement it is measured against, and it is **reviewed by a party
+that did not make it** — from outside its own model family where that option exists. An
+unreviewed ruling on a Critical surface blocks. The Validator attacking its own ruling does not
+satisfy this.
+
+**A ruling becomes a specification amendment only where it changes what a requirement means.**
+Then it takes the specification-defect path like any other amendment, and everything derived
+from the superseded version is invalidated and re-derived. The batch0 run shipped a ruling that
+got neither: it accepted a one-day gate on a decay computation as the resolution of a spec
+conflict, and the gate reintroduced precisely the schedule-dependence the requirement existed to
+remove. Nothing reviewed the ruling, because a ruling was not something the process reviewed.
 
 ---
 
@@ -939,6 +965,13 @@ retries do not reset the budget.
 An agent mutation-testing its own work defeats the separation. The Tester does not certify that
 its own tests are sensitive; the Validator removes the control and confirms the test fails.
 
+**The mutation must redden the test that carries the requirement, not merely some test.** In the
+batch0 run the falsifiability check mutated the decay computation and observed a red — from the
+closed-form test, not from the cadence test the headline requirement rested on. The check passed
+and the gap survived, and in aggregate the signal was indistinguishable from a sensitive suite.
+A mutation that reddens a neighbor has demonstrated that the suite is alive; it has demonstrated
+nothing about the requirement.
+
 ---
 
 ## 11. The gate
@@ -958,6 +991,33 @@ lines moved.**
 A change whose oracle demonstrably covers what it disturbs runs with more autonomy regardless
 of size. A change whose oracle is silent on a surface it touches gets a human regardless of how
 small it is.
+
+### Adequacy is coverage and quality
+
+Coverage asks whether a test touches the surface the change disturbs. **Quality asks whether the
+test could fail for the reason the requirement names**, and a test that could not is not evidence
+about that requirement however completely it covers the surface.
+
+Three questions establish it, and each is answered against the *specific* test that carries the
+requirement rather than against the suite:
+
+1. Does the fixture reach the code path under test, in the state the requirement is about?
+2. Does the assertion discriminate — would a conforming and a non-conforming system produce
+   different results?
+3. Does it fail at base **for the reason the requirement names**, rather than for some other
+   reason that happens to be present?
+
+The batch0 run carried its headline requirement — decay that does not depend on how often the
+process runs — behind a test whose fixture cold-started both databases and then compared
+immediate calls, so every operation it compared was a no-op. It failed at base and passed at
+head, both for reasons that had nothing to do with cadence. **Red-now proves a test can fail; it
+does not prove the test is about the requirement.**
+
+**An oracle that cannot fail for the requirement's reason is a silent oracle**, and the §3.5
+disposition for silence on a disturbed surface applies to it unchanged — block on Critical, gate
+on Standard, report on Cosmetic. The reason to say so explicitly is that a vacuous test satisfies
+every coverage measure the factory takes, so the gap never presents as a gap: unlike an unchecked
+checklist item it is not visibly absent — it is present, cited, and green.
 
 ### Labor allocation, which is the inverse of the common instinct
 
@@ -1010,6 +1070,25 @@ itself evidence, and it is evidence a human can act on.
 Each of the three phases ends in the same shape — a checklist gate whose items are satisfied by
 cited evidence, plus an adversarial pass, because **done is a claim to be refuted rather than
 accepted.**
+
+**A gate prevents regression; an adversary finds a defect.** The two halves are not
+interchangeable, and the checklist is the weaker one, because an item nobody wrote is an item
+nobody checks. In the batch0 run every defect that mattered was found by an adversarial pass and
+none by a gate: both spec controls, a 1,659-test regression rail, a packaged build, an isolation
+proof, five live probes, and changeset hygiene were green together on a release that was wrong
+twice over. The gates were not worthless — they established the absence of regression, which is
+what they are for — but **a process made only of gates ships defects with a clean bill of
+health**, and it ships them with the evidence of carefulness attached.
+
+**The adversarial pass is therefore a gate item that runs before promotion, not a closing
+formality.** The batch0 pass that asked *what would make this not done* found the two worst
+problems of the run — a dependency pin that shipped a broken public install path, and the vacuous
+oracle above — and found both after everything was green, because it sat last in the sequence and
+was read as ceremony. **Last among the gates and before the promotion decision** — both halves
+are load-bearing and neither survives alone. It has to run last because it can only attack a
+finished claim, and it has to run before promotion because a pass that cannot change the outcome
+is ceremony. Run after promotion, that pass produces an incident report. Run before it, the same
+pass produces a decision. Last in sequence is not last in weight.
 
 ### The decision package
 
@@ -1404,7 +1483,12 @@ directive version. A claimed tier the arrangement does not support blocks. *(Ful
 **No agent silently reinterprets the spec.** A contradiction is raised as a specification
 defect, the current version stays frozen, and the human and Validator resolve it in the phase
 it belongs to. **This includes silencing a monitor:** deleting or weakening one is a change to the
-oracle, so it is a proposal a human ratifies, never a triage decision.
+oracle, so it is a proposal a human ratifies, never a triage decision. **A ruling is reviewed
+before it is relied on:** resolving a conflict between the spec and the implementation in favor
+of the implementation is recorded and reviewed by a party that did not make it, cross-family
+where that option exists, and an unreviewed ruling on a Critical surface blocks. Where the
+ruling changes what a requirement *means* it is also an amendment and takes the
+specification-defect path. *(Full statement in §6.)*
 
 ### The eight non-negotiables
 
@@ -1431,8 +1515,15 @@ Critical surfaces draw mandatory specialist review regardless of size. When the 
 silent, Critical blocks, Standard gates for expiring human risk acceptance, and Cosmetic
 reports and promotes.
 
+**Adequacy is coverage and quality.** A test that could not fail for the reason the requirement
+names is a silent oracle whatever it covers, and it takes the silent-oracle disposition. *(Full
+statement in §11.)*
+
 Every gate is an explicit checklist. Each satisfied item cites individually content-addressed
-evidence recorded when obtained; an unchecked or uncited item remains a visible gap.
+evidence recorded when obtained; an unchecked or uncited item remains a visible gap. **A gate
+prevents regression; an adversary finds a defect** — the adversarial pass runs before promotion,
+because a process made only of gates ships defects with a clean bill of health. *(The batch0
+evidence for that is enumerated once, in §11.)*
 
 **Detection is exhaustive; notification is earned.** Every alert that reaches a human means
 something, and an unactionable alert is answered with a better conclusion or a specification
@@ -1510,6 +1601,15 @@ them.
 quoted, not paraphrased. If the spec does not answer it, escalate to the human and reopen the
 relevant phase. Do not decide.
 
+**A ruling that accepts a deviation is reviewed, not merely issued.** Where the spec and the
+implementation disagree and you resolve it in favor of the implementation, record the ruling with
+the deviation it accepts and the requirement it is measured against, and have it **reviewed by a
+party that did not make it** — from outside your own model family where that option exists —
+before anything is promoted on its authority. Your own attack on your own ruling does not count.
+On a Critical surface an unreviewed ruling blocks. Where the ruling changes what a requirement
+*means*, it is also an amendment: raise it as a specification defect and let a signed artifact
+carry it before anything is built on it.
+
 **Run the tests** when both are complete. Report failures to the Coder as failures — **not as
 test names, traces, or assertion text**, because a suite that returns its internals becomes an
 interactive debugger the implementation is tuned against.
@@ -1530,6 +1630,8 @@ not carry it, blocks promotion regardless of whether the suite is green.
 
 **Own mutation evidence.** Remove each high-consequence control and confirm at least one test
 fails. This is yours because an agent mutation-testing its own work defeats the separation.
+**Confirm the red came from the test that carries the requirement**, not from a neighbor: a red
+elsewhere in the suite proves the suite is alive and proves nothing about the requirement.
 
 **Verify both controls** in a correction: the negative control (red-now) failed against the
 recorded baseline on the defect, and the positive control (green-now) passed against main on
@@ -1563,6 +1665,13 @@ purchased.
 **Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
 including side effects. Do not let diff size stand in for that judgment.
 
+**Then gate on oracle quality**, which coverage does not establish. For each requirement, take
+the specific test carrying it and confirm the fixture reaches the code path in the state the
+requirement is about, that the assertion discriminates between a conforming and a non-conforming
+system, and that it failed at base for the reason the requirement names rather than some other
+reason present at the time. A test that could not fail for that reason leaves the surface silent,
+and the class disposition applies.
+
 **Dispose of gaps by class.** Determine every surface the change disturbs, including those its
 side effects reach, and take the highest class among them. Where the oracle is silent on a
 disturbed surface: block if Critical, gate if Standard, report if Cosmetic. Where a required
@@ -1576,6 +1685,11 @@ behavior remains unverified.
 
 **Re-derive every cited fact** from its authoritative source rather than reading it from a
 report. **Drive the change live.**
+
+**Attack the claim of doneness before you promote, not after.** Ask what would make this not
+done and answer it with cited evidence while the verdict can still change. This is a gate item,
+not the last line of the report: run after promotion, the same pass produces an incident record
+instead of a decision.
 
 **Refute findings before presenting them.** A finding passed to a human unrefuted is a
 hypothesis, and a gate flooded with hypotheses gets bypassed.
@@ -1591,15 +1705,21 @@ would do. You never relay test internals to an automated repair context. You nev
 where you should refute. You never accept self-attestation in place of cited evidence and a
 live pass. You never allow a partial pass. You never classify a surface as Cosmetic on the
 grounds that the change touching it is small. You never promote a Critical surface on a
-waiver. **You never edit the spec, tests, or implementation in the run you verify.**
+waiver. You never resolve a conflict between the spec and the implementation by accepting the
+implementation **on your own authority** — that ruling is a design change, and it is reviewed
+by a party that did not make it or it does not stand (§6). **You never edit the spec, tests, or
+implementation in the run you verify.**
 
 ### Self-refutation before handoff
 
 Read your itemization against the preserved verbatim and find the item that says something the
 source did not. For each acceptance criterion, name the specific observation that would have
-falsified your verdict and confirm you looked for it. For each surface classified below
-Critical, name the worst outcome of that surface being wrong and confirm it is bounded to what
-the class tolerates. For each Critical surface, trace which components' side effects reach it.
+falsified your verdict and confirm you looked for it. For each requirement, name the test that
+carries it and state what that test would have to see to go red for the requirement's reason.
+For each ruling you issued, name what it changed about the target, name the party that reviewed
+it, and — where it changed what a requirement means — confirm a signed artifact now carries it. For each surface classified below Critical, name the worst outcome of that
+surface being wrong and confirm it is bounded to what the class tolerates. For each Critical
+surface, trace which components' side effects reach it.
 
 ---
 
@@ -1745,7 +1865,8 @@ are not authorized to decide that previously-correct behavior was incorrect.
 
 You never derive an expectation from the implementation. You never invent an interface or
 schema. You never mock away an owned critical dependency whose real behavior the test exists to
-check. You never write a test that passes without exercising the path it names. **You never
+check. You never write a test that passes without exercising the path it names, and a fixture
+that leaves every operation the test compares a no-op has not exercised it. **You never
 assert a constraint no phase artifact carries, and you never attribute an assertion to a human
 decision without a resolvable backreference to the artifact bearing it.** You do not certify
 your own tests' sensitivity — mutation evidence is the Validator's. You never add a retry, a
@@ -1766,9 +1887,12 @@ target nobody signed.
 ### Self-refutation before handoff
 
 For each assertion, resolve its backreference and confirm the cited artifact carries the
-constraint asserted — **not merely a related one.** For each parity test, add a new site by hand
-and confirm the test fails. For each assertion matching text, confirm a second occurrence
-elsewhere in the file would not satisfy it.
+constraint asserted — **not merely a related one.** For each test carrying a requirement, confirm
+the fixture puts the system in the state the requirement is about and that a non-conforming
+system would produce a different result — a test that cannot fail for the requirement's reason is
+not evidence about it. For each parity test, add a new site by hand and confirm the test fails.
+For each assertion matching text, confirm a second occurrence elsewhere in the file would not
+satisfy it.
 
 ---
 
@@ -1800,6 +1924,57 @@ against the trusted baseline; the Validator verifies both before trusting anythi
 ---
 
 ## Appendix B — Changelog
+
+### Errata — oracle quality, doneness placement, rulings, cross-family review — 2026-08-11
+
+Source: the batch0 run — a Validator/Coder/Tester run of this factory against a reliability batch
+in the kindex repository, which shipped two releases and whose record is at
+`~/Code/kindex/.factory/runs/batch0/`. Every item below rests on a finding of that run rather
+than on an argument from structure, and where the run's evidence stops short of a claim the
+document makes, the item says where the line falls.
+
+**Oracle adequacy now has two components, and coverage was only one of them.** The document
+keyed verification depth on whether the suite comprehends the change and never said what makes an
+individual test evidence. The run's headline requirement was carried by a test whose fixture
+cold-started both databases and compared immediate calls, so every operation compared was a
+no-op: it failed at base and passed at head, both for reasons unrelated to the requirement.
+Adequacy is now coverage **and quality** — does the fixture reach the code path in the state the
+requirement is about, does the assertion discriminate, does it fail at base for the reason the
+requirement names — and a test that could not fail for that reason is a **silent oracle** taking
+the §3.5 disposition for silence.
+
+**Mutation must redden the test that carries the requirement.** The run's falsifiability check
+mutated the right computation and observed a red from the wrong test; the check passed while the
+gap survived. In aggregate that signal is indistinguishable from a sensitive suite, so the
+Validator now confirms which test went red, not merely that one did.
+
+**A Validator ruling is reviewed before anything is built on it.** The run resolved a spec
+conflict by accepting an implementation deviation, and the accepted mechanism reintroduced
+exactly the property the requirement existed to remove. Nothing reviewed the ruling because a
+ruling was not something the process reviewed. A ruling that accepts a deviation is now recorded
+and reviewed by a party that did not make it, cross-family where that option exists, with an
+unreviewed ruling on a Critical surface blocking; the Validator's own attack on its own ruling
+does not discharge that. It is additionally an amendment, taking the specification-defect path,
+only where it changes what a requirement means.
+
+**The adversarial doneness pass moved before promotion.** It was the highest-yield control in the
+run — it found a dependency pin that shipped a broken public install path, and the vacuous oracle
+above — and it found both *after* everything was green, because it sat last and read as ceremony.
+It is now a gate item satisfied by cited evidence.
+
+**Stated the gates-versus-adversaries division honestly.** Every defect that mattered in the run
+was found by an adversary and none by a gate. The finding and the enumeration of green evidence
+behind it are stated once, in §11 *A gate is a checklist, not a recollection*; the document now
+says plainly that gates establish the absence of regression and are not a substitute for
+adversarial search.
+
+**Cross-family review gained evidence; cross-family lanes did not.** The run recorded the
+**Moderate** tier — Coder, Tester, and Validator were one model family — and a reviewer layered
+on top of those lanes, drawn from a different family, found a requirement surface all three had
+read identically and all missed. That evidences cross-family **review**, which §6 now requires
+of every run without condition. The tier table's *Stronger* row is about cross-family **lanes**,
+which this run did not run and therefore did not test; that row remains an argument from
+structure, and the first run to exercise it is in progress.
 
 ### Errata — controls, independence tiers, monitors, reproduction — 2026-07-29
 

@@ -67,7 +67,9 @@ fi
 TARGET_CMD=$(tmux display -p -t "$RUN:$TO" '#{pane_current_command}' 2>/dev/null || echo "")
 [ -n "$TARGET_CMD" ] || { echo "refusing: no live pane at $RUN:$TO" >&2; exit 76; }
 case "$TARGET_CMD" in
-  claude|codex|node|python*|agy) ;;
+  # Agent CLIs and the runtimes/launchers they appear as in the pane: opencode runs
+  # on bun, and `ollama launch <integration>` keeps the launcher as the pane command.
+  claude|codex|node|python*|agy|ollama|opencode|bun|deno) ;;
   *)
     if [ "${INJECT_ALLOW_SHELL:-0}" != "1" ]; then
       echo "refusing: $RUN:$TO is running '$TARGET_CMD', not an agent — injected text" >&2
