@@ -37,7 +37,20 @@ printf '{"ts":"%s","projection":"%s","projection_sha256":"%s"}\n' \
   "$(date -u +%FT%TZ)" "$PROJ" "$(shasum -a 256 "$PROJ" | cut -d' ' -f1)" \
   >> "$ROOT/wakes/receipts.jsonl"
 
-OUT=$(claude -p "/orchestrate - you are woken for one exception, not residency. \
+# The orchestrator agent is a PARAMETER (ORCH_AGENT=claude|gemini|codex). Batch0 ran
+# it on the same family as the Validator it audits — an auditor sharing its subject's
+# frame is the weakest possible arrangement — and lost the seat entirely when that
+# one account hit a spend cap. A different family is both better independence and an
+# independent failure domain.
+ORCH_AGENT="${ORCH_AGENT:-claude}"
+case "$ORCH_AGENT" in
+  claude) ORCH_CMD=(claude -p) ;;
+  gemini) ORCH_CMD=(agy -p --dangerously-skip-permissions) ;;
+  codex)  ORCH_CMD=(codex exec --sandbox read-only) ;;
+  *) echo "unknown ORCH_AGENT '$ORCH_AGENT' (claude|gemini|codex)" >&2; exit 64 ;;
+esac
+
+OUT=$("${ORCH_CMD[@]}" "/orchestrate - you are woken for one exception, not residency. \
 Your seat is strategy and process; the Validator's is tactics. Your charter: the \
 run stays pointed at what the founder asked for. The failure modes you audit are \
 the Validator's, not the lanes': (1) announced work with no receipt — saying is \

@@ -63,11 +63,17 @@ ROLE_BRIEF="$BRIEF You are the $ROLE lane: you hold one pen only, you never see 
 # option unreachable: batch0 ran both lanes on one family and could only ever
 # record the weaker tier, while the alternative CLIs sat installed on the same box.
 AGENT="${AGENT:-claude}"
+# ollama drives a coding CLI through Ollama's own integration launcher; the model
+# must be explicit or it refuses headless ("model selection requires an interactive
+# terminal"). The TUI is launched and the brief is delivered by inject.sh, matching
+# how every other lane receives work, so one delivery path stays authoritative.
+OLLAMA_MODEL="${OLLAMA_LANE_MODEL:-glm-5.2:cloud}"
 case "$AGENT" in
   claude) LANE_CMD="claude \"$SKILL - $BRIEF\"" ;;
   codex)  LANE_CMD="codex \"$ROLE_BRIEF\"" ;;
   gemini) LANE_CMD="agy -i \"$ROLE_BRIEF\"" ;;
-  *) echo "unknown --agent '$AGENT' (claude|codex|gemini)" >&2; exit 64 ;;
+  ollama) LANE_CMD="ollama launch opencode --model '$OLLAMA_MODEL'" ;;
+  *) echo "unknown --agent '$AGENT' (claude|codex|gemini|ollama)" >&2; exit 64 ;;
 esac
 
 # The derived independence tier is only auditable if the manifest records what
@@ -82,4 +88,12 @@ open(rec, 'w').write('\n'.join(lines) + '\n')
 " "$RECEIPT" "$AGENT"
 
 tmux new-window -t "$RUN" -n "$ROLE" -c "$WS" "$LANE_CMD"
+
+# Agents that take no initial prompt on the command line get the brief delivered
+# through the one sanctioned, receipted, delivery-hardened path.
+if [ "$AGENT" = "ollama" ]; then
+  sleep 8   # let the TUI finish binding the model before the first keystroke
+  "$D/inject.sh" "$RUN" "$ROLE" "$ROLE_BRIEF" >/dev/null || \
+    echo "WARNING: brief delivery to $ROLE failed — inject it manually" >&2
+fi
 echo "lane '$ROLE' launched in $RUN from $WS @ $SHA (agent: $AGENT)"
