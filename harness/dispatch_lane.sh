@@ -7,10 +7,11 @@
 set -euo pipefail
 RUN="${1:?usage: dispatch_lane.sh <run> <coder|tester> --dispatch <file> [--sha <sha>]}"
 ROLE="${2:?role}"; shift 2
-DISPATCH=""; SHA=""
+DISPATCH=""; SHA=""; AGENT=""
 while [ $# -gt 0 ]; do case "$1" in
   --dispatch) DISPATCH="$2"; shift 2 ;;
   --sha) SHA="$2"; shift 2 ;;
+  --agent) AGENT="$2"; shift 2 ;;   # claude|codex|gemini (see lane launch below)
   *) echo "unknown arg: $1" >&2; exit 64 ;;
 esac; done
 H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
@@ -53,6 +54,32 @@ PY
 
 cp "$DISPATCH" "$WS/DISPATCH.md"
 SKILL=$([ "$ROLE" = "coder" ] && echo "/engineer" || echo "/test")
-tmux new-window -t "$RUN" -n "$ROLE" -c "$WS" \
-  "claude \"$SKILL - read DISPATCH.md in this directory; it is your dispatch. Work only from it and the signed artifacts it cites.\""
-echo "lane '$ROLE' launched in $RUN from $WS @ $SHA"
+BRIEF="read DISPATCH.md in this directory; it is your dispatch. Work only from it and the signed artifacts it cites."
+ROLE_BRIEF="$BRIEF You are the $ROLE lane: you hold one pen only, you never see the other lane's work, and your only upward channel is a question, a failure report, or a specification defect."
+
+# The lane agent is a PARAMETER because §6 grades independence by model family and
+# names different families across Coder and Tester as the cheap available
+# improvement, "worth taking where the option exists". A hardcoded CLI made that
+# option unreachable: batch0 ran both lanes on one family and could only ever
+# record the weaker tier, while the alternative CLIs sat installed on the same box.
+AGENT="${AGENT:-claude}"
+case "$AGENT" in
+  claude) LANE_CMD="claude \"$SKILL - $BRIEF\"" ;;
+  codex)  LANE_CMD="codex \"$ROLE_BRIEF\"" ;;
+  gemini) LANE_CMD="agy -i \"$ROLE_BRIEF\"" ;;
+  *) echo "unknown --agent '$AGENT' (claude|codex|gemini)" >&2; exit 64 ;;
+esac
+
+# The derived independence tier is only auditable if the manifest records what
+# actually launched, so stamp the agent onto this lane's dispatch receipt.
+python3 -c "
+import json, sys
+rec, agent = sys.argv[1], sys.argv[2]
+lines = [l for l in open(rec).read().splitlines() if l.strip()]
+body = json.loads(lines[-1]); body['agent'] = agent
+lines[-1] = json.dumps(body, sort_keys=True, separators=(',', ':'))
+open(rec, 'w').write('\n'.join(lines) + '\n')
+" "$RECEIPT" "$AGENT"
+
+tmux new-window -t "$RUN" -n "$ROLE" -c "$WS" "$LANE_CMD"
+echo "lane '$ROLE' launched in $RUN from $WS @ $SHA (agent: $AGENT)"
