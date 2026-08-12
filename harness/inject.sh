@@ -30,6 +30,22 @@ case "$TO" in
   *) echo "unknown lane window: $TO (coder|tester|validator)" >&2; exit 64 ;;
 esac
 
+# Oracle-leak guard on ALL coder-bound traffic, not only --results traffic.
+# The bare-outcome rule is a rule the Validator must remember at compose time, and
+# in run v8 the Validator broke it twice from memory while actively editing the
+# document that states it. A rule an executor must recall is not a control; this
+# makes it one. Blocks test-file paths, test function names, pytest vocabulary and
+# assertion text on the way to the implementation lane.
+if [ "$TO" = "coder" ]; then
+  if printf '%s' "$MSG" | grep -qiE 'tests?/[A-Za-z0-9_]+\.py|test_[a-z0-9_]+|[^a-z]tests?[^a-z]|pytest|assertion|traceback|fixture|conftest|oracle|::[A-Za-z_]'; then
+    echo "oracle-leak refusal: coder-bound message names a test, fixture, or assertion." >&2
+    echo "The Coder never learns how the oracle is built. Report WHAT failed by" >&2
+    echo "requirement id, or an observation of the implementation's own behavior." >&2
+    echo "Override for a genuine false positive: INJECT_ALLOW_ORACLE_WORDS=1" >&2
+    [ "${INJECT_ALLOW_ORACLE_WORDS:-0}" = "1" ] || exit 80
+  fi
+fi
+
 if [ "$TO" = "coder" ] && [ "$RESULTS" -eq 1 ]; then
   if ! printf '%s' "$MSG" | grep -qE '^(PASS|FAIL)( [A-Za-z0-9._/#-]+)?( \([0-9]+/[0-9]+\))?$'; then
     echo "verdict filter refusal: coder-bound results are bare pass/fail only —" >&2
