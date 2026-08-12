@@ -45,7 +45,7 @@ printf '{"ts":"%s","projection":"%s","projection_sha256":"%s"}\n' \
 ORCH_AGENT="${ORCH_AGENT:-claude}"
 case "$ORCH_AGENT" in
   claude) ORCH_CMD=(claude -p) ;;
-  gemini) ORCH_CMD=(agy -p --dangerously-skip-permissions) ;;
+  gemini) ORCH_CMD=(agy --dangerously-skip-permissions -p) ;;
   codex)  ORCH_CMD=(codex exec --sandbox read-only) ;;
   *) echo "unknown ORCH_AGENT '$ORCH_AGENT' (claude|gemini|codex)" >&2; exit 64 ;;
 esac
@@ -66,6 +66,18 @@ receipt id if the projection is insufficient). You FLAG, never gate: reply with 
 the single message the Validator needs, or 'ESCALATE TO HUMAN: <why>' if only the \
 founder can resolve it. You hold zero grant authority; you speak to the Validator \
 only." 2>/dev/null || echo "(orchestrator invocation failed)")
+
+# An auditor that cannot be shown to have run is not an auditor. v8 sent five wakes
+# whose prompt was a stray flag; every reply was the model asking what was wanted, and
+# nothing detected it because only emptiness was checked.
+if [ -z "$OUT" ] || printf '%s' "$OUT" | grep -qiE "clarify what|no surrounding command|didn't include the command|what would you like me to do"; then
+  printf '{"ts":"%s","wake":"%s","status":"ORCHESTRATOR_DID_NOT_RUN","excerpt":"%s"}\n' \
+    "$(date -u +%FT%TZ)" "$TS" "$(printf '%s' "$OUT" | tr -d '"' | tr '\n' ' ' | cut -c1-120)" \
+    >> "$ROOT/wakes/receipts.jsonl"
+  echo "ORCHESTRATOR DID NOT RUN at $TS — invocation produced no audit" >&2
+  INJECT_FROM=dispatcher "$D/inject.sh" "$RUN" validator \
+    "[dispatcher] ORCHESTRATOR SEAT IS DEAD: wake $TS produced no audit. You have no independent check right now." >/dev/null 2>&1 || true
+fi
 
 if [ -n "$OUT" ]; then
   INJECT_FROM=orchestrator "$D/inject.sh" "$RUN" validator \
