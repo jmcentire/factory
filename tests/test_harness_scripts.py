@@ -520,3 +520,218 @@ def test_scripts_are_executable_and_parse(script: Path) -> None:
     assert os.access(script, os.X_OK), f"not executable: {script.name}"
     r = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
     assert r.returncode == 0, f"{script.name}: {r.stderr}"
+
+
+# --------------------------------------------------------------------------
+# Phase-1 adequacy gate — existence is not adequacy
+#
+# Run v8 launched with all four Phase-A artifacts present and signed, then took
+# six amendments authored WHILE the lanes coded, one retracting the one before
+# it. dispatch_lane.sh could not have caught that: it only asks whether the files
+# are there. These drills watch the adequacy gate fire on each axis it measures.
+# --------------------------------------------------------------------------
+
+ADEQUATE_SPEC = """# Product Specification
+
+- **R1.1** Config resolution MUST expose a documented way to bind an explicit
+  root without relying on process-start environment.
+
+- **R2.1** Observed weight MUST equal the closed form for every run schedule.
+"""
+
+ADEQUATE_STRAT = """# Testing Strategy
+R1.1 and R2.1 each get a control. For each, reachability of the code path is
+demonstrated and the assertion is shown to discriminate met from unmet.
+"""
+
+
+def mkrun(tmp: Path, spec: str, strat: str | None, contract: bool = True) -> Path:
+    art = tmp / ".harness" / "runs" / "r1" / "artifacts"
+    art.mkdir(parents=True)
+    (art / "product-specification.md").write_text(spec)
+    if strat is not None:
+        (art / "testing-strategy.md").write_text(strat)
+    if contract:
+        (art / "oracle-contract.md").write_text("signatures, shapes, marker locations\n")
+    return tmp
+
+
+def p1(tmp: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    return run(["bash", str(HARNESS / "phase1_gate.sh"), "r1", "--repo", str(tmp)],
+               cwd=tmp, env_extra=env or None)
+
+
+def test_phase1_gate_passes_on_adequate_artifacts(tmp_path: Path) -> None:
+    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "phase1 gate: clean" in r.stdout
+
+
+def test_phase1_gate_refuses_requirement_that_names_its_oracle(tmp_path: Path) -> None:
+    """v8's original R6.1 named a test function inside the signed spec; Amendment 2
+    recorded it as a defect in the SPECIFICATION, not in either lane."""
+    spec = ADEQUATE_SPEC + (
+        "\n- **R6.1** The skipped test `test_r2_5_mcp_store_open_failure` in "
+        "tests/test_batch0_degrade.py MUST be unskipped and pass.\n"
+    )
+    r = p1(mkrun(tmp_path, spec, ADEQUATE_STRAT + "\nR6.1 covered.\n"))
+    assert r.returncode == 71
+    assert "a requirement names its oracle" in r.stdout
+
+
+def test_phase1_gate_refuses_requirement_absent_from_strategy(tmp_path: Path) -> None:
+    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, "# Testing Strategy\nR1.1 only. Reachability shown.\n"))
+    assert r.returncode == 71
+    assert "R2.1" in r.stdout and "absent from the testing strategy" in r.stdout
+
+
+def test_phase1_gate_refuses_strategy_without_non_vacuity_method(tmp_path: Path) -> None:
+    """batch0 shipped a vacuous oracle on its headline requirement and every gate
+    in that run stayed green."""
+    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, "# Testing Strategy\nR1.1 and R2.1 are covered.\n"))
+    assert r.returncode == 71
+    assert "non-vacuous" in r.stdout
+
+
+def test_phase1_gate_refuses_missing_oracle_contract(tmp_path: Path) -> None:
+    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False))
+    assert r.returncode == 71
+    assert "oracle-contract.md" in r.stdout
+
+
+def test_phase1_gate_override_is_receipted_not_silent(tmp_path: Path) -> None:
+    """An override nobody can see becomes the habit that turns a gate into theater."""
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False)
+    r = p1(tmp, PHASE1_ALLOW_GAPS="1")
+    assert r.returncode == 0
+    events = tmp / ".harness" / "runs" / "r1" / "events.jsonl"
+    rec = read_chain(events)[-1]
+    assert rec["gate"] == "phase1" and rec["override"] is True and rec["failures"] == 1
+
+
+# --------------------------------------------------------------------------
+# Projection receipt — reachability, not existence
+# --------------------------------------------------------------------------
+
+
+def mkproj(tmp: Path, *includes: str) -> Path:
+    (tmp / ".harness").mkdir(parents=True, exist_ok=True)
+    (tmp / ".harness" / "projection.conf").write_text(
+        "".join(f"tester-include: {i}\n" for i in includes))
+    return tmp
+
+
+def pr(tmp: Path, role: str, art: Path) -> subprocess.CompletedProcess[str]:
+    return run(["bash", str(HARNESS / "projection_receipt.sh"), role, str(art)], cwd=tmp)
+
+
+def test_projection_receipt_passes_when_every_path_is_reachable(tmp_path: Path) -> None:
+    mkproj(tmp_path, "tests", "pyproject.toml")
+    art = tmp_path / "s.md"
+    art.write_text("Cases land in tests/test_seam.py; metadata from pyproject.toml.\n")
+    r = pr(tmp_path, "tester", art)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "inside the declared view" in r.stdout
+
+
+def test_projection_receipt_refuses_unreachable_source_paths(tmp_path: Path) -> None:
+    mkproj(tmp_path, "tests", "pyproject.toml")
+    art = tmp_path / "s.md"
+    art.write_text("The oracle imports src/pkg/config.py and compares src/pkg/store.py.\n")
+    r = pr(tmp_path, "tester", art)
+    assert r.returncode == 67
+    assert "src/pkg/config.py" in r.stdout and "src/pkg/store.py" in r.stdout
+
+
+def test_projection_receipt_does_not_flag_not_yet_written_tests(tmp_path: Path) -> None:
+    """The whole point: a test the lane is ABOUT to write does not exist yet, and
+    checking existence instead of reachability would refuse every honest dispatch."""
+    mkproj(tmp_path, "tests")
+    art = tmp_path / "s.md"
+    art.write_text("New cases land in tests/test_does_not_exist_yet.py.\n")
+    r = pr(tmp_path, "tester", art)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_projection_receipt_does_not_gate_the_coder(tmp_path: Path) -> None:
+    mkproj(tmp_path, "tests")
+    art = tmp_path / "s.md"
+    art.write_text("Coder reads src/pkg/config.py.\n")
+    r = pr(tmp_path, "coder", art)
+    assert r.returncode == 0 and "not include-listed" in r.stdout
+
+
+# --------------------------------------------------------------------------
+# Mutation harness — a runner that cannot tell "did not apply" from "survived"
+# manufactures the very false green it exists to detect.
+# --------------------------------------------------------------------------
+
+
+def mkpkg(tmp: Path) -> Path:
+    (tmp / "src" / "pkg").mkdir(parents=True)
+    (tmp / "src" / "pkg" / "__init__.py").write_text("def guarded():\n    return 'safe'\n")
+    (tmp / "tests").mkdir()
+    (tmp / "tests" / "test_g.py").write_text(
+        "from pkg import guarded\n\ndef test_g():\n    assert guarded() == 'safe'\n")
+    return tmp
+
+
+def test_mutate_reports_patch_failure_not_survival(tmp_path: Path) -> None:
+    """The ad-hoc runner used mid-v8 reported SURVIVED for a patch that had died on
+    an IndentationError. That is the false green, inside the instrument."""
+    tree = mkpkg(tmp_path / "tree")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert 'ANCHOR THAT DOES NOT EXIST' in s, 'anchor'\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "m", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "PATCH-FAILED" in r.stdout and "SURVIVED" not in r.stdout
+
+
+def test_mutate_kills_a_real_mutation(tmp_path: Path) -> None:
+    tree = mkpkg(tmp_path / "tree")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "m2", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout
+
+
+# --------------------------------------------------------------------------
+# Dead-auditor detection — the control that failed through itself
+#
+# v8 first sent five wakes whose prompt was a stray flag; nothing detected it
+# because only emptiness was checked. The repair then failed the SAME way: the
+# invocation was wrapped in `|| echo "(orchestrator invocation failed)"`, which
+# discarded the exit status and produced a non-empty string matching none of the
+# clarify-phrases, so a failed invocation was written out as a normal response.
+# Five of sixteen v8 wakes died that way with ZERO dead-wake records, across the
+# whole endgame, while the check reported itself healthy.
+# --------------------------------------------------------------------------
+
+
+def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"}))
+    (root / "TASK.md").write_text("task\n")
+    # PATH without any agent binary: the invocation cannot succeed.
+    r = run(["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+            cwd=tmp_path, env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "claude"})
+    receipts = (root / "wakes" / "receipts.jsonl").read_text()
+    assert "ORCHESTRATOR_DID_NOT_RUN" in receipts, (
+        "a failed invocation must be recorded as a dead wake, not written out as an audit"
+    )
+    assert "ORCHESTRATOR DID NOT RUN" in r.stderr

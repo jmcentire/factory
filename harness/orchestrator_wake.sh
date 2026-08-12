@@ -50,6 +50,7 @@ case "$ORCH_AGENT" in
   *) echo "unknown ORCH_AGENT '$ORCH_AGENT' (claude|gemini|codex)" >&2; exit 64 ;;
 esac
 
+set +e
 OUT=$("${ORCH_CMD[@]}" "/orchestrate - you are woken for one exception, not residency. \
 Your seat is strategy and process; the Validator's is tactics. Your charter: the \
 run stays pointed at what the founder asked for. The failure modes you audit are \
@@ -65,12 +66,27 @@ it; the repo's design docs under docs/ are yours to read; pull artifacts by \
 receipt id if the projection is insufficient). You FLAG, never gate: reply with \
 the single message the Validator needs, or 'ESCALATE TO HUMAN: <why>' if only the \
 founder can resolve it. You hold zero grant authority; you speak to the Validator \
-only." 2>/dev/null || echo "(orchestrator invocation failed)")
+only." 2>/dev/null)
+ORCH_RC=$?
+set -e
+[ -n "$OUT" ] || OUT="(orchestrator invocation failed)"
 
 # An auditor that cannot be shown to have run is not an auditor. v8 sent five wakes
 # whose prompt was a stray flag; every reply was the model asking what was wanted, and
 # nothing detected it because only emptiness was checked.
-if [ -z "$OUT" ] || printf '%s' "$OUT" | grep -qiE "clarify what|no surrounding command|didn't include the command|what would you like me to do"; then
+#
+# It then did it AGAIN, through this very control. The invocation was wrapped in
+# `|| echo "(orchestrator invocation failed)"`, which discarded the exit status and
+# produced a non-empty string that matched none of the clarify-phrases below — so a
+# failed invocation was written out as a normal response and counted as a live audit.
+# Five of v8's sixteen wakes failed that way with ZERO dead-wake records, across the
+# entire endgame, while this check reported itself healthy. The lesson is the one the
+# run kept relearning: the detector watched for symptoms it IMAGINED (phrasings) and
+# never for the failure it was built to catch (the command not running). Status is now
+# read from the exit code, which cannot be paraphrased, with the string match kept only
+# as a secondary net for a command that exits 0 while refusing to work.
+if [ "$ORCH_RC" -ne 0 ] || [ -z "$OUT" ] \
+   || printf '%s' "$OUT" | grep -qiE "orchestrator invocation failed|clarify what|no surrounding command|didn't include the command|what would you like me to do"; then
   printf '{"ts":"%s","wake":"%s","status":"ORCHESTRATOR_DID_NOT_RUN","excerpt":"%s"}\n' \
     "$(date -u +%FT%TZ)" "$TS" "$(printf '%s' "$OUT" | tr -d '"' | tr '\n' ' ' | cut -c1-120)" \
     >> "$ROOT/wakes/receipts.jsonl"

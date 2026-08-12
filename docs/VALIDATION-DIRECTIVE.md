@@ -214,13 +214,32 @@ obtained. A checked item without that citation is still unchecked.
    acceptance suite derived from the frozen phase artifacts while structurally
    isolated from the Coder, invariant-kernel counterexamples, live probes, or a
    review record with a documented objection/refutation path. The Validator,
-   not the Tester, produces mutation evidence for Critical controls, and each
-   mutation must redden **the specific test that carries the requirement it
-   targets**; a mutation that reddens some other control has proved nothing
-   about that requirement. In batch0 the falsifiability spot-check broke the
-   decay fold and watched the closed-form test go red while the cadence test —
-   the one carrying the requirement — stayed green, so the check passed with the
-   gap fully intact. A review that merely says "looks good" is not adversarial
+   not the Tester, produces mutation evidence for Critical controls. Mutation
+   runs against the **full suite** — never against the single test believed to
+   own the requirement — and the result is read against **both** failure modes,
+   because per-test attribution is wrong in both directions and each direction
+   has already cost a run:
+   - When the requirement's own carrier stays green while other controls redden,
+     that is a **question, not a verdict**. In batch0 the falsifiability
+     spot-check broke the decay fold and watched the closed-form test go red
+     while the cadence test — the one carrying the requirement — stayed green, so
+     the check passed with the gap fully intact. In v8 the identical signal meant
+     the opposite: the mutation was an **equivalent mutant** for the requirement
+     it targeted (at zero elapsed interval the mutated fold is mathematically the
+     identity) and was legitimately observable only through another control.
+     Resolve it behaviourally — exercise the mutated build and show whether the
+     prohibited outcome actually occurs — never by assuming either reading.
+   - A **survivor is equally a question**: missing guard, or equivalent mutant. A
+     defense-in-depth control is unobservable while the primary holds, which is
+     what a backstop is; filing it as a gap sends a lane to change correct code.
+   The harness is `harness/mutate.sh`, which fails closed on the four
+   preconditions that make any verdict meaningful: the code under test loads from
+   the mutated tree, the clean tree is green first, the patch actually applied,
+   and the full suite ran. A runner that cannot distinguish *patch did not apply*
+   from *mutant survived* manufactures the very false green it exists to detect —
+   the ad-hoc runner used mid-v8 did exactly that. Full doctrine, and the
+   catalogue of worthless-check shapes, in `docs/practices/oracle-quality.md`.
+   A review that merely says "looks good" is not adversarial
    evidence. Critical tests are deterministic, have automatic retry disabled, and
    remain failed after any flake; the later green run is a second observation,
    not an erasure.
@@ -272,7 +291,16 @@ obtained. A checked item without that citation is still unchecked.
    step quietly skipped. Tests actually reach the target they claim to exercise
    — proved by the oracle-quality pass of item 7, never inferred from a satisfied
    red-now/green-now pair.
-   The final gate is re-run from a fresh checkout of the final SHA.
+   The final gate is re-run from a fresh checkout of the final SHA, and it is the
+   **entire suite against the INTEGRATED tree** — the implementation lane's source
+   overlaid with the test lane's tests — never the run's own acceptance suite
+   alone. The narrow surface that makes a judge fast is the same surface that lets
+   it certify a broken build: v8's acceptance suite reached 0 failed / 34 passed
+   while `kin search --json | jq` was broken by a note appended after the JSON
+   document, and only the full suite saw it. Verify import resolution actually
+   reaches the integrated tree on every such run — a stale interpreter path can
+   silently test a different checkout — and re-run the gate after **every** late
+   change. A tree validated before further changes is not a validated tree.
 
 9. **Observability, monitoring, and operations.** Every new failure mode has
    structured logs, metrics/traces where applicable, alert routing, and a

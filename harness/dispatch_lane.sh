@@ -34,6 +34,25 @@ fi
 grep -q "interpretation_confirmed: true" "$DISPATCH" || \
   fail "dispatch lacks 'interpretation_confirmed: true' (restatement gate, control 2)"
 
+# Existence is not adequacy. Run v8 launched with all four Phase-A artifacts
+# present and signed, then took six amendments authored WHILE the lanes coded —
+# one retracting the one before it. The checks above could not have caught that,
+# because they only ask whether the files are there. phase1_gate.sh asks whether
+# they did a specification's work, and refuses the dispatch when they did not.
+"$D/phase1_gate.sh" "$RUN" --repo "$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")" \
+  || fail "phase1 adequacy gate refused (see output above; PHASE1_ALLOW_GAPS=1 records a receipted gap)"
+
+# A signed artifact may point a lane at something its projection can never hold.
+# v8 discovered exactly that AFTER dispatch, mid-run, at the cost of a stall and a
+# round trip — though both inputs, the include list and the artifact, were on disk
+# before launch and nothing compared them. Reachability, not existence: a test the
+# lane is about to write does not exist yet and must not trip this.
+if [ "$ROLE" = "tester" ]; then
+  (cd "$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")" \
+     && "$D/projection_receipt.sh" tester "$ART/testing-strategy.md") \
+    || fail "projection receipt refused: the strategy names paths outside the tester's declared view"
+fi
+
 REPO=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")
 [ -n "$SHA" ] || SHA=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['base_sha'])")
 WS="$ROOT/workspaces/$ROLE"
