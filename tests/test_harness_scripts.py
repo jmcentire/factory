@@ -238,7 +238,15 @@ def ground_fixture(tmp: Path) -> dict[str, str]:
     )
     empty = tmp / "no-timers.txt"
     empty.write_text("")
+    # The tripwire now defaults ON (an unset TRANSCRIPTS silently disabled the only
+    # credential check in the harness). These drills must stay hermetic, so point it
+    # at an empty sandbox rather than the developer's real transcripts — otherwise
+    # ground.sh correctly STOPs on whatever it finds there and the drill measures the
+    # machine instead of the script.
+    scratch_transcripts = tmp / "transcripts"
+    scratch_transcripts.mkdir()
     return {
+        "TRANSCRIPTS": str(scratch_transcripts),
         "DIRECTIVE_LEDGER": str(tmp / "DIRECTIVES" / "ledger.jsonl"),
         "SCHED_AUDIT_INPUT": str(empty),
         "HARNESS_DIR": ".harness",
@@ -735,3 +743,23 @@ def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
         "a failed invocation must be recorded as a dead wake, not written out as an audit"
     )
     assert "ORCHESTRATOR DID NOT RUN" in r.stderr
+
+
+def test_mutate_reports_no_op_patch_not_survival(tmp_path: Path) -> None:
+    """A patch that applies cleanly and changes nothing is NOT a survivor.
+
+    mutate.sh shipped with this hole: GATE 3 checked the patch's exit code only, so
+    a patch that returned 0 without touching a byte came back `*** SURVIVED ***` —
+    the exact false green the gate exists to prevent, in the tool built to prevent
+    it. The author tested the nonzero-exit variant and stopped, which is the same
+    one-variant-treated-as-the-class error this harness exists to catch.
+    """
+    tree = mkpkg(tmp_path / "tree")
+    patch = tmp_path / "noop.py"
+    patch.write_text("import sys\nprint('applied, changed nothing')\nsys.exit(0)\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "n", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "NO-OP PATCH" in r.stdout
+    assert "SURVIVED" not in r.stdout

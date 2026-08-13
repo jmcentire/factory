@@ -82,16 +82,34 @@ if printf '%s' "$clean_out" | grep -qE "[0-9]+ (failed|error)"; then
   exit 3
 fi
 
-# --- GATE 3: the patch must actually apply -----------------------------------
+# --- GATE 3: the patch must apply AND must actually change the tree ----------
 # A patch whose anchor has drifted raises, changes nothing, and the suite then
 # passes — indistinguishable from a surviving mutant unless checked. The ad-hoc
 # runner used in v8 reported precisely that false SURVIVED for a patch that had
 # died on an IndentationError. A mutation harness that cannot tell "did not apply"
 # from "survived" manufactures the very false green it exists to detect.
+#
+# The exit code alone is NOT sufficient, and THIS SCRIPT SHIPPED WITH THAT HOLE:
+# a patch that exits 0 without touching a byte also came back SURVIVED. Same
+# defect, same tool, one variant away — the author tested the nonzero-exit case
+# and stopped. That is the exact failure this harness exists to catch, committed
+# by the person writing the catcher, which is why the tree is now digested before
+# and after and an unchanged tree is INVALID rather than a survival.
+tree_digest() {
+  find "$1" -type f -not -path '*/__pycache__/*' -not -path '*/.git/*' \
+    -exec shasum -a 256 {} + 2>/dev/null | sort -k2 | shasum -a 256 | cut -d' ' -f1
+}
+before_digest=$(tree_digest "$WORK")
 patch_out=$(python3 "$PATCH" "$WORK" 2>&1); patch_rc=$?
 if [ "$patch_rc" -ne 0 ]; then
   verdict "PATCH-FAILED (anchor missing or drifted — this is NOT a survival)"
   printf '%s\n' "$patch_out" | tail -3 | sed 's/^/    /'
+  exit 3
+fi
+if [ "$(tree_digest "$WORK")" = "$before_digest" ]; then
+  verdict "NO-OP PATCH (exited 0 but changed nothing — this is NOT a survival)"
+  echo "    Tree digest is identical before and after the patch. A mutation that" >&2
+  echo "    mutates nothing cannot be survived. Fix the patch, then re-run." >&2
   exit 3
 fi
 

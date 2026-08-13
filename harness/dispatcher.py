@@ -18,6 +18,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -160,7 +161,7 @@ class Dispatcher:
 
     # -- checks ---------------------------------------------------------------
     def check_halt(self) -> None:
-        halt = pathlib.Path(".harness/HALT")
+        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".harness")) / "HALT"
         if halt.exists() and not self.halted:
             self.halted = True
             head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"

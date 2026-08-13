@@ -18,6 +18,10 @@ echo "== 3/6 cadence audit =="
 "$D/sched_audit.sh"
 
 echo "== 4/6 tripwire =="
+# Default ON, but only where transcripts actually live: an unset var silently
+# disabled the only credential check in the harness, and a hard default would
+# break grounding in sandboxes that have no transcript dir at all.
+[ -n "${TRANSCRIPTS:-}" ] || { [ -d "$HOME/.claude/projects" ] && TRANSCRIPTS="$HOME/.claude/projects"; } || true
 if [ -n "${TRANSCRIPTS:-}" ]; then "$D/tripwire.sh" $TRANSCRIPTS
 else echo "(set TRANSCRIPTS=<paths> to scan)"; fi
 

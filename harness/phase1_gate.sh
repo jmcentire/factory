@@ -75,13 +75,45 @@ fi
 # every gate in that run stayed green. Red-now proves a test CAN fail; it never
 # proves the test is ABOUT the requirement. The strategy must declare the method
 # per requirement, before anyone writes code.
+# A single keyword anywhere in the document is NOT a declaration, and this check
+# shipped accepting exactly that: a strategy whose entire content was the tokens
+# "R1.1 R1.2. mutation" passed. Worse, it would have passed v8's real strategy,
+# whose prescribed method WAS the defect. The declaration must sit with the
+# requirement it describes, so the method is stated per requirement rather than
+# gestured at once for the document.
 if [ -s "$STRAT" ]; then
-  if grep -qiE 'non-?vacu|reachab|discriminat|mutation' "$STRAT"; then
-    pass "C: strategy declares a non-vacuity method"
+  cgap=$(python3 - "$SPEC" "$STRAT" <<'PY'
+import re, sys
+spec, strat = open(sys.argv[1]).read(), open(sys.argv[2]).read().splitlines()
+ids = sorted(set(re.findall(r'^- \*\*(R\d+\.\d+)', spec, re.M)))
+tok = re.compile(r'non-?vacu|reachab|discriminat|mutation|forcing|red[- ]now', re.I)
+missing = []
+for rid in ids:
+    hit = False
+    for i, line in enumerate(strat):
+        if rid in line:
+            lo, hi = max(0, i - 5), min(len(strat), i + 6)
+            if any(tok.search(l) for l in strat[lo:hi]):
+                hit = True; break
+    if not hit:
+        missing.append(rid)
+# Proximity alone is defeated by a one-line document, where a single token sits
+# within the window of every requirement — the exact strategy that passed before.
+# One declaration cannot serve N requirements, so require at least as many
+# distinct declarations as there are requirements.
+decls = sum(1 for l in strat if tok.search(l))
+if ids and decls < len(ids):
+    missing.append(f"[only {decls} declaration(s) for {len(ids)} requirements]")
+print(" ".join(missing))
+PY
+)
+  if [ -z "$cgap" ]; then
+    pass "C: every requirement states how its oracle is shown non-vacuous"
   else
-    fail "C: strategy never states how any oracle is shown non-vacuous"
-    note "  required: reachability of the code path, a discriminating assertion,"
-    note "  and failure at base FOR THE REASON THE REQUIREMENT NAMES"
+    fail "C: no non-vacuous-oracle method stated near these requirements:$cgap"
+    note "  a keyword elsewhere in the document is not a declaration — state, per"
+    note "  requirement, how its oracle is shown to reach the path, to discriminate,"
+    note "  and to fail at base FOR THE REASON THE REQUIREMENT NAMES"
   fi
 fi
 
@@ -105,7 +137,7 @@ echo "post-ratification amendments so far: ${AMEND:-0}   (v8 baseline: 6, all au
 if [ "$FAILURES" -gt 0 ]; then
   echo
   if [ "${PHASE1_ALLOW_GAPS:-0}" = "1" ]; then
-    printf '{"ts":"%s","run":"%s","gate":"phase1","failures":%s,"override":true}\n' \
+    printf '{"ts":"%s","kind":"phase1_gap_override","run":"%s","gate":"phase1","failures":%s,"override":true}\n' \
       "$(date -u +%FT%TZ)" "$RUN" "$FAILURES" >> "$ROOT/events.jsonl" 2>/dev/null || true
     echo "PHASE1_ALLOW_GAPS=1 — $FAILURES gap(s) overridden and RECEIPTED."
     echo "State them in the verdict; an override nobody can see becomes the habit"
