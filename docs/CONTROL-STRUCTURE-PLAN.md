@@ -6,13 +6,30 @@
 > claim in the actual `factory_core` code and found six real failures in the first draft.
 > This is a control-plane change to the factory's own verifier; per the control-plane
 > prohibition it requires an independent verifier lane and founder ratification before
-> any implementation. **Slices 1+2+3 are implemented in advisory mode and green through
-> `make ship`** — receipt `test_count`/`pass_count` (machine-derived), `mutate.sh
-> --named-test` (symptom-not-failure), the closed shepherd channel + bounded-time
-> liveness, and the blocking-event attention mechanism (the time-kill). Every control
-> carries an end-to-end denial probe. Next: slice 4 (Gates M, N — diff-to-surface
-> enumeration, observation-receipt binding) under an independent verifier lane; Gate L
-> (sole-advancement-authority) remains deferred.
+> any implementation. **Slices 1–6 are implemented and green through `make ship`** —
+> receipt `test_count`/`pass_count` (machine-derived), `mutate.sh --named-test`
+> (symptom-not-failure), the closed shepherd channel + bounded-time liveness, the
+> blocking-event attention mechanism (the time-kill), the FENCE→PRIMER→TASK dispatch +
+> kindex-as-primer gate (Gates B, C), the diff-to-surface enumeration + observation-receipt
+> binding (Gates M, N), the sole-advancement-authority (Gate L) + the seam chain-anchor
+> (F3) + the Standard false-close fix (F4) + the chain hash-linkage/duplicate-id hardening
+> (R2/R3), and the denial-probe registry (Gate I — every gate has a registered, collecting,
+> falsifiable end-to-end probe, or the build fails). The independent Opus cross-family
+> verifier APPROVED F3/F4. The R2/R3 re-verify returned CHANGES_REQUESTED (code correct;
+> required: the `$$` fix to `receipt.sh` because R3 wedges on honest id collision, and
+> correcting the "closes in three layers" overclaim) — both applied, plus two cheap optional
+> fixes, and a NEW residual R4 (chain authenticity / mint-by-append, distinct from R1). **The
+> round-2 Opus re-verify (2026-08-14) returned APPROVE — "Ratify, nothing blocks"** (all four
+> fixes land, both required items discharged, no new defect; cross-FAMILY independence only,
+> roles collapsed). It named one new residual **R5** (the wedge is now an attack: append-capability
+> on `chain.jsonl` is a permanent denial-of-promotion — the availability twin of R4; the same
+> external anchor that closes R4 gives R5 a repair path) and five optional follow-ups, of which
+> the two test-layer ones are applied (the R3 fixture is inverted to prove the GREEN-dup-shadows-
+> RED-honest false-acceptance the gate prevents, not merely one refusal becoming another) and the
+> two verifier-logic ones are deferred as a tracked task (they touch `_load_chain` and would
+> re-open the control-plane gate just closed). **Remaining:** F1 (the evidence-production
+> pipeline that wires Gate L into the live close path and supplies the receipt bodies that close
+> R1 replay) is the acknowledged deferral landing with Part 7.
 
 ---
 
@@ -303,6 +320,14 @@ false-positive rate, then switches to enforcement per skill.
 6. **End-to-end denial probes, re-run on every build (Gate I, Amend 2.4).** Write
    `denial_probe.sh`; register a probe for every gate; a gate without a passing probe is
    theater and fails the build. *Closes:* proxy-migration, control-reports-healthy-while-dead.
+   **BUILT 2026-08-14:** `harness/gates.tsv` (18 gates: A–N + F3/F4/R2/R3) +
+   `scripts/check_denial_probes.py` (coverage/dead-pointer/unfalsifiable check, wired into
+   `make ship` as `check-denial-probes`) + `harness/denial_probe.sh` (re-run a gate's probes)
+   + `tests/test_denial_probes.py` (the meta Gate I denial probe). The honest scope: the check
+   enforces coverage, collection, and *declared* falsifiability (`red_now`); the deeper
+   red-now-auto-run (apply the mutation, confirm the probe goes red, revert) is the named
+   "next proxy" residual (Part 5 §4) — the registry carries the `red_now` description for a
+   future runner, but per-gate mutation application is not automated here.
 
 **Advocate's operational requirements, applied to every gate as it ships:**
 - A **concrete interface spec** (script name, CLI, input format, exit codes, receipt storage).
@@ -487,3 +512,135 @@ nothing and the binding is dormant by design; after it, the binding is the sole 
 3. Seam + core: Gate N observation-receipt binding (mutation + flake receipts) + denial probes.
 4. `make ship` green; independent-verifier review; then push slice 4 as a unit (the
    partial-surface caveat means no incremental push).
+
+### Spec-defects & gaps (Opus cross-family review, 2026-08-14) — status
+
+The founder-mandated independent cross-family verifier (real Opus, reached via a one-off
+`claude` CLI call against `https://api.anthropic.com`) reviewed the built Gate L + the M/N
+enforcement cutover and returned BLOCK with nine findings (F1–F9). The implementation defects
+(F2 stale/forged-verdict route-around; F5 non-atomic run.json write; F6 run.json projection
+collision; F7 overloaded exit code; F8 malformed-but-JSON traceback; F9 unstripped identity
+values) are FIXED. The two findings initially raised as open design questions (F3, F4) are
+also now RESOLVED — re-derived against the prior Opus review's own record rather than
+re-asserted, and corrected where the earlier comments were false:
+
+- **F3 (RESOLVED — the seam's chain-anchor check is BUILT, not an open gap).** The plan's
+  trust model specifies that the seam "at submission verifies the cited envelope's digest
+  is in that chain." The verifier's first pass called this an open gap requiring a
+  receipt-schema decision (the chain entry's `hash` is the receipt's content address, not the
+  cited `EvidenceIntegrity` envelope's `claimed_digest` — different bodies). **That was
+  falsified by the prior Opus review's own record (kindex 1befd5511b01):** the check is
+  buildable today as a deterministic PROJECTION, not a digest-membership test. The seam
+  (`factory_runtime/promotion_gate.py`: `_load_chain` + `verify_chain_anchor` + `_verify_grounded`)
+  reads `<H>/receipts/chain.jsonl`, re-derives each entry's bare-hex content-address (chain
+  tamper-evidence), finds each cited envelope's real entry by id, and confirms the envelope
+  body matches a projection of that entry (build: `disturbed_surface_ids` +
+  `changed_paths_digest`; oracle: `oracle_adequate`; flake: `deterministic` + `flake_count` +
+  `retry_count←automatic_retry_count`). An honest envelope is grounded; a forged
+  self-consistent envelope is caught by the projection mismatch; a missing id fail-closes; a
+  present envelope with no chain fail-closes. The chain's bare-hex hash equals
+  `digest_obj(body).removeprefix("sha256:")` (same canonical encoding, prefix aside) — no
+  schema decision needed. This is ordinary seam engineering (the core stays pure/no-disk),
+  authorized by the founder's "solve all known issues" + "full enforcement" directive; the
+  control-plane check is the independent Opus re-verification. Tests: honest-grounded
+  promotes; forged/missing-id/tampered/no-chain all fail-closed (`test_promotion_gate_runtime.py`).
+
+- **F4 (RESOLVED — the false-close is FIXED, not merely raised).** The verifier's first pass
+  described the cutover as "class-blind where the doctrine is class-scoped" and raised it as a
+  design question. **Re-derivation found a real FALSE CLOSE on a STANDARD surface (kindex watch
+  d27535c676b1, resolved):** the flake receipt was required only when `deterministic=True`, and
+  the flake receipt is the SOLE thing binding `flake_count` to machine-derived values. So on a
+  Standard surface an agent could hide a flaky suite (real `flake_count=5`) by declaring
+  `deterministic=False` + `flake_count=0` + no receipt → PROMOTE, zero reasons. The earlier
+  comment claiming "no false close on any surface" was FALSE (it was hidden from the founder at
+  ratification). The fix (`factory_core/promotion.py` ~line 1000): mandate the flake receipt on
+  Standard (`or surface.effective_criticality == CRITICALITY_STANDARD`) as well as on a positive
+  determinism claim — `flake_count` is load-bearing on Standard (quarantine). The oracle
+  admission (`adequate=False`) stays class-scoped (a pure admission with no load-bearing
+  positive value); Cosmetic retains the no-receipt admission (flake_count not load-bearing
+  there — no false close, the signal vanishes); Critical is unaffected (negative-evidence hard
+  block). This STRENGTHENS the gate (makes the builder's own work harder), not the self-dealing
+  the control-plane prohibition targets; it restores the founder's true intent (full
+  enforcement). Red-now test: `test_standard_flake_admission_requires_receipt_closes_false_close`.
+
+- **F1 (CRITICAL, honest re-scope — OPEN, acknowledged deferral).** Gate L is not wired into
+  a live close path. No producer of `promotion_inputs.json` exists (the evidence-production
+  pipeline is the larger deferred work), and `endgame.sh` does not invoke `promote.sh`. The plan
+  (Part 6) already defers Gate L "until the inputs it gates are machine-derived," so this is the
+  acknowledged deferral, not a new defect. The fix applied is HONEST COMMENTING: `promote.sh` and
+  `promotion_gate.py` now state plainly that the sole-writer is built and tested but not yet
+  the live close path — wiring lands with the evidence-production pipeline. The stale
+  denial-probe `test_promotion_advisory_when_candidate_receipt_absent` (above) described the
+  pre-cutover advisory window; the cutover is now enforcement (absent receipt → hard block), and
+  the test was converted.
+
+**Bottom line:** the omission-enforcement cutover + the sole-writer are built, tested, and
+honest about their scope. F3 (fabrication-enforcement) and F4 (the Standard false-close) are
+resolved in code and the independent Opus cross-family re-verification returned **APPROVE**
+(F4 CLOSES-THE-DEFECT, F3 GROUNDS-ENVELOPES, no new defect). Opus named three residuals; R2
+(chain hash-linkage) and R3 (duplicate-id rejection) are now BUILT in the seam's `_load_chain`
+(the producers already write a real hash-chain, so verifying linkage + rejecting duplicate ids
+is free and correct) with two new fail-closed tests; R1 (receipt-replay) is DEFERRED to Part 7
+(it needs the evidence-production pipeline to put `candidate_digest`/`surface_id` in the
+oracle/flake receipt bodies — building the binding now with no producer is the F1 pattern).
+Gate I (denial-probe registry, slice 6) is BUILT: `harness/gates.tsv` registers every factory
+gate (A–N + F3/F4/R2/R3) with its end-to-end denial probe(s) + a `red_now` falsifiability
+mutation; `scripts/check_denial_probes.py` fails the build when a gate has no probe, a probe
+is a dead pointer, or a gate is unfalsifiable; `harness/denial_probe.sh` re-runs a gate's
+probes on demand. `make ship` is green. F1 (live-close wiring) remains the acknowledged
+deferral, landing with the evidence-production pipeline.
+
+**R2/R3 independent Opus re-verification (2026-08-14) returned CHANGES_REQUESTED** — the code
+is correct (keep it; the mutation matrix confirmed both tests kill only on their named check
+and fail for the named reason), but two required changes blocked ratification, both applied:
+(a) **`receipt.sh` `$$`** — R3 made id collision hard-fail, and `receipt.sh` built its id as
+`R-<UTC-second>-$RANDOM` with NO `$$` (unlike `mutate.sh`/`flake.sh`), so two receipts in one
+second collide with prob ~C(n,2)/32768 and permanently wedge the append-only chain (every
+future promotion refuses, no repair path). Adding `$$` removes the wedge. (b) **honest scope** —
+the docstring claimed the seam "closes that fabrication route-around in three layers"; Opus
+falsified that with Exploit F (forward re-chain from genesis) and Exploit G (mint-by-append:
+the lane agent authors a correctly-hashed, linked, id-unique receipt and cites it to promote).
+The three layers are per-entry + link + id-uniqueness INTEGRITY on an agent-writable file, not
+AUTHENTICITY. The prose is corrected to "narrows, does not close." Two cheap optional fixes
+applied: the `_load_chain` cursor advances on every physically-previous entry (not just
+id-bearing ones, matching the producers' convention); and the R3 test's duplicate carries a
+differing attested value so the test proves a real SUBSTITUTION, not merely rejection-vs-silent-
+ignore. (The round-2 re-verify then inverted this fixture — honest F-default RED, GREEN dup
+shadowing it — so the test proves the false-acceptance the gate prevents, the stronger
+direction; see the closing paragraph.)
+
+**R4 — chain authenticity / mint-by-append (Opus, NEW residual, distinct from R1).** The seam
+verifies membership in an agent-writable file; the producers run in the agent's own lane, so
+the same principal that runs the tests appends the chain. An attacker who can append mints a
+never-existed receipt (correctly-hashed, linked, id-unique) and cites it to promote. **R1's fix
+does NOT close R4**: binding `candidate_digest`/`surface_id` stops replay of a STALE HONEST
+receipt, but the attacker who mints writes those fields too. Closing R4 needs authenticity,
+not binding — privilege-separated receipt writing, signed entries (Tessera), or an external
+head/length anchor. R4 lands with the evidence-production pipeline (Part 7) alongside R1.
+
+The R2/R3 correction + R4 acknowledgment were re-verified by the independent Opus cross-family
+verifier (one-off `claude` CLI call, 2026-08-14): **APPROVE — "Ratify, nothing blocks."** All
+four fixes land; both required items discharged; no new defect. Independence is cross-FAMILY only
+(claude-opus-5 vs glm-5.2:cloud), not cross-organizational; roles collapsed. The verifier logic
+(`promotion_gate.py` `_load_chain`) is committed byte-identical to the approved state.
+
+**R5 — the wedge is now an attack (Opus round-2, NEW residual, the availability twin of R4).**
+R3 converts append-capability on `chain.jsonl` into a permanent **denial of promotion**: one
+duplicate-id append (correctly hashed, correctly linked) makes every future run on that harness
+refuse at `_load_chain`, and append-only means it can never be removed — no repair path short of
+a human replacing the file (itself an unanchored rewrite). Fix 1 removed the *accidental* trigger
+(the `$$` collision); it did not remove the *deliberate* one. The R3 fail-closed choice stays
+correct (a shadowed receipt is worse than a wedged harness), so R5 is a documentation gap, not a
+code defect. The same external anchor that closes R4 (privilege-separated writer / signed
+entries / external head-length anchor) is what gives R5 a repair path. R5 lands with R1/R4 in
+the evidence-production pipeline (Part 7). Captured in kindex as node `9bd3bdbb2ceb`.
+
+**Round-2 follow-ups (Opus, optional, non-blocking).** Applied (test-layer, not the verifier):
+the R3 fixture is **inverted** — the honest F-default is RED and a GREEN dup shadows it, so the
+test proves the false-**acceptance** (the run would PROMOTE on a green forgery shadowing a red
+honest receipt) the gate prevents, not merely one refusal becoming another. Deferred as a
+tracked task (kindex `3afe72a32268`) — verifier-logic, would re-open the control-plane gate:
+(4) `raise` instead of `continue` on an id-less chain entry (makes id-less unrepresentable);
+(5) an `isinstance(entry, dict)` guard so a non-object chain line raises `PromotionGateError`,
+not `AttributeError` (it fail-closes at the harness level via `promote.sh`, but is the class the
+F8 wrapper exists to prevent). `make ship` green: 558 passed, 3 skipped.

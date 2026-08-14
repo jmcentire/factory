@@ -3,7 +3,12 @@
 # Wraps any command; captures exit code, output digest, tree state; chains it.
 set -uo pipefail
 H="${HARNESS_DIR:-.factory}"; R="$H/receipts"; mkdir -p "$R"
-export _RID="R-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+# $$ (the PID) is load-bearing now that R3 rejects duplicate receipt ids in _load_chain:
+# $RANDOM alone collides across two receipt.sh calls in the same UTC second (measured
+# ~C(n,2)/32768 per second), and a collision hard-raises in the append-only chain with no
+# repair path, wedging every future promotion on that harness. The PID disambiguates
+# concurrent processes the way mutate.sh:76 and flake.sh:98 already do.
+export _RID="R-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
 export _RLOG="$R/$_RID.log" _RCHAIN="$R/chain.jsonl"
 export _RCMD="$*" _RSTART="$(date -u +%FT%TZ)"
 export _RHEAD="$(git rev-parse HEAD 2>/dev/null || echo none)"

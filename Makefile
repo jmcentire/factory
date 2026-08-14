@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority check-harness ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority check-harness check-denial-probes ship
 
 .DEFAULT_GOAL := help
 
@@ -152,17 +152,26 @@ check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's aut
 # drills) lives in tests/test_harness_scripts.py and runs under `test`.
 check-harness: check-python ## harness scripts parse/executable; local ledger chains verify
 	@bash -n harness/lane_env.sh harness/receipt.sh harness/tripwire.sh \
-		harness/sched_audit.sh harness/ground.sh
+		harness/sched_audit.sh harness/ground.sh harness/flake.sh harness/promote.sh \
+		harness/denial_probe.sh
 	@$(PY) -m py_compile harness/directive.py
 	@for s in harness/*.sh; do test -x "$$s" || { echo "not executable: $$s" >&2; exit 1; }; done
 	@if [ -f DIRECTIVES/ledger.jsonl ] || [ -f DIRECTIVES/provisional.jsonl ]; then \
 		DIRECTIVE_LEDGER=DIRECTIVES/ledger.jsonl $(PY) harness/directive.py verify; fi
 	@echo "check-harness: GREEN — harness scripts parse; ledger chains verify"
 
+# Gate I (control-structure plan slice 6): no factory gate ships without a registered,
+# collecting denial probe. The registry (harness/gates.tsv) maps each gate to the pytest
+# node-ids that prove it blocks the prohibited action; this check fails the build when a gate
+# has no probe, a probe is a dead pointer, or a gate has no declared red_now. A gate without a
+# passing probe is theater. `make test` then proves the registered probes pass.
+check-denial-probes: check-python ## every factory gate has a registered, collecting denial probe
+	@$(PY) scripts/check_denial_probes.py
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-authority check-harness lint typecheck test ## run every gate (purity -> doctrine -> authority -> harness -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-authority check-harness check-denial-probes lint typecheck test ## run every gate (purity -> doctrine -> authority -> harness -> denial-probes -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

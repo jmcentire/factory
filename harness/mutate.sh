@@ -49,6 +49,57 @@ done
 [ -n "$SRC" ] && [ -n "$TESTS" ] || { echo "--src and --tests are required" >&2; exit 64; }
 [ -f "$PATCH" ] || { echo "no patch script at $PATCH" >&2; exit 64; }
 
+# --- oracle receipt (Gate N seam): machine-derive oracle adequacy from the kill ----
+# A mutation test's outcome is the load-bearing input to a surface's oracle_adequate
+# claim (SurfaceObservation.oracle_receipt + oracle_adequate). KILLED-by-the-named-oracle
+# proves the oracle catches the regression; anything else (SURVIVED, KILLED-OUTSIDE-ORACLE,
+# KILLED-UNATTRIBUTED, INVALID/PATCH-FAILED/NO-OP) does not. The receipt is best-effort: it
+# must never change the mutation verdict or its exit code (the verdict on stdout is the
+# authority the Validator reads; the receipt is the durable record the promotion-gate
+# translator reads), so a receipt write that fails is silent. kind:"oracle" distinguishes it
+# from the build receipts (receipt.sh, no kind) in the same tamper-evident chain. MUTATION_STARTED
+# gates the trap so an arg-parse exit (before this point) is not mis-receipted as an outcome.
+MUTATION_STARTED=1
+_oracle_receipt() {
+  local ec=$?
+  [ "${MUTATION_STARTED:-0}" = 1 ] || return 0
+  [ -n "${NAME:-}" ] || return 0
+  local outcome adequate=0 verdict_text="${ORACLE_VERDICT:-}"
+  case "$ec" in
+    0) outcome=KILLED; [ -n "${NAMED_TEST:-}" ] && adequate=1 ;;
+    1) outcome=SURVIVED ;;
+    *) outcome=NOT_ADEQUATE ;;
+  esac
+  local H="${HARNESS_DIR:-.factory}"
+  mkdir -p "$H/receipts" 2>/dev/null || return 0
+  local ts rid
+  ts=$(date -u +%FT%TZ 2>/dev/null); rid="O-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$-$RANDOM"
+  OUTCOME="$outcome" ORACLE_ADEQUATE="$adequate" ORACLE_EC="$ec" \
+  ORACLE_VERDICT="$verdict_text" ORACLE_NAME="$NAME" ORACLE_NAMED="${NAMED_TEST:-}" \
+  ORACLE_CHAIN="$H/receipts/chain.jsonl" ORACLE_RID="$rid" ORACLE_TS="$ts" \
+  python3 - <<'PY' 2>/dev/null || true
+import fcntl, hashlib, json, os
+chain = os.environ["ORACLE_CHAIN"]
+with open(chain, "a+") as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    f.seek(0)
+    lines = [l for l in f.read().splitlines() if l.strip()]
+    prev = json.loads(lines[-1])["hash"] if lines else "0"*64
+    body = {"id": os.environ["ORACLE_RID"], "kind": "oracle", "ts": os.environ["ORACLE_TS"],
+            "mutation_name": os.environ["ORACLE_NAME"],
+            "named_test": os.environ.get("ORACLE_NAMED",""),
+            "outcome": os.environ["OUTCOME"],
+            "oracle_adequate": bool(int(os.environ["ORACLE_ADEQUATE"])),
+            "exit": int(os.environ["ORACLE_EC"]),
+            "verdict_text": os.environ.get("ORACLE_VERDICT",""),
+            "prev_hash": prev}
+    body["hash"] = hashlib.sha256(json.dumps(body, sort_keys=True,
+                          separators=(",",":")).encode()).hexdigest()
+    f.write(json.dumps(body, sort_keys=True, separators=(",",":")) + "\n")
+PY
+}
+trap _oracle_receipt EXIT
+
 WORK="${MUTATE_WORKDIR:-/tmp/mutate}/$NAME"
 rm -rf "$WORK" 2>/dev/null
 mkdir -p "$WORK" || exit 70
@@ -56,7 +107,7 @@ rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
 rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
 
 : "${TEST_CMD:=python3 -m pytest tests/ -q -p no:randomly}"
-verdict() { printf '%s: %s\n' "$NAME" "$*"; }
+verdict() { ORACLE_VERDICT="$*"; printf '%s: %s\n' "$NAME" "$*"; }
 
 # --- GATE 1: the code under test must load FROM THIS TREE --------------------
 # A stale site-packages .pth on the workstation aliases the package import to a

@@ -193,7 +193,25 @@ def _observation(
     automatic_retry_count: int = 0,
     evidence: tuple[NamedEvidence, ...] = (),
     quarantine: Quarantine | None = None,
+    oracle_receipt: str | None = None,
+    oracle_receipt_evidence: EvidenceIntegrity | None = None,
+    flake_receipt: str | None = None,
+    flake_receipt_evidence: EvidenceIntegrity | None = None,
 ) -> SurfaceObservation:
+    # Synthesize self-consistent receipts by default (None) so the happy path binds cleanly
+    # under the enforcement cutover. Pass "" to force an explicitly absent receipt (testing the
+    # hard-block); pass a real id + evidence to test binding/mismatch.
+    if oracle_receipt is None:
+        oracle_receipt = "M-default"
+        oracle_receipt_evidence = _oracle_receipt_evidence("M-default", adequate=adequate)
+    if flake_receipt is None:
+        flake_receipt = "F-default"
+        flake_receipt_evidence = _flake_receipt_evidence(
+            "F-default",
+            deterministic=deterministic,
+            flake_count=flake_count,
+            retry_count=automatic_retry_count,
+        )
     return SurfaceObservation(
         surface_id=surface_id,
         oracle_adequate=adequate,
@@ -204,6 +222,10 @@ def _observation(
         flake_count=flake_count,
         automatic_retry_count=automatic_retry_count,
         quarantine=quarantine,
+        oracle_receipt=oracle_receipt,
+        oracle_receipt_evidence=oracle_receipt_evidence,
+        flake_receipt=flake_receipt,
+        flake_receipt_evidence=flake_receipt_evidence,
     )
 
 
@@ -545,6 +567,8 @@ def _request(
         "provenance": _good_provenance(),
         "tool_policy": None,
         "independence": _independence(),
+        "candidate_receipt": None,
+        "candidate_receipt_evidence": None,
     }
     values.update(overrides)
     authority = values["provenance"]
@@ -558,6 +582,19 @@ def _request(
             _monitor(surface_id, provenance=bundle)
             for surface_id in values["disturbed_surface_ids"]
         )
+    # Synthesize a self-consistent candidate-build receipt by default (None) so the happy path
+    # binds cleanly under the enforcement cutover. Pass candidate_receipt="" to force an
+    # explicitly absent receipt (testing the hard-block); pass a real id + evidence to test
+    # binding/mismatch.
+    if values.get("candidate_receipt") is None:
+        dsids = tuple(values["disturbed_surface_ids"])
+        if dsids:
+            values["candidate_receipt"] = "R-default"
+            values["candidate_receipt_evidence"] = _candidate_receipt_evidence(
+                "R-default", disturbed_surface_ids=dsids,
+            )
+        else:
+            values["candidate_receipt"] = ""
     request = PromotionRequest(**values)
     if evidence_overridden:
         return request
@@ -720,15 +757,17 @@ def test_promotion_accepts_when_disturbed_surface_matches_receipt() -> None:
     assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
 
 
-def test_promotion_advisory_when_candidate_receipt_absent() -> None:
-    """The migration window: with no candidate_receipt the binding is advisory — logged
-    as a report, never a hard reason, so the disposition is unaffected (a clean request
-    still promotes). The non-breaking cutover the plan's Part 4 caveat b requires."""
-    request = _request()  # no candidate_receipt; disturbed_surface_ids present
+def test_promotion_blocks_when_candidate_receipt_absent() -> None:
+    """Enforcement cutover (founder-ratified "full enforcement"): a promotion with disturbed
+    surfaces but no candidate-build receipt is a hard block, not advisory — the agent cannot
+    advance without the seam-attested diff-to-surface binding. The migration window is closed
+    by Gate L + this core gate (defense-in-depth: even a runtime bypass that reaches
+    decide_promotion receipt-less fails closed here). A run with no disturbed surfaces needs no
+    receipt and is unaffected (see test_empty_request_blocks_default_deny)."""
+    request = _request(candidate_receipt="")  # explicitly no receipt; disturbed surfaces present
     decision = decide_promotion(request, _roster(), _profile())
-    assert "disturbed-surface-mismatch" not in decision.reasons
-    assert "candidate-receipt-absent:disturbed-surface-binding-advisory" in decision.reports
-    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "candidate-receipt-required:disturbed-surface-binding" in decision.reasons
 
 
 def test_promotion_core_passes_self_consistent_lie_seam_closes_it() -> None:
@@ -798,7 +837,9 @@ def test_promotion_rejects_oracle_binding_mismatch() -> None:
 
 def test_promotion_rejects_oracle_receipt_evidence_missing() -> None:
     """Citing an oracle receipt but omitting its envelope is route-arounding — fail-closed."""
-    obs = replace(_observation("standard-surface"), oracle_receipt="M-1")  # no evidence
+    obs = replace(
+        _observation("standard-surface"), oracle_receipt="M-1", oracle_receipt_evidence=None
+    )  # cite a receipt but omit its envelope
     request = _request(observations=(obs,))
     decision = decide_promotion(request, _roster(), _profile())
     assert decision.disposition == DISPOSITION_BLOCK
@@ -855,14 +896,80 @@ def test_promotion_accepts_when_observation_matches_receipts() -> None:
     assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
 
 
-def test_promotion_observation_advisory_when_receipts_absent() -> None:
-    """The migration window: with no oracle/flake receipts the observation binding is
-    advisory — no hard reason, and the self-reported values stand (audited postmortem
-    against the chain). A clean request still promotes."""
-    request = _request()  # no receipt fields set
+def test_promotion_blocks_when_observation_receipts_absent() -> None:
+    """Enforcement cutover: a positive adequacy/determinism claim with no seam-attested
+    receipt is a hard block, not advisory — the self-report cannot stand without the
+    machine-derived backing. The receipt is mandated only for positive claims (the lie
+    vector); an honest gap needs no receipt (see the companion test below)."""
+    obs = _observation("standard-surface", oracle_receipt="", flake_receipt="")
+    request = _request(observations=(obs,))
     decision = decide_promotion(request, _roster(), _profile())
-    assert not any("binding-mismatch" in r for r in decision.reasons)
-    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "oracle-receipt-required:standard-surface" in decision.reasons
+    assert "flake-receipt-required:standard-surface" in decision.reasons
+
+
+def test_oracle_honest_gap_needs_no_receipt() -> None:
+    """The ORACLE admission (adequate=False) is a pure admission — no positive claim, and no
+    load-bearing positive value to attest — so no receipt is mandated: a Standard surface with
+    a silent oracle gates on risk acceptance, it does not hard-block on a missing oracle receipt.
+
+    The flake side here is kept clean (deterministic=True with a receipt) so this isolates the
+    oracle-admission doctrine. The flake admission is NOT symmetric — see
+    test_standard_flake_admission_requires_receipt_closes_false_close.
+    """
+    obs = _observation(
+        "standard-surface",
+        adequate=False,
+        deterministic=True,  # clean flake side: a receipt is synthesized by _observation
+        oracle_receipt="",
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert not any(r.startswith("oracle-receipt-required") for r in decision.reasons)
+    assert not any(r.startswith("flake-receipt-required") for r in decision.reasons)
+    assert decision.disposition == DISPOSITION_GATE
+    assert "standard-gap-requires-risk-acceptance:standard-surface" in decision.reasons
+
+
+def test_standard_flake_admission_requires_receipt_closes_false_close() -> None:
+    """Opus F4 (cross-family review, 2026-08-14): on a Standard surface, the flake receipt was
+    required ONLY when deterministic=True, and the flake receipt is the ONLY thing binding
+    flake_count to a machine-derived value. So an agent could hide a flaky suite (real
+    flake_count=5) by declaring deterministic=False + flake_count=0 with NO receipt — the
+    receipt was waived because deterministic=False was treated as an admission, and the run
+    PROMOTED with zero blocking reasons (a false close, empirically verified).
+
+    The fix: the flake receipt is mandated on Standard (where flake_count is load-bearing for
+    the quarantine disposition), regardless of the determinism claim. The "admission needs no
+    receipt" doctrine holds for the ORACLE side (a pure admission) but NOT for the flake side
+    on Standard, because flake_count is a load-bearing value the receipt attests. Cosmetic
+    retains the no-receipt admission path (flake_count is not load-bearing there — no false
+    close). This is the red-now test: reverting the Standard clause of the receipt requirement
+    (removing ``or surface.effective_criticality == CRITICALITY_STANDARD``) turns this red as
+    the game case promotes again.
+    """
+    obs = replace(
+        _observation(
+            "standard-surface",
+            adequate=True,
+            live_result="passed",
+            deterministic=False,
+            flake_count=0,
+            automatic_retry_count=0,
+        ),
+        oracle_receipt="M-1",
+        oracle_receipt_evidence=_oracle_receipt_evidence("M-1", adequate=True),
+        flake_receipt="",
+        flake_receipt_evidence=None,
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "flake-receipt-required:standard-surface" in decision.reasons
+    # The honest-gap alternative (adequate=False) still needs no ORACLE receipt — the oracle
+    # side is unaffected by the flake-side fix.
+    assert not any(r.startswith("oracle-receipt-required") for r in decision.reasons)
 
 
 def test_cosmetic_oracle_and_live_gaps_are_reported_and_promoted() -> None:
@@ -1438,6 +1545,9 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     assert review.evidence is not None
     provenance = _good_provenance()
     tool_policy = _good_tool_policy(provenance)
+    oracle_ev = _oracle_receipt_evidence("M-1", adequate=True)
+    flake_ev = _flake_receipt_evidence("F-1", deterministic=True, flake_count=0, retry_count=0)
+    candidate_ev = _candidate_receipt_evidence("R-1", disturbed_surface_ids=("critical-surface",))
     raw_request: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
         "lane": LANE_CAPABILITY,
@@ -1457,6 +1567,16 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
                 "deterministic": True,
                 "flake_count": 0,
                 "automatic_retry_count": 0,
+                "oracle_receipt": "M-1",
+                "oracle_receipt_evidence": {
+                    "body": dict(oracle_ev.body or {}),
+                    "claimed_digest": oracle_ev.claimed_digest,
+                },
+                "flake_receipt": "F-1",
+                "flake_receipt_evidence": {
+                    "body": dict(flake_ev.body or {}),
+                    "claimed_digest": flake_ev.claimed_digest,
+                },
             },
         ],
         "gates": [_gate("tests").to_dict(), _gate("build").to_dict()],
@@ -1479,6 +1599,11 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
         "evaluated_at": 100,
         "provenance": provenance.to_dict(),
         "tool_policy": tool_policy.to_dict(),
+        "candidate_receipt": "R-1",
+        "candidate_receipt_evidence": {
+            "body": dict(candidate_ev.body or {}),
+            "claimed_digest": candidate_ev.claimed_digest,
+        },
     }
     unsigned = PromotionRequest.from_dict(raw_request)
     attestation = _attestation(unsigned, profile=profile)

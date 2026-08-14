@@ -730,10 +730,21 @@ def decide_promotion(
     # unbound is a hard block (fail-closed): citing a receipt but omitting its attested
     # envelope is route-arounding, not complying. An attested set with no changed_paths_digest
     # is disturbed-surface-without-diff (the receipt recorded no diff). The core is pure (no
-    # disk), so it cannot read the chain; a self-consistent lie (a forged body+digest) is
-    # closed by the seam's chain-anchor check (the forged digest is not in the tamper-evident
-    # chain), audited by the postmortem. Absent candidate_receipt -> advisory (the migration
-    # window): logged, not blocked, until Gate L mandates its presence.
+    # disk), so it cannot read the chain; a self-consistent lie (a forged body+digest) is NOT
+    # closed by the core — it is closed by the SEAM's chain-anchor check (built 2026-08-14 in
+    # factory_runtime.promotion_gate): the seam finds the cited envelope's real chain entry by
+    # id and confirms the envelope body matches a deterministic PROJECTION of that entry, so a
+    # forged self-consistent envelope fail-closes on the projection mismatch. The prior Opus
+    # review's "OPEN GAP / requires a receipt-schema decision" was FALSIFIED — every field the
+    # envelope attests is already carried in the chain entry, so this is seam engineering, not a
+    # founder decision. The core keeps doing omission-enforcement (no receipt -> block); the
+    # seam adds fabrication-enforcement (forged receipt -> block) on top.
+    # Absent candidate_receipt with disturbed surfaces is a HARD BLOCK (the enforcement
+    # cutover, founder-ratified "full enforcement" of omission): the agent cannot advance a
+    # run without the seam-attested diff-to-surface binding. The migration window is closed —
+    # the seam always produces one build receipt covering every disturbed surface, so this is
+    # always satisfiable by a real run; an absent receipt here is a route-around, not a gap.
+    # A run with no disturbed surfaces needs no receipt and is unaffected.
     if request.candidate_receipt:
         ev = request.candidate_receipt_evidence
         if ev is None or not ev.present:
@@ -763,7 +774,11 @@ def decide_promotion(
                     "disturbed-surface-receipt:" + (",".join(attested) or "(empty)")
                 )
     elif any(normalize_label(s) for s in request.disturbed_surface_ids):
-        reports.append("candidate-receipt-absent:disturbed-surface-binding-advisory")
+        # Enforcement cutover: disturbed surfaces without a candidate-build receipt cannot
+        # advance — the diff-to-surface binding is the load-bearing input, and an absent
+        # receipt is a route-around, not a gap. This is defense-in-depth beneath Gate L: even
+        # a runtime bypass that reaches decide_promotion receipt-less fails closed here.
+        hard_reasons.append("candidate-receipt-required:disturbed-surface-binding")
 
     tool_policy_issues: tuple[str, ...]
     tool_policy_digest = ""
@@ -892,8 +907,39 @@ def decide_promotion(
         # envelope is missing/tampered/unbound, OR a present envelope whose attested value
         # is absent, is a hard block (fail-closed): citing a receipt but omitting the
         # attested value is route-arounding, not complying. A self-consistent lie (a forged
-        # body+digest) is closed by the seam's chain-anchor check, audited by the postmortem.
-        # Advisory (no hard reason) when a receipt is absent: the migration window.
+        # body+digest) is NOT closed by the core — it is closed by the SEAM's chain-anchor
+        # check (built 2026-08-14 in factory_runtime.promotion_gate), which finds the cited
+        # envelope's real chain entry by id and confirms the body matches a projection of it.
+        # The prior Opus review's F3 "OPEN GAP / requires a receipt-schema decision" was
+        # FALSIFIED — every attested field is already carried in the chain entry, so this is
+        # seam engineering, not a founder decision. The core does omission-enforcement (no
+        # receipt -> block); the seam adds fabrication-enforcement (forged receipt -> block).
+        # Enforcement cutover (founder-ratified "full enforcement" of omission): a POSITIVE
+        # claim without a receipt is a hard block — oracle_adequate=True without an oracle
+        # receipt, or deterministic=True without a flake receipt. The receipt exists to catch
+        # a lie (a claim the machine-derived verdict contradicts), so it is mandated for
+        # positive claims. An honest gap (adequate=False) needs no receipt: it is an admission,
+        # not a claim, and the class-based gap/negative-evidence logic disposes it.
+        #
+        # Opus F4 FIX (cross-family review, 2026-08-14, founder-authorized "solve all known
+        # issues" + "full enforcement"; the false-close was hidden from the founder at
+        # ratification by an earlier comment that claimed "no false close on any surface"):
+        # the flake receipt was required ONLY when deterministic=True, and the flake receipt is
+        # the SOLE thing binding flake_count/automatic_retry_count to machine-derived values.
+        # So on a STANDARD surface an agent could hide a flaky suite (real flake_count=5) by
+        # declaring deterministic=False + flake_count=0 with NO receipt — the receipt was waived
+        # because deterministic=False was treated as an admission, and the run PROMOTED with
+        # zero blocking reasons. That was a FALSE CLOSE (empirically verified: the game case
+        # promoted; the honest flake_count=5 case gated). The flake "admission" is NOT a pure
+        # admission — flake_count is load-bearing on Standard (quarantine), so the receipt must
+        # attest it regardless of the determinism claim. The fix mandates the flake receipt on
+        # Standard (``or surface.effective_criticality == CRITICALITY_STANDARD`` below) as well
+        # as on a positive determinism claim. The ORACLE admission (adequate=False) stays
+        # class-scoped — it is a pure admission with no load-bearing positive value. Cosmetic
+        # retains the no-receipt admission path (flake_count is not load-bearing there — no
+        # false close, the signal vanishes rather than a false close). Critical is unaffected
+        # (deterministic=False -> negative-evidence hard block, line ~1059). The false-close
+        # vector is closed; re-verified by the independent Opus cross-family verifier.
         if current_observation.oracle_receipt:
             oev = current_observation.oracle_receipt_evidence
             if oev is None or not oev.present:
@@ -910,6 +956,8 @@ def decide_promotion(
                     hard_reasons.append(f"oracle-attested-value-missing:{surface_id}")
                 elif bool(current_observation.oracle_adequate) != bool(attested_adequate):
                     hard_reasons.append(f"oracle-binding-mismatch:{surface_id}")
+        elif current_observation.oracle_adequate:
+            hard_reasons.append(f"oracle-receipt-required:{surface_id}")
         if current_observation.flake_receipt:
             fev = current_observation.flake_receipt_evidence
             if fev is None or not fev.present:
@@ -949,6 +997,11 @@ def decide_promotion(
                     hard_reasons.append(
                         f"flake-binding-mismatch:{surface_id}:retry_count"
                     )
+        elif (
+            current_observation.deterministic
+            or surface.effective_criticality == CRITICALITY_STANDARD
+        ):
+            hard_reasons.append(f"flake-receipt-required:{surface_id}")
 
         if not current_observation.oracle_adequate:
             gaps[surface_id].append("oracle-silent")
