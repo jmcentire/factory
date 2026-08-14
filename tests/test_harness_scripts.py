@@ -1407,3 +1407,74 @@ def test_mutate_named_test_works_when_pytest_emits_color(tmp_path: Path) -> None
                                      "PYTEST_ADDOPTS": "--color=yes"})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
+
+
+def test_receipt_stray_with_in_phrase_does_not_inflate_count(tmp_path: Path) -> None:
+    """The strictly-harder false-acceptance: a stray own-line 'N passed ... in <digit>
+    <word>' (e.g. '1 passed validation in 3 checks') HAS the ' in <digit>' phrase the
+    first trailer required, so the buggy '\\bin \\d' matched it and read a vacuous run
+    as test_count=1 — passing the >0 gate the receipt exists to reject. The fix
+    requires the trailing 's' of the pytest duration ('in 0.00s'): 'in 3 checks' has
+    no 's' after the digit, so it cannot feed the count and the vacuous marker wins."""
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         'echo "1 passed validation in 3 checks"; echo "no tests ran in 0.00s"; exit 0'],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+
+
+def test_mutate_named_test_preserves_dash_space_in_nodeid(tmp_path: Path) -> None:
+    """The strictly-harder nodeid case: a parametrize id containing ' - ' (e.g.
+    [a - b]) makes the nodeid 'tests/test_g.py::test_g[a - b]'. The buggy awk
+    sub(/ - .*$/,'') stripped at the FIRST ' - ' — INSIDE the id — yielding
+    'tests/test_g.py::test_g[a' and rejecting a genuine kill of the named oracle as
+    outside-oracle. The bracket-aware extractor reads the full nodeid: the '[a - b]'
+    is bracket-delimited, so the ' - ' inside it is not mistaken for the pytest
+    separator that follows the closing ']'."""
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text(
+        "def guarded(x):\n    if x == 'a - b':\n        return 'DASH'\n    return x\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_g.py").write_text(
+        "import pytest\nfrom pkg import guarded\n"
+        "@pytest.mark.parametrize('x,expected', [('a - b','DASH'),('plain','plain')],"
+        " ids=['a - b','plain'])\n"
+        "def test_g(x, expected):\n    assert guarded(x) == expected\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'DASH'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'DASH'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "m", str(patch),
+             "--src", str(tree), "--tests", str(tree),
+             "--named-test", "tests/test_g.py::test_g[a - b]"],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED by:" in r.stdout, r.stdout
+    assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout
+
+
+def test_mutate_conftest_syntax_error_does_not_survive(tmp_path: Path) -> None:
+    """A mutation that breaks collection at the conftest level (a SyntaxError in
+    tests/conftest.py) exits non-zero with NO 'N failed/error' summary line — pytest
+    prints 'ImportError while loading conftest' and a traceback, then stops (verified:
+    exit 4, zero summary lines). The grep gate alone misses it and the run falls
+    through to SURVIVED, reading a suite the mutation broke as one that passed every
+    test. The exit code cannot be paraphrased: a non-zero exit is a kill (GATE 2
+    proved the clean tree exits 0), never a survival."""
+    tree = mkpkg(tmp_path / "tree")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "pathlib.Path(sys.argv[1]).joinpath('tests/conftest.py').write_text"
+        "('def broken(:\\n    pass\\n')\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "m", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout, r.stdout
+    assert "SURVIVED" not in r.stdout, r.stdout

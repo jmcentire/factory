@@ -137,8 +137,17 @@ fi
 # manufacture false confidence: in v8 a mutation "survived" the oracle it was aimed
 # at and was killed by a different one, because at zero elapsed interval the
 # mutated fold was mathematically the identity and observable only elsewhere.
-out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1)
-if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)"; then
+out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
+# A conftest.py SyntaxError (or any collection-time crash) exits non-zero with NO
+# "N failed/error" summary line — pytest prints "ImportError while loading conftest"
+# and a traceback, then stops. The grep below misses it and the run falls through to
+# SURVIVED, reading a suite the mutation broke as one that passed every test. The exit
+# code cannot be paraphrased, so the kill condition is a failure summary OR a non-zero
+# exit. (GATE 2 already proved the clean tree exits 0, so a non-zero exit here is the
+# mutation's effect, not a pre-existing one.) With no FAILED/ERROR rows to extract,
+# the killers list is empty: an unattributed KILL (or, with --named-test, an
+# outside-oracle) — never a SURVIVAL.
+if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)" || [ "$test_rc" -ne 0 ]; then
   # Extract the failing nodeid from each FAILED/ERROR short-summary line. pytest
   # prints "FAILED <nodeid> - <reason>" or "ERROR <nodeid-or-file> - <reason>"; the
   # nodeid is everything between the marker and " - ", so it can contain spaces
@@ -159,9 +168,22 @@ if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)"; then
   # literal ESC byte, portable on this shell.)
   clean=$(printf '%s' "$out" | sed $'s/\x1b\\[[0-9;]*m//g')
   kf="$WORK/killers.txt"
-  printf '%s' "$clean" | awk '/^(FAILED|ERROR) /{
-      line=$0; sub(/^(FAILED|ERROR) /,"",line); sub(/ - .*$/,"",line); print line
-    }' > "$kf"
+  printf '%s' "$clean" | python3 -c '
+import re, sys
+# pytest short-summary: "FAILED <nodeid> - <reason>" / "ERROR <nodeid-or-file> - <reason>".
+# A parametrize id can itself contain " - " (e.g. [a - b]), so splitting on the FIRST
+# " - " truncates the nodeid at the dash INSIDE the id and mis-attributes the kill.
+# Match the structured form instead: a nodeid is <path>::<func>[<params>] (or just
+# <path> for a file-level ERROR). Path and func have no spaces; the params are
+# bracket-delimited and pytest escapes "]" inside an id, so [^]]* absorbs any " - "
+# within them. The trailing "( - |$)" matches only the pytest separator AFTER the
+# nodeid, so a nodeid without params still strips at its own " - <reason>".
+NODEID = re.compile(r"^(?:FAILED|ERROR) ([^ ]+::[^\[\] ]+(?:\[[^\]]*\])?|[^ ]+)(?: - |$)")
+for line in sys.stdin:
+    m = NODEID.match(line.rstrip("\n"))
+    if m:
+        print(m.group(1))
+' > "$kf"
   # --named-test: a kill by any test OTHER than the named oracle is a symptom,
   # not the requirement's failure (the batch0 cadence-vs-closed-form shape). The
   # full suite still runs; this only attributes the kill. Match per-killer with a

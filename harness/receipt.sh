@@ -57,17 +57,25 @@ with open(chain, "a+") as f:
         return int(m.group(1)) if m else 0
     test_count = pass_count = None
     # The pytest short-summary line is "N passed[, M failed[, K errors]] in Xs".
-    # The " in <duration>" trailer is what separates a real summary from a stray
+    # The " in <duration>s" trailer is what separates a real summary from a stray
     # own-line "N passed ..." in build output: a start-of-line anchor alone blocks
     # MID-line strays but not own-line ones, and an own-line stray matches the
     # summary branch first and — by elif precedence — shadows the vacuous-run
     # marker, reading a vacuous run as test_count>0 and passing the very >0 gate
     # it exists to reject (the dangerous false-acceptance direction). The trailer
-    # closes that: "1 passed validation check" has no " in <digit>" so it cannot
-    # feed the count, and a vacuous "no tests ran in 0.00s" falls through to 0.
+    # closes that — but " in <digit>" alone is not enough: a stray "1 passed
+    # validation in 3 checks" has " in 3" and would still match, inflating a
+    # vacuous run to test_count=1. Require the trailing "s" of the pytest duration
+    # ("in 0.00s") so "in 3 checks" (no "s" after the digit) cannot feed the count,
+    # and a vacuous "no tests ran in 0.00s" falls through to 0.
     # Take the LAST match: pytest prints its summary at the foot of the output, so
     # a stray own-line "N passed in Xs" earlier cannot shadow the real one later.
-    matches = list(re.finditer(rb'(?:^|\n)\s*(\d+) passed[^\n]*\bin \d', log_bytes))
+    # Residual ceiling: a bare own-line "N passed in Xs" printed AFTER pytest (a
+    # post-run step that forges the same shape) is indistinguishable from the real
+    # summary and is taken as the foot. Authenticating that the line came from
+    # pytest — not a step that echoed its shape — is a higher gate's job (the
+    # command itself, not its log); from the log alone the two cannot be told apart.
+    matches = list(re.finditer(rb'(?:^|\n)\s*(\d+) passed[^\n]*\bin \d[\d.]*s\b', log_bytes))
     if matches:
         sm = matches[-1]
         line = sm.group(0)
