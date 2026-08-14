@@ -366,3 +366,100 @@ standalone scripts needing no founder ceremony). **Next:** slice 4 (Gates M, N) 
 formal policy-change lane under an independent verifier, advisory-mode first; Gate L
 (sole-advancement-authority, the `decide_promotion` sole-path wiring) remains deferred until
 the inputs it gates are machine-derived, so it is not rushed as a half-wired route-around.
+
+---
+
+## Part 7 — Slice 4 implementation spec (Gates M, N)
+
+> The receipt schema is the load-bearing artifact (Part 1: "get it right and the gates are
+> mechanical; get it wrong and you've built a second Validator that can also go rogue"). This
+> spec fixes the schema and the binding contract before any code, because slice 4 changes that
+> schema and the `PromotionRequest` contract.
+
+### The purity boundary (the governing constraint)
+
+`factory_core` is pure: stdlib-only, no clock, no disk, no git (CLAUDE.md; `promotion.py:30`).
+Therefore Gates M and N **cannot run `git diff` or parse a test log inside the core.** The
+machine-derivation happens at the **seam** (the harness/runtime, which is allowed disk and
+git); the core **verifies the binding** of the request's fields to the seam's content-addressed
+receipt. This is the same pattern slice 1 established for `test_count`: the machine derives
+the value from the artifact, receipts it with a digest into the hash-chained chain, and the
+gate checks the request binds to that receipt. The agent cannot self-report a value that
+contradicts a receipt it cannot forge (the chain is tamper-evident).
+
+### Gate M — diff-to-surface enumeration (seam side, in `receipt.sh`)
+
+`receipt.sh` is generic (it wraps arbitrary commands). The diff is only meaningful for a
+candidate-producing command, so the new fields are **opt-in via caller-supplied env** (like
+`HARNESS_DIR`), keeping the script generic and target-agnostic:
+
+- `HARNESS_BASE_SHA` — the run's base (the pre-change commit, from `run.json`). When set,
+  `receipt.sh` records `changed_paths` = `git diff --name-only <base>` (machine-derived,
+  generic, no target knowledge) and `changed_paths_digest` (SHA-256 of the sorted path list).
+  When unset, both are `null` (the receipt is not a candidate-build receipt).
+- `HARNESS_SURFACE_MAP` — a JSON file mapping path globs → `surface_id` (target data, lives in
+  `.factory/`). When set, `receipt.sh` applies it to `changed_paths` and records
+  `disturbed_surface_ids` (the mapped, de-duplicated, sorted set) and `surface_map_digest`
+  (SHA-256 of the map file). Applying a caller-supplied data file is data-driven, not a code
+  import, so the generic boundary holds. When unset, `disturbed_surface_ids` is `null` (the
+  runtime does the mapping; the receipt carries only raw paths).
+
+New receipt fields: `changed_paths`, `changed_paths_digest`, `disturbed_surface_ids`,
+`surface_map_digest`. All machine-derived; none agent-supplied.
+
+### Gate M — diff-to-surface enumeration (core side, in `promotion.py`)
+
+`PromotionRequest` gains `candidate_receipt`: the id + digest of the candidate-build receipt
+it claims to bind to. `decide_promotion` verifies, when `candidate_receipt` is present:
+
+- the request's `disturbed_surface_ids` **equal** the receipt's `disturbed_surface_ids`
+  (sorted, normalized). A mismatch is a hard reason `disturbed-surface-mismatch` — the agent
+  declared a different set than the diff produced. This is the "replaces agent-declared set"
+  amendment: the field stays (the seam fills it), but the agent can no longer *author* it; a
+  contradiction with the receipt blocks.
+- the receipt's `changed_paths_digest` is non-empty (the diff was actually taken against a
+  base). An empty diff with a non-empty `disturbed_surface_ids` is `disturbed-surface-without-diff`.
+
+When `candidate_receipt` is absent, the gate falls back to the current behavior (advisory mode
+for the migration window, Part 4 caveat b) — logged, not blocked — so slice 4 can ship
+advisory-first without a hard cutover.
+
+### Gate N — observation-receipt binding (seam + core)
+
+The self-reported `SurfaceObservation` booleans (`oracle_adequate`, `deterministic`,
+`flake_count`, `automatic_retry_count`, `promotion.py:189-194`) become **bindings to
+receipts**, not agent declarations:
+
+- `oracle_adequate` binds to a **mutation receipt** (slice 2's `mutate.sh --named-test`
+  verdict: KILLED-on-named-oracle → adequate; KILLED-OUTSIDE-ORACLE or SURVIVED → not). The
+  observation carries `oracle_receipt` (id + digest); the core verifies the binding.
+- `deterministic` / `flake_count` / `automatic_retry_count` bind to a **flake-detection
+  receipt** (the harness runs the test N times; the receipt records pass/fail per run, flake
+  count, retry count). The observation carries `flake_receipt`; the core verifies the binding.
+
+A self-reported value that contradicts its cited receipt is a hard reason
+(`oracle-binding-mismatch`, `flake-binding-mismatch`). The receipts are content-addressed and
+chain-verified, so the agent cannot forge them.
+
+### Denial probes (Gate I, machine-authored from this spec)
+
+- `test_receipt_records_changed_paths_from_diff` — a receipt with `HARNESS_BASE_SHA` records
+  the actual `git diff --name-only` paths; a receipt without it records `null`.
+- `test_receipt_maps_paths_to_surfaces_via_supplied_map` — the mapping is mechanical and
+  data-driven; an unmapped path is reported, not silently dropped.
+- `test_promotion_rejects_disturbed_surface_mismatch` — the request's `disturbed_surface_ids`
+  differ from the receipt's → `disturbed-surface-mismatch` hard block (the prohibited action:
+  the run does not advance).
+- `test_promotion_rejects_oracle_binding_mismatch` — `oracle_adequate=True` but the cited
+  mutation receipt says SURVIVED → hard block.
+- `test_promotion_advisory_when_candidate_receipt_absent` — the migration window: no
+  `candidate_receipt` → current behavior, logged not blocked.
+
+### Build order within slice 4
+
+1. Seam: `receipt.sh` Gate M fields + denial probes (generic, no target knowledge).
+2. Core: `promotion.py` `candidate_receipt` binding for Gate M + denial probes (purity guard
+   must stay green).
+3. Seam + core: Gate N observation-receipt binding (mutation + flake receipts) + denial probes.
+4. `make ship` green; independent-verifier review; then push slice 4 as a unit (the
+   partial-surface caveat means no incremental push).

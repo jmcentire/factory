@@ -10,6 +10,21 @@ export _RHEAD="$(git rev-parse HEAD 2>/dev/null || echo none)"
 export _RDIRTY="$(git status --porcelain 2>/dev/null | python3 -c \
   'import sys,hashlib;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
 "$@" >"$_RLOG" 2>&1; export _REC=$?
+# Gate M (slice 4): machine-derive changed paths from the diff against the run base. The
+# diff is taken AFTER the command ran (the candidate is the post-command working tree), so
+# it captures everything the build changed. Empty when no base is supplied — the receipt is
+# not a candidate-build receipt and the promotion gate runs advisory for the migration
+# window. Generic: no target knowledge; the surface mapping is a caller-supplied data file.
+if [ -n "${HARNESS_BASE_SHA:-}" ]; then
+  # Union tracked changes since the base with untracked new files: a candidate build
+  # creates new files, and `git diff` alone misses untracked ones (they are not yet
+  # tracked, so git does not diff them). --exclude-standard respects .gitignore, so the
+  # harness/receipts dir and transient .factory/runs do not pollute the surface set.
+  export _RCHANGED="$( { git diff --name-only "$HARNESS_BASE_SHA" 2>/dev/null; \
+     git ls-files --others --exclude-standard 2>/dev/null; } | sort -u )"
+else
+  export _RCHANGED=""
+fi
 python3 - <<'PY'
 import fcntl, hashlib, json, os, re
 chain = os.environ["_RCHAIN"]
@@ -61,12 +76,62 @@ with open(chain, "a+") as f:
     elif re.search(rb'no tests ran|no tests collected|collected 0 items', log_bytes):
         test_count = pass_count = 0
 
+    # Gate M (slice 4): changed paths machine-derived in the bash above (git diff against
+    # the run base, taken after the command ran), and — when the caller supplies a surface
+    # map (target data, read from a file: data-driven, not a code import, so the generic
+    # boundary holds) — the mapped disturbed-surface set. Both are machine-derived; neither
+    # is agent-supplied. The promotion gate verifies the request binds to these. An unmapped
+    # path is reported under unmapped_paths, not silently dropped into the surface set (a
+    # path with no surface mapping is a target-config gap for the runtime to resolve).
+    base_sha = os.environ.get("HARNESS_BASE_SHA")
+    if base_sha:
+        changed_paths = [p for p in os.environ.get("_RCHANGED", "").splitlines() if p.strip()]
+        changed_paths_digest = hashlib.sha256(
+            "\n".join(changed_paths).encode()).hexdigest()
+    else:
+        changed_paths = None
+        changed_paths_digest = None
+    disturbed_surface_ids = None
+    surface_map_digest = None
+    unmapped_paths = None
+    surface_map_path = os.environ.get("HARNESS_SURFACE_MAP")
+    if surface_map_path and changed_paths and os.path.exists(surface_map_path):
+        import fnmatch
+        with open(surface_map_path, "rb") as mf:
+            map_bytes = mf.read()
+        surface_map_digest = hashlib.sha256(map_bytes).hexdigest()
+        try:
+            surface_map = json.loads(map_bytes)
+        except json.JSONDecodeError:
+            surface_map = {}
+        # Deterministic glob order: the first sorted glob that matches a path wins, so the
+        # mapping is stable across runs and machines. isinstance guards a malformed map.
+        # fnmatchcase (not fnmatch): case-sensitive, so the mapping is deterministic across
+        # macOS/POSIX rather than inheriting the platform's case-folding.
+        globs = sorted(surface_map.keys()) if isinstance(surface_map, dict) else []
+        mapped = set()
+        unmapped = []
+        for path in changed_paths:
+            hit = next((str(surface_map[g]) for g in globs
+                        if fnmatch.fnmatchcase(path, g)), None)
+            if hit is not None:
+                mapped.add(hit)
+            else:
+                unmapped.append(path)
+        disturbed_surface_ids = sorted(mapped) if mapped else None
+        unmapped_paths = sorted(unmapped) if unmapped else None
+
     body = {"id": os.environ["_RID"], "ts": os.environ["_RSTART"],
             "cmd": os.environ["_RCMD"], "exit": int(os.environ["_REC"]),
             "git_head": os.environ["_RHEAD"], "dirty_digest": os.environ["_RDIRTY"],
             "log": os.environ["_RLOG"],
             "log_digest": hashlib.sha256(log_bytes).hexdigest(),
             "test_count": test_count, "pass_count": pass_count,
+            "changed_paths": changed_paths,
+            "changed_paths_digest": changed_paths_digest,
+            "disturbed_surface_ids": disturbed_surface_ids,
+            "surface_map_digest": surface_map_digest,
+            "unmapped_paths": unmapped_paths,
             "prev_hash": prev}
     body["hash"] = hashlib.sha256(json.dumps(body, sort_keys=True,
                                   separators=(",",":")).encode()).hexdigest()

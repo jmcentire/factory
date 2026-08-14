@@ -811,6 +811,116 @@ def test_receipt_test_count_hash_chain_stays_intact(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Gate M (slice 4) — diff-to-surface enumeration: machine-derived changed paths
+# and a caller-supplied surface map. The agent cannot author the surface set; the
+# receipt derives it from the diff. (Seam half; the core binding is slice 4 step 2.)
+# --------------------------------------------------------------------------
+
+
+def _git_repo_with_base(tmp: Path) -> str:
+    """Init a repo, commit a base, return its SHA. receipt.sh diffs against this."""
+    run(["git", "init", "-q"], tmp)
+    (tmp / ".gitignore").write_text(".harness/\n.factory/\n")
+    (tmp / "README").write_text("base\n")
+    run(["git", "add", "-A"], tmp)
+    run(["git", "-c", "user.name=T", "-c", "user.email=t@t",
+         "commit", "-q", "-m", "base"], tmp)
+    return run(["git", "rev-parse", "HEAD"], tmp).stdout.strip()
+
+
+def test_receipt_records_changed_paths_from_diff(tmp_path: Path) -> None:
+    """With a base SHA the receipt machine-derives changed_paths from the diff —
+    including untracked new files a candidate build creates. The agent cannot
+    declare a different set; the receipt records what the diff actually produced."""
+    base = _git_repo_with_base(tmp_path)
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "mod.py").write_text("x = 1\n")
+    env = {"HARNESS_DIR": str(tmp_path / ".harness"), "HARNESS_BASE_SHA": base}
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec["changed_paths"] == ["src/pkg/mod.py"]
+    assert rec["changed_paths_digest"] is not None
+    assert rec["disturbed_surface_ids"] is None  # no surface map supplied
+
+
+def test_receipt_null_changed_paths_when_no_base(tmp_path: Path) -> None:
+    """Without a base SHA the receipt is not a candidate-build receipt: changed_paths
+    is null, so the promotion gate runs advisory for the migration window (the
+    non-breaking cutover the plan's Part 4 caveat b requires)."""
+    _git_repo_with_base(tmp_path)
+    (tmp_path / "extra.py").write_text("y = 2\n")
+    env = {"HARNESS_DIR": str(tmp_path / ".harness")}
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec["changed_paths"] is None
+    assert rec["changed_paths_digest"] is None
+    assert rec["disturbed_surface_ids"] is None
+
+
+def test_receipt_maps_paths_to_surfaces_via_supplied_map(tmp_path: Path) -> None:
+    """The surface map is caller-supplied data (data-driven, not a code import): the
+    generic boundary holds. receipt.sh applies it mechanically and deterministically."""
+    base = _git_repo_with_base(tmp_path)
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "mod.py").write_text("x = 1\n")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("# guide\n")
+    surface_map = tmp_path / ".factory" / "surface_map.json"
+    surface_map.parent.mkdir(parents=True)
+    surface_map.write_text(json.dumps({"src/*": "api", "docs/*": "docs"}))
+    env = {"HARNESS_DIR": str(tmp_path / ".harness"),
+           "HARNESS_BASE_SHA": base,
+           "HARNESS_SURFACE_MAP": str(surface_map)}
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec["disturbed_surface_ids"] == ["api", "docs"]
+    assert rec["surface_map_digest"] is not None
+    assert rec["unmapped_paths"] is None
+
+
+def test_receipt_reports_unmapped_paths_not_drops_them(tmp_path: Path) -> None:
+    """An unmapped path is reported under unmapped_paths, not silently absorbed into
+    the surface set: a path with no surface mapping is a target-config gap for the
+    runtime to resolve, not a quiet permission to skip a surface."""
+    base = _git_repo_with_base(tmp_path)
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "mod.py").write_text("x = 1\n")
+    (tmp_path / "orphan.py").write_text("z = 3\n")
+    surface_map = tmp_path / ".factory" / "surface_map.json"
+    surface_map.parent.mkdir(parents=True)
+    surface_map.write_text(json.dumps({"src/*": "api"}))  # no rule for orphan.py
+    env = {"HARNESS_DIR": str(tmp_path / ".harness"),
+           "HARNESS_BASE_SHA": base,
+           "HARNESS_SURFACE_MAP": str(surface_map)}
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec["disturbed_surface_ids"] == ["api"]
+    assert rec["unmapped_paths"] == ["orphan.py"]
+
+
+def test_receipt_changed_paths_digest_binds_the_set(tmp_path: Path) -> None:
+    """changed_paths_digest is the content-address of the exact path set: two builds
+    with the same changed paths produce the same digest, a different set a different
+    digest. The promotion gate binds the request to this digest, so a swapped set is
+    visible by its mismatch."""
+    base = _git_repo_with_base(tmp_path)
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "mod.py").write_text("x = 1\n")
+    env = {"HARNESS_DIR": str(tmp_path / ".harness"), "HARNESS_BASE_SHA": base}
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec1 = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    # same paths, second receipt -> same digest
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec2 = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec1["changed_paths_digest"] == rec2["changed_paths_digest"]
+    # add a path -> different digest
+    (tmp_path / "src" / "pkg" / "other.py").write_text("y = 2\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "true"], tmp_path, env)
+    rec3 = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")[-1]
+    assert rec3["changed_paths_digest"] != rec1["changed_paths_digest"]
+
+
+# --------------------------------------------------------------------------
 # Named-test mutation gate — a kill by the wrong test is a symptom, not a failure
 # --------------------------------------------------------------------------
 
