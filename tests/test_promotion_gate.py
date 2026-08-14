@@ -193,7 +193,25 @@ def _observation(
     automatic_retry_count: int = 0,
     evidence: tuple[NamedEvidence, ...] = (),
     quarantine: Quarantine | None = None,
+    oracle_receipt: str | None = None,
+    oracle_receipt_evidence: EvidenceIntegrity | None = None,
+    flake_receipt: str | None = None,
+    flake_receipt_evidence: EvidenceIntegrity | None = None,
 ) -> SurfaceObservation:
+    # Synthesize self-consistent receipts by default (None) so the happy path binds cleanly
+    # under the enforcement cutover. Pass "" to force an explicitly absent receipt (testing the
+    # hard-block); pass a real id + evidence to test binding/mismatch.
+    if oracle_receipt is None:
+        oracle_receipt = "M-default"
+        oracle_receipt_evidence = _oracle_receipt_evidence("M-default", adequate=adequate)
+    if flake_receipt is None:
+        flake_receipt = "F-default"
+        flake_receipt_evidence = _flake_receipt_evidence(
+            "F-default",
+            deterministic=deterministic,
+            flake_count=flake_count,
+            retry_count=automatic_retry_count,
+        )
     return SurfaceObservation(
         surface_id=surface_id,
         oracle_adequate=adequate,
@@ -204,6 +222,10 @@ def _observation(
         flake_count=flake_count,
         automatic_retry_count=automatic_retry_count,
         quarantine=quarantine,
+        oracle_receipt=oracle_receipt,
+        oracle_receipt_evidence=oracle_receipt_evidence,
+        flake_receipt=flake_receipt,
+        flake_receipt_evidence=flake_receipt_evidence,
     )
 
 
@@ -545,6 +567,8 @@ def _request(
         "provenance": _good_provenance(),
         "tool_policy": None,
         "independence": _independence(),
+        "candidate_receipt": None,
+        "candidate_receipt_evidence": None,
     }
     values.update(overrides)
     authority = values["provenance"]
@@ -558,6 +582,19 @@ def _request(
             _monitor(surface_id, provenance=bundle)
             for surface_id in values["disturbed_surface_ids"]
         )
+    # Synthesize a self-consistent candidate-build receipt by default (None) so the happy path
+    # binds cleanly under the enforcement cutover. Pass candidate_receipt="" to force an
+    # explicitly absent receipt (testing the hard-block); pass a real id + evidence to test
+    # binding/mismatch.
+    if values.get("candidate_receipt") is None:
+        dsids = tuple(values["disturbed_surface_ids"])
+        if dsids:
+            values["candidate_receipt"] = "R-default"
+            values["candidate_receipt_evidence"] = _candidate_receipt_evidence(
+                "R-default", disturbed_surface_ids=dsids,
+            )
+        else:
+            values["candidate_receipt"] = ""
     request = PromotionRequest(**values)
     if evidence_overridden:
         return request
@@ -617,6 +654,322 @@ def test_standard_and_cosmetic_adequate_oracles_auto_promote_without_clicks() ->
     assert standard.allowed and standard.disposition == DISPOSITION_PROMOTE
     assert cosmetic.allowed and cosmetic.disposition == DISPOSITION_PROMOTE
     assert standard.required_approvers == cosmetic.required_approvers == 0
+
+
+# --------------------------------------------------------------------------
+# Gate M (slice 4) — disturbed-surface binding to the candidate-build receipt.
+# The attested surface set rides in a content-addressed EvidenceIntegrity envelope the
+# seam produces; the core verifies the envelope's content-address and receipt binding,
+# then compares the attested set to the agent's declared set. The agent cannot shrink the
+# set to dodge a Critical surface's evidence; a cited receipt with a missing, tampered,
+# or unbound envelope is a hard block (fail-closed).
+# --------------------------------------------------------------------------
+
+
+def _candidate_receipt_evidence(
+    receipt_id: str = "R-1",
+    disturbed_surface_ids: tuple[str, ...] = ("standard-surface",),
+    changed_paths_digest: str = "sha256:abcd",
+) -> EvidenceIntegrity:
+    return _evidence({
+        "receipt_id": receipt_id,
+        "disturbed_surface_ids": list(disturbed_surface_ids),
+        "changed_paths_digest": changed_paths_digest,
+    })
+
+
+def test_promotion_rejects_disturbed_surface_mismatch() -> None:
+    """The agent cannot shrink the disturbed-surface set to dodge a surface's evidence:
+    the receipt attests {standard, extra} but the agent declares only {standard}. The
+    mismatch is a hard block — the prohibited action under test is that the run does not
+    advance."""
+    request = _request(
+        candidate_receipt="R-1",
+        candidate_receipt_evidence=_candidate_receipt_evidence(
+            disturbed_surface_ids=("standard-surface", "extra-surface"),
+        ),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-mismatch" in decision.reasons
+    assert any(r.startswith("disturbed-surface-declared:") for r in decision.reports)
+    assert any(r.startswith("disturbed-surface-receipt:") for r in decision.reports)
+
+
+def test_promotion_rejects_tampered_candidate_receipt_evidence() -> None:
+    """A receipt envelope whose body does not re-derive to its claimed digest was altered
+    after the seam recorded it. The core's content-address check rejects it — fail-closed."""
+    ev = EvidenceIntegrity(
+        body=_candidate_receipt_evidence().body,
+        claimed_digest="sha256:" + "0" * 64,  # wrong digest -> tamper
+    )
+    request = _request(candidate_receipt="R-1", candidate_receipt_evidence=ev)
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "candidate-receipt-evidence-tampered" in decision.reasons
+
+
+def test_promotion_rejects_unbound_candidate_receipt_evidence() -> None:
+    """The envelope must bind the cited receipt: an envelope attesting receipt R-2 cannot
+    satisfy a request citing R-1 (replay of another run's receipt). Hard block."""
+    request = _request(
+        candidate_receipt="R-1",
+        candidate_receipt_evidence=_candidate_receipt_evidence(receipt_id="R-2"),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "candidate-receipt-evidence-binding" in decision.reasons
+
+
+def test_promotion_rejects_missing_candidate_receipt_evidence() -> None:
+    """Citing a receipt but omitting its attested envelope is route-arounding, not
+    complying — fail-closed, not advisory."""
+    request = _request(candidate_receipt="R-1")  # no evidence
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "candidate-receipt-evidence-missing" in decision.reasons
+
+
+def test_promotion_rejects_disturbed_surface_without_diff() -> None:
+    """An attested surface set with no changed_paths_digest means the receipt recorded no
+    diff — surfaces claimed against an empty diff. Hard block (the spec's Gate M check)."""
+    request = _request(
+        candidate_receipt="R-1",
+        candidate_receipt_evidence=_candidate_receipt_evidence(changed_paths_digest=""),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-without-diff" in decision.reasons
+
+
+def test_promotion_accepts_when_disturbed_surface_matches_receipt() -> None:
+    """When the declared set equals the receipt's attested set the binding holds and the
+    decision proceeds on its other evidence — no disturbed-surface hard reason, and the
+    baseline adequate-oracle standard request still auto-promotes."""
+    request = _request(
+        candidate_receipt="R-1",
+        candidate_receipt_evidence=_candidate_receipt_evidence(
+            disturbed_surface_ids=("standard-surface",),
+        ),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert "disturbed-surface-mismatch" not in decision.reasons
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
+def test_promotion_blocks_when_candidate_receipt_absent() -> None:
+    """Enforcement cutover (founder-ratified "full enforcement"): a promotion with disturbed
+    surfaces but no candidate-build receipt is a hard block, not advisory — the agent cannot
+    advance without the seam-attested diff-to-surface binding. The migration window is closed
+    by Gate L + this core gate (defense-in-depth: even a runtime bypass that reaches
+    decide_promotion receipt-less fails closed here). A run with no disturbed surfaces needs no
+    receipt and is unaffected (see test_empty_request_blocks_default_deny)."""
+    request = _request(candidate_receipt="")  # explicitly no receipt; disturbed surfaces present
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "candidate-receipt-required:disturbed-surface-binding" in decision.reasons
+
+
+def test_promotion_core_passes_self_consistent_lie_seam_closes_it() -> None:
+    """HONEST LIMITATION (not a core gap): the core is pure and cannot read the tamper-
+    evident chain, so it cannot distinguish a real seam-produced envelope from a self-
+    consistent one the agent forged (body + matching digest). Here the agent forges an
+    envelope attesting only {standard-surface} while the real receipt R-1 recorded
+    {standard, extra} — the core's content-address and binding checks PASS on the forgery.
+    This lie is closed by the SEAM's chain-anchor check (the forged digest is not in the
+    chain the seam records), audited by the postmortem — not by the core. This probe pins
+    the core's boundary: it enforces content-address + binding + set-equality, and defers
+    chain-authenticity to the seam (slice 4 seam-side producers, the activation)."""
+    forged = _evidence({  # self-consistent forgery: digest matches the body
+        "receipt_id": "R-1",
+        "disturbed_surface_ids": ["standard-surface"],  # shrunk vs the real receipt
+        "changed_paths_digest": "sha256:abcd",
+    })
+    request = _request(
+        candidate_receipt="R-1",
+        candidate_receipt_evidence=forged,
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    # The core does NOT block: the forgery is content-addressed and binds R-1. The seam
+    # is the catch. Asserting PROMOTE here documents that boundary, not a hole.
+    assert decision.disposition == DISPOSITION_PROMOTE
+    assert "disturbed-surface-mismatch" not in decision.reasons
+
+
+# --------------------------------------------------------------------------
+# Gate N (slice 4) — observation-receipt binding. The self-reported oracle/determinism/
+# flake fields must match the seam-attested receipt values (carried as content-addressed
+# EvidenceIntegrity envelopes), or the run does not advance.
+# --------------------------------------------------------------------------
+
+
+def _oracle_receipt_evidence(receipt_id: str = "M-1", adequate: bool = True) -> EvidenceIntegrity:
+    return _evidence({"receipt_id": receipt_id, "oracle_adequate": adequate})
+
+
+def _flake_receipt_evidence(
+    receipt_id: str = "F-1",
+    deterministic: bool = True,
+    flake_count: int = 0,
+    retry_count: int = 0,
+) -> EvidenceIntegrity:
+    return _evidence({
+        "receipt_id": receipt_id,
+        "deterministic": deterministic,
+        "flake_count": flake_count,
+        "retry_count": retry_count,
+    })
+
+
+def test_promotion_rejects_oracle_binding_mismatch() -> None:
+    """oracle_adequate is self-reported, but it binds to the mutation receipt: the agent
+    claims adequate while the receipt attests not (the named oracle survived). Hard block."""
+    obs = replace(
+        _observation("standard-surface"),
+        oracle_receipt="M-1",
+        oracle_receipt_evidence=_oracle_receipt_evidence(adequate=False),
+    )  # oracle_adequate defaults True -> contradicts the receipt
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "oracle-binding-mismatch:standard-surface" in decision.reasons
+
+
+def test_promotion_rejects_oracle_receipt_evidence_missing() -> None:
+    """Citing an oracle receipt but omitting its envelope is route-arounding — fail-closed."""
+    obs = replace(
+        _observation("standard-surface"), oracle_receipt="M-1", oracle_receipt_evidence=None
+    )  # cite a receipt but omit its envelope
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "oracle-receipt-evidence-missing:standard-surface" in decision.reasons
+
+
+def test_promotion_rejects_flake_binding_mismatch() -> None:
+    """deterministic/flake_count/retry_count bind to the flake-detection receipt. A
+    self-reported value that contradicts the attested receipt is a hard block, per field."""
+    obs = replace(
+        _observation("standard-surface"),
+        flake_receipt="F-1",
+        flake_receipt_evidence=_flake_receipt_evidence(
+            deterministic=False, flake_count=3, retry_count=1
+        ),
+    )  # defaults: deterministic=True, flake_count=0, retry=0 -> all contradict
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "flake-binding-mismatch:standard-surface:deterministic" in decision.reasons
+    assert "flake-binding-mismatch:standard-surface:flake_count" in decision.reasons
+    assert "flake-binding-mismatch:standard-surface:retry_count" in decision.reasons
+
+
+def test_promotion_rejects_flake_attested_value_missing() -> None:
+    """A cited flake receipt whose envelope omits an attested value is fail-closed, not
+    advisory: the agent cannot cite a receipt and skip the binding by omitting the value."""
+    ev = _evidence({"receipt_id": "F-1"})  # no deterministic/flake_count/retry_count
+    obs = replace(
+        _observation("standard-surface"), flake_receipt="F-1", flake_receipt_evidence=ev
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "flake-attested-value-missing:standard-surface:deterministic" in decision.reasons
+
+
+def test_promotion_accepts_when_observation_matches_receipts() -> None:
+    """When the self-reported values equal the attested receipt values the bindings hold
+    and the decision proceeds on its other evidence — no binding-mismatch hard reason."""
+    obs = replace(
+        _observation("standard-surface"),
+        oracle_receipt="M-1",
+        oracle_receipt_evidence=_oracle_receipt_evidence(adequate=True),
+        flake_receipt="F-1",
+        flake_receipt_evidence=_flake_receipt_evidence(
+            deterministic=True, flake_count=0, retry_count=0
+        ),
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert not any(r.startswith("oracle-binding-mismatch") for r in decision.reasons)
+    assert not any(r.startswith("flake-binding-mismatch") for r in decision.reasons)
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
+def test_promotion_blocks_when_observation_receipts_absent() -> None:
+    """Enforcement cutover: a positive adequacy/determinism claim with no seam-attested
+    receipt is a hard block, not advisory — the self-report cannot stand without the
+    machine-derived backing. The receipt is mandated only for positive claims (the lie
+    vector); an honest gap needs no receipt (see the companion test below)."""
+    obs = _observation("standard-surface", oracle_receipt="", flake_receipt="")
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "oracle-receipt-required:standard-surface" in decision.reasons
+    assert "flake-receipt-required:standard-surface" in decision.reasons
+
+
+def test_oracle_honest_gap_needs_no_receipt() -> None:
+    """The ORACLE admission (adequate=False) is a pure admission — no positive claim, and no
+    load-bearing positive value to attest — so no receipt is mandated: a Standard surface with
+    a silent oracle gates on risk acceptance, it does not hard-block on a missing oracle receipt.
+
+    The flake side here is kept clean (deterministic=True with a receipt) so this isolates the
+    oracle-admission doctrine. The flake admission is NOT symmetric — see
+    test_standard_flake_admission_requires_receipt_closes_false_close.
+    """
+    obs = _observation(
+        "standard-surface",
+        adequate=False,
+        deterministic=True,  # clean flake side: a receipt is synthesized by _observation
+        oracle_receipt="",
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert not any(r.startswith("oracle-receipt-required") for r in decision.reasons)
+    assert not any(r.startswith("flake-receipt-required") for r in decision.reasons)
+    assert decision.disposition == DISPOSITION_GATE
+    assert "standard-gap-requires-risk-acceptance:standard-surface" in decision.reasons
+
+
+def test_standard_flake_admission_requires_receipt_closes_false_close() -> None:
+    """Opus F4 (cross-family review, 2026-08-14): on a Standard surface, the flake receipt was
+    required ONLY when deterministic=True, and the flake receipt is the ONLY thing binding
+    flake_count to a machine-derived value. So an agent could hide a flaky suite (real
+    flake_count=5) by declaring deterministic=False + flake_count=0 with NO receipt — the
+    receipt was waived because deterministic=False was treated as an admission, and the run
+    PROMOTED with zero blocking reasons (a false close, empirically verified).
+
+    The fix: the flake receipt is mandated on Standard (where flake_count is load-bearing for
+    the quarantine disposition), regardless of the determinism claim. The "admission needs no
+    receipt" doctrine holds for the ORACLE side (a pure admission) but NOT for the flake side
+    on Standard, because flake_count is a load-bearing value the receipt attests. Cosmetic
+    retains the no-receipt admission path (flake_count is not load-bearing there — no false
+    close). This is the red-now test: reverting the Standard clause of the receipt requirement
+    (removing ``or surface.effective_criticality == CRITICALITY_STANDARD``) turns this red as
+    the game case promotes again.
+    """
+    obs = replace(
+        _observation(
+            "standard-surface",
+            adequate=True,
+            live_result="passed",
+            deterministic=False,
+            flake_count=0,
+            automatic_retry_count=0,
+        ),
+        oracle_receipt="M-1",
+        oracle_receipt_evidence=_oracle_receipt_evidence("M-1", adequate=True),
+        flake_receipt="",
+        flake_receipt_evidence=None,
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "flake-receipt-required:standard-surface" in decision.reasons
+    # The honest-gap alternative (adequate=False) still needs no ORACLE receipt — the oracle
+    # side is unaffected by the flake-side fix.
+    assert not any(r.startswith("oracle-receipt-required") for r in decision.reasons)
 
 
 def test_cosmetic_oracle_and_live_gaps_are_reported_and_promoted() -> None:
@@ -1192,6 +1545,9 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     assert review.evidence is not None
     provenance = _good_provenance()
     tool_policy = _good_tool_policy(provenance)
+    oracle_ev = _oracle_receipt_evidence("M-1", adequate=True)
+    flake_ev = _flake_receipt_evidence("F-1", deterministic=True, flake_count=0, retry_count=0)
+    candidate_ev = _candidate_receipt_evidence("R-1", disturbed_surface_ids=("critical-surface",))
     raw_request: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
         "lane": LANE_CAPABILITY,
@@ -1211,6 +1567,16 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
                 "deterministic": True,
                 "flake_count": 0,
                 "automatic_retry_count": 0,
+                "oracle_receipt": "M-1",
+                "oracle_receipt_evidence": {
+                    "body": dict(oracle_ev.body or {}),
+                    "claimed_digest": oracle_ev.claimed_digest,
+                },
+                "flake_receipt": "F-1",
+                "flake_receipt_evidence": {
+                    "body": dict(flake_ev.body or {}),
+                    "claimed_digest": flake_ev.claimed_digest,
+                },
             },
         ],
         "gates": [_gate("tests").to_dict(), _gate("build").to_dict()],
@@ -1233,6 +1599,11 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
         "evaluated_at": 100,
         "provenance": provenance.to_dict(),
         "tool_policy": tool_policy.to_dict(),
+        "candidate_receipt": "R-1",
+        "candidate_receipt_evidence": {
+            "body": dict(candidate_ev.body or {}),
+            "claimed_digest": candidate_ev.claimed_digest,
+        },
     }
     unsigned = PromotionRequest.from_dict(raw_request)
     attestation = _attestation(unsigned, profile=profile)

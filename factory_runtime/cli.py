@@ -115,6 +115,19 @@ def _parser() -> argparse.ArgumentParser:
     wrap.add_argument("--output", required=True)
     wrap.add_argument("--tessera-bin", default="tessera")
 
+    # Gate L — the sole advancement path. Renders the pure decide_promotion verdict for a
+    # run and writes promotion_verdict.json; the harness (promote.sh) is the sole writer of
+    # run.json "closed" and reads this verdict. No genesis/tessera is required: promotion
+    # only needs decide_promotion, which is pure; the authority/intake concerns live in the
+    # workflow commands that *gather* promotion_inputs.json, not in the verdict renderer.
+    promote = commands.add_parser(
+        "promote",
+        help="render the sole-advancement promotion decision (Gate L) and write "
+        "promotion_verdict.json",
+    )
+    promote.add_argument("--runs", required=True, help="the runs root directory")
+    promote.add_argument("--run-id", required=True, help="the run to promote")
+
     return parser
 
 
@@ -216,6 +229,17 @@ def _execute(arguments: argparse.Namespace) -> None:
                 "path": str(envelope.path),
             }
         )
+        return
+    if arguments.command == "promote":
+        from factory_runtime.promotion_gate import PromotionGateError, render
+
+        run_root = Path(arguments.runs) / arguments.run_id
+        try:
+            decision = render(run_root)
+        except PromotionGateError as exc:
+            # Fail-closed: surface as a refused control (exit 2) so promote.sh closes nothing.
+            raise ValueError(str(exc)) from exc
+        _emit(decision)
         return
     raise ValueError(f"unsupported command: {arguments.command}")
 

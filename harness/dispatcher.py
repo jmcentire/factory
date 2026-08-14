@@ -109,7 +109,7 @@ class Dispatcher:
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
 
     def counts(self) -> tuple[int, int]:
-        receipts = len(read_lines(pathlib.Path(".harness/receipts/chain.jsonl")))
+        receipts = len(read_lines(pathlib.Path(".factory/receipts/chain.jsonl")))
         dispatches = len(read_lines(self.root / "dispatches.jsonl"))
         return receipts, dispatches
 
@@ -131,20 +131,63 @@ class Dispatcher:
         had already overtaken (upstream finding #5). A wake that arrives while a
         seat is working is COALESCED: the running seat reads events.jsonl and sees
         it anyway, so dropping the duplicate loses no information.
+
+        BOUNDED-TIME LIVENESS (Amend 2.5): the coalescing predicate was
+        `proc.poll() is None` with no deadline. A hung wake (claude -p that never
+        returns) left poll() None forever, so every later trigger coalesced as "a
+        seat is still working" — the orchestrator dead but reported healthy, for
+        the whole endgame, while this check said it was fine. The liveness
+        detector must watch the PRINCIPAL (the process) against a deadline, not a
+        surface (the pane that stays warm). Past the deadline the seat is hung,
+        not working: kill it, record the death, let a new wake spawn.
         """
         wake = self.harness / "orchestrator_wake.sh"
         if not wake.exists():
             return
+        wake_timeout = float(os.environ.get("WAKE_TIMEOUT", "600"))
         proc = getattr(self, "_wake_proc", None)
         if proc is not None and proc.poll() is None:
-            self.coalesced_wakes = getattr(self, "coalesced_wakes", 0) + 1
-            print(f"[wake coalesced] a seat is still working "
-                  f"({self.coalesced_wakes} since it started); not spawning a rival")
-            return
+            wake_start = getattr(self, "_wake_start", None)
+            # Explicit None check, not `or`: a start time of 0.0 is a real value
+            # (monotonic origin), and `0.0 or fallback` would discard it and report
+            # a live seat as healthy. A proc with no recorded start is suspicious —
+            # treat it as already past the deadline so it is killed, not coalesced.
+            elapsed = (time.monotonic() - wake_start) if wake_start is not None else wake_timeout
+            if elapsed < wake_timeout:
+                self.coalesced_wakes = getattr(self, "coalesced_wakes", 0) + 1
+                print(f"[wake coalesced] a seat is still working "
+                      f"({self.coalesced_wakes} since it started); not spawning a rival")
+                return
+            # past the deadline — the seat is hung, not working. Kill it, record
+            # the death, and fall through to spawn a fresh wake.
+            proc.kill()
+            proc.wait()
+            self.event("orchestrator_dead",
+                       f"orchestrator wake hung past {wake_timeout:.0f}s and was "
+                       f"killed; no independent check is running", wake=False)
+            # A dead orchestrator that is only silently recorded is the opposite of
+            # the founder's "get the validator's attention" requirement. Banner it
+            # (a non-executing display-message, like HALT/stall) and record the death
+            # into wakes/receipts.jsonl — the wake script was killed before it could
+            # write its own dead-wake record, so without this the labeled count in
+            # status.sh misses the death the dispatcher itself caused.
+            self._banner(
+                f"INCIDENT — orchestrator wake hung {wake_timeout:.0f}s and was "
+                f"killed; no independent check is running"
+            )
+            wd = self.root / "wakes"
+            wd.mkdir(parents=True, exist_ok=True)
+            with open(wd / "receipts.jsonl", "a") as wf:
+                wf.write(json.dumps(
+                    {"ts": now(), "status": "ORCHESTRATOR_DID_NOT_RUN",
+                     "detail": f"dispatcher killed hung wake after {wake_timeout:.0f}s"},
+                    sort_keys=True, separators=(",", ":")) + "\n")
+            self._wake_proc = None
         self._wake_proc = subprocess.Popen(
             [str(wake), self.run, json.dumps(trigger)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        self._wake_start = time.monotonic()
         self.coalesced_wakes = 0
 
     # -- observe --------------------------------------------------------------
@@ -161,15 +204,13 @@ class Dispatcher:
 
     # -- checks ---------------------------------------------------------------
     def check_halt(self) -> None:
-        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".harness")) / "HALT"
+        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".factory")) / "HALT"
         if halt.exists() and not self.halted:
             self.halted = True
             head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"
             self.event("halt", head, wake=False)  # deterministic path, no agent in loop
-            subprocess.run(
-                ["tmux", "display-message", "-t", self.run,
-                 "INCIDENT — HALT is set; lanes will not start new work until a human clears it"],
-                capture_output=True,
+            self._banner(
+                "INCIDENT — HALT is set; lanes will not start new work until a human clears it"
             )
         elif not halt.exists():
             self.halted = False
@@ -205,13 +246,59 @@ class Dispatcher:
                 f"{HEALTHY_IDLE} marker — tending needed",
                 wake=True,
             )
-            subprocess.run(
-                [str(self.harness / "inject.sh"), self.run, "validator",
-                 f"[dispatcher] lane '{window}' has been quiet {quiet_min:.0f}m with no "
-                 f"idle marker. Tend it or have it write {HEALTHY_IDLE} to "
-                 f"{self.root}/lanes/{window}.state"],
-                capture_output=True, env={"INJECT_FROM": "dispatcher", "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(pathlib.Path.home())},
+            # Attention, not shepherding (founder refinement — the time-kill).
+            # The old control injected prose into the validator's pane mid-reasoning
+            # (shepherding contaminates; METHODOLOGY.md: -22:1 with reset), and a
+            # pane injection is a surface that stays warm after the seat behind it
+            # is dead. Attention is a control-plane PRECONDITION the lane cannot run
+            # past: a blocking event carrying its class and evidence (the lane and
+            # quiet duration), which lane_env enforces on (re)start and the
+            # validator consumes between tasks. The display-message is a transient
+            # banner — non-executing, not typed into the reasoning stream — so it
+            # draws attention without entering it. This extends to every lane, not
+            # the validator alone.
+            self._block(window, "stall", f"{window} quiet {quiet_min:.0f}m")
+            self._banner(
+                f"[dispatcher] {window} stalled {quiet_min:.0f}m — blocking event "
+                f"written; consume lanes/{window}.blocking before new work"
             )
+
+    def _banner(self, message: str) -> None:
+        """Show a transient, non-executing tmux display-message banner. tmux is the
+        attention surface, not a control: a missing binary (FileNotFoundError) or a
+        dead session must not crash the dispatcher, because the blocking event
+        already carries the control. The banner is best-effort decoration on top of
+        a deterministic signal; swallow the OSError and keep dispatching."""
+        try:
+            subprocess.run(
+                ["tmux", "display-message", "-t", self.run, message],
+                capture_output=True,
+            )
+        except OSError:
+            pass
+
+    def _block(self, lane: str, cls: str, evidence: str) -> None:
+        """Write a control-plane blocking event the lane cannot run past. This is
+        the orchestrator's attention channel — legitimate control, not shepherding:
+        the event carries its class and evidence (a one-line state / receipt id),
+        never prose about the validator's process, and lane_env enforces it as a
+        precondition rather than injecting it mid-reasoning. Append-only: a lane
+        may accumulate several events; lane_env refuses to start while any remain.
+        """
+        bf = self.root / "lanes" / f"{lane}.blocking"
+        bf.parent.mkdir(parents=True, exist_ok=True)
+        ts = now()
+        payload = {"ts": ts, "class": cls, "evidence": evidence[:200]}
+        with open(bf, "a") as f:
+            f.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+        # Receipt the WRITE so a silent clear is visible by its absence: a
+        # blocking_written record with no matching blocking_consumed means the
+        # file was rm'd/truncated without consume_block.sh, not consumed.
+        with open(self.events, "a") as f:
+            f.write(json.dumps(
+                {"ts": ts, "kind": "blocking_written", "lane": lane,
+                 "event": payload},
+                sort_keys=True, separators=(",", ":")) + "\n")
 
     def check_validator_failure_modes(self, fresh: str) -> None:
         """The Orchestrator's charter, detected deterministically, judged on wake:
@@ -253,7 +340,7 @@ class Dispatcher:
         # starts on a dirty tree (preflight infra, config the run itself needs), and
         # comparing to clean re-fires on that same pre-existing dirt every cycle —
         # batch0 burned five orchestrator wakes on exactly this (upstream finding #2).
-        # Harness bookkeeping is excluded outright: .harness/ churn is the detector
+        # Harness bookkeeping is excluded outright: .factory/ churn is the detector
         # watching its own notes and calling it lane work.
         _, dispatches = self.counts()
         dirty_now = {ln[3:] for ln in

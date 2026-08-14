@@ -2,7 +2,7 @@
 # factory.sh — ignition: one command, one task, one factory. N factories = N runs.
 #   harness/factory.sh <run-name> "<task text>"            (or a path to a task file)
 #   harness/factory.sh <run-name> <task> --budget 100
-# Creates .harness/runs/<run-name>/, pins the base SHA, records the task VERBATIM,
+# Creates .factory/runs/<run-name>/, pins the base SHA, records the task VERBATIM,
 # grounds the session, and opens the tmux session:
 #   window ctl        — the dispatcher (deterministic watcher; pays no model tokens)
 #   window validator  — the Validator lane (maximal context; the human talks here)
@@ -21,7 +21,7 @@ esac; done
 
 D="$(cd "$(dirname "$0")" && pwd)"
 # The factory is generic; the TARGET is data. All run state, config, and authority
-# roots (.harness/, DIRECTIVES/) live with the target project, never with the
+# roots (.factory/, DIRECTIVES/) live with the target project, never with the
 # factory checkout. Default target: the invoking directory's repo.
 REPO="${REPO_ARG:-$PWD}"
 [ -d "$REPO" ] || { echo "target repo does not exist: $REPO" >&2; exit 64; }
@@ -32,7 +32,7 @@ git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
   exit 64
 }
 cd "$REPO"
-H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
 [ -e "$ROOT" ] && { echo "run '$RUN' already exists at $ROOT" >&2; exit 65; }
 tmux has-session -t "$RUN" 2>/dev/null && { echo "tmux session '$RUN' already live" >&2; exit 65; }
 

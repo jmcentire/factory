@@ -8,7 +8,7 @@
 set -euo pipefail
 RUN="${1:?usage: orchestrator_wake.sh <run> <trigger-json>}"
 TRIGGER="${2:?trigger json}"
-H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
 D="$(cd "$(dirname "$0")" && pwd)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 PROJ="$ROOT/wakes/$TS.projection.md"
@@ -85,18 +85,38 @@ set -e
 # never for the failure it was built to catch (the command not running). Status is now
 # read from the exit code, which cannot be paraphrased, with the string match kept only
 # as a secondary net for a command that exits 0 while refusing to work.
+mkdir -p "$ROOT/lanes"
 if [ "$ORCH_RC" -ne 0 ] || [ -z "$OUT" ] \
    || printf '%s' "$OUT" | grep -qiE "orchestrator invocation failed|clarify what|no surrounding command|didn't include the command|what would you like me to do"; then
   printf '{"ts":"%s","wake":"%s","status":"ORCHESTRATOR_DID_NOT_RUN","excerpt":"%s"}\n' \
     "$(date -u +%FT%TZ)" "$TS" "$(printf '%s' "$OUT" | tr -d '"' | tr '\n' ' ' | cut -c1-120)" \
     >> "$ROOT/wakes/receipts.jsonl"
   echo "ORCHESTRATOR DID NOT RUN at $TS — invocation produced no audit" >&2
-  INJECT_FROM=dispatcher "$D/inject.sh" "$RUN" validator \
-    "[dispatcher] ORCHESTRATOR SEAT IS DEAD: wake $TS produced no audit. You have no independent check right now." >/dev/null 2>&1 || true
+  # Attention, not shepherding: a blocking event the lane cannot run past, carrying
+  # its class and evidence (the wake id), not prose injected into the validator's
+  # pane mid-reasoning. Shepherding contaminates (METHODOLOGY.md: -22:1 with reset);
+  # a pane injection is also a surface that stays warm after the seat behind it is
+  # dead. lane_env enforces this as a precondition; the validator consumes it
+  # between tasks and clears it. This is the founder's time-kill fix — the
+  # orchestrator can get the validator's attention and move work along — without
+  # reintroducing the contaminating channel.
+  _evt=$(printf '{"ts":"%s","class":"orchestrator_dead","wake":"%s","excerpt":"%s"}' \
+    "$(date -u +%FT%TZ)" "$TS" "$(printf '%s' "$OUT" | tr -d '"' | tr '\n' ' ' | cut -c1-120)")
+  printf '%s\n' "$_evt" >> "$ROOT/lanes/validator.blocking"
+  # Receipt the write so a silent clear is visible by its absence (see _block).
+  printf '{"ts":"%s","kind":"blocking_written","lane":"validator","event":%s}\n' \
+    "$(date -u +%FT%TZ)" "$_evt" >> "$ROOT/events.jsonl"
 fi
 
 if [ -n "$OUT" ]; then
-  INJECT_FROM=orchestrator "$D/inject.sh" "$RUN" validator \
-    "[orchestrator] $OUT" >/dev/null 2>&1 || true
   printf '%s\n' "$OUT" > "$ROOT/wakes/$TS.response.md"
+  # The orchestrator's reply lives in a file the validator reads at a defined
+  # checkpoint, never injected into its pane mid-reasoning. Attention is a
+  # control-plane precondition lane_env enforces, not a nudge typed into the
+  # reasoning stream.
+  _evt=$(printf '{"ts":"%s","class":"orchestrator_response","response":"%s","wake":"%s"}' \
+    "$(date -u +%FT%TZ)" "$ROOT/wakes/$TS.response.md" "$TS")
+  printf '%s\n' "$_evt" >> "$ROOT/lanes/validator.blocking"
+  printf '{"ts":"%s","kind":"blocking_written","lane":"validator","event":%s}\n' \
+    "$(date -u +%FT%TZ)" "$_evt" >> "$ROOT/events.jsonl"
 fi

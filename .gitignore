@@ -24,16 +24,16 @@ htmlcov/
 .idea/
 .vscode/
 
-# Harness ephemeral state (.harness/schedule.registry and reconcile.d/ ARE tracked)
-.harness/receipts/
-.harness/HALT
-.harness/grounded
-.harness/channels.now
-.harness/channels.reg
-.harness/minutes/
-.harness/events/
-.harness/spend/
-.harness/runs/
+# Harness ephemeral state (.factory/schedule.registry and reconcile.d/ ARE tracked)
+.factory/receipts/
+.factory/HALT
+.factory/grounded
+.factory/channels.now
+.factory/channels.reg
+.factory/minutes/
+.factory/events/
+.factory/spend/
+.factory/runs/
 
 # The directive ledger is its own hardware-signed repo; only its README travels here
 DIRECTIVES/*

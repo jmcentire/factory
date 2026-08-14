@@ -194,6 +194,18 @@ class SurfaceObservation:
     flake_count: int = 0
     automatic_retry_count: int = 0
     quarantine: Quarantine | None = None
+    # Gate N (slice 4): seam-attested receipt bindings for the self-reported fields. The
+    # attested values live in a content-addressed EvidenceIntegrity envelope the seam
+    # produces (body = {receipt_id, oracle_adequate} / {receipt_id, deterministic,
+    # flake_count, retry_count}); the core verifies the envelope's content-address and
+    # subject binding, then compares the attested values to the self-reported ones. The
+    # agent cannot forge the envelope's chain anchor (the seam records it); a self-
+    # consistent lie is closed by the seam's chain-anchor check, not the core. See
+    # decide_promotion and docs/CONTROL-STRUCTURE-PLAN.md Part 7.
+    oracle_receipt: str = ""
+    oracle_receipt_evidence: EvidenceIntegrity | None = None
+    flake_receipt: str = ""
+    flake_receipt_evidence: EvidenceIntegrity | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> SurfaceObservation:
@@ -217,6 +229,18 @@ class SurfaceObservation:
             quarantine=(
                 Quarantine.from_dict(quarantine_raw)
                 if isinstance(quarantine_raw, Mapping)
+                else None
+            ),
+            oracle_receipt=str(raw.get("oracle_receipt", "")),
+            oracle_receipt_evidence=EvidenceIntegrity.from_dict(
+                raw.get("oracle_receipt_evidence")
+                if isinstance(raw.get("oracle_receipt_evidence"), Mapping)
+                else None
+            ),
+            flake_receipt=str(raw.get("flake_receipt", "")),
+            flake_receipt_evidence=EvidenceIntegrity.from_dict(
+                raw.get("flake_receipt_evidence")
+                if isinstance(raw.get("flake_receipt_evidence"), Mapping)
                 else None
             ),
         )
@@ -326,6 +350,15 @@ class PromotionRequest:
     monitors: tuple[Monitor, ...] = ()
     monitor_declared_unit_count: int = 0
     correction: CorrectionRecord | None = None
+    # Gate M (slice 4): the candidate-build receipt this request binds to, and the
+    # content-addressed envelope the seam produces attesting the diff-derived surface set
+    # (body = {receipt_id, disturbed_surface_ids, changed_paths_digest}). The core verifies
+    # the envelope's content-address and subject binding, then compares the attested set to
+    # the agent's declared disturbed_surface_ids. The agent cannot forge the envelope's
+    # chain anchor; a self-consistent lie is closed by the seam's chain-anchor check (the
+    # postmortem audits it). See decide_promotion and docs/CONTROL-STRUCTURE-PLAN.md Part 7.
+    candidate_receipt: str = ""
+    candidate_receipt_evidence: EvidenceIntegrity | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
@@ -386,6 +419,12 @@ class PromotionRequest:
                 if isinstance(correction_raw, Mapping)
                 else None
             ),
+            candidate_receipt=str(raw.get("candidate_receipt", "")),
+            candidate_receipt_evidence=EvidenceIntegrity.from_dict(
+                raw.get("candidate_receipt_evidence")
+                if isinstance(raw.get("candidate_receipt_evidence"), Mapping)
+                else None
+            ),
         )
 
 
@@ -443,6 +482,14 @@ def promotion_attestation_subject(
                 "deterministic": observation.deterministic,
                 "flake_count": observation.flake_count,
                 "automatic_retry_count": observation.automatic_retry_count,
+                "oracle_receipt": observation.oracle_receipt,
+                "flake_receipt": observation.flake_receipt,
+                "oracle_receipt_evidence_digest": _integrity_digest(
+                    observation.oracle_receipt_evidence
+                ),
+                "flake_receipt_evidence_digest": _integrity_digest(
+                    observation.flake_receipt_evidence
+                ),
                 "quarantine": (
                     {
                         **observation.quarantine.authority_body(observation.surface_id),
@@ -486,6 +533,10 @@ def promotion_attestation_subject(
             normalize_label(surface_id)
             for surface_id in request.disturbed_surface_ids
             if normalize_label(surface_id)
+        ),
+        "candidate_receipt": request.candidate_receipt,
+        "candidate_receipt_evidence_digest": _integrity_digest(
+            request.candidate_receipt_evidence
         ),
         "gates": gates,
         "monitors": monitors,
@@ -669,6 +720,66 @@ def decide_promotion(
     elif not request.evidence.verifies_binding(promotion_attestation_subject(request, profile)):
         hard_reasons.append("attestation-subject-mismatch")
 
+    # Gate M (slice 4): the disturbed-surface set must bind to the cited candidate-build
+    # receipt. The seam produces a content-addressed EvidenceIntegrity envelope attesting
+    # the diff-derived surface set (body = {receipt_id, disturbed_surface_ids,
+    # changed_paths_digest}); the core verifies the envelope's content-address and that it
+    # binds the cited receipt, then compares the attested set to the agent's declared
+    # disturbed_surface_ids. A mismatch blocks — the agent cannot shrink the set to dodge a
+    # Critical surface's evidence. A cited receipt whose envelope is missing, tampered, or
+    # unbound is a hard block (fail-closed): citing a receipt but omitting its attested
+    # envelope is route-arounding, not complying. An attested set with no changed_paths_digest
+    # is disturbed-surface-without-diff (the receipt recorded no diff). The core is pure (no
+    # disk), so it cannot read the chain; a self-consistent lie (a forged body+digest) is NOT
+    # closed by the core — it is closed by the SEAM's chain-anchor check (built 2026-08-14 in
+    # factory_runtime.promotion_gate): the seam finds the cited envelope's real chain entry by
+    # id and confirms the envelope body matches a deterministic PROJECTION of that entry, so a
+    # forged self-consistent envelope fail-closes on the projection mismatch. The prior Opus
+    # review's "OPEN GAP / requires a receipt-schema decision" was FALSIFIED — every field the
+    # envelope attests is already carried in the chain entry, so this is seam engineering, not a
+    # founder decision. The core keeps doing omission-enforcement (no receipt -> block); the
+    # seam adds fabrication-enforcement (forged receipt -> block) on top.
+    # Absent candidate_receipt with disturbed surfaces is a HARD BLOCK (the enforcement
+    # cutover, founder-ratified "full enforcement" of omission): the agent cannot advance a
+    # run without the seam-attested diff-to-surface binding. The migration window is closed —
+    # the seam always produces one build receipt covering every disturbed surface, so this is
+    # always satisfiable by a real run; an absent receipt here is a route-around, not a gap.
+    # A run with no disturbed surfaces needs no receipt and is unaffected.
+    if request.candidate_receipt:
+        ev = request.candidate_receipt_evidence
+        if ev is None or not ev.present:
+            hard_reasons.append("candidate-receipt-evidence-missing")
+        elif not ev.verify():
+            hard_reasons.append("candidate-receipt-evidence-tampered")
+        elif not ev.verifies_binding({"receipt_id": request.candidate_receipt}):
+            hard_reasons.append("candidate-receipt-evidence-binding")
+        else:
+            body = ev.body or {}
+            if not str(body.get("changed_paths_digest", "") or "").strip():
+                hard_reasons.append("disturbed-surface-without-diff")
+            attested = sorted(
+                {normalize_label(s) for s in _as_str_tuple(body.get("disturbed_surface_ids", ()))
+                 if normalize_label(s)}
+            )
+            declared = sorted(
+                {normalize_label(s) for s in request.disturbed_surface_ids
+                 if normalize_label(s)}
+            )
+            if declared != attested:
+                hard_reasons.append("disturbed-surface-mismatch")
+                reports.append(
+                    "disturbed-surface-declared:" + (",".join(declared) or "(empty)")
+                )
+                reports.append(
+                    "disturbed-surface-receipt:" + (",".join(attested) or "(empty)")
+                )
+    elif any(normalize_label(s) for s in request.disturbed_surface_ids):
+        # Enforcement cutover: disturbed surfaces without a candidate-build receipt cannot
+        # advance — the diff-to-surface binding is the load-bearing input, and an absent
+        # receipt is a route-around, not a gap. This is defense-in-depth beneath Gate L: even
+        # a runtime bypass that reaches decide_promotion receipt-less fails closed here.
+        hard_reasons.append("candidate-receipt-required:disturbed-surface-binding")
+
     tool_policy_issues: tuple[str, ...]
     tool_policy_digest = ""
     if request.tool_policy is None:
@@ -788,6 +899,109 @@ def decide_promotion(
         if current_observation is None:
             gaps[surface_id].append("surface-observation-missing")
             continue
+
+        # Gate N (slice 4): the self-reported oracle/determinism/flake fields bind to
+        # seam-attested receipts carried as content-addressed EvidenceIntegrity envelopes.
+        # The core verifies each envelope's content-address and receipt binding, then
+        # compares the attested value to the self-reported one. A cited receipt whose
+        # envelope is missing/tampered/unbound, OR a present envelope whose attested value
+        # is absent, is a hard block (fail-closed): citing a receipt but omitting the
+        # attested value is route-arounding, not complying. A self-consistent lie (a forged
+        # body+digest) is NOT closed by the core — it is closed by the SEAM's chain-anchor
+        # check (built 2026-08-14 in factory_runtime.promotion_gate), which finds the cited
+        # envelope's real chain entry by id and confirms the body matches a projection of it.
+        # The prior Opus review's F3 "OPEN GAP / requires a receipt-schema decision" was
+        # FALSIFIED — every attested field is already carried in the chain entry, so this is
+        # seam engineering, not a founder decision. The core does omission-enforcement (no
+        # receipt -> block); the seam adds fabrication-enforcement (forged receipt -> block).
+        # Enforcement cutover (founder-ratified "full enforcement" of omission): a POSITIVE
+        # claim without a receipt is a hard block — oracle_adequate=True without an oracle
+        # receipt, or deterministic=True without a flake receipt. The receipt exists to catch
+        # a lie (a claim the machine-derived verdict contradicts), so it is mandated for
+        # positive claims. An honest gap (adequate=False) needs no receipt: it is an admission,
+        # not a claim, and the class-based gap/negative-evidence logic disposes it.
+        #
+        # Opus F4 FIX (cross-family review, 2026-08-14, founder-authorized "solve all known
+        # issues" + "full enforcement"; the false-close was hidden from the founder at
+        # ratification by an earlier comment that claimed "no false close on any surface"):
+        # the flake receipt was required ONLY when deterministic=True, and the flake receipt is
+        # the SOLE thing binding flake_count/automatic_retry_count to machine-derived values.
+        # So on a STANDARD surface an agent could hide a flaky suite (real flake_count=5) by
+        # declaring deterministic=False + flake_count=0 with NO receipt — the receipt was waived
+        # because deterministic=False was treated as an admission, and the run PROMOTED with
+        # zero blocking reasons. That was a FALSE CLOSE (empirically verified: the game case
+        # promoted; the honest flake_count=5 case gated). The flake "admission" is NOT a pure
+        # admission — flake_count is load-bearing on Standard (quarantine), so the receipt must
+        # attest it regardless of the determinism claim. The fix mandates the flake receipt on
+        # Standard (``or surface.effective_criticality == CRITICALITY_STANDARD`` below) as well
+        # as on a positive determinism claim. The ORACLE admission (adequate=False) stays
+        # class-scoped — it is a pure admission with no load-bearing positive value. Cosmetic
+        # retains the no-receipt admission path (flake_count is not load-bearing there — no
+        # false close, the signal vanishes rather than a false close). Critical is unaffected
+        # (deterministic=False -> negative-evidence hard block, line ~1059). The false-close
+        # vector is closed; re-verified by the independent Opus cross-family verifier.
+        if current_observation.oracle_receipt:
+            oev = current_observation.oracle_receipt_evidence
+            if oev is None or not oev.present:
+                hard_reasons.append(f"oracle-receipt-evidence-missing:{surface_id}")
+            elif not oev.verify():
+                hard_reasons.append(f"oracle-receipt-evidence-tampered:{surface_id}")
+            elif not oev.verifies_binding(
+                {"receipt_id": current_observation.oracle_receipt}
+            ):
+                hard_reasons.append(f"oracle-receipt-evidence-binding:{surface_id}")
+            else:
+                attested_adequate = oev.body.get("oracle_adequate") if oev.body else None
+                if not isinstance(attested_adequate, bool):
+                    hard_reasons.append(f"oracle-attested-value-missing:{surface_id}")
+                elif bool(current_observation.oracle_adequate) != bool(attested_adequate):
+                    hard_reasons.append(f"oracle-binding-mismatch:{surface_id}")
+        elif current_observation.oracle_adequate:
+            hard_reasons.append(f"oracle-receipt-required:{surface_id}")
+        if current_observation.flake_receipt:
+            fev = current_observation.flake_receipt_evidence
+            if fev is None or not fev.present:
+                hard_reasons.append(f"flake-receipt-evidence-missing:{surface_id}")
+            elif not fev.verify():
+                hard_reasons.append(f"flake-receipt-evidence-tampered:{surface_id}")
+            elif not fev.verifies_binding(
+                {"receipt_id": current_observation.flake_receipt}
+            ):
+                hard_reasons.append(f"flake-receipt-evidence-binding:{surface_id}")
+            else:
+                fbody = fev.body or {}
+                det = fbody.get("deterministic")
+                fc = fbody.get("flake_count")
+                rc = fbody.get("retry_count")
+                if not isinstance(det, bool):
+                    hard_reasons.append(
+                        f"flake-attested-value-missing:{surface_id}:deterministic"
+                    )
+                elif bool(current_observation.deterministic) != bool(det):
+                    hard_reasons.append(
+                        f"flake-binding-mismatch:{surface_id}:deterministic"
+                    )
+                if not isinstance(fc, int) or isinstance(fc, bool):
+                    hard_reasons.append(
+                        f"flake-attested-value-missing:{surface_id}:flake_count"
+                    )
+                elif current_observation.flake_count != fc:
+                    hard_reasons.append(
+                        f"flake-binding-mismatch:{surface_id}:flake_count"
+                    )
+                if not isinstance(rc, int) or isinstance(rc, bool):
+                    hard_reasons.append(
+                        f"flake-attested-value-missing:{surface_id}:retry_count"
+                    )
+                elif current_observation.automatic_retry_count != rc:
+                    hard_reasons.append(
+                        f"flake-binding-mismatch:{surface_id}:retry_count"
+                    )
+        elif (
+            current_observation.deterministic
+            or surface.effective_criticality == CRITICALITY_STANDARD
+        ):
+            hard_reasons.append(f"flake-receipt-required:{surface_id}")
 
         if not current_observation.oracle_adequate:
             gaps[surface_id].append("oracle-silent")

@@ -6,7 +6,7 @@
 # (commit messages alone contaminated the Tester in the postmortem), so no lane
 # receives them. The lane's repo starts at one scrubbed base commit.
 #   coder:  full tree at the SHA (real toolchain, contract tests included), minus
-#           paths declared `coder-exclude:` in .harness/projection.conf.
+#           paths declared `coder-exclude:` in .factory/projection.conf.
 #   tester: ONLY the paths declared `tester-include:`. No declared tester
 #           projection = refusal, not a guess — fail-closed beats an accidental
 #           full view.
@@ -14,7 +14,7 @@
 set -euo pipefail
 ROLE="${1:?usage: projection.sh <coder|tester> <src-repo> <sha> <dest-dir>}"
 SRC="${2:?src repo}"; SHA="${3:?pinned sha}"; DEST="${4:?dest dir}"
-CONF="${HARNESS_PROJECTION_CONF:-.harness/projection.conf}"
+CONF="${HARNESS_PROJECTION_CONF:-.factory/projection.conf}"
 [ -e "$DEST" ] && { echo "refusing: $DEST exists (projections are minted fresh)" >&2; exit 65; }
 
 conf_lines() { { [ -f "$CONF" ] && grep -E "^$1:" "$CONF" | sed "s/^$1:[[:space:]]*//"; } || true; }

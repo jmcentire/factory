@@ -1,7 +1,13 @@
 # The Harness
 
-> Status: unratified proposal. Definitions and controls for founder signature; scripts are
-> runnable today and enforce nothing until wired into lane start and `make ship`.
+> Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
+> wired into `harness/lane_env.sh` and enforced; the build-time gates are wired into the
+> `make ship` order (purity → doctrine → authority → harness → denial-probes → lint →
+> typecheck → test) and fail the build closed. The sole-advancement-authority (Gate L) and
+> the seam chain-anchor (F3/R2/R3) are built and tested but NOT yet wired into the live run
+> close path — that wiring, and the receipt-body fields that close replay (R1), land with the
+> evidence-production pipeline (the deferred final slice, F1). A green build is not a verified
+> run; a verified run is the cage refusing on every gap.
 > Canonical copy: `~/Code/factory/docs/HARNESS.md`. Mirror: `~/Code/tools/HARNESS.md`.
 > Skill form: `/orchestrate` (`skills/orchestrate.md` here and in `~/.claude/commands/`).
 
@@ -246,7 +252,7 @@ point, Require-class work holding while they're away is also the point.
 
 ## Scripts
 
-Layout: `harness/` for the scripts, `.harness/` for state (receipts, HALT, grounding
+Layout: `harness/` for the scripts, `.factory/` for state (receipts, HALT, grounding
 marker, registries, `reconcile.d/`), `DIRECTIVES/` as a git repo for the ledger (signed
 chain `ledger.jsonl` + agent-appendable `provisional.jsonl` side chain). All are
 dependency-free (bash + python3 + git):
