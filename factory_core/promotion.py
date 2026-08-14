@@ -326,6 +326,14 @@ class PromotionRequest:
     monitors: tuple[Monitor, ...] = ()
     monitor_declared_unit_count: int = 0
     correction: CorrectionRecord | None = None
+    # Gate M (slice 4): the candidate-build receipt this request binds to, and the
+    # disturbed-surface set the seam attests came from that chain-verified receipt. The
+    # agent supplies disturbed_surface_ids but cannot author a self-serving set: the core
+    # blocks when the declared set differs from the attested one. The core is pure (no
+    # disk), so it cannot read the chain itself; it trusts the seam's attested value, which
+    # the postmortem re-reads from the tamper-evident chain to audit. See decide_promotion.
+    candidate_receipt: str = ""
+    receipt_disturbed_surface_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
@@ -385,6 +393,10 @@ class PromotionRequest:
                 CorrectionRecord.from_dict(correction_raw)
                 if isinstance(correction_raw, Mapping)
                 else None
+            ),
+            candidate_receipt=str(raw.get("candidate_receipt", "")),
+            receipt_disturbed_surface_ids=_as_str_tuple(
+                raw.get("receipt_disturbed_surface_ids")
             ),
         )
 
@@ -487,6 +499,7 @@ def promotion_attestation_subject(
             for surface_id in request.disturbed_surface_ids
             if normalize_label(surface_id)
         ),
+        "candidate_receipt": request.candidate_receipt,
         "gates": gates,
         "monitors": monitors,
         "monitor_declared_unit_count": request.monitor_declared_unit_count,
@@ -668,6 +681,33 @@ def decide_promotion(
         hard_reasons.append("attestation-digest-mismatch")
     elif not request.evidence.verifies_binding(promotion_attestation_subject(request, profile)):
         hard_reasons.append("attestation-subject-mismatch")
+
+    # Gate M (slice 4): the disturbed-surface set must bind to the cited candidate-build
+    # receipt. The seam (a script, not an agent) reads the chain-verified receipt and
+    # attests its disturbed_surface_ids; the agent supplies disturbed_surface_ids but
+    # cannot author a self-serving set — a mismatch with the receipt blocks. This is the
+    # "replaces agent-declared set" amendment: the field stays, but the agent can no longer
+    # shrink it to dodge a Critical surface's evidence. Absent candidate_receipt -> advisory
+    # (the migration window): logged, not blocked, so slice 4 ships advisory-first.
+    if request.candidate_receipt:
+        declared = sorted(
+            normalize_label(s) for s in request.disturbed_surface_ids
+            if normalize_label(s)
+        )
+        attested = sorted(
+            normalize_label(s) for s in request.receipt_disturbed_surface_ids
+            if normalize_label(s)
+        )
+        if declared != attested:
+            hard_reasons.append("disturbed-surface-mismatch")
+            reports.append(
+                "disturbed-surface-declared:" + (",".join(declared) or "(empty)")
+            )
+            reports.append(
+                "disturbed-surface-receipt:" + (",".join(attested) or "(empty)")
+            )
+    elif any(normalize_label(s) for s in request.disturbed_surface_ids):
+        reports.append("candidate-receipt-absent:disturbed-surface-binding-advisory")
 
     tool_policy_issues: tuple[str, ...]
     tool_policy_digest = ""

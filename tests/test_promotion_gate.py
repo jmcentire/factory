@@ -619,6 +619,66 @@ def test_standard_and_cosmetic_adequate_oracles_auto_promote_without_clicks() ->
     assert standard.required_approvers == cosmetic.required_approvers == 0
 
 
+# --------------------------------------------------------------------------
+# Gate M (slice 4) — disturbed-surface binding to the candidate-build receipt.
+# The agent cannot author a self-serving surface set: the declared set must equal the
+# seam-attested receipt set, or the run does not advance.
+# --------------------------------------------------------------------------
+
+
+def test_promotion_rejects_disturbed_surface_mismatch() -> None:
+    """The agent cannot shrink the disturbed-surface set to dodge a surface's evidence:
+    when the request binds to a candidate-build receipt, the declared set must equal the
+    receipt's attested set. A mismatch is a hard block — the prohibited action under test
+    is that the run does not advance."""
+    request = _request(
+        candidate_receipt="R-1",
+        receipt_disturbed_surface_ids=("standard-surface", "extra-surface"),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-mismatch" in decision.reasons
+    assert any(r.startswith("disturbed-surface-declared:") for r in decision.reports)
+    assert any(r.startswith("disturbed-surface-receipt:") for r in decision.reports)
+
+
+def test_promotion_accepts_when_disturbed_surface_matches_receipt() -> None:
+    """When the declared set equals the receipt's attested set the binding holds and the
+    decision proceeds on its other evidence — no disturbed-surface-mismatch hard reason,
+    and the baseline adequate-oracle standard request still auto-promotes."""
+    request = _request(
+        candidate_receipt="R-1",
+        receipt_disturbed_surface_ids=("standard-surface",),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert "disturbed-surface-mismatch" not in decision.reasons
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
+def test_promotion_mismatch_blocks_even_if_otherwise_promotable() -> None:
+    """The mismatch is a hard block that dominates: a request that would otherwise
+    auto-promote is blocked solely because the agent declared a different surface set
+    than the diff produced. The gate is the sole path, not an advisory note."""
+    request = _request(  # declared subset of attested — the dodge shape
+        candidate_receipt="R-1",
+        receipt_disturbed_surface_ids=("standard-surface", "critical-surface"),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-mismatch" in decision.reasons
+
+
+def test_promotion_advisory_when_candidate_receipt_absent() -> None:
+    """The migration window: with no candidate_receipt the binding is advisory — logged
+    as a report, never a hard reason, so the disposition is unaffected (a clean request
+    still promotes). The non-breaking cutover the plan's Part 4 caveat b requires."""
+    request = _request()  # no candidate_receipt; disturbed_surface_ids present
+    decision = decide_promotion(request, _roster(), _profile())
+    assert "disturbed-surface-mismatch" not in decision.reasons
+    assert "candidate-receipt-absent:disturbed-surface-binding-advisory" in decision.reports
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
 def test_cosmetic_oracle_and_live_gaps_are_reported_and_promoted() -> None:
     request = _request(
         disturbed_surface_ids=("cosmetic-surface",),
