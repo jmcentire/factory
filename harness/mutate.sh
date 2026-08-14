@@ -83,8 +83,15 @@ esac
 # "The guard caught it" means nothing if the guard was already failing. v8 produced
 # exactly this: a tightened check that failed 5/5 on the UNMODIFIED tree, whose
 # apparent kill was only the false red firing again.
-clean_out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1 | tail -3)
-if printf '%s' "$clean_out" | grep -qE "[0-9]+ (failed|error)"; then
+# Capture pytest's OWN exit code, not tail's. Piping to `tail -3` makes $? reflect tail
+# (always 0), so GATE 2 could never see a non-zero pytest exit — a conftest SyntaxError or
+# collection crash in the CLEAN baseline exits non-zero with no "N failed/error" summary,
+# slipped past the grep, and was accepted as green. The mutation was then falsely reported
+# KILLED: the exact v8 false-red this gate exists to prevent. The line-146 premise ("GATE 2
+# already proved the clean tree exits 0") is only true now that GATE 2 sees pytest's exit.
+clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
+clean_out=$(printf '%s' "$clean_full" | tail -3)
+if printf '%s' "$clean_out" | grep -qE "[0-9]+ (failed|error)" || [ "$clean_rc" -ne 0 ]; then
   verdict "INVALID (baseline is not green — fix the false red first)"
   printf '%s\n' "$clean_out" | sed 's/^/    /'
   exit 3
@@ -171,19 +178,52 @@ if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)" || [ "$test_rc" -ne 0 ]
   printf '%s' "$clean" | python3 -c '
 import re, sys
 # pytest short-summary: "FAILED <nodeid> - <reason>" / "ERROR <nodeid-or-file> - <reason>".
-# A parametrize id can itself contain " - " (e.g. [a - b]), so splitting on the FIRST
-# " - " truncates the nodeid at the dash INSIDE the id and mis-attributes the kill.
-# Match the structured form instead: a nodeid is <path>::<func>[<params>] (or just
-# <path> for a file-level ERROR). Path and func have no spaces; the params are
-# bracket-delimited and pytest escapes "]" inside an id, so [^]]* absorbs any " - "
-# within them. The trailing "( - |$)" matches only the pytest separator AFTER the
-# nodeid, so a nodeid without params still strips at its own " - <reason>".
-NODEID = re.compile(r"^(?:FAILED|ERROR) ([^ ]+::[^\[\] ]+(?:\[[^\]]*\])?|[^ ]+)(?: - |$)")
+# The nodeid can contain spaces in TWO places: a parametrize id ([a - b], [with space]) AND
+# the file path itself (tests/test_thing bar.py — legal, pytest 9.0.3 collects it). A
+# space-forbidding token ([^ ]+) drops the whole row when the PATH has a space, mis-
+# attributing a real kill as <unnamed> or, with --named-test, falsely rejecting the exact
+# oracle that failed as outside-oracle. Split on the pytest SEPARATOR " - " at bracket
+# depth 0 instead: track [] nesting so " - " inside a parametrize id is skipped, and a
+# literal "]" inside an id (pytest escapes it) does not corrupt the depth. The nodeid is
+# everything between the marker and the first depth-0 " - " (or the whole remainder when
+# there is none — the no-reason end-of-line case). This admits spaces in both path and id.
 for line in sys.stdin:
-    m = NODEID.match(line.rstrip("\n"))
-    if m:
-        print(m.group(1))
+    line = line.rstrip("\n")
+    m = re.match(r"^(?:FAILED|ERROR) (.+)", line)
+    if not m:
+        continue
+    rest = m.group(1)
+    depth = 0
+    cut = len(rest)
+    i = 0
+    while i < len(rest):
+        c = rest[i]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            if depth > 0:
+                depth -= 1
+        elif depth == 0 and rest[i:i+3] == " - ":
+            cut = i
+            break
+        i += 1
+    print(rest[:cut])
 ' > "$kf"
+  # No FAILED/ERROR rows captured: a collection-time crash (conftest SyntaxError,
+  # ImportError while loading conftest, timeout) killed the suite before any test ran.
+  # test_rc != 0 brought us here, so the kill is real (the suite reddened). With no
+  # --named-test, "KILLED by: <unnamed>" is honest: the mutation was detected, no
+  # oracle was named so none is expected to be attributed. With --named-test, the
+  # crash is NOT "outside-oracle" — that verdict says a test failed but not the named
+  # one, and here NO test failed (collection crashed before any could run); the named
+  # oracle never ran, so the break is real but not demonstrated by it. Fail-closed
+  # (exit 3) only in the --named-test case: a human confirms the mutation broke the
+  # requirement the oracle owns, since the oracle never ran.
+  if [ ! -s "$kf" ] && [ -n "$NAMED_TEST" ]; then
+    verdict "KILLED-UNATTRIBUTED (suite-wide collection crash — '$NAMED_TEST' did not run; the break is real but not demonstrated by the oracle)"
+    printf '%s\n' "$clean" | tail -8 | sed 's/^/    /'
+    exit 3
+  fi
   # --named-test: a kill by any test OTHER than the named oracle is a symptom,
   # not the requirement's failure (the batch0 cadence-vs-closed-form shape). The
   # full suite still runs; this only attributes the kill. Match per-killer with a

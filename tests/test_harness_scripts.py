@@ -1478,3 +1478,176 @@ def test_mutate_conftest_syntax_error_does_not_survive(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout, r.stdout
     assert "SURVIVED" not in r.stdout, r.stdout
+
+
+# --------------------------------------------------------------------------
+# Third-round forcing probes — REAL pytest, not synthetic echoes.
+#
+# The second-round probes above were forcing for the REGEX but not for the
+# command: every receipt probe used `echo "N passed in Xs"`, a synthetic bare
+# line. Real pytest prints "===== N passed in Xs =====" (with '=' padding) and,
+# under a tmux pane, ANSI color — both of which the bare-line probes never
+# exercised, so `make ship` was green against the wrong shape. An adversarial
+# pass found the receipt's test_count was None for every real pytest run. These
+# probes run the REAL command through the script: the check must guard the
+# prohibited action, not the fix's artifact.
+# --------------------------------------------------------------------------
+
+
+def _pytest_tree(tmp: Path, n: int = 2) -> Path:
+    """A real collectable pytest tree with `n` passing tests (no -q; default
+    verbosity, so the foot line is the padded '===== N passed in Xs =====')."""
+    tree = tmp / "ptree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    body = (
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+    )
+    for i in range(n):
+        body += f"def test_{i}():\n    assert val() == 42\n\n"
+    (tree / "tests" / "test_x.py").write_text(body)
+    return tree
+
+
+def test_receipt_parses_real_pytest_padded_foot(tmp_path: Path) -> None:
+    """A REAL `python3 -m pytest` run (default verbosity) prints a foot padded
+    with '=': '===== N passed in Xs ====='. The bare-line anchor '(?:^|\\n)\\s*(\\d+)'
+    rejects it (\\s* does not consume '='), so test_count was None — the load-bearing
+    >0 gate inert against the very command it wraps. The '[ =]*' anchor tolerates the
+    padding; test_count must be the real N, not None."""
+    tree = _pytest_tree(tmp_path, 2)
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 2, chain[-1]
+    assert chain[-1]["pass_count"] == 2, chain[-1]
+
+
+def test_receipt_parses_real_pytest_with_ansi_color(tmp_path: Path) -> None:
+    """pytest 9 emits ANSI color on the summary line even when stdout is a pipe
+    (it keys off TERM). The escapes sit before the digit, so the anchor saw 0x1b
+    not a digit and test_count was None. The receipt must strip ANSI (as mutate.sh
+    does for its own extraction) before deriving the count."""
+    tree = _pytest_tree(tmp_path, 1)
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py --color=yes"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness"), "TERM": "xterm-256color"})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 1, chain[-1]
+
+
+def test_receipt_real_pytest_vacuous_run_is_zero(tmp_path: Path) -> None:
+    """A real pytest run that collects 0 tests prints 'no tests ran' (padded).
+    Vacuous-first must classify it 0 — the >0 gate rejects it — not None."""
+    tree = tmp_path / "empty"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_none.py").write_text("# no tests here\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/ --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+
+
+def test_receipt_vacuous_marker_wins_over_stray_before_it(tmp_path: Path) -> None:
+    """The HIGH false-acceptance the skeptics found: 'last match wins' does NOT
+    protect a vacuous run, because a vacuous run has no real 'N passed' foot, so a
+    stray 'N passed in Xs' BEFORE the vacuous marker is the only match and wins
+    regardless of position — inflating a vacuous run to test_count>0 and passing
+    the >0 gate. Vacuous-first (marker present anywhere -> 0) closes it: the stray
+    is refused because the vacuous marker is authoritative."""
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         'echo "1 passed in 0.1s"; echo "no tests ran in 0.00s"; exit 0'],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+
+
+def test_mutate_named_test_preserves_space_in_file_path(tmp_path: Path) -> None:
+    """A pytest nodeid whose FILE path contains a space (tests/test_thing bar.py —
+    legal, pytest 9.0.3 collects it) was dropped entirely by the space-forbidding
+    regex token, so a real kill was mis-attributed <unnamed>, or with --named-test
+    falsely rejected as KILLED-OUTSIDE-ORACLE even when the EXACT named oracle
+    failed. The bracket-depth scan admits spaces in the path; the named oracle's
+    kill must be attributed to it."""
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def guarded():\n    return 'safe'\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_thing bar.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import guarded\n\ndef test_oracle():\n    assert guarded() == 'safe'\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "sp", str(patch),
+             "--src", str(tree), "--tests", str(tree),
+             "--named-test", "tests/test_thing bar.py::test_oracle"],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED by: tests/test_thing bar.py::test_oracle" in r.stdout, r.stdout
+    assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout
+
+
+def test_mutate_gate2_rejects_broken_clean_baseline(tmp_path: Path) -> None:
+    """GATE 2 must see pytest's OWN exit code, not tail's. The first cut piped to
+    `tail -3`, so $? was tail's (always 0): a clean baseline with a pre-existing
+    conftest SyntaxError (exit 4, no 'N failed/error' summary) was accepted as
+    green, and the mutation was falsely reported KILLED — the exact v8 false-red
+    GATE 2 exists to prevent. With clean_rc captured before the tail pipe, GATE 2
+    returns INVALID (baseline not green)."""
+    tree = mkpkg(tmp_path / "tree")
+    # A pre-existing broken conftest in the CLEAN baseline (not introduced by the patch).
+    (tree / "tests" / "conftest.py").write_text("def broken(:\n    pass\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "g2", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "INVALID" in r.stdout and "baseline is not green" in r.stdout, r.stdout
+    assert "KILLED" not in r.stdout, r.stdout
+
+
+def test_mutate_named_test_conftest_crash_is_unattributed(tmp_path: Path) -> None:
+    """With --named-test, a mutation that crashes suite-wide conftest collection
+    (by breaking a symbol conftest imports) yields NO FAILED/ERROR rows, so
+    killers is empty. The first cut fell through to KILLED-OUTSIDE-ORACLE with a
+    literally-false 'a test failed' message (no test ran — collection crashed).
+    The empty-killers path now emits KILLED-UNATTRIBUTED: the break is real
+    (test_rc != 0) but not demonstrated by the named oracle, which never ran."""
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def add(a, b):\n    return a + b\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "conftest.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import add\n")
+    (tree / "tests" / "test_add.py").write_text(
+        "from pkg import add\n\ndef test_add_basic():\n    assert add(1, 1) == 2\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert 'def add(a, b):' in s, 'anchor'\n"
+        "p.write_text(s.replace('def add(a, b):', 'def add_(a, b):').replace('a + b', 'a - b'))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "cc", str(patch),
+             "--src", str(tree), "--tests", str(tree),
+             "--named-test", "tests/test_add.py::test_add_basic"],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "KILLED-UNATTRIBUTED" in r.stdout, r.stdout
+    assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout

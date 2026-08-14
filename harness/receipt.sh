@@ -52,37 +52,47 @@ with open(chain, "a+") as f:
     #    a forged "1 passed") is a higher gate's job; the receipt cannot, from the
     #    log alone, tell a real pytest run from a forgery.
     log_bytes = open(os.environ["_RLOG"], "rb").read()
+    # pytest 9 emits ANSI color on the summary line even when stdout is a pipe (it keys
+    # off TERM, set in every tmux pane), and its foot line is padded with '=':
+    #   "========================= N passed in X.XXs ========================="
+    # Both defeat a naive anchor: the ANSI escapes sit before the digit (so \s* then
+    # (\d+) sees 0x1b, not a digit), and \s* does not consume '=' (so the line starting
+    # with '=' fails the anchor). Without stripping/tolerating these, a REAL pytest run
+    # is misparsed as test_count=None — "not a test runner" — and the load-bearing >0
+    # gate is inert against the very command it wraps. mutate.sh strips ANSI for its own
+    # extraction; the receipt must do the same for the count it derives.
+    log_clean = re.sub(rb'\x1b\[[0-9;]*m', b'', log_bytes)
     def _g(text, pat):
         m = re.search(pat, text)
         return int(m.group(1)) if m else 0
     test_count = pass_count = None
     # The pytest short-summary line is "N passed[, M failed[, K errors]] in Xs".
-    # The " in <duration>s" trailer is what separates a real summary from a stray
-    # own-line "N passed ..." in build output: a start-of-line anchor alone blocks
-    # MID-line strays but not own-line ones, and an own-line stray matches the
-    # summary branch first and — by elif precedence — shadows the vacuous-run
-    # marker, reading a vacuous run as test_count>0 and passing the very >0 gate
-    # it exists to reject (the dangerous false-acceptance direction). The trailer
-    # closes that — but " in <digit>" alone is not enough: a stray "1 passed
-    # validation in 3 checks" has " in 3" and would still match, inflating a
-    # vacuous run to test_count=1. Require the trailing "s" of the pytest duration
-    # ("in 0.00s") so "in 3 checks" (no "s" after the digit) cannot feed the count,
-    # and a vacuous "no tests ran in 0.00s" falls through to 0.
-    # Take the LAST match: pytest prints its summary at the foot of the output, so
-    # a stray own-line "N passed in Xs" earlier cannot shadow the real one later.
-    # Residual ceiling: a bare own-line "N passed in Xs" printed AFTER pytest (a
-    # post-run step that forges the same shape) is indistinguishable from the real
-    # summary and is taken as the foot. Authenticating that the line came from
-    # pytest — not a step that echoed its shape — is a higher gate's job (the
-    # command itself, not its log); from the log alone the two cannot be told apart.
-    matches = list(re.finditer(rb'(?:^|\n)\s*(\d+) passed[^\n]*\bin \d[\d.]*s\b', log_bytes))
-    if matches:
-        sm = matches[-1]
-        line = sm.group(0)
-        pass_count = int(sm.group(1))
-        test_count = pass_count + _g(line, rb'(\d+) failed') + _g(line, rb'(\d+) error')
-    elif re.search(rb'no tests ran|no tests collected|collected 0 items', log_bytes):
+    # VACUOUS-FIRST: if a vacuous marker ("no tests ran" / "no tests collected" /
+    # "collected 0 items") is present ANYWHERE, classify test_count=0 BEFORE looking for
+    # a summary. A vacuous run has no real "N passed" foot, so any "N passed in Xs" match
+    # — before OR after the marker — is a stray/forgery and would otherwise inflate the
+    # run to test_count>0 and pass the very >0 gate it exists to reject (the dangerous
+    # false-acceptance direction; "last match wins" only helps when a real summary
+    # FOLLOWS the stray, which a vacuous run never has). Taking the vacuous marker as
+    # authoritative is fail-closed: a real passing run never prints "no tests ran" (it is
+    # pytest's terminal signal for 0 tests), so this never false-rejects a real run; it
+    # only rejects when the run really was vacuous (or a forgery claimed it was, which
+    # fails closed). Residual: a forged "N passed in Xs" with NO vacuous marker (the
+    # rogue suppresses "no tests ran") is indistinguishable from a real summary from the
+    # log alone — authenticating the command (not its log) is a higher gate's job.
+    if re.search(rb'no tests ran|no tests collected|collected 0 items', log_clean):
         test_count = pass_count = 0
+    else:
+        # Tolerate the pytest '=' separator padding ("===== N passed in Xs ====="): the
+        # '[ =]*' absorbs the leading '=' run. Take the LAST match: pytest prints its
+        # summary at the foot, so a stray own-line "N passed in Xs" earlier cannot shadow
+        # the real one later.
+        matches = list(re.finditer(rb'(?:^|\n)[ =]*(\d+) passed[^\n]*\bin \d[\d.]*s\b', log_clean))
+        if matches:
+            sm = matches[-1]
+            line = sm.group(0)
+            pass_count = int(sm.group(1))
+            test_count = pass_count + _g(line, rb'(\d+) failed') + _g(line, rb'(\d+) error')
 
     # Gate M (slice 4): changed paths machine-derived in the bash above (git diff against
     # the run base, taken after the command ran), and — when the caller supplies a surface
