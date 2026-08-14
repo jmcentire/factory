@@ -53,6 +53,23 @@ if [ "$ROLE" = "tester" ]; then
     || fail "projection receipt refused: the strategy names paths outside the tester's declared view"
 fi
 
+# Blocking-event gate (founder refinement — the time-kill). The orchestrator/
+# dispatcher gets the validator's attention by writing a blocking event; this gate
+# refuses to dispatch ANY lane while the validator has an unconsumed event (or
+# this lane does), so the validator cannot start new work past an attention signal
+# it has not consumed. The off-ramp is harness/consume_block.sh, which receipts
+# the consumption into events.jsonl and clears the file. This is the production
+# enforcement site — lane_env.sh enforces the same precondition once lanes route
+# through it; dispatch_lane.sh is the per-task path that fires today.
+for _bf in "$ROOT/lanes/validator.blocking" "$ROOT/lanes/$ROLE.blocking"; do
+  if [ -s "$_bf" ]; then
+    echo "blocking event pending — consume before dispatching:" >&2
+    head -3 "$_bf" | sed 's/^/  /' >&2
+    echo "  run: harness/consume_block.sh $RUN validator  (then $ROLE if its own is pending)" >&2
+    exit 81
+  fi
+done
+
 REPO=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")
 [ -n "$SHA" ] || SHA=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['base_sha'])")
 WS="$ROOT/workspaces/$ROLE"

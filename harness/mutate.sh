@@ -22,19 +22,27 @@
 # job of this script.
 #
 #   usage: mutate.sh <name> <patch.py> --src <tree> --tests <tree> [--test-cmd "..."]
+#                    [--named-test <nodeid>]
 #
 # <patch.py> receives the mutated tree root as argv[1]. It MUST assert its own
 # anchor and exit nonzero when the anchor is missing — see GATE 3.
+#
+# --named-test <nodeid>: the oracle that owns this requirement. When set, a kill
+# by ANY OTHER test is rejected as a symptom, not a failure (see the kill gate).
+# The full suite still runs — per-test attribution manufactures blind spots the
+# same way per-test greens manufacture false confidence; this only checks the
+# kill is attributable to the named oracle, not that only one test ran.
 set -uo pipefail
 
 NAME="${1:?usage: mutate.sh <name> <patch.py> --src <tree> --tests <tree>}"; shift
 PATCH="${1:?patch script}"; shift
-SRC=""; TESTS=""; TEST_CMD=""
+SRC=""; TESTS=""; TEST_CMD=""; NAMED_TEST=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --src)      SRC="$2"; shift 2 ;;
-    --tests)    TESTS="$2"; shift 2 ;;
-    --test-cmd) TEST_CMD="$2"; shift 2 ;;
+    --src)        SRC="$2"; shift 2 ;;
+    --tests)      TESTS="$2"; shift 2 ;;
+    --test-cmd)   TEST_CMD="$2"; shift 2 ;;
+    --named-test) NAMED_TEST="$2"; [ -n "$2" ] || { echo "--named-test must be non-empty (an empty oracle silently disables attribution)" >&2; exit 64; }; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 64 ;;
   esac
 done
@@ -131,8 +139,56 @@ fi
 # mutated fold was mathematically the identity and observable only elsewhere.
 out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1)
 if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)"; then
-  killers=$(printf '%s' "$out" | grep -oE '^FAILED [^ ]+' | sed 's/^FAILED //' | head -4 | tr '\n' ' ')
-  verdict "KILLED by: ${killers:-<unnamed>}"
+  # Extract the failing nodeid from each FAILED/ERROR short-summary line. pytest
+  # prints "FAILED <nodeid> - <reason>" or "ERROR <nodeid-or-file> - <reason>"; the
+  # nodeid is everything between the marker and " - ", so it can contain spaces
+  # (pytest 9 emits literal spaces in parametrize-string IDs:
+  # "FAILED tests/x.py::test_g[with space] - ..."). A [^ ]+ token truncates at the
+  # first space, dropping the "space]" tail and mis-attributing the kill, and a
+  # `for k in $killers` word-split fragments it further. awk strips the marker
+  # prefix and the " - <reason>" suffix, preserving the full nodeid; the list stays
+  # newline-delimited so spaces survive the read. No head cap: the named oracle can
+  # be any failing row, not just the first four.
+  # pytest 9 emits ANSI color even when stdout is a pipe — it keys color off TERM,
+  # which a tmux pane sets — so a line that reads "FAILED <nodeid> - <reason>"
+  # arrives as "<ESC>[31mFAILED<ESC>[0m <nodeid>...". An anchor on ^(FAILED|ERROR)
+  # then matches NOTHING: every --named-test kill was silently read as
+  # KILLED-OUTSIDE-ORACLE because zero killers were captured, the attribution
+  # never firing at all. Strip the color first so the extraction sees the text
+  # pytest meant to print. (BSD sed has no \x1b escape; $'...' expands it to the
+  # literal ESC byte, portable on this shell.)
+  clean=$(printf '%s' "$out" | sed $'s/\x1b\\[[0-9;]*m//g')
+  kf="$WORK/killers.txt"
+  printf '%s' "$clean" | awk '/^(FAILED|ERROR) /{
+      line=$0; sub(/^(FAILED|ERROR) /,"",line); sub(/ - .*$/,"",line); print line
+    }' > "$kf"
+  # --named-test: a kill by any test OTHER than the named oracle is a symptom,
+  # not the requirement's failure (the batch0 cadence-vs-closed-form shape). The
+  # full suite still runs; this only attributes the kill. Match per-killer with a
+  # boundary: exact equality, a parametrized-id prefix delimited by '[' (pytest's
+  # parametrize boundary — the only thing that legally abuts a nodeid, so a prefix
+  # without it is a collision, not a match), OR a file-level collection ERROR (no
+  # "::") which kills every test in that file — attribute it to the named oracle
+  # when the oracle's file matches. An unbounded substring grep matched
+  # "tests/x.py::test_g" inside the unrelated killer "tests/x.py::test_guard".
+  if [ -n "$NAMED_TEST" ]; then
+    named_hit=0
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      if [ "$k" = "$NAMED_TEST" ] || [[ "$k" == "$NAMED_TEST["* ]]; then named_hit=1; break; fi
+      case "$NAMED_TEST" in "$k"::*) named_hit=1; break ;; esac
+    done < "$kf"
+    if [ "$named_hit" -ne 1 ]; then
+      verdict "KILLED-OUTSIDE-ORACLE (a test failed but '$NAMED_TEST' did not — symptom, not the requirement's failure)"
+      printf '%s\n' "$clean" | grep -E '^(FAILED|ERROR)' | head -8 | sed 's/^/    /'
+      echo "    The suite reddened, but not on the test the requirement names. This is" >&2
+      echo "    not a kill of the behavior under test; re-derive which behavior the" >&2
+      echo "    requirement actually names, or name the oracle that owns it." >&2
+      exit 3
+    fi
+  fi
+  killers_display=$(tr '\n' ' ' < "$kf")
+  verdict "KILLED by: ${killers_display:-<unnamed>}"
   exit 0
 fi
 
