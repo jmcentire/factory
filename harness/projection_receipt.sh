@@ -19,7 +19,7 @@
 set -uo pipefail
 ROLE="${1:?usage: projection_receipt.sh <role> <artifact.md> [--conf <path>]}"
 ART="${2:?artifact}"
-CONF="${HARNESS_PROJECTION_CONF:-.harness/projection.conf}"
+CONF="${HARNESS_PROJECTION_CONF:-.factory/projection.conf}"
 shift 2
 while [ $# -gt 0 ]; do case "$1" in --conf) CONF="$2"; shift 2 ;; *) shift ;; esac; done
 

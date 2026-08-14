@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # proof.sh — "click and test" is a property the run proves, not promises.
 # The target declares how its world comes up and what demonstrates it working:
-# .harness/target.conf supplies a provision script, probes (entry points exercised
+# .factory/target.conf supplies a provision script, probes (entry points exercised
 # for real — HTTP hits, CLI invocations, DB checks out of band, screenshot/video
 # capture commands), access instructions, and teardown. The harness owns the
 # requirement and the receipts; the target owns the probes (control 9's division).
 # Every probe's exit code and output land under the run's proof/ directory and in
 # the receipt chain. No target.conf = a declared gap (exit 64), never a quiet pass.
 #
-# .harness/target.conf format (one per line):
+# .factory/target.conf format (one per line):
 #   provision: <script>        # brings the environment up; env PROOF_DIR is set
 #   teardown:  <script>        # always runs, even after failures
 #   access:    <path-or-text>  # where a human finds entry points + credentials doc
@@ -16,7 +16,7 @@
 # usage: proof.sh <run>
 set -uo pipefail
 RUN="${1:?usage: proof.sh <run>}"
-H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
 CONF="${HARNESS_TARGET_CONF:-$H/target.conf}"
 D="$(cd "$(dirname "$0")" && pwd)"
 

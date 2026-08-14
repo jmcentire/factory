@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # sched_audit.sh — the runner owns cadence; an unregistered timer is hostile (§2, §6.2).
-# Registry: .harness/schedule.registry, one approved regex per line. Everything the
+# Registry: .factory/schedule.registry, one approved regex per line. Everything the
 # OS reports that matches nothing in the registry fails the audit.
 # SCHED_AUDIT_INPUT=<file> substitutes a fixture for the OS scan (test seam only —
 # the forced-negative drill in tests/ needs a deterministic timer list).
 set -uo pipefail
-REG="${HARNESS_DIR:-.harness}/schedule.registry"
+REG="${HARNESS_DIR:-.factory}/schedule.registry"
 tmp=$(mktemp)
 if [ -n "${SCHED_AUDIT_INPUT:-}" ]; then
   sed '/^\s*$/d' "$SCHED_AUDIT_INPUT" > "$tmp"

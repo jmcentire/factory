@@ -14,7 +14,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --agent) AGENT="$2"; shift 2 ;;   # claude|codex|gemini (see lane launch below)
   *) echo "unknown arg: $1" >&2; exit 64 ;;
 esac; done
-H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
 D="$(cd "$(dirname "$0")" && pwd)"
 case "$ROLE" in coder|tester) ;; *) echo "role must be coder|tester" >&2; exit 64 ;; esac
 

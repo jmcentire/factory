@@ -52,7 +52,7 @@ done
 WORK="${MUTATE_WORKDIR:-/tmp/mutate}/$NAME"
 rm -rf "$WORK" 2>/dev/null
 mkdir -p "$WORK" || exit 70
-rsync -a --exclude .git --exclude .harness "$SRC"/ "$WORK"/ 2>/dev/null
+rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
 rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
 
 : "${TEST_CMD:=python3 -m pytest tests/ -q -p no:randomly}"

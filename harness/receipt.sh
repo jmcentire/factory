@@ -2,7 +2,7 @@
 # receipt.sh — a claim of execution is a receipt id or it does not exist.
 # Wraps any command; captures exit code, output digest, tree state; chains it.
 set -uo pipefail
-H="${HARNESS_DIR:-.harness}"; R="$H/receipts"; mkdir -p "$R"
+H="${HARNESS_DIR:-.factory}"; R="$H/receipts"; mkdir -p "$R"
 export _RID="R-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
 export _RLOG="$R/$_RID.log" _RCHAIN="$R/chain.jsonl"
 export _RCMD="$*" _RSTART="$(date -u +%FT%TZ)"
@@ -66,53 +66,114 @@ with open(chain, "a+") as f:
         m = re.search(pat, text)
         return int(m.group(1)) if m else 0
     test_count = pass_count = None
-    # pytest's terminal foot is the LAST non-empty line of the log. Every test's own stdout
-    # (under -s) prints DURING the run, before the terminal phase, so a test that prints
-    # "5 passed in 0.1s" can never be the foot — the real foot follows it. The r5 lesson:
-    # "take the last regex match ANYWHERE in the log" fell back to a test's own summary-shaped
-    # stdout when the real foot was keyword-less (a skip-only run), and fabricated
-    # test_count=5 for a run that executed zero tests — defeating the load-bearing >0 gate
-    # this receipt exists to enforce. Anchor to the foot's POSITION (last line), not to a
-    # content regex matched anywhere; the content is confirmation, the position is the
-    # structural fact. (Residual: a trylast pytest_terminal_summary hook that prints after
-    # the foot moves the last line off it — a real run then reads as None; benign for a
-    # passing build, accepted for the right reason on the wrong line. A 0-test run there is
-    # exotic-squared and still caught by the collection-line anchor below.)
+    # The foot is NOT reliably the last non-empty line: pytest plugins print AFTER the terminal
+    # summary. pytest_unconfigure fires at session teardown, after summary_stats, and
+    # coverage/telemetry plugins emit their report there — a "Coverage: 100%" line after the
+    # real foot made the r5 "foot = last non-empty line" anchor miss a real 2-pass run and
+    # record test_count=None (r6: false-rejection of a green build, a regression the r5
+    # last-line anchor introduced). Scan BACKWARD for the last line that BOTH ends in pytest's
+    # timing suffix "in <time>s" (optionally '='-padded, the r6 fix) AND carries a pytest foot
+    # keyword. The shape requirement excludes a pytest progress line ("s [100%]") that carries a
+    # keyword but does not end in "in Xs"; the keyword requirement excludes a post-foot
+    # NON-summary plugin line ("Coverage: 100%" / "done in 3.2s" carries no pytest keyword) —
+    # and because the real foot is printed at teardown AFTER all test stdout, it is the LAST
+    # keyword-bearing "in Xs" line, so scan-backward picks it over a test's earlier "5 passed
+    # in 0.1s" stdout (the r5/r7 gain). r7 found the hole in "provided the real foot matches a
+    # foot pattern": an xfail-only foot "1 xfailed in 0.02s" matched the r6 keyword set's
+    # executed-only alternation, so scan-backward skipped it and fell back to test stdout. The
+    # foot-keyword set here is the COMPLETE pytest 9.0.3 terminal set: executed (passed,
+    # failed, error, xfailed, xpassed) AND non-executed (skipped, deselected, warning, "no
+    # tests ran"). A future pytest foot keyword outside this set would not anchor (the set is
+    # complete for 9.0.3, not for all time).
     lines = [ln for ln in log_clean.splitlines() if ln.strip()]
-    foot = lines[-1] if lines else b''
-    # VACUOUS: collected but executed no verifying test. The >0 gate must REJECT this
-    # (test_count=0), not skip it as "not a test runner" (None) — None lets a 0-test build
-    # through, the exact false-acceptance this branch closes. Four terminal shapes, all
-    # anchored to pytest's real signals, never an unanchored substring (the r4 lesson:
-    # `re.search(rb'no tests ran', ...)` anywhere matches the phrase inside a test's OWN
-    # stdout). The collection line ("collected 0 items" / "collected N items / 0 selected")
-    # precedes the foot, so it is searched in the body; the keyword-less feet ("no tests ran
-    # in Xs", "N skipped in Xs", "N deselected in Xs") ARE the foot, so they are matched at
-    # the last line. The "0 selected" token only appears when zero tests will run — a mixed
-    # run prints "M selected" with M>0 — so it is a clean deselect-all marker that
-    # -k NoSuchName, -m NoSuchMarker and --deselect all share. The keyword-less skip/
-    # deselected feet are start-anchored (re.match on the foot) and require " in " directly
-    # after the keyword, so a mixed foot "1 passed, 1 skipped in 0.03s" (starts with
-    # "passed"; comma before "skipped") does NOT match — only an all-skipped/deselected foot.
-    vacuous_foot = re.match(rb'[ =]*no tests ran in \d[\d.]*s', foot)
-    vacuous_skip = re.match(rb'[ =]*\d+ (?:skipped|deselected) in \d[\d.]*s', foot)
+    footshape_re = rb'\bin \d[\d.]*s\b[ =]*$'
+    footkw_re = rb'(?:passed|failed|error|xfailed|xpassed|skipped|deselected|warnings?|no tests ran)'
+    foot = b''
+    for ln in reversed(lines):
+        if re.search(footshape_re, ln) and re.search(footkw_re, ln):
+            foot = ln
+            break
+    # VACUOUS vs EXECUTED vs NOT-A-TEST-RUNNER — three states, classified from the foot's
+    # keywords, NOT by enumerating every vacuous combination (the r8/r9 lesson: enumerate the
+    # mixes and the next one bites you; classify the property instead). An EXECUTED test
+    # produced a pass/fail/error/xfail/xpass verdict; those five keywords are the only ones that
+    # count. A foot that carries a pytest keyword but NONE of those five is VACUOUS — 0
+    # verifying tests ran — however the non-executed counts combine ("no tests ran", "N
+    # skipped[, M deselected][, K warnings]", "N warnings" alone, which pytest prints INSTEAD
+    # of "no tests ran" when 0 tests ran but a warning was emitted). The >0 gate must REJECT a
+    # vacuous run (test_count=0), not skip it as "not a test runner" (None) — None lets a
+    # 0-test build through, the exact false-acceptance this closes. The classification is sound
+    # because no non-executed keyword contains an executed one as a substring (skipped /
+    # deselected / warning / "no tests ran" hold none of passed/failed/error/xfailed/xpassed).
+    # A foot found via the anchor always carries a pytest keyword (the anchor requires it), so
+    # the no-keyword branch is only reached when no foot was found — a crash before the terminal
+    # summary, or genuinely not a test runner: then vacuous_coll (the "collected 0 items" /
+    # "0 selected" body marker, which precedes the foot) is the fallback that still yields 0,
+    # else None (not a test runner / incomplete run). All anchors match pytest's real terminal
+    # signals, never an unanchored substring (the r4 lesson: `re.search(rb'no tests ran', ...)`
+    # anywhere matches the phrase inside a test's OWN stdout). "0 selected" only appears when
+    # zero tests will run (a mixed run prints "M selected", M>0), so it is a clean deselect-all
+    # marker that -k NoSuchName, -m NoSuchMarker and --deselect all share.
+    executed_re = rb'(?:passed|failed|error|xfailed|xpassed)'
     vacuous_coll = (re.search(rb'(?:^|\n)[ =]*collected 0 items[ \t]*(?:\n|$)', log_clean)
                     or re.search(rb'(?:^|\n)[ =]*collected \d+ items[^\n]*\b0 selected\b',
                                  log_clean))
-    if vacuous_foot or vacuous_skip or vacuous_coll:
+    if foot and re.search(executed_re, foot):
+        # EXECUTED foot. pytest 9 orders failures FIRST ("1 failed, 2 passed in 0.03s"); extract
+        # each count independently by keyword so passed-first, failed-first, and xfail-bearing
+        # feet all parse. xfailed/xpassed are EXECUTED tests (the test ran and produced a
+        # verdict), so they count toward test_count — an xfail-only run is NOT "no tests ran"
+        # and the >0 gate must not reject it as such (r7: the prior set read None for a real
+        # xfail run, misclassifying a test runner as "not a test runner"). pass_count stays
+        # passed-only: xfailed is an expected failure (not a pass), and xpassed is a pass only
+        # under non-strict xfail (strict mode treats it as a failure) — the receipt does not
+        # adjudicate strict-vs-non-strict, that is the promotion gate's oracle-adequacy call, not
+        # the count's. The literal space in '(\d+) failed' stops "xfailed" feeding the failed
+        # branch (the char after the digit-space is 'x', not 'f'); symmetric for xpassed/passed.
+        # '\berror' matches "error" and the "error" in "errors".
+        pass_count = _g(foot, rb'(\d+) passed')
+        test_count = (pass_count + _g(foot, rb'(\d+) failed')
+                      + _g(foot, rb'(\d+) error') + _g(foot, rb'(\d+) xfailed')
+                      + _g(foot, rb'(\d+) xpassed'))
+    elif foot:
+        # pytest-keyword foot but NO executed keyword: vacuous (0 verifying tests), regardless
+        # of how skipped/deselected/warning/"no tests ran" combine. (This is the structural fix
+        # for the r9 gap: "1 warning in 0.00s" and "2 skipped, 1 warning in 0.00s" read None
+        # under the enumerated vacuous patterns — a false-acceptance, since a 0-test build then
+        # passes the >0 gate by being skipped as "not a test runner". Classifying by the
+        # executed-keyword property subsumes every vacuous mix in one check.)
         test_count = pass_count = 0
-    else:
-        # Keyword-bearing foot (passed/failed/error) at the last line. pytest 9 orders
-        # failures FIRST ("1 failed, 2 passed in 0.03s"); extract each count independently
-        # by keyword so passed-first and failed-first both parse. The last-line anchor
-        # excludes a test's mid-log summary-shaped stdout (it is never the foot). The
-        # '\bin \d[\d.]*s\b' timing suffix excludes non-summary lines that merely contain a
-        # digit + "passed"; the '[ =]*' absorbs pytest's '=' separator padding.
-        m = re.match(rb'[ =]*[^\n]*\b\d+ (?:passed|failed|error)[^\n]*\bin \d[\d.]*s\b', foot)
-        if m:
-            line = m.group(0)
-            pass_count = _g(line, rb'(\d+) passed')
-            test_count = pass_count + _g(line, rb'(\d+) failed') + _g(line, rb'(\d+) error')
+    elif vacuous_coll:
+        # No foot found (crash before the terminal summary, or -q suppressed it) but the body
+        # shows a 0-collection / 0-selected marker: vacuous.
+        test_count = pass_count = 0
+    # else: no foot and no collection marker -> genuinely not a test runner, or an incomplete
+    # run (no terminal summary printed). test_count stays None; a >0 gate skips it.
+    # RESIDUAL (undetectable from the log + exit code, and NOT a regression — r4 had it too):
+    # a plugin or conftest that prints a summary-shaped line AFTER the real foot forges the
+    # count, because scan-backward picks the last keyword-bearing "in Xs" line and the forged
+    # line is one. The receipt cannot tell a real pytest foot from a forged one by position or
+    # content, because the agent controls the test config. This is the same class as a wrapper
+    # that echoes a forged "1 passed": authenticating the COMMAND (not its log) is a higher
+    # gate's job, and the receipt has never claimed otherwise. The count is honest GIVEN an
+    # honest test config; a config that forges its own summary is an agent supplying its own
+    # count. The forgery is SYMMETRIC and either direction is undetectable: a plugin printing
+    # an EXECUTED-shaped line ("3 passed in 0.07s") after a vacuous foot forges a count
+    # (false-ACCEPTANCE — a 0-test build promotes); a plugin printing a VACUOUS-shaped line
+    # ("1 warning in 0.5s") after an executed foot forges a 0 (false-REJECTION — a real build
+    # is held). The r9 structural fix (widening the keyword set to include "warning" so the
+    # natural 0-test "1 warning in 0.00s" foot is classified vacuous, not None) makes the
+    # second direction reachable where the enumerated r8 set did not — but it is the same
+    # undetectable forgery class, and it is fail-CLOSED (a held build is investigated; a
+    # promoted 0-test build is the exact failure the gate exists to prevent), so the r9 trade
+    # is correct on every NATURAL foot shape and wrong only on a forged config. "Prefer an
+    # executed foot over a vacuous one" would close the false-rejection but REOPEN the r5/r7
+    # test-stdout false-acceptance (a skip-only run whose test prints "5 passed in 0.1s" under
+    # -s would pick the executed stdout over the real vacuous foot) — a NATURAL case, worse
+    # than the forged case it fixes — so it is not taken. (A future hardening — prefer a foot
+    # line that carried ANSI color before stripping, since pytest colorizes its summary and a
+    # bare plugin print does not — is partial and only helps when TERM/color is on, so it is
+    # not relied on here.)
 
     # Gate M (slice 4): changed paths machine-derived in the bash above (git diff against
     # the run base, taken after the command ran), and — when the caller supplies a surface

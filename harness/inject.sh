@@ -2,7 +2,7 @@
 # inject.sh — the ONLY sanctioned path for putting text into a lane's pane, and the
 # topology is enforced here, not remembered: Validator→{coder,tester,validator};
 # dispatcher/orchestrator/founder→validator only. Every injection is receipted
-# (sha256 of the message, from, to, ts) into .harness/runs/<run>/injections.jsonl.
+# (sha256 of the message, from, to, ts) into .factory/runs/<run>/injections.jsonl.
 # Coder-bound *result* traffic passes a verdict filter: bare pass/fail only — never
 # a test name, assertion, or trace (validate.md:230-232).
 # usage: inject.sh <run> <to-window> [--results] "<message>"
@@ -13,7 +13,7 @@ RESULTS=0
 [ "${1:-}" = "--results" ] && { RESULTS=1; shift; }
 MSG="${1:?message}"
 FROM="${INJECT_FROM:-validator}"
-ROOT="${HARNESS_DIR:-.harness}/runs/$RUN"
+ROOT="${HARNESS_DIR:-.factory}/runs/$RUN"
 
 case "$TO" in
   coder|tester)

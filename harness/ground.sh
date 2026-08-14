@@ -3,7 +3,7 @@
 # pattern). Produces the grounding marker lane_env requires. Run at session start
 # and after every compaction.
 set -euo pipefail
-H="${HARNESS_DIR:-.harness}"; mkdir -p "$H"
+H="${HARNESS_DIR:-.factory}"; mkdir -p "$H"
 D="$(cd "$(dirname "$0")" && pwd)"
 
 echo "== 1/6 directive ledger =="

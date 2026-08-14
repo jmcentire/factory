@@ -17,7 +17,7 @@
 #   usage: consume_block.sh <run> <lane>
 set -euo pipefail
 RUN="${1:?usage: consume_block.sh <run> <lane>}"; LANE="${2:?lane}"
-H="${HARNESS_DIR:-.harness}"; BF="$H/runs/$RUN/lanes/$LANE.blocking"
+H="${HARNESS_DIR:-.factory}"; BF="$H/runs/$RUN/lanes/$LANE.blocking"
 EV="$H/runs/$RUN/events.jsonl"
 [ -s "$BF" ] || { echo "no blocking event pending for $LANE" >&2; exit 0; }
 # Receipt each event into events.jsonl as a blocking_consumed record, then

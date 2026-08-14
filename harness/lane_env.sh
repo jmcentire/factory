@@ -4,7 +4,7 @@
 # were never present) plus two harness preflights: no run during an incident
 # HALT, no run without a fresh grounding receipt.
 set -euo pipefail
-H="${HARNESS_DIR:-.harness}"
+H="${HARNESS_DIR:-.factory}"
 [ -e "$H/HALT" ] && { echo "HALT: $(head -1 "$H/HALT")" >&2; exit 75; }
 if [ ! -e "$H/grounded" ] || [ -n "$(find "$H/grounded" -mmin +"${HARNESS_MAX_GROUND_MIN:-360}" 2>/dev/null)" ]; then
   echo "not grounded: run harness/ground.sh (re-derive state from disk, not memory)" >&2

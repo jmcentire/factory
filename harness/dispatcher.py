@@ -109,7 +109,7 @@ class Dispatcher:
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
 
     def counts(self) -> tuple[int, int]:
-        receipts = len(read_lines(pathlib.Path(".harness/receipts/chain.jsonl")))
+        receipts = len(read_lines(pathlib.Path(".factory/receipts/chain.jsonl")))
         dispatches = len(read_lines(self.root / "dispatches.jsonl"))
         return receipts, dispatches
 
@@ -204,7 +204,7 @@ class Dispatcher:
 
     # -- checks ---------------------------------------------------------------
     def check_halt(self) -> None:
-        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".harness")) / "HALT"
+        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".factory")) / "HALT"
         if halt.exists() and not self.halted:
             self.halted = True
             head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"
@@ -340,7 +340,7 @@ class Dispatcher:
         # starts on a dirty tree (preflight infra, config the run itself needs), and
         # comparing to clean re-fires on that same pre-existing dirt every cycle —
         # batch0 burned five orchestrator wakes on exactly this (upstream finding #2).
-        # Harness bookkeeping is excluded outright: .harness/ churn is the detector
+        # Harness bookkeeping is excluded outright: .factory/ churn is the detector
         # watching its own notes and calling it lane work.
         _, dispatches = self.counts()
         dirty_now = {ln[3:] for ln in

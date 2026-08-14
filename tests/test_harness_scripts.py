@@ -554,7 +554,7 @@ demonstrated and the assertion is shown to discriminate met from unmet.
 
 
 def mkrun(tmp: Path, spec: str, strat: str | None, contract: bool = True) -> Path:
-    art = tmp / ".harness" / "runs" / "r1" / "artifacts"
+    art = tmp / ".factory" / "runs" / "r1" / "artifacts"
     art.mkdir(parents=True)
     (art / "product-specification.md").write_text(spec)
     if strat is not None:
@@ -612,7 +612,7 @@ def test_phase1_gate_override_is_receipted_not_silent(tmp_path: Path) -> None:
     tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False)
     r = p1(tmp, PHASE1_ALLOW_GAPS="1")
     assert r.returncode == 0
-    events = tmp / ".harness" / "runs" / "r1" / "events.jsonl"
+    events = tmp / ".factory" / "runs" / "r1" / "events.jsonl"
     rec = read_chain(events)[-1]
     assert rec["gate"] == "phase1" and rec["override"] is True and rec["failures"] == 1
 
@@ -623,8 +623,8 @@ def test_phase1_gate_override_is_receipted_not_silent(tmp_path: Path) -> None:
 
 
 def mkproj(tmp: Path, *includes: str) -> Path:
-    (tmp / ".harness").mkdir(parents=True, exist_ok=True)
-    (tmp / ".harness" / "projection.conf").write_text(
+    (tmp / ".factory").mkdir(parents=True, exist_ok=True)
+    (tmp / ".factory" / "projection.conf").write_text(
         "".join(f"tester-include: {i}\n" for i in includes))
     return tmp
 
@@ -729,7 +729,7 @@ def test_mutate_kills_a_real_mutation(tmp_path: Path) -> None:
 
 
 def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
-    root = tmp_path / ".harness" / "runs" / "r1"
+    root = tmp_path / ".factory" / "runs" / "r1"
     (root / "wakes").mkdir(parents=True)
     (root / "artifacts").mkdir(parents=True)
     (root / "run.json").write_text(
@@ -988,7 +988,7 @@ def test_mutate_named_test_accepts_kill_on_named_oracle(tmp_path: Path) -> None:
 
 
 def test_dead_auditor_writes_blocking_event_not_injection(tmp_path: Path) -> None:
-    root = tmp_path / ".harness" / "runs" / "r1"
+    root = tmp_path / ".factory" / "runs" / "r1"
     (root / "wakes").mkdir(parents=True)
     (root / "artifacts").mkdir(parents=True)
     (root / "run.json").write_text(
@@ -1920,3 +1920,216 @@ def test_mutate_gate2_not_fooled_by_error_in_configuration_hook(tmp_path: Path) 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout, r.stdout
     assert "INVALID" not in r.stdout, r.stdout
+
+
+# --- r6 fix: the scan-backward foot anchor (post-foot plugin output) ------------------
+
+
+def test_receipt_post_foot_coverage_line_does_not_mask_real_foot(tmp_path: Path) -> None:
+    """r6 HIGH false-rejection (a regression the r5 last-line anchor introduced): a
+    coverage/telemetry plugin prints a non-summary line AFTER the real pytest foot
+    (pytest_unconfigure fires at session teardown, after summary_stats). The r5
+    'foot = last non-empty line' anchor read the 'Coverage: 100%' line as the foot,
+    missed the real '2 passed in 0.02s' foot, and recorded test_count=None for a real
+    passing run — misclassifying a test runner as 'not a test runner'. Scan BACKWARD for
+    the last line matching a foot pattern (keyword-bearing OR vacuous foot): the coverage
+    line matches no foot pattern, so the real foot is found and test_count=2."""
+    tree = tmp_path / "covtree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "conftest.py").write_text(
+        "def pytest_unconfigure(config):\n"
+        "    print('Coverage: 100% (0 missing)')\n")
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_a():\n    assert val() == 42\n\n"
+        "def test_b():\n    assert val() == 42\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 2, chain[-1]
+    assert chain[-1]["pass_count"] == 2, chain[-1]
+
+
+def test_receipt_xfail_only_with_fake_stdout_under_s_is_one_not_five(
+    tmp_path: Path,
+) -> None:
+    """r7 HIGH false-acceptance (an over-correction the r6 scan-backward anchor
+    introduced): an xfail-only run's real foot '1 xfailed in 0.02s' matched NONE of the
+    r6 foot patterns (passed|failed|error | skipped|deselected | no tests ran), so
+    scan-backward skipped the real foot and fell back to the test's OWN mid-run stdout
+    '5 passed in 0.1s' (printed under -s) — recording test_count=5 for a run that was
+    really 1 xfailed, 0 passed. This re-admitted the exact test-stdout the anchor exists
+    to exclude, and it needs no plugin/conftest (so it is NOT the disclaimed forgery
+    residual). Completing the keyword set with xfailed|xpassed makes the real xfail foot
+    the last keyword-bearing line, so scan-backward anchors on it; xfailed counts as an
+    EXECUTED test (test_count=1), pass_count stays 0 (xfail is not a pass)."""
+    tree = tmp_path / "xftree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_xfail_print.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.xfail(reason='expected to fail')\n"
+        "def test_xfail_prints_fake():\n"
+        "    print('5 passed in 0.1s')\n"
+        "    assert False\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_xfail_print.py -s --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 1, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_xfail_only_no_print_is_one_not_none(tmp_path: Path) -> None:
+    """r7 MEDIUM false-rejection: a pure xfail-only run (no printing) read test_count=None
+    because the real foot '1 xfailed in 0.02s' matched none of the r6 foot patterns, so the
+    foot stayed empty and the receipt misclassified a real test runner as 'genuinely not a
+    test runner'. An xfail-only run executed a test — it is NOT 'no tests ran' — so the >0
+    gate must see test_count=1, not None (skip) and not 0 (reject). xfailed counts toward
+    test_count; pass_count stays 0."""
+    tree = tmp_path / "xfotree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_xfail_only.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.xfail(reason='expected to fail')\n"
+        "def test_xfail_only():\n"
+        "    assert False\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_xfail_only.py -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 1, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_xpass_only_is_one_not_none(tmp_path: Path) -> None:
+    """r7 symmetric: an xpass-only run (xfail marker on a test that unexpectedly passes)
+    has the real foot '1 xpassed in 0.02s', which the r6 set also missed. xpassed is an
+    EXECUTED test -> test_count=1. pass_count stays 0: xpassed is a pass only under
+    non-strict xfail (strict mode treats it as a failure), and the receipt does not
+    adjudicate strict-vs-non-strict — that is the promotion gate's oracle-adequacy call."""
+    tree = tmp_path / "xptree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_xpass_only.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.xfail(reason='expected to fail')\n"
+        "def test_xpass_only():\n"
+        "    assert True\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_xpass_only.py -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 1, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_mixed_skipped_deselected_vacuous_is_zero_not_none(
+    tmp_path: Path,
+) -> None:
+    """r8 MEDIUM false-acceptance (pre-existing, surfaced by testing the r7 keyword-set
+    completeness claim): a vacuous 0-test run whose foot MIXES skipped and deselected
+    ('2 skipped, 1 deselected in 0.00s' — 0 executed, exit 0) read test_count=None because
+    vacuous_skip_re required ' in ' directly after the FIRST keyword and the mixed foot has
+    ', 1 deselected in' after 'skipped'. None lets the >0 gate skip it as 'not a test runner'
+    and accept a vacuous build — the exact false-acceptance the gate exists to reject, and a
+    violation of the receipt's own 'vacuous -> 0, NOT null' contract. The fix allows a
+    comma-separated skipped/deselected tail before ' in Xs'. A foot that STARTS with an
+    executed keyword ('1 passed, 1 skipped') is NOT vacuous (start-anchored), so this stays
+    a count, not a 0."""
+    tree = tmp_path / "mixtree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_mix.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.skip(reason='s1')\n"
+        "def test_s1():\n    assert False\n"
+        "@pytest.mark.skip(reason='s2')\n"
+        "def test_s2():\n    assert False\n"
+        "def test_unmarked():\n    assert True\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_mix.py -q -k 's1 or s2' --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_warnings_only_foot_is_zero_not_none(tmp_path: Path) -> None:
+    """r9 HIGH false-acceptance (the gap that ended mix-enumeration): a run that collected ZERO
+    tests but emitted a warning prints the foot '1 warning in 0.00s' INSTEAD OF 'no tests ran
+    in 0.00s'. Under the enumerated vacuous patterns this foot matched NONE of keyword_re
+    (no executed keyword), vacuous_foot_re ('no tests ran'), or vacuous_skip_re
+    (skipped/deselected only) -> foot not found -> vacuous_coll did not fire (no 'collected 0
+    items' / '0 selected' under -q) -> test_count=None -> the >0 gate skipped it as 'not a test
+    runner' and accepted a 0-test build. The exact false-acceptance the gate exists to reject.
+    The structural fix classifies by the executed-keyword PROPERTY: a foot carrying a pytest
+    keyword (warning) but NONE of passed/failed/error/xfailed/xpassed is vacuous -> 0, however
+    the non-executed counts combine. A 0-test run is now REJECTED, not skipped."""
+    tree = tmp_path / "warntree"
+    (tree / "tests").mkdir(parents=True)
+    # conftest emits a warning at import; no test file is collected -> 0 tests, 1 warning.
+    (tree / "tests" / "conftest.py").write_text(
+        "import warnings\nwarnings.warn('from conftest', UserWarning)\n")
+    (tree / "tests" / "not_a_test.py").write_text("x = 1\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/ -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_mixed_skipped_and_warning_vacuous_is_zero_not_none(
+    tmp_path: Path,
+) -> None:
+    """r9 latent false-acceptance (the mix that proved enumeration is bottomless): a run whose
+    foot MIXES a non-executed count with a warning ('2 skipped, 1 warning in 0.00s' — 0
+    executed, exit 0). The r8 vacuous_skip_re tail absorbed only a comma-separated
+    skipped/deselected mix; '1 warning' in the tail broke the match, so the foot matched
+    nothing and read test_count=None -> the >0 gate skipped it and accepted a vacuous build.
+    Each round of mix-enumeration exposed the next non-executed keyword combo; the structural
+    fix ends the loop by classifying the property (no executed keyword -> vacuous) rather than
+    enumerating each combination. A foot that carries an executed keyword ('1 passed, 1
+    warning') is NOT vacuous and stays a count (see test_receipt_pass_warn_keeps_count)."""
+    tree = tmp_path / "skipwarntree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "conftest.py").write_text(
+        "import warnings\nwarnings.warn('from conftest', UserWarning)\n")
+    (tree / "tests" / "test_s.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.skip(reason='s1')\n"
+        "def test_s1():\n    assert False\n"
+        "@pytest.mark.skip(reason='s2')\n"
+        "def test_s2():\n    assert False\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_s.py -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_pass_warn_keeps_count_not_vacuous(tmp_path: Path) -> None:
+    """r9 negative control for the structural fix: a foot that MIXES an executed keyword with a
+    warning ('1 passed, 1 warning in 0.00s') must stay a COUNT (test_count=1), not be swept into
+    the vacuous-0 branch. The structural classification keys on the PRESENCE of an executed
+    keyword (passed/failed/error/xfailed/xpassed); '1 passed' is executed, so the foot counts
+    regardless of the trailing warning. This is the discrimination that makes 'vacuous iff no
+    executed keyword' safe: it rejects the 0-test warnings-only foot without rejecting a real
+    passing run that merely emitted a warning. (A test whose body warns is itself an executed
+    passing test, so this is the common 'a passing test raised a deprecation' shape.)"""
+    tree = tmp_path / "passwarntree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_pw.py").write_text(
+        "import warnings\n"
+        "def test_p():\n    assert True\n"
+        "def test_w():\n    warnings.warn('x', UserWarning)\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_pw.py -q --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 2, chain[-1]
+    assert chain[-1]["pass_count"] == 2, chain[-1]

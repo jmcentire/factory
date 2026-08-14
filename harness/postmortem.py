@@ -56,7 +56,7 @@ def lane_usage(workspace: pathlib.Path) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--root", required=True, help=".harness/runs/<run>")
+    p.add_argument("--root", required=True, help=".factory/runs/<run>")
     args = p.parse_args()
     root = pathlib.Path(args.root)
     run_file = root / "run.json"
@@ -68,7 +68,7 @@ def main() -> None:
     dispatches = read_jsonl(root / "dispatches.jsonl")
     injections = read_jsonl(root / "injections.jsonl")
     wakes = read_jsonl(root / "wakes" / "receipts.jsonl")
-    receipts = read_jsonl(pathlib.Path(".harness/receipts/chain.jsonl"))
+    receipts = read_jsonl(pathlib.Path(".factory/receipts/chain.jsonl"))
     verdict_file = root / "endgame" / "verdict.json"
     verdict = json.loads(verdict_file.read_text()) if verdict_file.exists() else None
 
@@ -100,7 +100,7 @@ def main() -> None:
     w(f"- injections: {len(injections)} total; validator→lanes {len(build)}, "
       f"coordination (dispatcher/orchestrator→validator) {len(coord)}")
     w(f"- orchestrator wakes: {len(wakes)} (projection receipts in wakes/receipts.jsonl)")
-    w(f"- receipts in chain: {len(receipts)} (.harness/receipts/chain.jsonl)")
+    w(f"- receipts in chain: {len(receipts)} (.factory/receipts/chain.jsonl)")
     w("")
     # Silent-clear detection: every blocking_written should have a matching
     # blocking_consumed (consume_block.sh receipts the event it cleared). A

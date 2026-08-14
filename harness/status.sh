@@ -15,7 +15,7 @@ set -uo pipefail
 RUN="${1:?usage: status.sh <run> [--repo <path>]}"; shift || true
 REPO="$PWD"
 while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2 ;; *) shift ;; esac; done
-H="${HARNESS_DIR:-.harness}"; ROOT="$REPO/$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$REPO/$H/runs/$RUN"
 [ -d "$ROOT" ] || { echo "no run '$RUN' under $REPO/$H/runs" >&2; exit 64; }
 
 say() { printf '%s\n' "$*"; }
@@ -82,5 +82,5 @@ except Exception: print('none')" 2>/dev/null)"
 # --- the target repo's own truth --------------------------------------------
 say ""; say "## target repo"
 say "  branch $(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null) @ $(git -C "$REPO" log --oneline -1 2>/dev/null | cut -c1-56)"
-dirty=$(git -C "$REPO" status --porcelain 2>/dev/null | grep -vc '^?? \.harness/'); dirty=${dirty:-0}
+dirty=$(git -C "$REPO" status --porcelain 2>/dev/null | grep -vc '^?? \.factory/'); dirty=${dirty:-0}
 say "  uncommitted (excluding run state): $dirty"

@@ -8,7 +8,7 @@
 set -euo pipefail
 RUN="${1:?usage: orchestrator_wake.sh <run> <trigger-json>}"
 TRIGGER="${2:?trigger json}"
-H="${HARNESS_DIR:-.harness}"; ROOT="$H/runs/$RUN"
+H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
 D="$(cd "$(dirname "$0")" && pwd)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 PROJ="$ROOT/wakes/$TS.projection.md"

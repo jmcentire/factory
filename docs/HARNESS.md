@@ -246,7 +246,7 @@ point, Require-class work holding while they're away is also the point.
 
 ## Scripts
 
-Layout: `harness/` for the scripts, `.harness/` for state (receipts, HALT, grounding
+Layout: `harness/` for the scripts, `.factory/` for state (receipts, HALT, grounding
 marker, registries, `reconcile.d/`), `DIRECTIVES/` as a git repo for the ledger (signed
 chain `ledger.jsonl` + agent-appendable `provisional.jsonl` side chain). All are
 dependency-free (bash + python3 + git):

@@ -19,7 +19,7 @@ set -uo pipefail
 RUN="${1:?usage: phase1_gate.sh <run> [--repo <path>]}"; shift || true
 REPO="$PWD"
 while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2 ;; *) shift ;; esac; done
-H="${HARNESS_DIR:-.harness}"; ROOT="$REPO/$H/runs/$RUN"; ART="$ROOT/artifacts"
+H="${HARNESS_DIR:-.factory}"; ROOT="$REPO/$H/runs/$RUN"; ART="$ROOT/artifacts"
 [ -d "$ART" ] || { echo "phase1: no artifacts dir at $ART" >&2; exit 64; }
 
 SPEC="$ART/product-specification.md"
