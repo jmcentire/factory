@@ -679,6 +679,74 @@ def test_promotion_advisory_when_candidate_receipt_absent() -> None:
     assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
 
 
+# --------------------------------------------------------------------------
+# Gate N (slice 4) — observation-receipt binding. The self-reported oracle/determinism/
+# flake fields must match the seam-attested receipt values, or the run does not advance.
+# --------------------------------------------------------------------------
+
+
+def test_promotion_rejects_oracle_binding_mismatch() -> None:
+    """oracle_adequate is self-reported, but it binds to the mutation receipt: the agent
+    claims the oracle was adequate while the receipt attests it was not (the named oracle
+    survived). A contradiction is a hard block — the run does not advance."""
+    obs = replace(
+        _observation("standard-surface"),
+        oracle_receipt="M-1",
+        oracle_receipt_adequate=False,  # receipt attests NOT adequate
+    )  # oracle_adequate defaults True -> contradicts the receipt
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "oracle-binding-mismatch:standard-surface" in decision.reasons
+
+
+def test_promotion_rejects_flake_binding_mismatch() -> None:
+    """deterministic/flake_count/retry_count bind to the flake-detection receipt. A
+    self-reported value that contradicts the attested receipt is a hard block, per field."""
+    obs = replace(
+        _observation("standard-surface"),
+        flake_receipt="F-1",
+        flake_receipt_deterministic=False,  # receipt attests nondeterministic
+        flake_receipt_flake_count=3,         # receipt attests 3 flakes
+        flake_receipt_retry_count=1,          # receipt attests 1 retry
+    )  # defaults: deterministic=True, flake_count=0, retry=0 -> all contradict
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "flake-binding-mismatch:standard-surface:deterministic" in decision.reasons
+    assert "flake-binding-mismatch:standard-surface:flake_count" in decision.reasons
+    assert "flake-binding-mismatch:standard-surface:retry_count" in decision.reasons
+
+
+def test_promotion_accepts_when_observation_matches_receipts() -> None:
+    """When the self-reported values equal the attested receipt values the bindings hold
+    and the decision proceeds on its other evidence — no binding-mismatch hard reason."""
+    obs = replace(
+        _observation("standard-surface"),
+        oracle_receipt="M-1",
+        oracle_receipt_adequate=True,        # matches oracle_adequate=True
+        flake_receipt="F-1",
+        flake_receipt_deterministic=True,    # matches deterministic=True
+        flake_receipt_flake_count=0,         # matches flake_count=0
+        flake_receipt_retry_count=0,         # matches retry=0
+    )
+    request = _request(observations=(obs,))
+    decision = decide_promotion(request, _roster(), _profile())
+    assert not any(r.startswith("oracle-binding-mismatch") for r in decision.reasons)
+    assert not any(r.startswith("flake-binding-mismatch") for r in decision.reasons)
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
+def test_promotion_observation_advisory_when_receipts_absent() -> None:
+    """The migration window: with no oracle/flake receipts the observation binding is
+    advisory — no hard reason, and the self-reported values stand (audited postmortem
+    against the chain). A clean request still promotes."""
+    request = _request()  # no receipt fields set
+    decision = decide_promotion(request, _roster(), _profile())
+    assert not any("binding-mismatch" in r for r in decision.reasons)
+    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+
+
 def test_cosmetic_oracle_and_live_gaps_are_reported_and_promoted() -> None:
     request = _request(
         disturbed_surface_ids=("cosmetic-surface",),

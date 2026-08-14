@@ -117,6 +117,15 @@ def _as_int(value: Any, *, field_name: str, default: int = 0) -> int:
         raise PromotionError(f"{field_name!r} must be an integer, got {value!r}") from exc
 
 
+def _as_int_opt(value: Any) -> int | None:
+    """An optional attested integer: None when missing or non-integral (advisory), never
+    raising — a malformed attested value is an absence the postmortem can flag, not a
+    parse error that crashes the gate. bool is excluded (it is an int subclass)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 def _is_sha256(value: str) -> bool:
     return bool(_SHA256_RE.fullmatch(value))
 
@@ -194,6 +203,15 @@ class SurfaceObservation:
     flake_count: int = 0
     automatic_retry_count: int = 0
     quarantine: Quarantine | None = None
+    # Gate N (slice 4): seam-attested receipt bindings for the self-reported fields.
+    # The seam reads the mutation verdict (oracle) and the flake-detection receipt and
+    # attests these; the agent self-reports but cannot contradict them. See decide_promotion.
+    oracle_receipt: str = ""
+    oracle_receipt_adequate: bool | None = None
+    flake_receipt: str = ""
+    flake_receipt_deterministic: bool | None = None
+    flake_receipt_flake_count: int | None = None
+    flake_receipt_retry_count: int | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> SurfaceObservation:
@@ -219,6 +237,20 @@ class SurfaceObservation:
                 if isinstance(quarantine_raw, Mapping)
                 else None
             ),
+            oracle_receipt=str(raw.get("oracle_receipt", "")),
+            oracle_receipt_adequate=(
+                raw.get("oracle_receipt_adequate")
+                if isinstance(raw.get("oracle_receipt_adequate"), bool)
+                else None
+            ),
+            flake_receipt=str(raw.get("flake_receipt", "")),
+            flake_receipt_deterministic=(
+                raw.get("flake_receipt_deterministic")
+                if isinstance(raw.get("flake_receipt_deterministic"), bool)
+                else None
+            ),
+            flake_receipt_flake_count=_as_int_opt(raw.get("flake_receipt_flake_count")),
+            flake_receipt_retry_count=_as_int_opt(raw.get("flake_receipt_retry_count")),
         )
 
 
@@ -455,6 +487,8 @@ def promotion_attestation_subject(
                 "deterministic": observation.deterministic,
                 "flake_count": observation.flake_count,
                 "automatic_retry_count": observation.automatic_retry_count,
+                "oracle_receipt": observation.oracle_receipt,
+                "flake_receipt": observation.flake_receipt,
                 "quarantine": (
                     {
                         **observation.quarantine.authority_body(observation.surface_id),
@@ -828,6 +862,37 @@ def decide_promotion(
         if current_observation is None:
             gaps[surface_id].append("surface-observation-missing")
             continue
+
+        # Gate N (slice 4): the self-reported oracle/determinism/flake fields bind to
+        # seam-attested receipts. The seam (a script) reads the mutation verdict and the
+        # flake-detection receipt and attests the values; the agent self-reports but cannot
+        # contradict the attested value — a mismatch is a hard block. Advisory (no hard
+        # reason) when a receipt is absent: the migration window. The core is pure, so it
+        # trusts the seam's attested value; the postmortem re-reads the chain to audit it.
+        if current_observation.oracle_receipt and \
+                current_observation.oracle_receipt_adequate is not None and \
+                bool(current_observation.oracle_adequate) != \
+                bool(current_observation.oracle_receipt_adequate):
+            hard_reasons.append(f"oracle-binding-mismatch:{surface_id}")
+        if current_observation.flake_receipt:
+            if current_observation.flake_receipt_deterministic is not None and \
+                    bool(current_observation.deterministic) != \
+                    bool(current_observation.flake_receipt_deterministic):
+                hard_reasons.append(
+                    f"flake-binding-mismatch:{surface_id}:deterministic"
+                )
+            if current_observation.flake_receipt_flake_count is not None and \
+                    current_observation.flake_count != \
+                    current_observation.flake_receipt_flake_count:
+                hard_reasons.append(
+                    f"flake-binding-mismatch:{surface_id}:flake_count"
+                )
+            if current_observation.flake_receipt_retry_count is not None and \
+                    current_observation.automatic_retry_count != \
+                    current_observation.flake_receipt_retry_count:
+                hard_reasons.append(
+                    f"flake-binding-mismatch:{surface_id}:retry_count"
+                )
 
         if not current_observation.oracle_adequate:
             gaps[surface_id].append("oracle-silent")
