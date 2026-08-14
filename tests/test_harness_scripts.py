@@ -1651,3 +1651,272 @@ def test_mutate_named_test_conftest_crash_is_unattributed(tmp_path: Path) -> Non
     assert r.returncode == 3, r.stdout + r.stderr
     assert "KILLED-UNATTRIBUTED" in r.stdout, r.stdout
     assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout
+
+
+# --- r4 fixes: real-pytest probes for the six false-rejection breaks ----------------
+
+
+def test_receipt_real_pytest_failed_first_order_is_counted(tmp_path: Path) -> None:
+    """r4 HIGH false-rejection: the foot anchor required `passed` at the line start,
+    but pytest 9 orders failures FIRST ('1 failed, 2 passed in 0.03s'), so any run
+    with a failure yielded test_count=None — every failing run misread as 'not a test
+    runner' and the load-bearing >0 gate inert against it. Match the foot by keyword +
+    'in Ns' and extract each count independently, so failed-first parses."""
+    tree = tmp_path / "ftree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_pass_a():\n    assert val() == 42\n\n"
+        "def test_pass_b():\n    assert val() == 42\n\n"
+        "def test_fail():\n    assert val() == 99\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py --color=yes"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness"), "TERM": "xterm-256color"})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 3, chain[-1]
+    assert chain[-1]["pass_count"] == 2, chain[-1]
+
+
+def test_receipt_vacuous_phrase_in_test_stdout_under_s_is_not_zero(
+    tmp_path: Path,
+) -> None:
+    """r4 HIGH false-rejection: the unanchored vacuous search matched the phrase
+    'no tests ran' / 'collected 0 items' inside a test's OWN stdout (under -s),
+    forcing test_count=0 on a real PASSING run — the >0 gate rejecting a green build,
+    the opposite of the false-acceptance vacuous-first was added to close. Anchor the
+    marker to pytest's terminal signal (timing-suffixed foot / end-of-line collection):
+    'no tests ran today' lacks 'in Xs' and must NOT trigger vacuous."""
+    tree = tmp_path / "stree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_prints_vacuous_phrase():\n"
+        "    print('no tests ran today, all good')\n"
+        "    print('collected 0 items from cache')\n"
+        "    assert val() == 42\n\n"
+        "def test_real_pass():\n    assert val() == 42\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py -s --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 2, chain[-1]
+    assert chain[-1]["pass_count"] == 2, chain[-1]
+
+
+def test_receipt_vacuous_phrase_in_captured_stdout_does_not_mask_failure(
+    tmp_path: Path,
+) -> None:
+    """r4 MEDIUM: in default capture, a failing test's captured stdout (containing
+    'no tests ran in submodule') is printed in the FAILURES section; the unanchored
+    vacuous search matched it and forced test_count=0, hiding a real '1 failed, 1
+    passed' behind a vacuous classification (the ledger lying even though exit=1
+    still rejects). The anchored marker ('no tests ran in <N>s') does not match
+    'in submodule', so the real summary parses."""
+    tree = tmp_path / "ctree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_fails_and_prints_vacuous():\n"
+        "    print('no tests ran in submodule')\n    assert val() == 99\n\n"
+        "def test_real_pass():\n    assert val() == 42\n")
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py --color=no"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 2, chain[-1]
+    assert chain[-1]["pass_count"] == 1, chain[-1]
+
+
+def test_mutate_gate2_not_fooled_by_terminal_summary_hook(tmp_path: Path) -> None:
+    """r4 LOW: GATE 2's grep `[0-9]+ (failed|error)` matched a
+    pytest_terminal_summary hook line ('1 failed to archive coverage artifacts')
+    printed just before the foot in a GREEN run, returning INVALID despite clean_rc=0
+    — blocking mutation testing on a tree with such a hook. Anchor the grep to
+    summary syntax (a comma or ' in ' after the keyword) so a non-failure hook line
+    does not match; the clean baseline passes and the mutation is correctly KILLED."""
+    tree = mkpkg(tmp_path / "tree")
+    (tree / "tests" / "conftest.py").write_text(
+        "def pytest_terminal_summary(terminalreporter, exitstatus, config):\n"
+        "    terminalreporter.write_line('1 failed to archive coverage artifacts')\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "hk", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout, r.stdout
+    assert "INVALID" not in r.stdout, r.stdout
+
+
+def test_mutate_named_test_open_bracket_in_param_id(tmp_path: Path) -> None:
+    """r4 HIGH: a parametrize string id with a literal '[' (pytest 9 does NOT escape
+    it) left bracket depth >0 at the real ' - ' separator, so the depth-scan appended
+    the reason to the nodeid and --named-test rejected the EXACT oracle that failed as
+    KILLED-OUTSIDE-ORACLE. Prefix-matching the known named-test against the raw FAILED
+    line sidesteps the unparseable nodeid: the oracle's kill is attributed to it."""
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def guarded():\n    return 'safe'\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib, pytest\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import guarded\n\n"
+        "@pytest.mark.parametrize('x', ['bracket[open'])\n"
+        "def test_g(x):\n    assert guarded() == 'safe'\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "ob", str(patch),
+             "--src", str(tree), "--tests", str(tree),
+             "--named-test", "tests/test_x.py::test_g[bracket[open]"],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w"),
+                                     "PYTEST_ADDOPTS": "--color=yes", "TERM": "xterm-256color"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout, r.stdout
+    assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout
+
+
+def test_mutate_named_test_close_bracket_and_dash_in_param_id(tmp_path: Path) -> None:
+    """r4 HIGH: a parametrize id with a literal ']' followed by ' - ' ('a]b - c')
+    closed bracket depth prematurely to 0, so the depth-scan mistook the ' - ' INSIDE
+    the id for the pytest separator and truncated the nodeid; --named-test rejected
+    the exact oracle that failed as KILLED-OUTSIDE-ORACLE. Prefix-matching the known
+    named-test against the raw FAILED line (the known string includes the id's ' - ')
+    attributes the kill correctly."""
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def guarded():\n    return 'safe'\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib, pytest\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import guarded\n\n"
+        "@pytest.mark.parametrize('x', ['a]b - c'])\n"
+        "def test_g(x):\n    assert guarded() == 'safe'\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "cb", str(patch),
+             "--src", str(tree), "--tests", str(tree),
+             "--named-test", "tests/test_x.py::test_g[a]b - c]"],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w"),
+                                     "PYTEST_ADDOPTS": "--color=yes", "TERM": "xterm-256color"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout, r.stdout
+    assert "OUTSIDE-ORACLE" not in r.stdout, r.stdout
+
+
+# --- r5 fixes: real-pytest probes for the three breaks that survived r4 ----------------
+
+
+def test_receipt_all_deselected_vacuous_is_zero_not_none(tmp_path: Path) -> None:
+    """r5 MEDIUM false-acceptance: a run that deselects EVERY test (-k NoSuchName /
+    -m NoSuchMarker / --deselect all) prints 'collected N items / N deselected / 0
+    selected' + 'N deselected in Xs' — neither the r4 vacuous anchor ('collected 0
+    items' / 'no tests ran in Xs') nor the keyword summary regex matched, so
+    test_count stayed None. With the exit code masked to 0 (|| true), the >0 gate
+    skipped it as 'not a test runner' and ACCEPTED a 0-test build — the exact
+    false-acceptance the vacuous branch exists to close. The '0 selected' token
+    (only present when zero tests will run) and the 'N deselected in Xs' keyword-less
+    foot now anchor it as test_count=0, which the >0 gate rejects."""
+    tree = tmp_path / "dtree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_a1():\n    assert val() == 42\n\n"
+        "def test_a2():\n    assert val() == 42\n")
+    # -k NoSuchName deselects all; || true masks pytest's exit 5 to 0 (the dangerous
+    # case: a 0-test build that looks green to an exit-only check).
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py -k NoSuchName --color=yes || true"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness"), "TERM": "xterm-256color"})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_receipt_skip_only_with_fake_summary_stdout_is_zero_not_five(
+    tmp_path: Path,
+) -> None:
+    """r5 HIGH false-acceptance: a skip-only run's real foot ('1 skipped in 0.02s') has
+    no passed/failed/error keyword, so 'take the last regex match ANYWHERE' fell back to
+    a test's OWN stdout line '5 passed in 0.1s' (printed under -s before pytest.skip()),
+    fabricating test_count=5 for a run that executed ZERO tests — defeating the
+    load-bearing >0 gate. Anchoring the foot to its POSITION (the last non-empty line)
+    structurally excludes test stdout (it prints during the run, before the terminal
+    phase), and the keyword-less skip foot is classified vacuous (test_count=0), not
+    None, so the >0 gate rejects the unverified build instead of skipping it."""
+    tree = tmp_path / "stree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "__init__.py").write_text("def val():\n    return 42\n")
+    (tree / "tests").mkdir()
+    (tree / "tests" / "test_x.py").write_text(
+        "import sys, pathlib, pytest\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'src'))\n"
+        "from pkg import val\n\n"
+        "def test_dyn_skip():\n"
+        "    print('5 passed in 0.1s')\n"
+        "    pytest.skip('dynamic skip')\n")
+    # The fake '5 passed in 0.1s' is streamed under -s; the real foot is '1 skipped'.
+    run(["bash", str(HARNESS / "receipt.sh"), "bash", "-c",
+         f"cd {tree} && python3 -m pytest tests/test_x.py -q -s --color=yes"],
+        tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness"), "TERM": "xterm-256color"})
+    chain = read_chain(tmp_path / ".harness" / "receipts" / "chain.jsonl")
+    assert chain[-1]["test_count"] == 0, chain[-1]
+    assert chain[-1]["pass_count"] == 0, chain[-1]
+
+
+def test_mutate_gate2_not_fooled_by_error_in_configuration_hook(tmp_path: Path) -> None:
+    """r5 MEDIUM false-rejection: the r4 GATE 2 grep anchor '(,| in )' matched a
+    pytest_terminal_summary hook line '1 error in configuration loading' via the
+    ' in ' branch, INVALID-ing a genuinely GREEN rc=0 baseline ('1 passed in 0.02s')
+    and blocking mutation testing on any tree with such a hook. The grep was fully
+    redundant with the exit-code guard (in -q mode pytest prints no lowercase
+    'N failed/error in Xs' timing line; the short-summary is uppercase, which the
+    case-sensitive grep never matched), so its only independent effect was
+    false-rejection. Relying on clean_rc alone, the green baseline proceeds and the
+    killing mutation is correctly KILLED."""
+    tree = mkpkg(tmp_path / "tree")
+    (tree / "tests" / "conftest.py").write_text(
+        "def pytest_terminal_summary(terminalreporter, exitstatus, config):\n"
+        "    terminalreporter.write_line(\n"
+        "        '1 error in configuration loading (deprecation: legacy adapter)')\n")
+    patch = tmp_path / "p.py"
+    patch.write_text(
+        "import sys,pathlib\n"
+        "p=pathlib.Path(sys.argv[1])/'src/pkg/__init__.py'; s=p.read_text()\n"
+        "assert \"return 'safe'\" in s, 'anchor'\n"
+        "p.write_text(s.replace(\"return 'safe'\", \"return 'broken'\"))\n")
+    r = run(["bash", str(HARNESS / "mutate.sh"), "ec", str(patch),
+             "--src", str(tree), "--tests", str(tree)],
+            cwd=tmp_path, env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "KILLED" in r.stdout, r.stdout
+    assert "INVALID" not in r.stdout, r.stdout

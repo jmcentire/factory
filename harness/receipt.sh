@@ -66,32 +66,52 @@ with open(chain, "a+") as f:
         m = re.search(pat, text)
         return int(m.group(1)) if m else 0
     test_count = pass_count = None
-    # The pytest short-summary line is "N passed[, M failed[, K errors]] in Xs".
-    # VACUOUS-FIRST: if a vacuous marker ("no tests ran" / "no tests collected" /
-    # "collected 0 items") is present ANYWHERE, classify test_count=0 BEFORE looking for
-    # a summary. A vacuous run has no real "N passed" foot, so any "N passed in Xs" match
-    # — before OR after the marker — is a stray/forgery and would otherwise inflate the
-    # run to test_count>0 and pass the very >0 gate it exists to reject (the dangerous
-    # false-acceptance direction; "last match wins" only helps when a real summary
-    # FOLLOWS the stray, which a vacuous run never has). Taking the vacuous marker as
-    # authoritative is fail-closed: a real passing run never prints "no tests ran" (it is
-    # pytest's terminal signal for 0 tests), so this never false-rejects a real run; it
-    # only rejects when the run really was vacuous (or a forgery claimed it was, which
-    # fails closed). Residual: a forged "N passed in Xs" with NO vacuous marker (the
-    # rogue suppresses "no tests ran") is indistinguishable from a real summary from the
-    # log alone — authenticating the command (not its log) is a higher gate's job.
-    if re.search(rb'no tests ran|no tests collected|collected 0 items', log_clean):
+    # pytest's terminal foot is the LAST non-empty line of the log. Every test's own stdout
+    # (under -s) prints DURING the run, before the terminal phase, so a test that prints
+    # "5 passed in 0.1s" can never be the foot — the real foot follows it. The r5 lesson:
+    # "take the last regex match ANYWHERE in the log" fell back to a test's own summary-shaped
+    # stdout when the real foot was keyword-less (a skip-only run), and fabricated
+    # test_count=5 for a run that executed zero tests — defeating the load-bearing >0 gate
+    # this receipt exists to enforce. Anchor to the foot's POSITION (last line), not to a
+    # content regex matched anywhere; the content is confirmation, the position is the
+    # structural fact. (Residual: a trylast pytest_terminal_summary hook that prints after
+    # the foot moves the last line off it — a real run then reads as None; benign for a
+    # passing build, accepted for the right reason on the wrong line. A 0-test run there is
+    # exotic-squared and still caught by the collection-line anchor below.)
+    lines = [ln for ln in log_clean.splitlines() if ln.strip()]
+    foot = lines[-1] if lines else b''
+    # VACUOUS: collected but executed no verifying test. The >0 gate must REJECT this
+    # (test_count=0), not skip it as "not a test runner" (None) — None lets a 0-test build
+    # through, the exact false-acceptance this branch closes. Four terminal shapes, all
+    # anchored to pytest's real signals, never an unanchored substring (the r4 lesson:
+    # `re.search(rb'no tests ran', ...)` anywhere matches the phrase inside a test's OWN
+    # stdout). The collection line ("collected 0 items" / "collected N items / 0 selected")
+    # precedes the foot, so it is searched in the body; the keyword-less feet ("no tests ran
+    # in Xs", "N skipped in Xs", "N deselected in Xs") ARE the foot, so they are matched at
+    # the last line. The "0 selected" token only appears when zero tests will run — a mixed
+    # run prints "M selected" with M>0 — so it is a clean deselect-all marker that
+    # -k NoSuchName, -m NoSuchMarker and --deselect all share. The keyword-less skip/
+    # deselected feet are start-anchored (re.match on the foot) and require " in " directly
+    # after the keyword, so a mixed foot "1 passed, 1 skipped in 0.03s" (starts with
+    # "passed"; comma before "skipped") does NOT match — only an all-skipped/deselected foot.
+    vacuous_foot = re.match(rb'[ =]*no tests ran in \d[\d.]*s', foot)
+    vacuous_skip = re.match(rb'[ =]*\d+ (?:skipped|deselected) in \d[\d.]*s', foot)
+    vacuous_coll = (re.search(rb'(?:^|\n)[ =]*collected 0 items[ \t]*(?:\n|$)', log_clean)
+                    or re.search(rb'(?:^|\n)[ =]*collected \d+ items[^\n]*\b0 selected\b',
+                                 log_clean))
+    if vacuous_foot or vacuous_skip or vacuous_coll:
         test_count = pass_count = 0
     else:
-        # Tolerate the pytest '=' separator padding ("===== N passed in Xs ====="): the
-        # '[ =]*' absorbs the leading '=' run. Take the LAST match: pytest prints its
-        # summary at the foot, so a stray own-line "N passed in Xs" earlier cannot shadow
-        # the real one later.
-        matches = list(re.finditer(rb'(?:^|\n)[ =]*(\d+) passed[^\n]*\bin \d[\d.]*s\b', log_clean))
-        if matches:
-            sm = matches[-1]
-            line = sm.group(0)
-            pass_count = int(sm.group(1))
+        # Keyword-bearing foot (passed/failed/error) at the last line. pytest 9 orders
+        # failures FIRST ("1 failed, 2 passed in 0.03s"); extract each count independently
+        # by keyword so passed-first and failed-first both parse. The last-line anchor
+        # excludes a test's mid-log summary-shaped stdout (it is never the foot). The
+        # '\bin \d[\d.]*s\b' timing suffix excludes non-summary lines that merely contain a
+        # digit + "passed"; the '[ =]*' absorbs pytest's '=' separator padding.
+        m = re.match(rb'[ =]*[^\n]*\b\d+ (?:passed|failed|error)[^\n]*\bin \d[\d.]*s\b', foot)
+        if m:
+            line = m.group(0)
+            pass_count = _g(line, rb'(\d+) passed')
             test_count = pass_count + _g(line, rb'(\d+) failed') + _g(line, rb'(\d+) error')
 
     # Gate M (slice 4): changed paths machine-derived in the bash above (git diff against

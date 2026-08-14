@@ -91,7 +91,17 @@ esac
 # already proved the clean tree exits 0") is only true now that GATE 2 sees pytest's exit.
 clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
 clean_out=$(printf '%s' "$clean_full" | tail -3)
-if printf '%s' "$clean_out" | grep -qE "[0-9]+ (failed|error)" || [ "$clean_rc" -ne 0 ]; then
+# The kill condition is pytest's EXIT CODE alone — not a grep for "N failed/error" in the
+# summary. The grep was added to catch a collection crash that prints no summary line, but a
+# collection crash exits NON-ZERO (pytest 2/4/5), so clean_rc already catches every case the
+# grep did. The grep's ONLY independent effect was false-rejection: a pytest_terminal_summary
+# hook that prints a non-failure line matching "N (failed|error) in <text>" (e.g. "1 error in
+# configuration loading") matched the r4 anchor's " in " branch and INVALID-ed a genuinely
+# green rc=0 baseline (r5). In -q mode pytest prints NO lowercase "N failed/error in Xs"
+# timing line at all — the short-summary is uppercase FAILED/ERROR, which the case-sensitive
+# grep never matched — so the grep was fully redundant with clean_rc for real failures too.
+# Rely on the structured signal (exit code); keep grep only for killer EXTRACTION below.
+if [ "$clean_rc" -ne 0 ]; then
   verdict "INVALID (baseline is not green — fix the false red first)"
   printf '%s\n' "$clean_out" | sed 's/^/    /'
   exit 3
@@ -147,14 +157,14 @@ fi
 out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
 # A conftest.py SyntaxError (or any collection-time crash) exits non-zero with NO
 # "N failed/error" summary line — pytest prints "ImportError while loading conftest"
-# and a traceback, then stops. The grep below misses it and the run falls through to
-# SURVIVED, reading a suite the mutation broke as one that passed every test. The exit
-# code cannot be paraphrased, so the kill condition is a failure summary OR a non-zero
-# exit. (GATE 2 already proved the clean tree exits 0, so a non-zero exit here is the
-# mutation's effect, not a pre-existing one.) With no FAILED/ERROR rows to extract,
-# the killers list is empty: an unattributed KILL (or, with --named-test, an
-# outside-oracle) — never a SURVIVAL.
-if printf '%s' "$out" | grep -qE "[0-9]+ (failed|error)" || [ "$test_rc" -ne 0 ]; then
+# and a traceback, then stops. The kill condition is the EXIT CODE alone: a collection
+# crash exits non-zero (pytest 2/4/5), so test_rc catches it without a summary grep,
+# and a grep for "N failed/error" only added false-rejection (a hook line matching
+# "N error in <text>", r5 — see GATE 2). (GATE 2 already proved the clean tree exits 0,
+# so a non-zero exit here is the mutation's effect, not a pre-existing one.) With no
+# FAILED/ERROR rows to extract, the killers list is empty: an unattributed KILL (or,
+# with --named-test, an outside-oracle) — never a SURVIVAL.
+if [ "$test_rc" -ne 0 ]; then
   # Extract the failing nodeid from each FAILED/ERROR short-summary line. pytest
   # prints "FAILED <nodeid> - <reason>" or "ERROR <nodeid-or-file> - <reason>"; the
   # nodeid is everything between the marker and " - ", so it can contain spaces
@@ -234,12 +244,35 @@ for line in sys.stdin:
   # when the oracle's file matches. An unbounded substring grep matched
   # "tests/x.py::test_g" inside the unrelated killer "tests/x.py::test_guard".
   if [ -n "$NAMED_TEST" ]; then
+    # Attribute by prefix-matching the named oracle against the RAW FAILED/ERROR line, not
+    # by extracting a nodeid from it and comparing. pytest's short-summary is
+    # "FAILED <nodeid> - <reason>" where the nodeid can contain literal '[' / ']' / " - "
+    # inside a parametrize id (pytest 9 does NOT escape them), so any bracket-depth or
+    # token split mis-extracts the nodeid and the exact oracle that failed is rejected as
+    # outside-oracle. Matching the KNOWN named-test string as a prefix of the raw line
+    # sidesteps extraction entirely: the ambiguity is in parsing an UNKNOWN nodeid out, not
+    # in matching a KNOWN one in. Quoting "$NAMED_TEST" inside the case patterns makes its
+    # '[' / ']' / '*' literal (glob meta is disabled inside double quotes), so a parametrize
+    # id's brackets do not corrupt the match. Three boundary modes mirror the old compare:
+    # exact (line is "FAILED <NAMED_TEST> - <reason>" or bare "FAILED <NAMED_TEST>"),
+    # parametrized (NAMED_TEST is the base; line is "FAILED <NAMED_TEST>[id] - ..."), and
+    # file-level collection ERROR (the oracle's file errored: "ERROR <file> - ...").
     named_hit=0
-    while IFS= read -r k; do
-      [ -n "$k" ] || continue
-      if [ "$k" = "$NAMED_TEST" ] || [[ "$k" == "$NAMED_TEST["* ]]; then named_hit=1; break; fi
-      case "$NAMED_TEST" in "$k"::*) named_hit=1; break ;; esac
-    done < "$kf"
+    nt_file="${NAMED_TEST%%::*}"
+    while IFS= read -r line; do
+      case "$line" in
+        "FAILED $NAMED_TEST - "*|"FAILED $NAMED_TEST"|"ERROR $NAMED_TEST - "*|"ERROR $NAMED_TEST")
+          named_hit=1; break ;;
+        "FAILED $NAMED_TEST["*|"ERROR $NAMED_TEST["*)
+          named_hit=1; break ;;
+        "ERROR $nt_file - "*|"ERROR $nt_file")
+          # file-level collection ERROR (no '::'): attribute when the oracle lives in
+          # that file. pytest prints the bare "ERROR <file>" (no ' - reason') for a
+          # collection crash, or "ERROR <file> - <reason>" for some error types; both
+          # kill every test in that file, so attribute to the named oracle in it.
+          [ "$nt_file" != "$NAMED_TEST" ] && { named_hit=1; break; } ;;
+      esac
+    done < <(printf '%s' "$clean" | grep -E '^(FAILED|ERROR)')
     if [ "$named_hit" -ne 1 ]; then
       verdict "KILLED-OUTSIDE-ORACLE (a test failed but '$NAMED_TEST' did not — symptom, not the requirement's failure)"
       printf '%s\n' "$clean" | grep -E '^(FAILED|ERROR)' | head -8 | sed 's/^/    /'
