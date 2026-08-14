@@ -409,37 +409,61 @@ New receipt fields: `changed_paths`, `changed_paths_digest`, `disturbed_surface_
 
 ### Gate M — diff-to-surface enumeration (core side, in `promotion.py`)
 
-`PromotionRequest` gains `candidate_receipt`: the id + digest of the candidate-build receipt
-it claims to bind to. `decide_promotion` verifies, when `candidate_receipt` is present:
+`PromotionRequest` gains `candidate_receipt` (the receipt id) and `candidate_receipt_evidence`
+(a content-addressed `EvidenceIntegrity` envelope the seam produces, body =
+`{receipt_id, disturbed_surface_ids, changed_paths_digest}`). `decide_promotion`, when
+`candidate_receipt` is present, verifies in order — each failure is a hard block (fail-closed):
 
-- the request's `disturbed_surface_ids` **equal** the receipt's `disturbed_surface_ids`
-  (sorted, normalized). A mismatch is a hard reason `disturbed-surface-mismatch` — the agent
-  declared a different set than the diff produced. This is the "replaces agent-declared set"
-  amendment: the field stays (the seam fills it), but the agent can no longer *author* it; a
-  contradiction with the receipt blocks.
-- the receipt's `changed_paths_digest` is non-empty (the diff was actually taken against a
-  base). An empty diff with a non-empty `disturbed_surface_ids` is `disturbed-surface-without-diff`.
-
-When `candidate_receipt` is absent, the gate falls back to the current behavior (advisory mode
-for the migration window, Part 4 caveat b) — logged, not blocked — so slice 4 can ship
-advisory-first without a hard cutover.
+- the envelope is **present** (`candidate-receipt-evidence-missing`) — citing a receipt but
+  omitting its attested envelope is route-arounding, not complying;
+- the envelope's body **re-derives to its claimed digest** (`candidate-receipt-evidence-tampered`)
+  — the content-address check, the same one `live_evidence` uses;
+- the envelope **binds the cited receipt** (`candidate-receipt-evidence-binding`) — an envelope
+  attesting receipt R-2 cannot satisfy a request citing R-1 (replay of another run's receipt);
+- the body's `changed_paths_digest` is **non-empty** (`disturbed-surface-without-diff`) — the
+  receipt recorded a real diff;
+- the request's `disturbed_surface_ids` **equal** the envelope's `disturbed_surface_ids`
+  (sorted, de-duplicated, normalized) — else `disturbed-surface-mismatch`. This is the
+  "replaces agent-declared set" amendment: the field stays, but the agent can no longer author a
+  self-serving set; a contradiction with the receipt blocks.
 
 ### Gate N — observation-receipt binding (seam + core)
 
-The self-reported `SurfaceObservation` booleans (`oracle_adequate`, `deterministic`,
-`flake_count`, `automatic_retry_count`, `promotion.py:189-194`) become **bindings to
-receipts**, not agent declarations:
+The self-reported `SurfaceObservation` fields (`oracle_adequate`, `deterministic`, `flake_count`,
+`automatic_retry_count`) become **bindings to content-addressed `EvidenceIntegrity` envelopes**,
+not agent declarations:
 
-- `oracle_adequate` binds to a **mutation receipt** (slice 2's `mutate.sh --named-test`
-  verdict: KILLED-on-named-oracle → adequate; KILLED-OUTSIDE-ORACLE or SURVIVED → not). The
-  observation carries `oracle_receipt` (id + digest); the core verifies the binding.
-- `deterministic` / `flake_count` / `automatic_retry_count` bind to a **flake-detection
-  receipt** (the harness runs the test N times; the receipt records pass/fail per run, flake
-  count, retry count). The observation carries `flake_receipt`; the core verifies the binding.
+- `oracle_adequate` binds to a **mutation receipt** envelope (`oracle_receipt_evidence`, body =
+  `{receipt_id, oracle_adequate}`; slice 2's `mutate.sh --named-test` verdict: KILLED-on-named-
+  oracle → adequate; KILLED-OUTSIDE-ORACLE or SURVIVED → not).
+- `deterministic` / `flake_count` / `automatic_retry_count` bind to a **flake-detection receipt**
+  envelope (`flake_receipt_evidence`, body = `{receipt_id, deterministic, flake_count,
+  retry_count}`; the harness runs the test N times and receipts the results).
 
-A self-reported value that contradicts its cited receipt is a hard reason
-(`oracle-binding-mismatch`, `flake-binding-mismatch`). The receipts are content-addressed and
-chain-verified, so the agent cannot forge them.
+The core verifies each envelope's content-address + receipt binding (fail-closed on
+missing/tampered/unbound), then requires the attested value be present (fail-closed on
+`*-attested-value-missing` — a cited receipt with an envelope that omits the value is
+route-arounding), then blocks on mismatch (`oracle-binding-mismatch`, `flake-binding-mismatch`).
+
+### Trust model & cutover (the verifier's load-bearing point)
+
+The core is pure — it cannot read the tamper-evident chain — so it **cannot** distinguish a
+real seam-produced envelope from a self-consistent one the agent forged (a body plus a matching
+digest). The core therefore enforces **content-address + subject-binding + value-equality**, and
+defers **chain-authenticity** to the seam: the seam records the real receipt in the hash-chained
+ledger, and at submission verifies the cited envelope's digest is in that chain (a forged digest
+is not). The postmortem re-reads the chain to audit. This is the same split the codebase already
+uses for `live_evidence` (core content-addresses; seam chain-anchors). `test_promotion_core_
+passes_self_consistent_lie_seam_closes_it` pins this boundary: the core passes a self-consistent
+forgery (PROMOTE), and the seam is the catch — it is an honest limitation, not a hole.
+
+The binding runs **advisory** (logged, not blocked) while `candidate_receipt` / the observation
+receipts are absent — the migration window (Part 4 caveat b). This is a documented, committed
+trade, not an abandoned hole: the cutover to enforcement is the seam-side producers (structured
+mutation verdicts, a flake-detection runner, the seam attesting `candidate_receipt_evidence` from
+the chain) plus **Gate L** (sole-advancement-authority), which mandates `candidate_receipt`'s
+presence and rejects requests without it (fail-closed). Until Gate L ships, the runtime wires
+nothing and the binding is dormant by design; after it, the binding is the sole path.
 
 ### Denial probes (Gate I, machine-authored from this spec)
 
