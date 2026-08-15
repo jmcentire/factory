@@ -151,9 +151,7 @@ check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's aut
 # and any local directive ledger verifies. Behavioral enforcement (forced-negative
 # drills) lives in tests/test_harness_scripts.py and runs under `test`.
 check-harness: check-python ## harness scripts parse/executable; local ledger chains verify
-	@bash -n harness/lane_env.sh harness/receipt.sh harness/tripwire.sh \
-		harness/sched_audit.sh harness/ground.sh harness/flake.sh harness/promote.sh \
-		harness/denial_probe.sh
+	@bash -n harness/*.sh
 	@$(PY) -m py_compile harness/directive.py
 	@for s in harness/*.sh; do test -x "$$s" || { echo "not executable: $$s" >&2; exit 1; }; done
 	@if [ -f DIRECTIVES/ledger.jsonl ] || [ -f DIRECTIVES/provisional.jsonl ]; then \

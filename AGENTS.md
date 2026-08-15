@@ -16,9 +16,9 @@ fail-closed; `make ship` runs it first.
 ## Where things live
 
 See `CLAUDE.md` "Layout". In short:
-`factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,test_disposition,tool_policy,target,adapters,roles}.py`,
+`factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,build_plan,test_disposition,tool_policy,target,adapters,roles}.py`,
 the executable boundary under
-`factory_runtime/{state,schema,tessera,authority,workflow,isolation,lanes,evidence_plane,orchestrator,cli}.py`,
+`factory_runtime/{state,schema,tessera,authority,workflow,generation,snapshot,isolation,lanes,evidence_plane,orchestrator,cli}.py`,
 the guards in `scripts/`, tests in `tests/`, and the synthetic empty target under
 `tests/fixtures/synthetic_target/`.
 
@@ -40,7 +40,9 @@ hash-chained ledger · fail-closed provenance of intent against the three truste
 artifacts with artifact-version invalidation · evidence-backed checklist items · signed scoped
 tool tiers (unknown and Verboten deny; Sign-off authority expires) · authorization-based
 existing-test disposition · human-decided surface criticality (unclassified is Critical; no
-waiver or flake tolerance on Critical) · data-only targets (no code references) · portability
+waiver or flake tolerance on Critical) · authority-bound recipe/build IR · exact retained
+generation/review bytes · bounded build attempts · human-authorized exact test changes ·
+data-only targets with an operational build ABI (no code references) · portability
 (green with no target pack present). All are enforced by the guards and the test suite, not
 merely documented.
 

@@ -17,16 +17,11 @@
 # imports the factory package). The operator installs the factory (console script `factory`
 # on PATH); FACTORY_CLI overrides the binary so tests can point at a venv or module form.
 #
-# HONEST SCOPE (Opus cross-family review, 2026-08-14): this script is the sole-writer of
-# "closed" — built and tested — but it is NOT yet wired into endgame.sh (or the dispatcher).
-# Wiring lands WITH the evidence-production pipeline (plan Part 7): that pipeline is what
-# gathers promotion_inputs.json, the input decide_promotion grounds a verdict on. Until the
-# pipeline exists, no real run produces promotion_inputs.json, so this script is exercised
-# by its test suite, not by a live run's close path. "Sole-advancement-authority" is
-# established at the code level (only this script writes "closed", and only through
-# decide_promotion); it becomes the runtime close path when Part 7 wires endgame.sh to
-# invoke it. Describing the script as the live close path before that wiring is an
-# overclaim this comment exists to correct.
+# HONEST SCOPE (2026-08-14): endgame.sh now invokes this script after every preceding gate,
+# live proof, and hygiene check is green, so Gate L is the live harness close path and a missing
+# promotion_inputs.json fails that close. The evidence-production pipeline still does not gather
+# promotion_inputs.json automatically, and this harness status update is not a RunStore PROMOTED
+# ledger transition. Those are separate remaining controls; neither is implied by this wiring.
 #
 #   usage: promote.sh <run>
 set -uo pipefail
@@ -100,14 +95,11 @@ fi
 # No other harness script writes "closed". The dispatcher reads it to stop; factory.sh
 # writes "open". This is the one advancement path, reached only through decide_promotion.
 #
-# run.json is ALSO the RunStore projection (state.py: the ledger is authoritative; run.json
-# is its re-derived view). promote.sh edits only the harness "status" key (the one the
-# dispatcher reads, consistent with factory.sh's ignition "status":"open") — it does NOT add
-# keys RunStore._derive never produces, so it minimizes the surface rebuild-projection would
-# erase. The close audit metadata (when, which verdict, which run) goes in a SEPARATE
-# close.json that rebuild-projection does not touch. The ledger-integrated close (a RunStore
-# transition that survives rebuild-projection) lands with the evidence-production pipeline
-# (plan Part 7); until then, do not rebuild-projection a closed run.
+# This run.json is the manual harness control record written by factory.sh; it is not the
+# authoritative RunStore projection used by factory_runtime. promote.sh edits only its harness
+# "status" key, which the dispatcher reads. The close audit metadata lives in a separate
+# close.json. A RunStore PROMOTED transition, including its signed approval/CI evidence, remains
+# a separate unwired runtime control and must never be inferred from this harness close.
 #
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
 # half-written run.json. Exit 70 on write-failure (Opus F7) so it is distinct from BLOCKED (1).

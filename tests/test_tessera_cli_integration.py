@@ -11,6 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from factory_core.build_plan import (
+    BuildPlan,
+    BuildStep,
+    OracleLink,
+    PatternCatalog,
+    PatternDefinition,
+)
 from factory_core.correction import LANE_CAPABILITY
 from factory_core.evidence import EvidenceIntegrity
 from factory_core.independence import (
@@ -30,9 +37,12 @@ from factory_core.monitors import (
     Monitor,
 )
 from factory_core.provenance import PhaseArtifact
+from factory_core.target import load_target_manifest
 from factory_runtime.authority import load_genesis
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
+from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import FactoryOrchestrator, OrchestrationError
+from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 from factory_runtime.workflow import FactoryWorkflow
@@ -90,12 +100,15 @@ def test_real_tessera_signs_validates_and_detects_tampering(tmp_path: Path) -> N
 
     assert verified.payload == payload
     assert len(verified.public_key) == 64
-    assert cli.verify_json(
-        envelope_path,
-        trusted_public_keys=(verified.public_key,),
-        expected_kind="factory-integration-proof",
-        expected_payload_digest=verified.payload_digest,
-    ) == verified
+    assert (
+        cli.verify_json(
+            envelope_path,
+            trusted_public_keys=(verified.public_key,),
+            expected_kind="factory-integration-proof",
+            expected_payload_digest=verified.payload_digest,
+        )
+        == verified
+    )
 
     tampered_path = tmp_path / "tampered.tessera.json"
     tampered = json.loads(envelope_path.read_text(encoding="utf-8"))
@@ -191,9 +204,52 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         tessera=cli,
     )
 
+    pattern = PatternDefinition(
+        pattern_id="python-function",
+        version="1",
+        artifact_digest=digest_obj({"artifact": "python-function-v1"}),
+        qualification_evidence_digest=digest_obj({"qualification": "python-function-v1"}),
+        mechanism={
+            "kind": "source-generator",
+            "required_configuration": ["module", "function", "operation"],
+        },
+    )
+    catalog = PatternCatalog(
+        catalog_id="synthetic-qualified-patterns",
+        version="1",
+        patterns=(pattern,),
+    )
+    catalog_path = tmp_path / "pattern-catalog.json"
+    catalog_path.write_text(json.dumps(catalog.body()), encoding="utf-8")
+    target_path = tmp_path / "target.toml"
+    target_path.write_text(
+        "\n".join(
+            (
+                'schema_version = "factory-target-manifest/1"',
+                'target_id = "synthetic-runtime"',
+                "[repo]",
+                'url = "https://example.invalid/synthetic.git"',
+                'ref = "main"',
+                "[adapters]",
+                'repo = "readonly_git"',
+                'knowledge = "kin_reader"',
+                'compliance = "rules_json"',
+                'idp = "oidc"',
+                'artifact_sink = "local_fs"',
+                "[compliance]",
+                'rules_path = "compliance/rules.json"',
+                "[build]",
+                f'pattern_catalog_digest = "{catalog.content_digest}"',
+                "max_attempts = 2",
+                'construction_modes = ["regenerate", "brownfield"]',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    target_digest = load_target_manifest(target_path).content_digest
     verbatim = "Build the synthetic authorized Factory change."
     source_digest = digest_bytes(verbatim.encode())
-    target_digest = "sha256:" + ("9" * 64)
     request = {
         "schema_version": "factory-authorization-request/1",
         "request_id": "synthetic-request",
@@ -247,8 +303,23 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         ("architecture", "ratify-architecture"),
         ("operational-maturity", "ratify-operational-maturity"),
     )
+    phase_items = {
+        "product-specification": (
+            "product:addition",
+            "The product adds integers and returns their mathematical sum.",
+        ),
+        "architecture": (
+            "architecture:interface",
+            "The public Python interface is calculator.py:add(left: int, right: int).",
+        ),
+        "operational-maturity": (
+            "test:addition",
+            "Acceptance examples cover positive and negative integer addition.",
+        ),
+    }
     phase_artifacts: dict[str, PhaseArtifact] = {}
     for index, (phase, action) in enumerate(phases, start=1):
+        item_id, statement = phase_items[phase]
         phase_document = {
             "artifact_id": f"synthetic-{phase}",
             "phase": phase,
@@ -258,8 +329,8 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
             "validator_ratifier": "agent:validator",
             "items": [
                 {
-                    "item_id": f"{phase}:1",
-                    "canonical_statement": f"The synthetic {phase} artifact is authoritative.",
+                    "item_id": item_id,
+                    "canonical_statement": statement,
                     "supersedes": [],
                 }
             ],
@@ -320,33 +391,43 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     assert len(workflow.store.consumed_authority_nonces("synthetic-run")) == 7
 
     product = phase_artifacts["product-specification"]
-    backreference = product.backreference(product.items[0]).to_dict()
-    build_spec = {
-        "schema_version": "factory-synthetic-build-spec/1",
-        "interface": {
-            "module": "calculator.py",
-            "function": "add",
-            "operation": "integer-addition",
-        },
-        "acceptance": [
-            {
-                "criterion_id": "AC-1",
-                "left": 2,
-                "right": 3,
-                "expected": 5,
-                "backreference": backreference,
-            },
-            {
-                "criterion_id": "AC-2",
-                "left": -7,
-                "right": 4,
-                "expected": -3,
-                "backreference": backreference,
-            },
-        ],
-    }
-    build_spec_path = tmp_path / "combined-spec.json"
-    build_spec_path.write_text(json.dumps(build_spec), encoding="utf-8")
+    architecture = phase_artifacts["architecture"]
+    operations = phase_artifacts["operational-maturity"]
+    product_reference = product.backreference(product.items[0])
+    architecture_reference = architecture.backreference(architecture.items[0])
+    oracle_reference = operations.backreference(operations.items[0])
+    authority = tuple(phase_artifacts[phase] for phase, _ in phases)
+    build_input = build_input_document("synthetic-run", target_digest, authority)
+    plan = BuildPlan(
+        plan_id="synthetic-plan",
+        version="1",
+        run_id="synthetic-run",
+        target_digest=target_digest,
+        construction_mode="regenerate",
+        max_build_attempts=2,
+        build_input_digest=digest_obj(build_input),
+        pattern_catalog_digest=catalog.content_digest,
+        phase_artifact_digests={artifact.phase: artifact.content_digest for artifact in authority},
+        steps=(
+            BuildStep(
+                step_id="generate-calculator",
+                pattern_id=pattern.pattern_id,
+                pattern_digest=pattern.content_digest,
+                configuration={
+                    "module": "calculator.py",
+                    "function": "add",
+                    "operation": "integer-addition",
+                },
+                intent_backreferences=(product_reference, architecture_reference),
+            ),
+        ),
+        oracle_links=(
+            OracleLink(product_reference, oracle_reference),
+            OracleLink(architecture_reference, oracle_reference),
+        ),
+    )
+    plan_path = tmp_path / "build-plan.json"
+    plan_path.write_text(json.dumps(plan.body()), encoding="utf-8")
     surface_evidence = (
         SurfaceEvidence(
             surface_id="synthetic-control-plane",
@@ -417,7 +498,9 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     orchestrator = FactoryOrchestrator(workflow)
     common_arguments = {
-        "spec_path": build_spec_path,
+        "target_manifest_path": target_path,
+        "pattern_catalog_path": catalog_path,
+        "build_plan_path": plan_path,
         "tester_command": (sys.executable, str(RUNTIME_FIXTURES / "tester.py")),
         "validator_command": (sys.executable, str(RUNTIME_FIXTURES / "validator.py")),
         "coder_trusted_paths": (RUNTIME_FIXTURES / "coder.py",),
@@ -464,6 +547,22 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     assert outcome.evidence_report is not None
     assert outcome.evidence_report.provenance.satisfied is True
     assert outcome.evidence_report.checklist.satisfied is True
+    evidence = outcome.evidence_report.document
+    assert evidence["schema_version"] == "factory-evidence-bundle/2"
+    assert evidence["build_attempt"] == {"number": 2, "limit": 2}
+    assert set(evidence["generation_artifacts"]) == {
+        "target-manifest-source",
+        "pattern-catalog",
+        "pattern-catalog-source",
+        "build-plan",
+        "build-plan-source",
+        "build-input",
+        "generation-readiness",
+    }
+    assert set(evidence["review_snapshots"]) == {
+        "coder-output",
+        "tester-output",
+    }
     assert outcome.evidence_envelope is not None
     assert outcome.evidence_envelope.public_key == validator_public_key
     cli.verify_json(
@@ -472,3 +571,16 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         expected_kind="factory-evidence-bundle",
         expected_payload_digest=outcome.evidence_envelope.payload_digest,
     )
+
+    # The source workspaces may change after review. Evidence consumption continues from the
+    # retained bytes, and the exact Coder tree the Validator reviewed remains reproducible.
+    plan_path.write_text("{}", encoding="utf-8")
+    candidate_path = outcome.execution.coder.output_directory / "artifact" / "calculator.py"
+    candidate_path.write_text("raise RuntimeError('later mutation')\n", encoding="utf-8")
+    verify_prepared_generation(tmp_path / "runs", outcome.projection)
+    assert outcome.execution.coder_snapshot is not None
+    coder_snapshot = verify_frozen_tree(
+        outcome.execution.coder_snapshot.directory,
+        expected_digest=outcome.execution.coder_snapshot.digest,
+    )
+    assert tree_digest(coder_snapshot.files_directory / "artifact") == outcome.candidate_digest

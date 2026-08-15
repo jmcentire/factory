@@ -22,14 +22,11 @@ until the inputs arrive, which is exactly what enforcement means. The alternativ
 on ``make ship`` green, as the pre-cage harness did) is the route-around this gate exists to
 prevent: a green build is not a verified run.
 
-HONEST SCOPE (Opus cross-family review, 2026-08-14). One thing this module does NOT do, and
-the comments elsewhere must not claim it does:
-
-1. It is NOT wired into a live run's close path. ``promote.sh`` is the sole-writer of
-   "closed" (built, tested), but no producer of ``promotion_inputs.json`` exists yet and
-   ``endgame.sh`` does not invoke ``promote.sh``. That wiring lands with the evidence-
-   production pipeline (plan Part 7). Until then this module is exercised by its test suite,
-   not by a real run.
+HONEST SCOPE (updated 2026-08-14). ``endgame.sh`` invokes ``promote.sh`` only after its other
+gates are green, so this module is now on the live harness close path. No producer of
+``promotion_inputs.json`` exists yet, however; an otherwise green live run therefore stops at
+Gate L until those inputs have been gathered. The harness close also remains distinct from a
+RunStore ``PROMOTED`` ledger transition.
 
 What this module DOES do — the F3 chain-anchor check (built 2026-08-14, hardened R2/R3
 2026-08-14). The pure core verifies each receipt envelope's content-address, subject binding,
@@ -75,8 +72,8 @@ run/suite — or a build receipt whose ``git_head`` is not compared to the promo
 put ``candidate_digest`` + ``surface_id`` in the flake/oracle receipt bodies, bind them in
 ``verifies_binding``, and extend the build projection to bind ``git_head`` to the request's
 ``candidate_digest``. That decision belongs with the evidence-production pipeline (plan Part 7):
-the envelopes are produced by that pipeline, which does not yet exist (nothing invokes
-``promote.sh`` or produces ``promotion_inputs.json``), so building the binding now would define a
+the envelopes are produced by that pipeline, which does not yet exist (nothing produces
+``promotion_inputs.json``), so building the binding now would define a
 contract with no producer — the F1 pattern. R1 is captured as the named "next proxy" (plan Part
 5 §4) and lands with Part 7.
 

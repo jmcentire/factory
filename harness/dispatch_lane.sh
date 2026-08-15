@@ -70,18 +70,40 @@ for _bf in "$ROOT/lanes/validator.blocking" "$ROOT/lanes/$ROLE.blocking"; do
   fi
 done
 
+# Re-derive the frozen target pack before every lane launch. The room name, dispatch prose, or
+# current checkout can never substitute for the operational ABI bound at ignition.
+[ -s "$ROOT/target.toml" ] || fail "run has no retained target manifest"
+FACTORY_CLI="${FACTORY_CLI:-factory}"
+if ! TARGET_ACTUAL=$($FACTORY_CLI inspect-target --manifest "$ROOT/target.toml"); then
+  fail "retained target manifest failed the operational-ABI gate"
+fi
+python3 - "$ROOT/run.json" "$TARGET_ACTUAL" <<'PY' || fail "retained target manifest no longer matches run-bound target record"
+import json, sys
+run = json.load(open(sys.argv[1]))
+actual = json.loads(sys.argv[2])
+expected = run.get("target_manifest")
+if not isinstance(expected, dict):
+    raise SystemExit(1)
+for key in ("target_id", "content_digest", "source_digest", "build"):
+    if expected.get(key) != actual.get(key):
+        raise SystemExit(1)
+PY
+
 REPO=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['repo'])")
 [ -n "$SHA" ] || SHA=$(python3 -c "import json;print(json.load(open('$ROOT/run.json'))['base_sha'])")
 WS="$ROOT/workspaces/$ROLE"
 PROJ=$("$D/projection.sh" "$ROLE" "$REPO" "$SHA" "$WS")
 
 RECEIPT="$ROOT/dispatches.jsonl"
-python3 - "$RECEIPT" "$RUN" "$ROLE" "$SHA" "$DISPATCH" "$PROJ" <<'PY'
+python3 - "$RECEIPT" "$RUN" "$ROLE" "$SHA" "$DISPATCH" "$PROJ" "$ROOT/run.json" <<'PY'
 import hashlib, json, sys, datetime
-rec, run, role, sha, dispatch, proj = sys.argv[1:7]
+rec, run, role, sha, dispatch, proj, run_path = sys.argv[1:8]
+target = json.load(open(run_path))["target_manifest"]
 body = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "run": run, "role": role, "sha": sha,
         "dispatch_digest": hashlib.sha256(open(dispatch, "rb").read()).hexdigest(),
+        "target_manifest_content_digest": target["content_digest"],
+        "target_manifest_source_digest": target["source_digest"],
         "projection": json.loads(proj)}
 with open(rec, "a") as f:
     f.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")

@@ -13,16 +13,27 @@ import re
 import tempfile
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy
 
-RUN_SCHEMA_VERSION = "factory-run/1"
+RUN_SCHEMA_VERSION = "factory-run/2"
+LEGACY_RUN_SCHEMA_VERSION = "factory-run/1"
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
+    "target-manifest-source",
+    "pattern-catalog",
+    "pattern-catalog-source",
+    "build-plan",
+    "build-plan-source",
+    "build-input",
+    "generation-readiness",
+)
 
 
 class RunState(StrEnum):
@@ -153,16 +164,21 @@ class RunProjection:
     created_at: int
     updated_at: int
     approved_candidate_digest: str = ""
+    generation_artifact_digests: Mapping[str, str] = field(default_factory=dict)
+    build_attempt_count: int = 0
+    build_attempt_limit: int = 0
     schema_version: str = RUN_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         body = asdict(self)
         body["phase_artifact_digests"] = dict(self.phase_artifact_digests)
+        body["generation_artifact_digests"] = dict(self.generation_artifact_digests)
         return body
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> RunProjection:
         phase_raw = raw.get("phase_artifact_digests")
+        generation_raw = raw.get("generation_artifact_digests")
         return cls(
             run_id=str(raw.get("run_id", "")),
             state=str(raw.get("state", "")),
@@ -177,6 +193,13 @@ class RunProjection:
             created_at=_as_int(raw.get("created_at")),
             updated_at=_as_int(raw.get("updated_at")),
             approved_candidate_digest=str(raw.get("approved_candidate_digest", "")),
+            generation_artifact_digests=(
+                {str(key): str(value) for key, value in generation_raw.items()}
+                if isinstance(generation_raw, Mapping)
+                else {}
+            ),
+            build_attempt_count=_as_int(raw.get("build_attempt_count")),
+            build_attempt_limit=_as_int(raw.get("build_attempt_limit")),
             schema_version=str(raw.get("schema_version", "")),
         )
 
@@ -191,6 +214,52 @@ def _as_int(value: Any) -> int:
 def _require_digest(value: str, field_name: str) -> None:
     if not _DIGEST.fullmatch(value):
         raise RunStateError(f"{field_name} must be a canonical sha256 digest")
+
+
+def _require_generation_artifacts(
+    digests: Mapping[str, Any],
+    *,
+    context: str,
+) -> dict[str, str]:
+    """Require the complete immutable generation-readiness tuple on each build entry."""
+
+    missing = [key for key in GENERATION_ARTIFACT_KEYS if not digests.get(key)]
+    if missing:
+        raise RunStateError(
+            f"{context} requires generation artifact digest(s): {', '.join(missing)}"
+        )
+    generation = {key: str(digests[key]) for key in GENERATION_ARTIFACT_KEYS}
+    for key, value in generation.items():
+        _require_digest(value, f"generation_artifacts[{key!r}]")
+    return generation
+
+
+def _require_build_attempt(
+    payload: Mapping[str, Any],
+    *,
+    expected_attempt: int,
+    context: str,
+) -> int:
+    """Make convergence a ledger predicate rather than an agent promise."""
+
+    attempt_number = payload.get("attempt_number")
+    attempt_limit = payload.get("attempt_limit")
+    if (
+        isinstance(attempt_number, bool)
+        or not isinstance(attempt_number, int)
+        or attempt_number != expected_attempt
+    ):
+        raise RunStateError(
+            f"{context} requires attempt_number {expected_attempt}, not {attempt_number!r}"
+        )
+    if isinstance(attempt_limit, bool) or not isinstance(attempt_limit, int) or attempt_limit < 1:
+        raise RunStateError(f"{context} requires a positive attempt_limit")
+    if attempt_number > attempt_limit:
+        raise RunStateError(
+            f"{context} exceeds the authorized build attempt limit "
+            f"({attempt_number} > {attempt_limit})"
+        )
+    return attempt_limit
 
 
 def _require_approval_identities(
@@ -445,10 +514,7 @@ class RunStore:
         run_dir = self._run_dir(run_id)
         if run_dir.exists() and not run_dir.is_dir():
             raise RunStateError(f"run path is not a directory: {run_id}")
-        if (
-            (run_dir / "ledger.jsonl").exists()
-            or (run_dir / "run.json").exists()
-        ):
+        if (run_dir / "ledger.jsonl").exists() or (run_dir / "run.json").exists():
             raise RunStateError(f"run already exists: {run_id}")
         run_dir.mkdir(parents=True, exist_ok=True)
         created_at = self._clock()
@@ -464,6 +530,7 @@ class RunStore:
                     "target": target_digest,
                     "source": source_digest,
                     "phase_artifacts": {},
+                    "generation_artifacts": {},
                 },
                 payload={
                     **dict(payload or {}),
@@ -554,6 +621,11 @@ class RunStore:
         """Append one authorized state transition and refresh the checked projection."""
 
         current = self.load(run_id)
+        if current.schema_version != RUN_SCHEMA_VERSION:
+            raise RunStateError(
+                "legacy run schema cannot advance under the generation-readiness controls; "
+                "start a new run"
+            )
         try:
             destination = RunState(to_state)
             source = RunState(current.state)
@@ -574,9 +646,7 @@ class RunStore:
         if phase_key:
             phase_digest = supplied.get(phase_key, "")
             if not phase_digest:
-                raise RunStateError(
-                    f"{destination} requires artifact digest {phase_key!r}"
-                )
+                raise RunStateError(f"{destination} requires artifact digest {phase_key!r}")
             _require_ratification_receipts(
                 supplied,
                 phase_key,
@@ -584,6 +654,24 @@ class RunStore:
                 already_recorded=_recorded_receipt_digests(self._ledger(run_id).entries()),
             )
             phases[phase_key] = phase_digest
+
+        generation = dict(current.generation_artifact_digests)
+        if destination is RunState.BUILDING:
+            generation = _require_generation_artifacts(
+                supplied,
+                context=str(destination),
+            )
+            attempt_limit = _require_build_attempt(
+                transition_payload,
+                expected_attempt=current.build_attempt_count + 1,
+                context=str(destination),
+            )
+            if current.build_attempt_limit and attempt_limit > current.build_attempt_limit:
+                raise RunStateError(
+                    "building cannot raise the attempt limit after generation starts"
+                )
+        elif destination is RunState.SPECIFICATION_DEFECT or phase_key:
+            generation = {}
 
         # Anchor states carry authority, not just an actor. Each check is fail-closed: an
         # omission refuses the transition rather than recording an unauthorized anchor.
@@ -628,6 +716,7 @@ class RunStore:
                     "target": current.target_digest,
                     "source": current.source_digest,
                     "phase_artifacts": phases,
+                    "generation_artifacts": generation,
                 },
                 payload=transition_payload,
                 actor=actor.strip(),
@@ -653,6 +742,10 @@ class RunStore:
         source_digest = ""
         approved_candidate = ""
         phase_artifacts: dict[str, str] = {}
+        generation_artifacts: dict[str, str] = {}
+        build_attempt_count = 0
+        build_attempt_limit = 0
+        schema_version = ""
         created_at = 0
         updated_at = 0
         current = ""
@@ -692,15 +785,23 @@ class RunStore:
             digests = record.get("artifact_digests")
             if not isinstance(digests, Mapping):
                 raise RunStateError(f"ledger entry {index} has no artifact digest map")
+            payload_raw = record.get("payload")
+            if not isinstance(payload_raw, Mapping):
+                raise RunStateError(f"ledger entry {index} has no payload object")
             if index == 0:
                 target_digest = str(digests.get("target", ""))
                 source_digest = str(digests.get("source", ""))
                 _require_digest(target_digest, "target_digest")
                 _require_digest(source_digest, "source_digest")
-            elif (
-                digests.get("target") != target_digest
-                or digests.get("source") != source_digest
-            ):
+                schema_version = str(payload_raw.get("run_schema_version", ""))
+                if schema_version not in {
+                    LEGACY_RUN_SCHEMA_VERSION,
+                    RUN_SCHEMA_VERSION,
+                }:
+                    raise RunStateError(
+                        f"run genesis has unsupported schema version {schema_version!r}"
+                    )
+            elif digests.get("target") != target_digest or digests.get("source") != source_digest:
                 raise RunStateError(f"ledger entry {index} changes the run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
@@ -721,11 +822,9 @@ class RunStore:
                 # phase map. `transition` writes one value into both; two records of the same
                 # digest that disagree is inadmissible rather than a matter of which one wins.
                 phases_declared = digests.get("phase_artifacts")
-                if (
-                    isinstance(phases_declared, Mapping)
-                    and str(phases_declared.get(derived_phase_key, ""))
-                    != str(digests.get(derived_phase_key, ""))
-                ):
+                if isinstance(phases_declared, Mapping) and str(
+                    phases_declared.get(derived_phase_key, "")
+                ) != str(digests.get(derived_phase_key, "")):
                     raise RunStateError(
                         f"ledger entry {index} disagrees with itself about the "
                         f"{derived_phase_key!r} artifact digest"
@@ -734,6 +833,43 @@ class RunStore:
             # rather than only the ratifying ones, so the two paths cannot disagree about which
             # digests are spent.
             recorded_receipts |= _receipt_digests_in(digests)
+
+            if schema_version == RUN_SCHEMA_VERSION:
+                if destination is RunState.BUILDING:
+                    generation_artifacts = _require_generation_artifacts(
+                        digests,
+                        context=f"ledger entry {index} building",
+                    )
+                    candidate_limit = _require_build_attempt(
+                        payload_raw,
+                        expected_attempt=build_attempt_count + 1,
+                        context=f"ledger entry {index} building",
+                    )
+                    if build_attempt_limit and candidate_limit > build_attempt_limit:
+                        raise RunStateError(f"ledger entry {index} raises the build attempt limit")
+                    build_attempt_limit = (
+                        min(build_attempt_limit, candidate_limit)
+                        if build_attempt_limit
+                        else candidate_limit
+                    )
+                    build_attempt_count += 1
+                elif destination is RunState.SPECIFICATION_DEFECT or derived_phase_key:
+                    generation_artifacts = {}
+                    if destination is RunState.SPECIFICATION_DEFECT:
+                        build_attempt_count = 0
+                        build_attempt_limit = 0
+                declared_generation = digests.get("generation_artifacts")
+                if not isinstance(declared_generation, Mapping):
+                    raise RunStateError(f"ledger entry {index} has no generation artifact map")
+                candidate_generation = {
+                    str(key): str(value) for key, value in declared_generation.items()
+                }
+                if candidate_generation != generation_artifacts:
+                    raise RunStateError(
+                        f"ledger entry {index} changes or omits generation artifacts"
+                    )
+                for key, value in candidate_generation.items():
+                    _require_digest(value, f"generation_artifacts[{key!r}]")
 
             # Read from the same table `transition` reads, not by naming the two states again.
             # N.B. The digest requirement is generic on the write path (`_ANCHOR_STATE_KEYS`) and
@@ -759,6 +895,12 @@ class RunStore:
                     str(record.get("implementer_identity", "")),
                     context=f"ledger entry {index} human approval",
                 )
+            elif destination is RunState.SPECIFICATION_DEFECT:
+                # Approval binds the prior candidate under the prior phase versions. A defect
+                # invalidates both, so retaining the digest in the projection would present
+                # stale human authority to downstream readers even though promotion is no
+                # longer reachable without another approval.
+                approved_candidate = ""
             elif destination is RunState.PROMOTED:
                 promoted = str(digests.get("promoted-artifact", ""))
                 if promoted != approved_candidate:
@@ -769,12 +911,7 @@ class RunStore:
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):
                 raise RunStateError(f"ledger entry {index} has no phase artifact map")
-            candidate_phases = {
-                str(key): str(value) for key, value in phases_raw.items()
-            }
-            payload_raw = record.get("payload")
-            if not isinstance(payload_raw, Mapping):
-                raise RunStateError(f"ledger entry {index} has no payload object")
+            candidate_phases = {str(key): str(value) for key, value in phases_raw.items()}
             raw_nonces = payload_raw.get("authority_receipt_nonces", [])
             if not isinstance(raw_nonces, list):
                 raise RunStateError(
@@ -819,6 +956,10 @@ class RunStore:
             created_at=created_at,
             updated_at=updated_at,
             approved_candidate_digest=approved_candidate,
+            generation_artifact_digests=generation_artifacts,
+            build_attempt_count=build_attempt_count,
+            build_attempt_limit=build_attempt_limit,
+            schema_version=schema_version,
         )
 
     def _write_projection(self, projection: RunProjection) -> None:

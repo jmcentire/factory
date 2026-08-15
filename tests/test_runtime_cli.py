@@ -6,6 +6,7 @@ from pathlib import Path
 from pytest import CaptureFixture
 
 from factory_core.manifest import digest_obj
+from factory_core.target import load_target_manifest
 from factory_runtime.cli import main
 
 DIGEST = "sha256:" + ("a" * 64)
@@ -81,3 +82,21 @@ def test_cli_refuses_a_document_outside_the_closed_schema(
         == 2
     )
     assert "factory: refused:" in capsys.readouterr().err
+
+
+def test_cli_inspects_the_target_operational_abi(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    source = Path(__file__).parent / "fixtures" / "synthetic_target" / "target.toml"
+    manifest_path = tmp_path / "target.toml"
+    manifest_path.write_bytes(source.read_bytes())
+
+    assert main(["inspect-target", "--manifest", str(manifest_path)]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    target = load_target_manifest(manifest_path)
+
+    assert inspected["target_id"] == target.target_id
+    assert inspected["content_digest"] == target.content_digest
+    assert inspected["source_digest"].startswith("sha256:")
+    assert inspected["build"] == dict(target.build)

@@ -7,7 +7,7 @@ import pytest
 
 from factory_core.manifest import SegregationError, SegregationPolicy
 from factory_runtime.state import RunState, RunStateError, RunStore
-from tests.conftest import ratification_receipts
+from tests.conftest import generation_artifacts, ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -60,6 +60,16 @@ def _ratify_all(store: RunStore) -> None:
     )
 
 
+def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
+    store.transition(
+        "run-1",
+        RunState.BUILDING,
+        actor="validator",
+        artifact_digests=generation_artifacts(f"attempt-{attempt}"),
+        payload={"attempt_number": attempt, "attempt_limit": limit},
+    )
+
+
 def test_create_and_rederive_run_from_authoritative_ledger(tmp_path: Path) -> None:
     store = _store(tmp_path)
     created = store.create(
@@ -79,7 +89,8 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
     _ratify_all(store)
 
-    for state in (RunState.BUILDING, RunState.VALIDATING, RunState.PREVIEW):
+    _start_build(store)
+    for state in (RunState.VALIDATING, RunState.PREVIEW):
         store.transition("run-1", state, actor="validator")
 
     # The two anchor states carry authority. This previously walked them with nothing but
@@ -117,6 +128,44 @@ def test_skipping_a_phase_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(RunStateError, match="transition refused"):
         store.transition("run-1", RunState.BUILDING, actor="validator")
+
+
+def test_building_requires_the_complete_generation_readiness_tuple(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _ratify_all(store)
+    incomplete = generation_artifacts()
+    incomplete.pop("build-plan-source")
+
+    with pytest.raises(RunStateError, match="build-plan-source"):
+        store.transition(
+            "run-1",
+            RunState.BUILDING,
+            actor="validator",
+            artifact_digests=incomplete,
+            payload={"attempt_number": 1, "attempt_limit": 2},
+        )
+
+
+def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    first = store.transition("run-1", RunState.BLOCKED, actor="validator")
+    assert first.build_attempt_count == 1
+    assert first.build_attempt_limit == 2
+
+    with pytest.raises(RunStateError, match="cannot raise the attempt limit"):
+        _start_build(store, attempt=2, limit=3)
+
+    _start_build(store, attempt=2, limit=2)
+    second = store.transition("run-1", RunState.BLOCKED, actor="validator")
+    assert second.build_attempt_count == 2
+    assert second.build_attempt_limit == 2
+
+    with pytest.raises(RunStateError, match="exceeds the authorized build attempt limit"):
+        _start_build(store, attempt=3, limit=2)
 
 
 def test_ratified_state_requires_the_corresponding_artifact(tmp_path: Path) -> None:
@@ -161,7 +210,7 @@ def test_specification_defect_can_only_resume_through_a_ratified_phase(tmp_path:
     store = _store(tmp_path)
     store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
     _ratify_all(store)
-    store.transition("run-1", RunState.BUILDING, actor="validator")
+    _start_build(store)
     projection = store.transition(
         "run-1",
         RunState.SPECIFICATION_DEFECT,
@@ -196,7 +245,7 @@ def test_specification_defect_requires_affected_phase(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
     _ratify_all(store)
-    store.transition("run-1", RunState.BUILDING, actor="validator")
+    _start_build(store)
 
     with pytest.raises(RunStateError, match="payload.phase"):
         store.transition("run-1", RunState.SPECIFICATION_DEFECT, actor="validator")

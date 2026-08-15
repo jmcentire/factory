@@ -25,6 +25,11 @@ artifact_sink = "local_fs"
 
 [compliance]
 rules_path = "compliance/rules.json"
+
+[build]
+pattern_catalog_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+max_attempts = 2
+construction_modes = ["regenerate", "brownfield"]
 """
 
 
@@ -37,6 +42,7 @@ def _write(tmp_path, text: str):
 # --------------------------------------------------------------------------- #
 # Accept
 # --------------------------------------------------------------------------- #
+
 
 def test_accepts_the_synthetic_empty_target() -> None:
     tm = load_target_manifest(SYNTHETIC_TARGET)
@@ -51,11 +57,13 @@ def test_accepts_a_minimal_valid_manifest(tmp_path) -> None:
     tm = load_target_manifest(_write(tmp_path, VALID))
     assert tm.target_id == "acme"
     assert tm.repo["ref"] == "main"
+    assert tm.build["max_attempts"] == 2
 
 
 # --------------------------------------------------------------------------- #
 # Reject malformed
 # --------------------------------------------------------------------------- #
+
 
 def test_rejects_malformed_toml(tmp_path) -> None:
     with pytest.raises(TargetManifestError, match="not valid TOML"):
@@ -79,6 +87,7 @@ def test_rejects_unknown_top_level_key(tmp_path) -> None:
 # Refuse code references (the boundary guarantee: data only, never code)
 # --------------------------------------------------------------------------- #
 
+
 def test_refuses_adapter_that_is_an_import_path(tmp_path) -> None:
     bad = VALID.replace('repo = "readonly_git"', 'repo = "target_packs.acme.repo:RepoAdapter"')
     with pytest.raises(TargetManifestError) as exc:
@@ -87,15 +96,13 @@ def test_refuses_adapter_that_is_an_import_path(tmp_path) -> None:
 
 
 def test_refuses_dotted_callable_anywhere_in_the_manifest(tmp_path) -> None:
-    bad = VALID.replace('rules_path = "compliance/rules.json"',
-                        'rules_path = "acme.rules:load"')
+    bad = VALID.replace('rules_path = "compliance/rules.json"', 'rules_path = "acme.rules:load"')
     with pytest.raises(TargetManifestError, match="code reference"):
         load_target_manifest(_write(tmp_path, bad))
 
 
 def test_refuses_python_file_reference(tmp_path) -> None:
-    bad = VALID.replace('rules_path = "compliance/rules.json"',
-                        'rules_path = "acme/evil.py"')
+    bad = VALID.replace('rules_path = "compliance/rules.json"', 'rules_path = "acme/evil.py"')
     with pytest.raises(TargetManifestError, match="code reference"):
         load_target_manifest(_write(tmp_path, bad))
 
@@ -103,6 +110,7 @@ def test_refuses_python_file_reference(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 # Content address / signature (fail-closed before adapter resolution)
 # --------------------------------------------------------------------------- #
+
 
 def test_declared_content_digest_must_match(tmp_path) -> None:
     signed = VALID + '\n[signature]\ncontent_digest = "sha256:deadbeef"\n'

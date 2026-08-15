@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from factory_core.manifest import digest_obj
+from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.target import load_target_manifest
 from factory_runtime.authority import load_genesis
 from factory_runtime.schema import SCHEMA_NAMES, validate_document
 from factory_runtime.state import RunStore
@@ -65,6 +66,12 @@ def _parser() -> argparse.ArgumentParser:
         help="print the canonical content address of a JSON object",
     )
     digest.add_argument("--input", required=True)
+
+    inspect_target = commands.add_parser(
+        "inspect-target",
+        help="validate a target manifest and print its content/source addresses and build ABI",
+    )
+    inspect_target.add_argument("--manifest", required=True)
 
     status = commands.add_parser("status", help="verify and print an authoritative run projection")
     status.add_argument("--runs", required=True)
@@ -159,6 +166,19 @@ def _execute(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "digest-json":
         _emit({"digest": digest_obj(_read_object(arguments.input))})
+        return
+    if arguments.command == "inspect-target":
+        manifest_path = Path(arguments.manifest)
+        manifest = load_target_manifest(manifest_path)
+        _emit(
+            {
+                "target_id": manifest.target_id,
+                "content_digest": manifest.content_digest,
+                "source_digest": digest_bytes(manifest_path.read_bytes()),
+                "repo": dict(manifest.repo),
+                "build": dict(manifest.build),
+            }
+        )
         return
     if arguments.command == "status":
         _emit(RunStore(arguments.runs).load(arguments.run_id))

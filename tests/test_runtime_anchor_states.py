@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from factory_runtime.state import _ANCHOR_STATE_KEYS, RunState, RunStateError, RunStore
-from tests.conftest import ratification_receipts
+from tests.conftest import generation_artifacts, ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -61,7 +61,13 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
             actor="validator",
             artifact_digests={key: digest, **ratification_receipts(key)},
         )
-    store.transition("run-1", RunState.BUILDING, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.BUILDING,
+        actor="validator",
+        artifact_digests=generation_artifacts(),
+        payload={"attempt_number": 1, "attempt_limit": 1},
+    )
     store.transition("run-1", RunState.VALIDATING, actor="validator")
     store.transition("run-1", RunState.PREVIEW, actor="validator")
     return store
@@ -157,6 +163,21 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
     assert reloaded.approved_candidate_digest == CANDIDATE
 
 
+def test_specification_defect_invalidates_prior_candidate_approval(tmp_path: Path) -> None:
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+
+    projection = store.transition(
+        "run-1",
+        RunState.SPECIFICATION_DEFECT,
+        actor="validator",
+        payload={"phase": "product-specification"},
+    )
+
+    assert projection.approved_candidate_digest == ""
+    assert RunStore(tmp_path, clock=_Clock()).load("run-1").approved_candidate_digest == ""
+
+
 def test_human_approval_without_an_implementer_identity_is_refused(tmp_path: Path) -> None:
     """A distinctness check against an empty implementer proves nothing.
 
@@ -186,6 +207,7 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
     from factory_core.manifest import LedgerEntry
 
     store = _run_at_preview(tmp_path)
+    generation = dict(store.load("run-1").generation_artifact_digests)
     store._ledger("run-1").append(
         LedgerEntry(
             capability_id="run-1",
@@ -202,6 +224,7 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
                     "architecture": ARCHITECTURE,
                     "operational-maturity": OPERATIONS,
                 },
+                "generation_artifacts": generation,
             },
             payload={},
             actor="validator",
@@ -230,6 +253,7 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
 
     store = _run_at_preview(tmp_path)
     anchor_key = _ANCHOR_STATE_KEYS[anchor_state]
+    generation = dict(store.load("run-1").generation_artifact_digests)
     phase_artifacts = {
         "product-specification": PRODUCT,
         "architecture": ARCHITECTURE,
@@ -254,6 +278,7 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
                 "target": TARGET,
                 "source": SOURCE,
                 "phase_artifacts": phase_artifacts,
+                "generation_artifacts": generation,
             },
             payload={},
             actor="validator",

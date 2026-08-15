@@ -3,13 +3,23 @@
 > Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
 > wired into `harness/lane_env.sh` and enforced; the build-time gates are wired into the
 > `make ship` order (purity → doctrine → authority → harness → denial-probes → lint →
-> typecheck → test) and fail the build closed. The sole-advancement-authority (Gate L) and
-> the seam chain-anchor (F3/R2/R3) are built and tested but NOT yet wired into the live run
-> close path — that wiring, and the receipt-body fields that close replay (R1), land with the
-> evidence-production pipeline (the deferred final slice, F1). A green build is not a verified
-> run; a verified run is the cage refusing on every gap.
+> typecheck → test) and fail the build closed. `endgame.sh` now invokes the
+> sole-advancement-authority (Gate L) only after its deterministic gates, required live proof,
+> and hygiene checks are green; the promotion renderer also enforces the F3/R2/R3 chain anchor.
+> The evidence pipeline still does not automatically produce `promotion_inputs.json`, the R1
+> cross-run receipt binding and R4 chain authenticity gaps remain, and the harness close is not
+> yet a RunStore `PROMOTED` ledger transition. A green build is not a verified run; a verified
+> run is the cage refusing on every gap.
 > Canonical copy: `~/Code/factory/docs/HARNESS.md`. Mirror: `~/Code/tools/HARNESS.md`.
 > Skill form: `/orchestrate` (`skills/orchestrate.md` here and in `~/.claude/commands/`).
+
+Two execution surfaces exist and must not be conflated. `factory_runtime` is the executable
+authority/isolation/evidence path: its signed ledger, target-bound generation tuple, macOS
+Seatbelt projections, frozen review bytes, and Validator-signed preview survive removal of the
+models. The tmux scripts under `harness/` are a coordination and transition surface around target
+work. A tmux window, Kindex room name, role prompt, or filesystem convention is not mechanical
+lane isolation and never upgrades an independence claim. Kindex remains context and incident
+history, never authority or a secure projection boundary.
 
 ## Definition
 
@@ -199,6 +209,40 @@ registered per-target reconcilers (terraform-vs-live IAM, tfvars-vs-runtime conf
 digest expectations) run at ground time, and drift blocks the lane exactly as channel
 drift does. The harness owns the requirement and the receipt; the target owns the probe.
 
+## Build compilation and convergence
+
+Human negotiation stays upstream of generation. The founder and Validator may go back and forth
+through induced understanding for as many interactions as improve the result, but author lanes do
+not begin until three distinct artifacts are sufficiently deep, agreed, and independently
+ratified:
+
+1. **Product Specification** — the requested outcome and user-visible behavioral commitments.
+2. **Architecture Specification** — the major interfaces, boundaries, state/authority ownership,
+   and operational decisions.
+3. **Testing and Monitoring Strategy** — the user expectations, acceptance oracles, failure
+   discrimination, and production observations that judge the result.
+
+A recipe is not a fourth artifact. In `factory_core.build_plan`, a recipe pattern is a reusable,
+versioned construction mechanism carrying addresses for its implementation and qualification
+evidence. A recipe book/build plan is disposable per-run IR: it instantiates those mechanisms
+with immutable configuration, orders dependencies, maps every Product/Architecture item to a
+construction step, maps every Product expectation to a Testing/Monitoring oracle, and uses every
+Testing/Monitoring item. Any change to the
+run, target, catalog, build input, or phase artifacts invalidates it. Coder and Validator receive
+this IR; Tester receives only the common ratified build input.
+
+The result is judged by agreed behavior and evidence, not generated-code aesthetics. `regenerate`
+keeps a complete rewrite ordinary; `brownfield` supports a deliberately scoped correction. The
+target ABI and plan both bound authoring attempts, and the ledger will not raise the ceiling after
+generation starts. After the final permitted attempt, remaining defects produce a blocked handoff,
+not another self-authorized specification round. Existing tests remain immutable unless current
+signed authority uniquely supersedes the old same-phase behavior and a separately trusted human
+ruling binds the exact assertion (or frozen family) and exact signed replacement statement.
+The runtime binds the construction mode today; mechanical `brownfield` path/surface-ceiling
+enforcement against the produced candidate remains unwired, so the label itself is not scope
+evidence. A legitimate target-ABI change starts a new authorized run rather than bypassing drift
+detection inside an existing run.
+
 ## The human surface
 
 The founder's console is the third projection of the same event stream: lanes get
@@ -269,9 +313,18 @@ dependency-free (bash + python3 + git):
 - `harness/sched_audit.sh` — every OS timer must match the human-approved registry.
 - `harness/ground.sh` — ledger verify, origin pin, cadence audit, tripwire, channel-list
   diff, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
+- `harness/factory.sh` — ignition; refuses a missing/invalid target operational ABI, retains the
+  exact target-manifest bytes and addresses, then opens the coordination surface.
+- `harness/dispatch_lane.sh` — re-derives the retained target pack before dispatch and records its
+  source/content addresses. This detects drift against the harness record; signed target authority
+  belongs to the runtime authorization ledger.
+- `harness/endgame.sh` — fresh-checkout ship/isolation/live-proof/hygiene sweep; missing live proof
+  is red, and only an otherwise-green run reaches Gate L.
+- `harness/promote.sh` — Gate L harness close, driven only by the pure promotion verdict and its
+  chain-anchor checks. It does not create a RunStore `PROMOTED` transition.
 
-The full script listings are in the ratification proposal; they land in
-`~/Code/factory/harness/` at adoption step 1/2.
+The active scripts live in `~/Code/factory/harness/`; tests and the denial-probe registry are the
+enforcement inventory, not this prose.
 
 Founder ceremony, once: `git init DIRECTIVES && git config commit.gpgsign true` with the
 signing key on hardware requiring touch. Every append is committed signed. The agent runs

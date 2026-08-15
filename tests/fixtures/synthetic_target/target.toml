@@ -25,6 +25,11 @@ artifact_sink = "local_fs"
 rules_path = "compliance/rules.json"
 format = "json"
 
+[build]
+pattern_catalog_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+max_attempts = 2
+construction_modes = ["regenerate", "brownfield"]
+
 [[roles]]
 name = "requester"
 description = "Asks questions, browses features, authors and submits PRDs."

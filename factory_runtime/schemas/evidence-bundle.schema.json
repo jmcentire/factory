@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/evidence-bundle/1",
+  "$id": "factory://schemas/evidence-bundle/2",
   "title": "Factory change evidence bundle",
   "type": "object",
   "additionalProperties": false,
@@ -11,6 +11,9 @@
     "source_digest",
     "candidate_digest",
     "acceptance_tests_digest",
+    "generation_artifacts",
+    "review_snapshots",
+    "build_attempt",
     "ledger_head",
     "phase_artifacts",
     "trusted_artifact_digests",
@@ -24,7 +27,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "factory-evidence-bundle/1"
+      "const": "factory-evidence-bundle/2"
     },
     "run_id": {
       "type": "string",
@@ -41,6 +44,46 @@
     },
     "acceptance_tests_digest": {
       "$ref": "#/$defs/digest"
+    },
+    "generation_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target-manifest-source",
+        "pattern-catalog",
+        "pattern-catalog-source",
+        "build-plan",
+        "build-plan-source",
+        "build-input",
+        "generation-readiness"
+      ],
+      "properties": {
+        "target-manifest-source": {"$ref": "#/$defs/digest"},
+        "pattern-catalog": {"$ref": "#/$defs/digest"},
+        "pattern-catalog-source": {"$ref": "#/$defs/digest"},
+        "build-plan": {"$ref": "#/$defs/digest"},
+        "build-plan-source": {"$ref": "#/$defs/digest"},
+        "build-input": {"$ref": "#/$defs/digest"},
+        "generation-readiness": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "review_snapshots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coder-output", "tester-output"],
+      "properties": {
+        "coder-output": {"$ref": "#/$defs/digest"},
+        "tester-output": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "build_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "limit"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "limit": {"type": "integer", "minimum": 1}
+      }
     },
     "ledger_head": {
       "$ref": "#/$defs/digest"

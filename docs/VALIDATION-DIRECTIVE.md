@@ -34,6 +34,10 @@ The Validator verifies from immutable, externally supplied references:
 - the signed Product Specification, Architecture Specification, and Testing and
   Monitoring Strategy, including each whole-artifact digest and their
   preserved-source, capability-delta, schema, and contract-bundle digests;
+- the exact retained target manifest, qualified-pattern catalog, derived build
+  plan, ratified build input, and generation-readiness record, with every
+  Product/Architecture item mapped to construction, every Product expectation
+  mapped to a Testing/Monitoring oracle, and every Testing/Monitoring item used;
 - the content-addressed artifact/config/deployment digests;
 - the externally timestamped gate/audit records for signatures, CI, reviews,
   deploys, Standard risk acceptances, and Cosmetic gap reports.
@@ -43,6 +47,13 @@ trigger is created by the source host, CI/event system, or a non-implementer
 release role. The Validator rejects symbolic refs, mutable tags, moving branch
 heads, unpinned submodules, unresolved LFS pointers, and manifests whose digest
 does not match the supplied trigger.
+
+The build plan is disposable construction IR, not a fourth source of intent.
+Coder receives its verified plan and pattern catalog; Tester receives the common
+ratified build input only and is mechanically denied that construction IR. Before
+the Validator reviews or executes either lane, the runtime retains the exact
+regular-file bytes, relative paths, and modes of both outputs independently. A
+hash manifest without recoverable reviewed subjects is `BLOCKED:provenance`.
 
 The Validator's own prompt, policy, tool grants, model/tool versions, sandbox,
 and source permissions are versioned and signed. A validation run emits an
@@ -244,9 +255,12 @@ obtained. A checked item without that citation is still unchecked.
    remain failed after any flake; the later green run is a second observation,
    not an erasure.
    For every test that passed on the baseline and now fails, an exact signed
-   supersession authorizes a Tester-side update, unchanged authority requires a
-   code fix, and artifact silence or conflicting supersession routes to the
-   human. If an unrelated artifact amendment retains the exact item id and
+   same-phase supersession is necessary but not sufficient for a Tester-side
+   update. A separately trusted affirmative human test-impact ruling must bind
+   the run, current phase versions, exact old/new behavior, exact assertion or
+   membership-frozen family, and the expected change copied from the signed
+   superseder. Unchanged authority requires a code fix, and artifact silence or
+   conflicting supersession routes to the human. If an unrelated artifact amendment retains the exact item id and
    canonical intent digest, rebind the test provenance to the new artifact
    digest without changing its assertion and fix the code. Inconvenience never
    authorizes a test edit.

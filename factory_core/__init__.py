@@ -26,6 +26,7 @@ Public surface:
   * tool_policy — signed Allowed / Sign-off-required / Verboten run capabilities with scoped
     pre-execution decisions and denial probes
   * test_disposition — authorization-based handling of formerly passing tests that now fail
+  * build_plan — qualified recipe patterns plus disposable, authority-bound implementation IR
   * promotion — the oracle-adequacy × surface-criticality promotion decision: class-disposed
     evidence gaps, deterministic Critical evidence, specialist review, and candidate-bound
     Standard risk acceptance
@@ -49,6 +50,21 @@ from factory_core.adapters import (
     IdpAdapter,
     KnowledgeAdapter,
     RepoAdapter,
+)
+from factory_core.build_plan import (
+    BUILD_PLAN_SCHEMA_VERSION,
+    CONSTRUCTION_BROWNFIELD,
+    CONSTRUCTION_MODES,
+    CONSTRUCTION_REGENERATE,
+    PATTERN_CATALOG_SCHEMA_VERSION,
+    BuildPlan,
+    BuildPlanBundle,
+    BuildPlanReport,
+    BuildStep,
+    OracleLink,
+    PatternCatalog,
+    PatternDefinition,
+    verify_build_plan,
 )
 from factory_core.checklist import (
     ChecklistItemResult,
@@ -267,8 +283,13 @@ from factory_core.test_disposition import (
     TEST_ACTION_FIX_IMPLEMENTATION,
     TEST_ACTION_ROUTE_HUMAN,
     TEST_ACTION_UPDATE,
+    TEST_CHANGE_AUTHORIZATION_SCHEMA_VERSION,
+    TEST_CHANGE_RULING,
     ExistingTestDisposition,
     ExistingTestFailure,
+    TestAssertionBinding,
+    TestChangeAuthorization,
+    TestSelection,
     dispose_existing_test_failure,
 )
 from factory_core.tool_policy import (
@@ -334,6 +355,7 @@ __all__ = [
     "BASELINE_RESULT_FAILED",
     "BASELINE_RESULT_PASSED",
     "BASE_REQUIRED_EVIDENCE_IDS",
+    "BUILD_PLAN_SCHEMA_VERSION",
     "CLAIM_MONITOR",
     "CONTROL_GREEN_NOW",
     "CONTROL_RECOGNITION_CHECK",
@@ -357,6 +379,10 @@ __all__ = [
     "CapabilityDelta",
     "CapabilityFlow",
     "CapabilityLedger",
+    "BuildPlan",
+    "BuildPlanBundle",
+    "BuildPlanReport",
+    "BuildStep",
     "ChecklistItemResult",
     "ChecklistReport",
     "Classification",
@@ -366,6 +392,9 @@ __all__ = [
     "ComprehensivenessGate",
     "ComprehensivenessResult",
     "ConditionalSpec",
+    "CONSTRUCTION_BROWNFIELD",
+    "CONSTRUCTION_MODES",
+    "CONSTRUCTION_REGENERATE",
     "ContractReport",
     "ControlClassification",
     "ControlObservation",
@@ -429,12 +458,16 @@ __all__ = [
     "NOTIFICATION_RECORD_ONLY",
     "NamedEvidence",
     "NotificationDecision",
+    "OracleLink",
     "PHASE_ARCHITECTURE",
     "PHASE_ARTIFACT_NAMES",
     "PHASE_OPERATIONAL_MATURITY",
     "PHASE_PRODUCT_SPECIFICATION",
+    "PATTERN_CATALOG_SCHEMA_VERSION",
     "PROVENANCE_GAP_PREFIXES",
     "PhaseArtifact",
+    "PatternCatalog",
+    "PatternDefinition",
     "PromotionDecision",
     "PromotionError",
     "PromotionRequest",
@@ -485,6 +518,8 @@ __all__ = [
     "TEST_ACTION_FIX_IMPLEMENTATION",
     "TEST_ACTION_ROUTE_HUMAN",
     "TEST_ACTION_UPDATE",
+    "TEST_CHANGE_AUTHORIZATION_SCHEMA_VERSION",
+    "TEST_CHANGE_RULING",
     "TOOL_POLICY_GAP_PREFIXES",
     "TOOL_TIER_ALLOWED",
     "TOOL_TIER_SIGNOFF_REQUIRED",
@@ -501,6 +536,9 @@ __all__ = [
     "TRIAGE_DISPOSITION_SPECIFICATION_DEFECT_REQUIRED",
     "TargetManifest",
     "TargetManifestError",
+    "TestAssertionBinding",
+    "TestChangeAuthorization",
+    "TestSelection",
     "ToolAuthorization",
     "ToolInvocationDecision",
     "ToolPolicy",
@@ -541,6 +579,7 @@ __all__ = [
     "tier_rank",
     "tool_policy_issue_is_gap",
     "verify_checklist",
+    "verify_build_plan",
     "verify_correction",
     "verify_digest",
     "verify_independence",

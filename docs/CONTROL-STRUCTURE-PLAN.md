@@ -27,9 +27,11 @@
 > the two test-layer ones are applied (the R3 fixture is inverted to prove the GREEN-dup-shadows-
 > RED-honest false-acceptance the gate prevents, not merely one refusal becoming another) and the
 > two verifier-logic ones are deferred as a tracked task (they touch `_load_chain` and would
-> re-open the control-plane gate just closed). **Remaining:** F1 (the evidence-production
-> pipeline that wires Gate L into the live close path and supplies the receipt bodies that close
-> R1 replay) is the acknowledged deferral landing with Part 7.
+> re-open the control-plane gate just closed). **Remaining:** the evidence-production pipeline
+> does not yet produce `promotion_inputs.json` automatically or supply the receipt bodies that
+> close R1 replay; the harness close is also not a RunStore `PROMOTED` transition. Gate L itself
+> is now invoked by `endgame.sh` after all preceding gates and live proof are green, and missing
+> promotion inputs fail that close.
 
 ---
 
@@ -563,16 +565,15 @@ re-asserted, and corrected where the earlier comments were false:
   the control-plane prohibition targets; it restores the founder's true intent (full
   enforcement). Red-now test: `test_standard_flake_admission_requires_receipt_closes_false_close`.
 
-- **F1 (CRITICAL, honest re-scope — OPEN, acknowledged deferral).** Gate L is not wired into
-  a live close path. No producer of `promotion_inputs.json` exists (the evidence-production
-  pipeline is the larger deferred work), and `endgame.sh` does not invoke `promote.sh`. The plan
-  (Part 6) already defers Gate L "until the inputs it gates are machine-derived," so this is the
-  acknowledged deferral, not a new defect. The fix applied is HONEST COMMENTING: `promote.sh` and
-  `promotion_gate.py` now state plainly that the sole-writer is built and tested but not yet
-  the live close path — wiring lands with the evidence-production pipeline. The stale
-  denial-probe `test_promotion_advisory_when_candidate_receipt_absent` (above) described the
-  pre-cutover advisory window; the cutover is now enforcement (absent receipt → hard block), and
-  the test was converted.
+- **F1 (PARTIALLY RESOLVED — live harness close wired; evidence production remains).**
+  `endgame.sh` now invokes `promote.sh` only after the deterministic gates, required live proof,
+  and hygiene checks are green. A missing or invalid `promotion_inputs.json` makes Gate L red and
+  the endgame verdict red, so a green build can no longer stand in for a close. No automatic
+  producer of `promotion_inputs.json` exists yet, however, and the harness `run.json` close is not
+  the authoritative RunStore `PROMOTED` ledger transition. Those remaining controls belong to
+  the evidence-production/runtime-close work. The stale denial-probe
+  `test_promotion_advisory_when_candidate_receipt_absent` described the pre-cutover advisory
+  window; the cutover is enforcement (absent receipt → hard block), and the test was converted.
 
 **Bottom line:** the omission-enforcement cutover + the sole-writer are built, tested, and
 honest about their scope. F3 (fabrication-enforcement) and F4 (the Standard false-close) are
@@ -587,8 +588,9 @@ Gate I (denial-probe registry, slice 6) is BUILT: `harness/gates.tsv` registers 
 gate (A–N + F3/F4/R2/R3) with its end-to-end denial probe(s) + a `red_now` falsifiability
 mutation; `scripts/check_denial_probes.py` fails the build when a gate has no probe, a probe
 is a dead pointer, or a gate is unfalsifiable; `harness/denial_probe.sh` re-runs a gate's
-probes on demand. `make ship` is green. F1 (live-close wiring) remains the acknowledged
-deferral, landing with the evidence-production pipeline.
+probes on demand. `make ship` is green. Gate L is wired into the harness endgame; automatic
+promotion-input production and the RunStore promotion transition remain deferred to the
+evidence-production pipeline.
 
 **R2/R3 independent Opus re-verification (2026-08-14) returned CHANGES_REQUESTED** — the code
 is correct (keep it; the mutation matrix confirmed both tests kill only on their named check

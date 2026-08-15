@@ -57,12 +57,26 @@ def test_evidence_bundle_resolves_the_phase_artifact_schema() -> None:
     trusted = {phase["artifact_id"]: digest_obj(phase) for phase in phases}
     item = phases[0]["items"][0]
     document = {
-        "schema_version": "factory-evidence-bundle/1",
+        "schema_version": "factory-evidence-bundle/2",
         "run_id": "run-1",
         "target_digest": DIGEST,
         "source_digest": DIGEST,
         "candidate_digest": DIGEST,
         "acceptance_tests_digest": DIGEST,
+        "generation_artifacts": {
+            "target-manifest-source": DIGEST,
+            "pattern-catalog": DIGEST,
+            "pattern-catalog-source": DIGEST,
+            "build-plan": DIGEST,
+            "build-plan-source": DIGEST,
+            "build-input": DIGEST,
+            "generation-readiness": DIGEST,
+        },
+        "review_snapshots": {
+            "coder-output": DIGEST,
+            "tester-output": DIGEST,
+        },
+        "build_attempt": {"number": 1, "limit": 1},
         "ledger_head": DIGEST,
         "phase_artifacts": phases,
         "trusted_artifact_digests": trusted,

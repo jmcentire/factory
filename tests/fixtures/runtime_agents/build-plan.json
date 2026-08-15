@@ -1,0 +1,14 @@
+{
+  "schema_version": "factory-build-plan/1",
+  "steps": [
+    {
+      "step_id": "generate-calculator",
+      "pattern_id": "python-function",
+      "configuration": {
+        "module": "calculator.py",
+        "function": "add",
+        "operation": "integer-addition"
+      }
+    }
+  ]
+}

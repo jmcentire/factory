@@ -1,0 +1,52 @@
+{
+  "schema_version": "factory-build-input/1",
+  "run_id": "fixture-run",
+  "target_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+  "phase_artifacts": [
+    {
+      "artifact_id": "synthetic-product-specification",
+      "phase": "product-specification",
+      "version": "1",
+      "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "human_ratifier": "human:founder",
+      "validator_ratifier": "agent:validator",
+      "items": [
+        {
+          "item_id": "product:addition",
+          "canonical_statement": "The product adds integers and returns their mathematical sum.",
+          "supersedes": []
+        }
+      ]
+    },
+    {
+      "artifact_id": "synthetic-architecture",
+      "phase": "architecture",
+      "version": "1",
+      "source_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "human_ratifier": "human:founder",
+      "validator_ratifier": "agent:validator",
+      "items": [
+        {
+          "item_id": "architecture:interface",
+          "canonical_statement": "The public Python interface is calculator.py:add(left: int, right: int).",
+          "supersedes": []
+        }
+      ]
+    },
+    {
+      "artifact_id": "synthetic-operational-maturity",
+      "phase": "operational-maturity",
+      "version": "1",
+      "source_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "human_ratifier": "human:founder",
+      "validator_ratifier": "agent:validator",
+      "items": [
+        {
+          "item_id": "test:addition",
+          "canonical_statement": "Acceptance examples cover positive and negative integer addition.",
+          "supersedes": []
+        }
+      ]
+    }
+  ]
+}

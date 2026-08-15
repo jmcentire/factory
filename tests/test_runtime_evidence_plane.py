@@ -8,6 +8,13 @@ from typing import Any
 
 import pytest
 
+from factory_core.build_plan import (
+    BuildPlan,
+    BuildStep,
+    OracleLink,
+    PatternCatalog,
+    PatternDefinition,
+)
 from factory_core.correction import (
     BASELINE_RESULT_FAILED,
     BASELINE_RESULT_PASSED,
@@ -34,7 +41,7 @@ from factory_core.independence import (
     IndependenceRecord,
     StructuralModeRecord,
 )
-from factory_core.manifest import SegregationPolicy, digest_obj
+from factory_core.manifest import SegregationPolicy, digest_bytes, digest_obj
 from factory_core.monitors import (
     MONITOR_AUTHORSHIP_GENERATED,
     MONITOR_AUTHORSHIP_HUMAN,
@@ -49,6 +56,7 @@ from factory_core.provenance import (
     PhaseArtifact,
     ProvenanceClaim,
 )
+from factory_core.target import load_target_manifest
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
     DeterminismRecord,
@@ -56,14 +64,36 @@ from factory_runtime.evidence_plane import (
     EvidencePlaneError,
     SurfaceEvidence,
 )
+from factory_runtime.generation import GenerationPreparer, build_input_document
 from factory_runtime.schema import DocumentValidationError
+from factory_runtime.snapshot import freeze_tree, tree_digest
 from factory_runtime.state import RunState, RunStore
 from tests.conftest import ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
-CANDIDATE = "sha256:" + ("3" * 64)
-TESTS = "sha256:" + ("4" * 64)
+CANDIDATE = digest_obj(
+    {
+        "files": [
+            {
+                "path": "candidate.txt",
+                "mode": 0o444,
+                "digest": digest_bytes(b"candidate"),
+            }
+        ]
+    }
+)
+TESTS = digest_obj(
+    {
+        "files": [
+            {
+                "path": "acceptance.txt",
+                "mode": 0o444,
+                "digest": digest_bytes(b"acceptance"),
+            }
+        ]
+    }
+)
 
 
 class _Clock:
@@ -95,11 +125,53 @@ def _phase(phase: str, artifact_id: str) -> PhaseArtifact:
 def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
     clock = _Clock()
     store = RunStore(root, clock=clock)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
     artifacts = (
         _phase(PHASE_PRODUCT_SPECIFICATION, "product"),
         _phase(PHASE_ARCHITECTURE, "architecture"),
         _phase(PHASE_OPERATIONAL_MATURITY, "operations"),
+    )
+    pattern = PatternDefinition(
+        pattern_id="module",
+        version="1",
+        artifact_digest=digest_obj({"pattern": "module"}),
+        qualification_evidence_digest=digest_obj({"qualified": "module"}),
+        mechanism={"kind": "module"},
+    )
+    catalog = PatternCatalog("catalog", "1", (pattern,))
+    catalog_path = root / "pattern-catalog.json"
+    catalog_path.write_text(json.dumps(catalog.body()), encoding="utf-8")
+    target_path = root / "target.toml"
+    target_path.write_text(
+        "\n".join(
+            (
+                'schema_version = "factory-target-manifest/1"',
+                'target_id = "synthetic-evidence"',
+                "[repo]",
+                'url = "https://example.invalid/repo.git"',
+                'ref = "main"',
+                "[adapters]",
+                'repo = "readonly_git"',
+                'knowledge = "kin_reader"',
+                'compliance = "rules_json"',
+                'idp = "oidc"',
+                'artifact_sink = "local_fs"',
+                "[compliance]",
+                'rules_path = "compliance/rules.json"',
+                "[build]",
+                f'pattern_catalog_digest = "{catalog.content_digest}"',
+                "max_attempts = 1",
+                'construction_modes = ["regenerate", "brownfield"]',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    target = load_target_manifest(target_path)
+    store.create(
+        "run-1",
+        target_digest=target.content_digest,
+        source_digest=SOURCE,
+        actor="validator",
     )
     states = (
         RunState.PRODUCT_SPECIFICATION_RATIFIED,
@@ -128,7 +200,71 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
                 **ratification_receipts(artifact.phase),
             },
         )
-    store.transition("run-1", RunState.BUILDING, actor="validator")
+    build_input = build_input_document("run-1", target.content_digest, artifacts)
+    product, architecture, operations = artifacts
+    plan = BuildPlan(
+        plan_id="plan-1",
+        version="1",
+        run_id="run-1",
+        target_digest=target.content_digest,
+        construction_mode="regenerate",
+        max_build_attempts=1,
+        build_input_digest=digest_obj(build_input),
+        pattern_catalog_digest=catalog.content_digest,
+        phase_artifact_digests={artifact.phase: artifact.content_digest for artifact in artifacts},
+        steps=(
+            BuildStep(
+                step_id="construct",
+                pattern_id=pattern.pattern_id,
+                pattern_digest=pattern.content_digest,
+                configuration={"module": "candidate.txt"},
+                intent_backreferences=(
+                    product.backreference(product.items[0]),
+                    architecture.backreference(architecture.items[0]),
+                ),
+            ),
+        ),
+        oracle_links=(
+            OracleLink(
+                product.backreference(product.items[0]),
+                operations.backreference(operations.items[0]),
+            ),
+            OracleLink(
+                architecture.backreference(architecture.items[0]),
+                operations.backreference(operations.items[0]),
+            ),
+        ),
+    )
+    plan_path = root / "build-plan.json"
+    plan_path.write_text(json.dumps(plan.body()), encoding="utf-8")
+    prepared = GenerationPreparer(root).prepare(
+        "run-1",
+        target_manifest_path=target_path,
+        pattern_catalog_path=catalog_path,
+        build_plan_path=plan_path,
+    )
+    store.transition(
+        "run-1",
+        RunState.BUILDING,
+        actor="validator",
+        artifact_digests=prepared.artifact_digests,
+        payload={"attempt_number": 1, "attempt_limit": 1},
+    )
+    coder_output = root / "coder-output"
+    tester_output = root / "tester-output"
+    (coder_output / "artifact").mkdir(parents=True)
+    (tester_output / "tests").mkdir(parents=True)
+    candidate_file = coder_output / "artifact" / "candidate.txt"
+    tests_file = tester_output / "tests" / "acceptance.txt"
+    candidate_file.write_bytes(b"candidate")
+    tests_file.write_bytes(b"acceptance")
+    candidate_file.chmod(0o444)
+    tests_file.chmod(0o444)
+    review_root = root / "run-1" / "evidence" / "review-snapshots"
+    coder_snapshot = freeze_tree(coder_output, review_root)
+    tester_snapshot = freeze_tree(tester_output, review_root)
+    assert tree_digest(coder_snapshot.files_directory / "artifact") == CANDIDATE
+    assert tree_digest(tester_snapshot.files_directory / "tests") == TESTS
     store.transition(
         "run-1",
         RunState.VALIDATING,
@@ -136,6 +272,8 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
         artifact_digests={
             "candidate": CANDIDATE,
             "acceptance-tests": TESTS,
+            "coder-output-snapshot": coder_snapshot.digest,
+            "tester-output-snapshot": tester_snapshot.digest,
         },
     )
     return store, artifacts
@@ -391,9 +529,7 @@ def test_critical_gap_or_flake_blocks_while_standard_gap_gates(tmp_path: Path) -
         claims=(_claim(artifacts[0]),),
         checklist_journal=journal,
         required_checklist_item_ids=("build", "tests"),
-        surface_evidence=(
-            _surface(criticality="standard", adequate=False, evidence=False),
-        ),
+        surface_evidence=(_surface(criticality="standard", adequate=False, evidence=False),),
         determinism_records=(_determinism(criticality="standard"),),
         **_records(artifacts),
     )
@@ -592,9 +728,7 @@ def test_monitor_coverage_is_class_disposed_at_the_bundle_boundary(tmp_path: Pat
     standard = _uncovered("standard")
     cosmetic = _uncovered("cosmetic")
 
-    assert (
-        "critical-gap:monitor-coverage-missing:control-plane" in critical.blocking_issues
-    )
+    assert "critical-gap:monitor-coverage-missing:control-plane" in critical.blocking_issues
     assert "standard-gap:monitor-coverage-missing:control-plane" in standard.gate_issues
     assert "cosmetic-gap:monitor-coverage-missing:control-plane" in cosmetic.reports
     assert standard.blocking_issues == () and cosmetic.blocking_issues == ()

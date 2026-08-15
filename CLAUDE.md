@@ -28,8 +28,10 @@ construction — the purity guard will (and must) reject it.
 - `factory_core/promotion.py` — oracle-adequacy × criticality promotion decision.
 - `factory_core/provenance.py` — canonical phase-artifact/backreference verifier and
   absence-vs-integrity issue classification, including whole-artifact version binding.
-- `factory_core/test_disposition.py` — signed-supersession / regression / ambiguity classifier
-  for formerly passing tests.
+- `factory_core/build_plan.py` — qualified recipe-pattern catalog and disposable per-run build
+  IR with immutable configuration, full intent coverage, oracle links, and freshness binding.
+- `factory_core/test_disposition.py` — same-phase signed supersession plus exact externally
+  trusted human impact ruling / regression / ambiguity classifier for formerly passing tests.
 - `factory_core/independence.py` — the five-tier independence ladder derived from the recorded
   arrangement, per-agent model/directive versions, and the structural-depth trade.
 - `factory_core/monitors.py` / `triage.py` — spec-derived monitors with resolvable authority and
@@ -38,14 +40,20 @@ construction — the purity guard will (and must) reject it.
   and reproduction before repair.
 - `factory_core/tool_policy.py` — signed Allowed / Sign-off-required / Verboten run-policy and
   scoped pre-execution decision.
-- `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code references).
+- `factory_core/target.py` — `TargetManifest` loader (TOML + JSON Schema; refuses code
+  references and binds pattern catalog, construction modes, and attempt ceiling).
 - `factory_core/adapters.py` — the five `typing.Protocol` seams (interfaces only).
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
-- `factory_runtime/state.py` — persisted lifecycle ledger and checked projection.
+- `factory_runtime/state.py` — persisted lifecycle ledger, checked projection, frozen generation
+  tuple, and bounded-attempt enforcement.
 - `factory_runtime/tessera.py` / `authority.py` — real Tessera CLI and external authority.
 - `factory_runtime/workflow.py` — authorized intake and invariant-document ratification.
-- `factory_runtime/isolation.py` / `lanes.py` — qualified platform isolation and role lanes.
-- `factory_runtime/evidence_plane.py` / `orchestrator.py` — item evidence and runtime to preview.
+- `factory_runtime/generation.py` / `snapshot.py` — target/phase/build-plan readiness and retained
+  exact generation/review bytes.
+- `factory_runtime/isolation.py` / `lanes.py` — qualified platform isolation and asymmetric role
+  projections (Tester never receives construction IR).
+- `factory_runtime/evidence_plane.py` / `orchestrator.py` — retained-output evidence and runtime
+  to signed preview.
 - `factory_runtime/cli.py` — executable command boundary.
 - `scripts/check_core_purity.py` — the fail-closed anti-coupling guard.
 - `scripts/check_doctrine_sync.py` — structural parity guard for the active doctrine surfaces.
@@ -82,6 +90,16 @@ make test-tessera   # real signing + runtime-through-preview proof
   fail closed.
 - **Checklist gates** — each required item is independently content-addressed against the
   candidate; unchecked/uncited remains a gap and negative or invalid evidence cannot pass.
+- **Derived build IR** — Product, Architecture, and Testing/Monitoring artifacts remain the only
+  intent authority. Recipe patterns are pre-qualified mechanisms; per-run recipe books carry
+  instantiated configuration plus exact backreferences and oracle links, invalidate on any
+  phase/target/catalog/input change, and cannot change a test expectation.
+- **Retained bytes and bounded convergence** — each build attempt names a complete frozen
+  generation tuple; reviewed Coder/Tester bytes are retained and re-derived; attempt ceilings
+  live in both target ABI and plan and cannot rise after authoring starts.
+- **Existing tests are immutable by default** — changing one requires a unique same-phase signed
+  supersession plus an externally trusted affirmative human ruling over the exact assertion or
+  frozen family and exact expected replacement statement; a ruling alone cannot invert behavior.
 - **Tool capability boundary** — every declared tool has exactly one signed tier and a
   phase-2/3 backreference; unknown/Verboten denies, Sign-off grants are scoped and expiring,
   and denial probes demonstrate enforcement. Platform credential/network removal remains an
@@ -107,7 +125,8 @@ make test-tessera   # real signing + runtime-through-preview proof
 - **Doctrine parity** — active docs retain exactly Validator/Coder/Tester, the three phases, all
   eight non-negotiables, and the structural criticality/determinism policy; historical records
   are not rewritten.
-- **Data-only targets** — the `TargetManifest` loader refuses code references; a target may only *select* named seams the core already owns.
+- **Data-only targets** — the `TargetManifest` loader refuses code references; a target may only
+  *select* named seams the core already owns and must declare its operational build ABI.
 - **Portability** — the full suite passes with no target pack present (only the synthetic empty fixture).
 
 ## Style

@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://factory.invalid/schemas/target_manifest.schema.json",
   "title": "TargetManifest",
-  "description": "A data-only descriptor of a factory target. Repo coordinates + adapter selections (names, never code) + role/capability bindings + compliance-rule path + effort params + demo-env descriptor. The core imports nothing this file names.",
+  "description": "A data-only descriptor of a factory target. Repo coordinates + adapter selections (names, never code) + role/capability bindings + compliance-rule path + operational build ABI + effort params + demo-env descriptor. The core imports nothing this file names.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "target_id", "repo", "adapters", "compliance"],
+  "required": ["schema_version", "target_id", "repo", "adapters", "compliance", "build"],
   "properties": {
     "schema_version": {
       "type": "string",
@@ -50,6 +50,30 @@
           "description": "Path (within the target checkout) to the fed-in compliance ruleset — declarative data the ComplianceAdapter surfaces. Never code."
         },
         "format": {"type": "string"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern_catalog_digest", "max_attempts", "construction_modes"],
+      "properties": {
+        "pattern_catalog_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Externally authorized address of the pre-qualified construction catalog."
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Hard ceiling for BUILDING entries in one run; a lower per-run plan limit is allowed."
+        },
+        "construction_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["regenerate", "brownfield"]},
+          "description": "Target-authorized construction modes. Regeneration keeps a complete rewrite ordinary."
+        }
       }
     },
     "roles": {

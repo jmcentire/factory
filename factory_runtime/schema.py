@@ -16,8 +16,11 @@ SCHEMA_NAMES = frozenset(
         "authorization-request",
         "authority-receipt",
         "evidence-bundle",
+        "build-plan",
         "genesis",
+        "pattern-catalog",
         "phase-artifact",
+        "test-change-authorization",
     }
 )
 
@@ -64,6 +67,4 @@ def validate_document(name: str, document: Mapping[str, Any]) -> None:
     for error in errors:
         location = "/".join(str(item) for item in error.absolute_path) or "<root>"
         details.append(f"{location}: {error.message}")
-    raise DocumentValidationError(
-        f"{name} validation failed:\n  " + "\n  ".join(details)
-    )
+    raise DocumentValidationError(f"{name} validation failed:\n  " + "\n  ".join(details))

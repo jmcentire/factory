@@ -40,6 +40,21 @@ def ratification_receipts(phase: str) -> dict[str, str]:
     }
 
 
+def generation_artifacts(seed: str = "default") -> dict[str, str]:
+    """Complete stand-in generation tuple for state-machine unit tests.
+
+    These values exercise ledger admissibility only. Runtime generation tests create and verify
+    real retained target/catalog/plan/input bytes before using the same transition.
+    """
+
+    from factory_runtime.state import GENERATION_ARTIFACT_KEYS
+
+    return {
+        key: "sha256:" + hashlib.sha256(f"{seed}:{key}".encode()).hexdigest()
+        for key in GENERATION_ARTIFACT_KEYS
+    }
+
+
 def _freeze(obj: object) -> object:
     """Serialize a dataclass request/policy/profile to the dict shape ``from_dict`` reads.
 

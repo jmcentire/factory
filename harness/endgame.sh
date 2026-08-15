@@ -53,6 +53,7 @@ if [ -f "$H/target.conf" ]; then
 else
   say "   (no $H/target.conf — live-proof GAP declared, not passed: the run cannot"
   say "    demonstrate real entry points until a provisioner is configured)"
+  FAILED=1
 fi
 
 say "== changeset hygiene (challenge the clean claim) =="
@@ -66,6 +67,17 @@ UNTRACKED=$(git -C "$REPO" status --porcelain | grep '^??' || true)
 if command -v gh >/dev/null 2>&1; then
   PRS=$(cd "$REPO" && gh pr list --state open 2>/dev/null || true)
   [ -n "$PRS" ] && { say "   open PRs (disposition each — merged, closed, or explicitly carried):"; say "$PRS"; }
+fi
+
+say "== sole advancement (Gate L) =="
+if [ "$FAILED" -eq 0 ]; then
+  if HARNESS_DIR="$H" "$D/promote.sh" "$RUN"; then
+    say "   Gate L: GREEN"
+  else
+    say "   Gate L: RED"; FAILED=1
+  fi
+else
+  say "   Gate L: NOT RUN — prior deterministic or live-proof gaps remain"
 fi
 
 python3 - "$ROOT" "$RUN" "$SHA" "$FAILED" <<'PY'

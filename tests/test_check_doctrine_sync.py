@@ -42,11 +42,11 @@ def test_mutated_role_map_is_detected_even_when_name_remains_elsewhere(tmp_path:
     root = _copy_guard_surface(tmp_path)
     doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
     source = doctrine.read_text(encoding="utf-8")
-    row = "| **Tester** | Validator only | The spec | The tests | Nothing |"
+    row = "| **Tester** | Validator only | Ratified build input only | The tests | Nothing |"
     doctrine.write_text(
         source.replace(
             row,
-            "| **Reviewer** | Validator only | The spec | The tests | Nothing |",
+            "| **Reviewer** | Validator only | Ratified build input only | The tests | Nothing |",
         ),
         encoding="utf-8",
     )
@@ -60,11 +60,15 @@ def test_mutated_role_channel_is_detected_structurally(tmp_path: Path) -> None:
     root = _copy_guard_surface(tmp_path)
     doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
     source = doctrine.read_text(encoding="utf-8")
-    row = "| **Coder** | Validator only | The spec | The implementation | Nothing it is judged by |"
+    row = (
+        "| **Coder** | Validator only | Ratified build input + derived construction IR | "
+        "The implementation | Nothing it is judged by |"
+    )
     doctrine.write_text(
         source.replace(
             row,
-            "| **Coder** | Nobody | The spec | The implementation | Nothing it is judged by |",
+            "| **Coder** | Nobody | Ratified build input + derived construction IR | "
+            "The implementation | Nothing it is judged by |",
         ),
         encoding="utf-8",
     )
@@ -142,6 +146,38 @@ def test_invariant_artifact_authority_cannot_be_replaced_by_a_ticket(tmp_path: P
     assert any(error.startswith("invariant-document-rule-missing:") for error in errors)
 
 
+def test_recipe_book_cannot_be_promoted_into_behavioral_authority(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    rule = "it may not contain free behavioral authority."
+    assert rule in source
+    doctrine.write_text(
+        source.replace(rule, "it may add behavior when a standard pattern needs it."),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert any(error.startswith("construction-ir-rule-missing:") for error in errors)
+
+
+def test_tester_projection_cannot_receive_construction_ir(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    rule = "You never read the pattern catalog or build plan."
+    assert rule in source
+    doctrine.write_text(
+        source.replace(rule, "You may inspect the pattern catalog when useful."),
+        encoding="utf-8",
+    )
+
+    errors = check_repository(root)
+
+    assert "tester-construction-ir-isolation-missing" in errors
+
+
 def test_missing_tool_tier_is_detected_structurally(tmp_path: Path) -> None:
     root = _copy_guard_surface(tmp_path)
     doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
@@ -188,9 +224,23 @@ def test_the_red_guard_rule_cannot_be_softened_back_into_an_expectation(tmp_path
 
     errors = check_repository(root)
 
-    assert (
-        "control-rule-missing:A green guard that comes back red is not a forcing test." in errors
+    assert "control-rule-missing:A green guard that comes back red is not a forcing test." in errors
+
+
+def test_signed_supersession_alone_cannot_authorize_a_test_change(tmp_path: Path) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    rule = "firm affirmative human\nruling over its impact"
+    assert rule in source
+    doctrine.write_text(
+        source.replace(rule, "signed superseding item\nwithout a separate impact ruling"),
+        encoding="utf-8",
     )
+
+    errors = check_repository(root)
+
+    assert "existing-test-disposition-missing:firm affirmative human ruling" in errors
 
 
 def test_the_operational_control_names_cannot_be_dropped(tmp_path: Path) -> None:

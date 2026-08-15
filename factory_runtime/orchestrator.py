@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from factory_core.correction import CorrectionRecord
 from factory_core.independence import IndependenceRecord
-from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.monitors import Monitor
 from factory_core.provenance import ProvenanceClaim
 from factory_runtime.evidence_plane import (
@@ -21,11 +19,13 @@ from factory_runtime.evidence_plane import (
     EvidenceBundleReport,
     SurfaceEvidence,
 )
+from factory_runtime.generation import GenerationError, GenerationPreparer
 from factory_runtime.lanes import (
     IsolatedBuildLoop,
     LaneExecution,
     ValidationExecution,
 )
+from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.tessera import VerifiedEnvelope
 from factory_runtime.workflow import FactoryWorkflow
@@ -70,29 +70,10 @@ class BuildOutcome:
 def digest_artifact_tree(root: str | Path) -> str:
     """Content-address a regular-file tree without following links."""
 
-    directory = Path(root)
-    if not directory.is_dir():
-        raise OrchestrationError(f"candidate artifact directory is missing: {directory}")
-    files: list[dict[str, object]] = []
-    for path in sorted(directory.rglob("*")):
-        relative = path.relative_to(directory).as_posix()
-        if path.is_symlink():
-            raise OrchestrationError(f"candidate artifact contains a symlink: {relative}")
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            raise OrchestrationError(f"candidate artifact is not a regular file: {relative}")
-        mode = stat.S_IMODE(path.stat().st_mode)
-        files.append(
-            {
-                "path": relative,
-                "mode": mode,
-                "digest": digest_bytes(path.read_bytes()),
-            }
-        )
-    if not files:
-        raise OrchestrationError("candidate artifact tree is empty")
-    return digest_obj({"files": files})
+    try:
+        return tree_digest(root)
+    except SnapshotError as exc:
+        raise OrchestrationError(str(exc)) from exc
 
 
 def _claims(path: Path) -> tuple[ProvenanceClaim, ...]:
@@ -104,9 +85,7 @@ def _claims(path: Path) -> tuple[ProvenanceClaim, ...]:
     if not isinstance(raw_claims, list):
         raise OrchestrationError("Tester assertion manifest has no claims array")
     claims = tuple(
-        ProvenanceClaim.from_dict(claim)
-        for claim in raw_claims
-        if isinstance(claim, Mapping)
+        ProvenanceClaim.from_dict(claim) for claim in raw_claims if isinstance(claim, Mapping)
     )
     if len(claims) != len(raw_claims) or not claims:
         raise OrchestrationError("Tester assertion manifest contains malformed or no claims")
@@ -152,7 +131,9 @@ class FactoryOrchestrator:
         run_id: str,
         *,
         attempt_id: str,
-        spec_path: str | Path,
+        target_manifest_path: str | Path,
+        pattern_catalog_path: str | Path,
+        build_plan_path: str | Path,
         coder_command: Sequence[str],
         tester_command: Sequence[str],
         validator_command: Sequence[str],
@@ -196,37 +177,52 @@ class FactoryOrchestrator:
         if len({implementer_identity, tester_identity, verifier_identity}) != 3:
             raise OrchestrationError("Coder, Tester, and Validator identities must be distinct")
         if len({implementer.public_key, tester.public_key, verifier.public_key}) != 3:
-            raise OrchestrationError(
-                "Coder, Tester, and Validator must not share signing keys"
-            )
+            raise OrchestrationError("Coder, Tester, and Validator must not share signing keys")
 
-        attempt_root = (
-            self.workflow.root
-            / run_id
-            / "evidence"
-            / "build-attempts"
-            / attempt_id
-        )
+        try:
+            prepared = GenerationPreparer(self.workflow.root).prepare(
+                run_id,
+                target_manifest_path=target_manifest_path,
+                pattern_catalog_path=pattern_catalog_path,
+                build_plan_path=build_plan_path,
+            )
+        except GenerationError as exc:
+            raise OrchestrationError(str(exc)) from exc
+
+        attempt_root = self.workflow.root / run_id / "evidence" / "build-attempts" / attempt_id
         if attempt_root.exists():
             raise OrchestrationError(f"refusing to reuse build attempt: {attempt_id}")
         self.workflow.store.transition(
             run_id,
             RunState.BUILDING,
             actor="validator",
-            artifact_digests={"combined-spec": digest_bytes(Path(spec_path).read_bytes())},
+            artifact_digests=prepared.artifact_digests,
+            payload={
+                "attempt_id": attempt_id,
+                "attempt_number": prepared.attempt_number,
+                "attempt_limit": prepared.plan.max_build_attempts,
+                "construction_mode": prepared.plan.construction_mode,
+            },
         )
         loop = IsolatedBuildLoop(attempt_root)
         candidate_digest = ""
         tests_digest = ""
+        coder_snapshot_digest = ""
+        tester_snapshot_digest = ""
         journal: ChecklistJournal | None = None
 
         def enter_validation(
             coder: LaneExecution,
             tester: LaneExecution,
+            coder_snapshot: FrozenTree,
+            tester_snapshot: FrozenTree,
         ) -> None:
             nonlocal candidate_digest, tests_digest, journal
-            candidate_digest = digest_artifact_tree(coder.output_directory / "artifact")
-            tests_digest = digest_artifact_tree(tester.output_directory / "tests")
+            nonlocal coder_snapshot_digest, tester_snapshot_digest
+            candidate_digest = digest_artifact_tree(coder_snapshot.files_directory / "artifact")
+            tests_digest = digest_artifact_tree(tester_snapshot.files_directory / "tests")
+            coder_snapshot_digest = coder_snapshot.digest
+            tester_snapshot_digest = tester_snapshot.digest
             journal = ChecklistJournal(
                 attempt_root / "checklist.jsonl",
                 subject_digest=candidate_digest,
@@ -241,16 +237,22 @@ class FactoryOrchestrator:
             journal.record(
                 "coder-output",
                 passed=True,
-                detail="Coder produced a non-empty regular-file artifact tree",
+                detail="Coder output was frozen before Validator review",
                 actor="validator",
-                observations={"candidate_digest": candidate_digest},
+                observations={
+                    "candidate_digest": candidate_digest,
+                    "snapshot_digest": coder_snapshot_digest,
+                },
             )
             journal.record(
                 "tester-output",
                 passed=True,
-                detail="Tester produced a non-empty regular-file acceptance-test tree",
+                detail="Tester output was frozen before Validator review",
                 actor="validator",
-                observations={"tests_digest": tests_digest},
+                observations={
+                    "tests_digest": tests_digest,
+                    "snapshot_digest": tester_snapshot_digest,
+                },
             )
             self.workflow.store.transition(
                 run_id,
@@ -259,6 +261,8 @@ class FactoryOrchestrator:
                 artifact_digests={
                     "candidate": candidate_digest,
                     "acceptance-tests": tests_digest,
+                    "coder-output-snapshot": coder_snapshot_digest,
+                    "tester-output-snapshot": tester_snapshot_digest,
                 },
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
@@ -266,13 +270,18 @@ class FactoryOrchestrator:
 
         try:
             execution = loop.execute(
-                spec_path=spec_path,
+                build_input_path=prepared.build_input_path,
                 coder_command=coder_command,
                 tester_command=tester_command,
                 validator_command=validator_command,
                 coder_trusted_paths=coder_trusted_paths,
                 tester_trusted_paths=tester_trusted_paths,
                 validator_trusted_paths=validator_trusted_paths,
+                build_plan_path=prepared.build_plan_path,
+                pattern_catalog_path=prepared.pattern_catalog_path,
+                review_snapshot_store=(
+                    self.workflow.root / run_id / "evidence" / "review-snapshots"
+                ),
                 before_validation=enter_validation,
             )
         except Exception as exc:
@@ -280,9 +289,7 @@ class FactoryOrchestrator:
                 run_id,
                 exc=exc,
                 tester_identity=tester_identity,
-                implementer_identity=(
-                    implementer_identity if candidate_digest else ""
-                ),
+                implementer_identity=(implementer_identity if candidate_digest else ""),
             )
             raise
         if not execution.coder.succeeded or not execution.tester.succeeded:
@@ -338,8 +345,10 @@ class FactoryOrchestrator:
             )
 
         try:
+            if execution.tester_snapshot is None:
+                raise OrchestrationError("Tester review snapshot is missing")
             claims = _claims(
-                execution.tester.output_directory / "evidence" / "assertions.json"
+                execution.tester_snapshot.files_directory / "evidence" / "assertions.json"
             )
             report = EvidenceBundleAssembler(self.workflow.root).assemble(
                 run_id,

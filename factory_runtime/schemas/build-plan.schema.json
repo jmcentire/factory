@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/build-plan/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_id", "version", "run_id", "target_digest", "construction_mode", "max_build_attempts", "build_input_digest", "pattern_catalog_digest", "phase_artifact_digests", "steps", "oracle_links"],
+  "properties": {
+    "schema_version": {"const": "factory-build-plan/1"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "target_digest": {"$ref": "#/$defs/digest"},
+    "construction_mode": {"enum": ["regenerate", "brownfield"]},
+    "max_build_attempts": {"type": "integer", "minimum": 1},
+    "build_input_digest": {"$ref": "#/$defs/digest"},
+    "pattern_catalog_digest": {"$ref": "#/$defs/digest"},
+    "phase_artifact_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product-specification", "architecture", "operational-maturity"],
+      "properties": {
+        "product-specification": {"$ref": "#/$defs/digest"},
+        "architecture": {"$ref": "#/$defs/digest"},
+        "operational-maturity": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "pattern_id", "pattern_digest", "configuration", "intent_backreferences", "depends_on"],
+        "properties": {
+          "step_id": {"type": "string", "minLength": 1},
+          "pattern_id": {"type": "string", "minLength": 1},
+          "pattern_digest": {"$ref": "#/$defs/digest"},
+          "configuration": {"type": "object", "minProperties": 1},
+          "intent_backreferences": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/backreference"}},
+          "depends_on": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "oracle_links": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectation", "oracle"],
+        "properties": {
+          "expectation": {"$ref": "#/$defs/backreference"},
+          "oracle": {"$ref": "#/$defs/backreference"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "backreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_digest", "item_id", "intent_digest"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "item_id": {"type": "string", "minLength": 1},
+        "intent_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

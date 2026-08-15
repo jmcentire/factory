@@ -37,7 +37,9 @@ from factory_core.provenance import (
     ProvenanceClaim,
     ProvenanceReport,
 )
+from factory_runtime.generation import GenerationError, verify_prepared_generation
 from factory_runtime.schema import validate_document
+from factory_runtime.snapshot import SnapshotError, tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState, RunStore
 
 
@@ -95,11 +97,7 @@ class EvidenceBundleReport:
 
     @property
     def mechanically_satisfied(self) -> bool:
-        return (
-            self.provenance.satisfied
-            and self.checklist.satisfied
-            and not self.blocking_issues
-        )
+        return self.provenance.satisfied and self.checklist.satisfied and not self.blocking_issues
 
 
 class ChecklistJournal:
@@ -177,9 +175,7 @@ class ChecklistJournal:
             if digests.get("subject") != self.subject_digest:
                 raise EvidencePlaneError(f"checklist entry {index} binds another subject")
             payload = entry.get("payload")
-            raw_result = (
-                payload.get("checklist_result") if isinstance(payload, Mapping) else None
-            )
+            raw_result = payload.get("checklist_result") if isinstance(payload, Mapping) else None
             if not isinstance(raw_result, Mapping):
                 raise EvidencePlaneError(f"checklist entry {index} has no result")
             result = ChecklistItemResult.from_dict(raw_result)
@@ -248,9 +244,36 @@ class EvidenceBundleAssembler:
                 "candidate digest does not match the authoritative validating transition"
             )
         if not acceptance_tests_digest:
+            raise EvidencePlaneError("validating transition has no acceptance-test artifact digest")
+        coder_snapshot_digest = str(current_digests.get("coder-output-snapshot", ""))
+        tester_snapshot_digest = str(current_digests.get("tester-output-snapshot", ""))
+        if not coder_snapshot_digest or not tester_snapshot_digest:
             raise EvidencePlaneError(
-                "validating transition has no acceptance-test artifact digest"
+                "validating transition has no immutable review snapshot digests"
             )
+        review_root = self.runs_root / run_id / "evidence" / "review-snapshots"
+        try:
+            coder_snapshot = verify_frozen_tree(
+                review_root / coder_snapshot_digest.removeprefix("sha256:"),
+                expected_digest=coder_snapshot_digest,
+            )
+            tester_snapshot = verify_frozen_tree(
+                review_root / tester_snapshot_digest.removeprefix("sha256:"),
+                expected_digest=tester_snapshot_digest,
+            )
+            if tree_digest(coder_snapshot.files_directory / "artifact") != candidate_digest:
+                raise EvidencePlaneError(
+                    "frozen Coder snapshot does not contain the ledger candidate"
+                )
+            if tree_digest(tester_snapshot.files_directory / "tests") != acceptance_tests_digest:
+                raise EvidencePlaneError(
+                    "frozen Tester snapshot does not contain the ledger acceptance tests"
+                )
+            verify_prepared_generation(self.runs_root, projection)
+        except (SnapshotError, GenerationError) as exc:
+            raise EvidencePlaneError(
+                f"immutable build evidence failed verification: {exc}"
+            ) from exc
         artifacts = self._phase_artifacts(run_id, projection.phase_artifact_digests)
         trusted = {artifact.artifact_id: artifact.content_digest for artifact in artifacts}
         provenance_bundle = ProvenanceBundle(
@@ -291,19 +314,26 @@ class EvidenceBundleAssembler:
             policy=policy or SegregationPolicy(),
         )
         record_blocking, record_gates, record_reports = record_findings
-        blocking = tuple(
-            dict.fromkeys((*evidence_binding_issues, *blocking, *record_blocking))
-        )
+        blocking = tuple(dict.fromkeys((*evidence_binding_issues, *blocking, *record_blocking)))
         gates = tuple(dict.fromkeys((*gates, *record_gates)))
         reports = tuple(dict.fromkeys((*reports, *record_reports)))
         document = {
-            "schema_version": "factory-evidence-bundle/1",
+            "schema_version": "factory-evidence-bundle/2",
             "run_id": run_id,
             "lane": lane,
             "target_digest": projection.target_digest,
             "source_digest": projection.source_digest,
             "candidate_digest": candidate_digest,
             "acceptance_tests_digest": acceptance_tests_digest,
+            "generation_artifacts": dict(projection.generation_artifact_digests),
+            "review_snapshots": {
+                "coder-output": coder_snapshot_digest,
+                "tester-output": tester_snapshot_digest,
+            },
+            "build_attempt": {
+                "number": projection.build_attempt_count,
+                "limit": projection.build_attempt_limit,
+            },
             "ledger_head": projection.ledger_head,
             "phase_artifacts": [artifact.body() for artifact in artifacts],
             "trusted_artifact_digests": trusted,
@@ -496,9 +526,7 @@ class EvidenceBundleAssembler:
                         f"surface-evidence-unresolvable:{surface.surface_id}:{evidence_id}"
                     )
                 elif claimed_digest != authoritative:
-                    issues.append(
-                        f"surface-evidence-mismatch:{surface.surface_id}:{evidence_id}"
-                    )
+                    issues.append(f"surface-evidence-mismatch:{surface.surface_id}:{evidence_id}")
             resolved = {
                 evidence_id: available[evidence_id]
                 for evidence_id in surface.required_evidence_ids
@@ -578,11 +606,7 @@ class EvidenceBundleAssembler:
             if surface.criticality == "critical":
                 if gap:
                     blocking.append(f"critical-evidence-gap:{surface_id}")
-                if (
-                    not record.deterministic
-                    or record.flake_count
-                    or record.automatic_retry_count
-                ):
+                if not record.deterministic or record.flake_count or record.automatic_retry_count:
                     blocking.append(f"critical-nondeterminism:{surface_id}")
             elif surface.criticality == "standard" and gap:
                 gates.append(f"standard-evidence-gap:{surface_id}")

@@ -204,8 +204,7 @@ def _active_markdown(root: Path) -> tuple[Path, ...]:
     docs = tuple(
         path.relative_to(root)
         for path in sorted((root / "docs").rglob("*.md"))
-        if path.relative_to(root) not in HISTORICAL_MARKDOWN
-        and path.relative_to(root) != CANONICAL
+        if path.relative_to(root) not in HISTORICAL_MARKDOWN and path.relative_to(root) != CANONICAL
     )
     return root_docs + docs
 
@@ -264,6 +263,26 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         if required not in invariant_text:
             errors.append(f"invariant-document-rule-missing:{required}")
 
+    construction_ir = _normalized(
+        "\n".join(
+            _section_lines(canonical, 3, "Recipes are derived construction IR, not authority")
+        )
+    )
+    for required in (
+        "It is not a fourth invariant document.",
+        "it may not contain free behavioral authority.",
+        (
+            "The Tester receives only the ratified build input, never the plan, catalog, "
+            "or Coder output"
+        ),
+        (
+            "Cheap rewriting is freedom to replace an implementation, not permission to "
+            "move the target."
+        ),
+    ):
+        if required not in construction_ir:
+            errors.append(f"construction-ir-rule-missing:{required}")
+
     criticality_section = _section_lines(canonical, 2, "3.5. Criticality")
     criticality_rows = _table_first_column(criticality_section)
     if criticality_rows != EXPECTED_CRITICALITY_ROWS:
@@ -308,9 +327,7 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if "readme.md#doctrine--code-mapping" not in status:
         errors.append("operational-guide-link-missing")
 
-    shared_foundation = _normalized(
-        "\n".join(_section_lines(canonical, 2, "Shared foundation"))
-    )
+    shared_foundation = _normalized("\n".join(_section_lines(canonical, 2, "Shared foundation")))
     communication_contract = (
         "The writer of a fix does not control the judge, cannot negotiate the verdict, "
         "and cannot talk to the Tester."
@@ -320,9 +337,7 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     if "Working-copy question" in canonical:
         errors.append("unresolved-working-copy-question")
 
-    determinism = _section_lines(
-        canonical, 3, "Determinism is class-scoped, and retry is search"
-    )
+    determinism = _section_lines(canonical, 3, "Determinism is class-scoped, and retry is search")
     determinism_rows = _table_first_column(determinism)
     if determinism_rows != EXPECTED_CRITICALITY_ROWS:
         errors.append(f"determinism-policy-mismatch:{determinism_rows!r}")
@@ -352,6 +367,9 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     )
     for required in (
         "The control is authorization, not immutability",
+        "immutable by default",
+        "firm affirmative human ruling",
+        "membership-frozen test family",
         "Fix the code, not the test.",
         "Route to the human.",
     ):
@@ -443,6 +461,7 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         "The model and version of every agent that produced or judged the change",
         "the **independence tier** of the arrangement they ran in",
         "working coordination between the roles is ephemeral and never committed",
+        "a manifest of hashes without the recoverable subjects does not satisfy this record",
     ):
         if required not in evidence_plane:
             errors.append(f"evidence-plane-record-missing:{required}")
@@ -464,18 +483,28 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         errors.append("validator-critical-no-waiver-missing")
     if "Dispose of failing existing tests by authorization, not by preference." not in validator:
         errors.append("validator-existing-test-disposition-missing")
+    if "Compile and verify the construction IR after ratification." not in validator:
+        errors.append("validator-construction-ir-boundary-missing")
+    if "Freeze before review." not in validator:
+        errors.append("validator-review-freeze-missing")
     if "Externalize as you go." not in validator:
         errors.append("validator-checklist-externalization-missing")
 
     coder = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Coder")))
     if "A capability you do not hold is a decision someone made." not in coder:
         errors.append("coder-tool-policy-prohibition-missing")
+    if "Treat the build plan as mechanism, not authority." not in coder:
+        errors.append("coder-construction-ir-boundary-missing")
 
     tester = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Tester")))
     if "Write deterministically on critical surfaces." not in tester:
         errors.append("tester-critical-determinism-missing")
     if "Report contradictions; do not resolve them." not in tester:
         errors.append("tester-existing-test-contradiction-rule-missing")
+    if "Alter an existing expectation only under an exact test-change authorization." not in tester:
+        errors.append("tester-test-change-authorization-missing")
+    if "You never read the pattern catalog or build plan." not in tester:
+        errors.append("tester-construction-ir-isolation-missing")
 
     for path in _active_markdown(root) + _active_python(root):
         text = _read(root, path).casefold()

@@ -2,8 +2,9 @@
 
 A target is fed to the factory as a single content-addressed TOML manifest: repo coordinates
 + ref (+ optional monorepo subpath), adapter *selections* (names, never import paths),
-role->capability bindings, a compliance-rule path, effort/cost parameters, and a demo-env
-descriptor. This module parses that manifest, validates it against a JSON Schema, and
+role->capability bindings, a compliance-rule path, an operational build ABI, effort/cost
+parameters, and a demo-env descriptor. This module parses that manifest, validates it against
+a JSON Schema, and
 **refuses any code reference** — the manifest is data only; it may never smuggle in a Python
 import, module:attr callable, or ``.py`` path. That refusal is the structural guarantee
 behind the generic-core / target-as-data boundary: a target can never inject code into the
@@ -40,13 +41,14 @@ ADAPTER_KINDS = ("repo", "knowledge", "compliance", "idp", "artifact_sink")
 # A registered adapter selection is a plain lowercase name (a registry key). Anything else —
 # a dotted path, a colon, a slash, a file extension — is not a name and is refused.
 _ADAPTER_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+_CANONICAL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # Patterns that mark a string as a *code reference* rather than data. None of these match a
 # URL (``https://...`` has ``:`` followed by ``/``, never ``:<identifier>``), so repo
 # coordinates pass while an import/callable path is refused.
 _CODE_REF_PATTERNS = (
-    re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$"),   # module:attr callable ("pkg.mod:Class")
-    re.compile(r"\.py[cwox]?$"),                         # a python source/bytecode path
+    re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$"),  # module:attr callable ("pkg.mod:Class")
+    re.compile(r"\.py[cwox]?$"),  # a python source/bytecode path
     re.compile(r"(?:^|\s)(?:import|from)\s+[A-Za-z_]"),  # an inline import statement
     re.compile(r"^(?:targets|target_packs)\.[A-Za-z_]"),  # an explicit target-pack import head
 )
@@ -67,6 +69,7 @@ class TargetManifest:
     repo: dict[str, Any]
     adapters: dict[str, str]
     compliance: dict[str, Any]
+    build: dict[str, Any]
     roles: list[dict[str, Any]] = field(default_factory=list)
     grants: list[dict[str, Any]] = field(default_factory=list)
     effort: dict[str, Any] = field(default_factory=dict)
@@ -75,7 +78,7 @@ class TargetManifest:
     schema_version: str = SCHEMA_VERSION
 
     # provenance stamped by the loader
-    source_digest: str = ""   # content address of the raw TOML bytes
+    source_digest: str = ""  # content address of the raw TOML bytes
     content_digest: str = ""  # canonical address of the manifest data (signature block excluded)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -95,6 +98,8 @@ def _walk_strings(obj: Any) -> list[str]:
 
 
 def _looks_like_code_ref(value: str) -> bool:
+    if _CANONICAL_DIGEST.fullmatch(value):
+        return False
     return any(pat.search(value) for pat in _CODE_REF_PATTERNS)
 
 
@@ -204,6 +209,7 @@ def load_target_manifest(
         repo=data["repo"],
         adapters=data["adapters"],
         compliance=data["compliance"],
+        build=data["build"],
         roles=data.get("roles", []),
         grants=data.get("grants", []),
         effort=data.get("effort", {}),

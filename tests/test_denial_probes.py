@@ -81,11 +81,30 @@ def test_check_passes_when_registry_complete(tmp_path: Path) -> None:
     )
     assert "GREEN" in proc.stdout
     # Every gate id the plan names should be registered.
-    for gate in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N",
-                 "F3", "R2", "R3", "F4"]:
-        assert any(
-            line.strip().startswith(gate + "  ") for line in proc.stdout.splitlines()
-        ), f"gate {gate} not reported by the coverage check"
+    for gate in [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "F3",
+        "R2",
+        "R3",
+        "F4",
+    ]:
+        assert any(line.strip().startswith(gate + "  ") for line in proc.stdout.splitlines()), (
+            f"gate {gate} not reported by the coverage check"
+        )
 
 
 # --- the coverage logic (temp registry + temp node-id set) -------------------------

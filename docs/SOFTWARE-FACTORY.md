@@ -401,9 +401,10 @@ coordination pattern; it is not a substitute for the ratification rule above.
 
 ### After the phases
 
-The three signed artifacts combine into the spec the Coder and the Tester both read. **Every
-task and every constraint carries a backreference to the phase artifact that authorizes it**,
-so nothing downstream asserts a requirement that did not come from an agreed artifact.
+The three signed artifacts combine into the ratified build input the Coder and the Tester both
+read. **Every task and every constraint carries a backreference to the phase artifact that
+authorizes it**, so nothing downstream asserts a requirement that did not come from an agreed
+artifact. The Coder may additionally receive derived construction IR; the Tester may not.
 
 Then the build loop runs (§10).
 
@@ -454,6 +455,38 @@ input directly routes around it.
 **A trivial change collapses the three phases into one confirmation. It does not skip the
 artifacts.** The confirmation is signed, addressed, and cited like any other — a one-line spec
 is still a spec.
+
+### Recipes are derived construction IR, not authority
+
+A **recipe pattern** is a reusable, versioned construction mechanism. Its implementation and
+qualification evidence are content-addressed so the factory can prove which standard approach
+it invoked and what qualified that approach. It answers *how this kind of thing can be built*;
+it does not say that the product should exist, what a user should observe, or what counts as
+correct. It is not a fourth invariant document.
+
+A per-run **build plan (recipe book)** compiles the exact target ABI, pattern catalog, and three
+ratified phase artifacts into disposable construction IR. Every Product and Architecture item
+maps to at least one ordered build step, every Product expectation maps to at least one
+Operational oracle, every Operational item is used, and every step carries exact phase-item
+backreferences. The plan may contain immutable
+configuration and dependency wiring; it may not contain free behavioral authority. A change to
+the target, catalog, build input, or any phase digest invalidates it.
+
+The Coder receives that verified plan and catalog because they reduce standard construction to
+code generation. The Tester receives only the ratified build input, never the plan, catalog, or
+Coder output: mechanisms must not leak into the independent oracle. The resulting product is
+judged by the agreed user-visible and operational effects. Generated-code aesthetics are not a
+promotion criterion unless a phase artifact explicitly makes one an outcome or constraint.
+
+`regenerate` makes complete replacement ordinary rather than organizationally exceptional;
+`brownfield` permits a deliberately scoped correction. Either mode preserves the same
+authority, oracle, evidence, and promotion rules. Cheap rewriting is freedom to replace an
+implementation, not permission to move the target.
+
+For `brownfield`, the authorized path/surface ceiling is part of the run input and the actual
+candidate disturbance is mechanically checked against it. A mode label is not a scope gate. The
+target ABI is immutable for the run; an intentional ABI revision starts a newly authorized run,
+not an exception that teaches drift detection to accept changed bytes.
 
 ---
 
@@ -892,17 +925,22 @@ from a sample.
 
 Once the three phases are agreed, the loop runs.
 
-1. **Validator** hands the signed spec to both the Coder and the Tester. They receive the same
-   artifact. They have no channel to each other.
-2. **Coder** implements. Questions go to the Validator, which answers by quoting the
-   authorizing spec language or escalates to the human.
+1. **Validator** hands the same ratified build input to both the Coder and the Tester. They have
+   no channel to each other. The Coder additionally receives the verified build plan and
+   pattern catalog; the Tester is mechanically denied both.
+2. **Coder** implements. The plan supplies qualified mechanisms and configuration, but every
+   consequential choice still resolves to the ratified phase artifacts. Questions go to the
+   Validator, which answers by quoting the authorizing language or escalates to the human.
 3. **Tester** writes integration-level acceptance and feature tests, deriving every expectation
-   from the phase artifacts and never from the implementation. Questions go to the Validator
-   on the same terms.
-4. **Validator** runs the tests when both are complete.
+   from the ratified build input and never from the construction IR or implementation. Questions
+   go to the Validator on the same terms.
+4. The runtime freezes the exact Coder and Tester outputs independently before review. A hash
+   without recoverable subject bytes is not an immutable review artifact. **Validator** runs the
+   tests only from those frozen subjects when both are complete.
 5. On failure, the Validator reports the failure to the Coder — **not the tests.** Test names,
    traces, and assertion text do not reach an automated repair context, because a suite that
    returns its internals becomes an interactive debugger the implementation is tuned against.
+   Any automated retry starts clean and receives only a bare pass/fail result.
 6. On pass, the Validator verifies the mechanical evidence adversarially, confirms provenance,
    confirms oracle adequacy, and drives the change live.
 7. **After validation passes**, unit tests are written against the now-settled implementation
@@ -916,7 +954,7 @@ tests and the Tester cannot see the results.
 
 | The failing test asserts… | Meaning | Disposition |
 |---|---|---|
-| behavior a signed artifact **supersedes** | Stale. The specification changed it deliberately. | Update the test, citing the superseding item. Ordinary work. |
+| behavior a signed artifact **uniquely supersedes** | Potentially stale. The specification changed it deliberately, but that fact alone does not authorize changing the oracle. | Update only after an affirmative human test-impact ruling names the exact assertion or frozen family, the superseding item, and the exact expected behavior change. |
 | behavior no signed artifact **touched** | Regression, or an unintended side effect of the change. | The implementation is wrong. Fix the code, not the test. |
 | behavior the artifacts are **silent** on, and it is unclear which of the above applies | Ambiguity | **Route to the human.** Do not resolve it. |
 
@@ -924,19 +962,19 @@ If the current signed artifacts both retain and supersede the exact asserted beh
 contradict each other. That is a specification defect routed to the human, not a choice the
 Validator resolves by ordering the items.
 
-Note what this replaces. An earlier reading of this problem proposed making existing tests
-immutable to protect the oracle. That deadlocks every change to previously-correct behavior —
-the tests assert the old behavior, they can never pass, and the Validator can never validate.
-**The control is authorization, not immutability**, and the authorization already exists: the
-positive control flags a change to previously-correct behavior as an over-constraint and routes
-it to a human who confirms the old behavior was also wrong.
+Existing tests are therefore **immutable by default**, not absolutely immutable. **The control
+is authorization, not immutability**: changing a previously correct expectation requires both
+the current signed same-phase supersession and a separately trusted, firm affirmative human
+ruling over its impact. The ruling binds the run, current phase versions, old and new behavior,
+the exact assertion or a membership-frozen test family, and an expected-change statement that
+exactly matches the signed superseder. It acknowledges a change already authorized by the
+phase artifact; it cannot invent one.
 
-It also needs no prohibition on the Tester. **The Tester never runs the tests**, so it receives
-no signal that a test went red and has no occasion to tune one to green. Tuning a test to pass
-requires a feedback loop the structure does not provide, which is why the separation is the
-defense and a rule would be decoration. Where a signed item supersedes the asserted behavior,
-the Validator issues that cited disposition to the Tester; the Validator still does not edit
-tests in the run it verifies, and no implementation observation enters the update.
+**The Tester never runs the tests**, so it receives no runtime signal that could tune an oracle
+to green. If the Tester notices a documentary contradiction, it reports it; discovery is not
+permission to edit. Only the exact authorized disposition reaches the Tester. The Validator
+still does not edit tests in the run it verifies, and no implementation observation enters the
+update.
 
 An unrelated amendment still changes the whole-artifact digest and invalidates the old test
 reference. If exactly one item in the new signed version retains the same item id and canonical
@@ -947,8 +985,9 @@ version invalidation without pretending an untouched requirement disappeared.
 ### Retry is recovery, not search
 
 When an implementation fails, the lane may retire that Coder and start a fresh one from clean
-context, carrying the spec and **a bare pass-or-fail history only** — none of the failed work,
-its transcript, or any explanation.
+context, carrying the ratified build input, the same verified construction IR, and **a bare
+pass-or-fail history only** — none of the failed work, its transcript, test identity, assertion,
+or explanation. Each attempt gets one authoring pass and one immutable review snapshot.
 
 This is sound as recovery from an unlucky but capable agent. **It is not sound as a search for a
 passing implementation**, because running many fresh agents until one passes is brute-force
@@ -959,6 +998,11 @@ The budget caps the cost of that sampling, not its logic. It is kept small enoug
 by luck is negligible, and correctness is established against the trusted target and the bound
 evidence rather than against the suite alone. No-op, metadata-only, and fingerprint-identical
 retries do not reset the budget.
+
+The target ABI and plan both bind a monotone attempt ceiling; the smaller limit wins. Exhaustion
+produces a blocked handoff with the retained receipts, not another specification round. Only a
+real specification defect resolved by the human and Validator creates new signed authority and
+invalidates the old generation tuple; a failed implementation cannot manufacture that reset.
 
 ### Mutation evidence belongs to the Validator
 
@@ -1148,6 +1192,11 @@ also records:
 
 - The exact digest and version of each invariant document, and each downstream item's
   artifact-and-item backreference
+- The exact retained target manifest, pattern catalog, build plan, ratified build input, and
+  generation-readiness bytes; their addresses; and the attempt number and effective ceiling
+- Independently retained Coder and Tester review snapshots containing the exact regular-file
+  bytes, relative paths, and modes the Validator reviewed — a manifest of hashes without the
+  recoverable subjects does not satisfy this record
 - The signed tool-policy digest; every declared inventory item's tier and scope; every
   Sign-off-required authorization; and every Verboten denial-probe result
 - Every checklist definition and each item's independently addressed evidence, recorded when
@@ -1181,6 +1230,10 @@ The manifest is tamper-evident, independently verifiable, and rooted in defined 
 authorities. It is **not** unfakeable, because an attestation does not protect against
 compromise of the verifier that produced it — which is why the factory's verifiers are governed
 as a production-grade system in their own right.
+
+Application-level read-only content-addressed storage detects mutation and makes the reviewed
+subjects reproducible; it is not hardware WORM. Promotion re-verifies the retained bytes and
+their addresses rather than trusting a prior hash report.
 
 Artifacts are produced according to the **applicability matrix** settled in phase 3, because
 burying the important artifacts under noise is the documentation equivalent of the alert wall.
@@ -1409,7 +1462,9 @@ tests.
 **There is no channel between Coder and Tester.** Every question goes to the Validator, which
 answers by quoting the authorizing spec language or escalates to the human.
 
-**Both read the same spec.** Shared spec, no shared channel.
+**Both read the same ratified build input.** Shared authority, no shared channel. The Coder alone
+also reads the verified pattern catalog and derived build plan; the Tester is denied that
+construction IR.
 
 ### The three phases
 
@@ -1433,6 +1488,11 @@ immutable for the run, and amendable only through the specification-defect path.
 downstream backreference binds the exact artifact digest and item. A ticket, thread, comment,
 design note, memory, or conversation is input, never authority. A new signed version
 invalidates all work and evidence derived from the old one.
+
+The pattern catalog and per-run build plan are not invariant documents. They are verified,
+content-addressed construction inputs derived from the target ABI and those three authorities.
+They may select and configure qualified mechanisms, but may not originate behavior, alter an
+oracle, or survive a change to any bound input.
 
 ### The run tool policy
 
@@ -1469,8 +1529,11 @@ bounded, and given an expiry.
 
 ### What is shared and what is independent
 
-**Shared:** interface, boundary, inputs, observable effects, data topology including the
-database schema, acceptance criteria.
+**Shared:** the ratified interface, boundary, inputs, observable effects, data topology including
+the database schema, and acceptance criteria.
+
+**Coder-only derived input:** the pattern catalog and build plan. These make construction more
+repeatable without teaching the Tester which mechanisms the implementation is expected to use.
 
 **Independent:** the oracle — what counts as the right answer. It comes from the phase
 artifacts, never from the implementation. A test whose expectation came from the code passes
@@ -1531,9 +1594,10 @@ defect — never with a quieter monitor.
 
 ### Retry is recovery, not search
 
-A fresh agent after a failure carries the spec and a bare pass-or-fail history only. Running
-many fresh agents until one passes is brute-force sampling against the oracle. The budget caps
-its cost, not its logic.
+A fresh agent after a failure carries the ratified build input, the same derived construction
+IR, and a bare pass-or-fail history only. Running many fresh agents until one passes is
+brute-force sampling against the oracle. The target ABI and plan set a small monotone attempt
+ceiling; exhaustion blocks rather than reopening specification by automation.
 
 ### Core doctrine
 
@@ -1594,8 +1658,15 @@ failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name
 disposition of every hazard-class failure and the safe degradation of every other. Continue
 until the human agrees.
 
-**Hand the signed spec to both the Coder and the Tester.** Same artifact. No channel between
-them.
+**Compile and verify the construction IR after ratification.** Bind the exact target ABI,
+pattern catalog, ratified phase versions, and build input. Reject any plan that lacks complete
+Product/Architecture construction coverage, Product-to-Operational oracle coverage, or use of
+every Operational item, or that contains an unresolvable backreference. The plan is disposable mechanism,
+never authority.
+
+**Hand the same ratified build input to both the Coder and the Tester.** Give the verified plan
+and pattern catalog only to the Coder. Mechanically deny them to the Tester. No channel exists
+between the lanes.
 
 **Answer questions by quoting the spec.** When either asks, answer with the authorizing language
 quoted, not paraphrased. If the spec does not answer it, escalate to the human and reopen the
@@ -1617,9 +1688,15 @@ interactive debugger the implementation is tuned against.
 **Dispose of failing existing tests by authorization, not by preference.** For each test that
 passed before this change and fails now, determine whether a signed artifact supersedes the
 behavior it asserts, whether no artifact touched that behavior, or whether the artifacts are
-silent. Authorize a cited Tester-side update, fix the implementation, or route to the human
-respectively. **Never update a test on the grounds that it is inconvenient**, and never
-authorize one without citing the superseding item.
+silent. A superseding item is necessary but insufficient: authorize a Tester-side update only
+when a separately trusted affirmative human ruling binds this run, the current phase versions,
+the exact old and new behavior, the exact assertion or membership-frozen family, and the exact
+replacement statement carried by that superseder. Otherwise fix the implementation or route to
+the human. **Never update a test on the grounds that it is inconvenient.**
+
+**Freeze before review.** Retain the exact Coder and Tester bytes independently, including
+paths and modes, before you inspect or execute them. Re-derive candidate and test addresses from
+those frozen subjects. A mutable workspace plus a hash list is not review provenance.
 
 **Verify the mechanical evidence adversarially.** For each acceptance criterion, select a
 refutation method that could actually fail and attempt to refute rather than confirm.
@@ -1727,13 +1804,24 @@ surface, trace which components' side effects reach it.
 
 ### Purpose
 
-You implement against the signed spec. **Your self-review is the floor of quality, never the
+You implement against the ratified phase artifacts, using the verified build plan and pattern
+catalog as derived construction input. **Your self-review is the floor of quality, never the
 proof of doneness**, which belongs to the Validator's verification and the live pass.
 
 You cannot see the tests. You cannot talk to the Tester. This is the mechanism, not an
 inconvenience.
 
 ### Procedure
+
+**Treat the build plan as mechanism, not authority.** Every step and configuration value must
+resolve to its phase-item backreferences. If the plan conflicts with the ratified build input,
+raise the conflict; the plan loses. Do not turn descriptive text in a recipe into a product
+requirement.
+
+**Use the selected construction mode.** In `regenerate`, replace the implementation as freely as
+needed to satisfy the agreed outcome. In `brownfield`, make the deliberately scoped correction.
+Neither mode optimizes for preserving generated style, and neither relaxes contracts, tests,
+evidence, or promotion.
 
 **Build against the shared interface and schema**, writing migrations that implement exactly
 the settled topology — no more and no less.
@@ -1770,6 +1858,9 @@ You never reach a tool, credential, or integration outside the run's signed tool
 you never treat the absence of a capability as an obstacle to route around. **A capability you
 do not hold is a decision someone made.**
 
+You never treat a recipe, pattern qualification, or build-plan field as behavioral authority.
+Only a ratified phase-item backreference can authorize the consequential result.
+
 You receive at most a bare pass-or-fail history of prior attempts — no test names, traces, or
 explanation of how a prior attempt failed.
 
@@ -1791,6 +1882,10 @@ search for a second site where it must also hold and confirm you found them all.
 You write the tests that assert the spec's truths. **Every expectation comes from the phase
 artifacts and never from the implementation**, which you cannot see, from a Coder you cannot
 reach.
+
+You receive the same ratified build input as the Coder, but never the pattern catalog, build
+plan, or Coder output. Those describe mechanisms and would contaminate an oracle whose job is to
+assert user and operational expectations.
 
 During the loop your tests are **integration level** — acceptance and feature tests through the
 real interface. Unit tests come after the work is validated.
@@ -1859,6 +1954,12 @@ specification defect about testability, raised rather than shipped with a retry 
 find an existing test that contradicts a signed item, raise it as a specification defect. You
 are not authorized to decide that previously-correct behavior was incorrect.
 
+**Alter an existing expectation only under an exact test-change authorization.** It must bind
+the current run and phase versions, a unique same-phase signed superseder, the old and new
+behavior, the exact assertion or membership-frozen family, and a firm affirmative human ruling
+whose expected-change statement exactly matches the superseder. Anything less is a report, not
+permission.
+
 **Route every question to the Validator.**
 
 ### Prohibitions
@@ -1879,6 +1980,9 @@ behavior and defends that change with a green suite.
 
 You never read the implementation to buy structural depth where no signed interface contract
 anchors your expectations.
+
+You never read the pattern catalog or build plan. If either is projected into your lane, stop:
+lane isolation has failed, regardless of whether you used the information.
 
 Where the spec is ambiguous about intent, **raise a specification defect rather than encoding
 your guess as the oracle.** A test asserting an intent nobody agreed judges the work against a
@@ -1911,8 +2015,8 @@ satisfy it.
 | Role | Talks to | Reads | Writes | Runs |
 |---|---|---|---|---|
 | **Validator** | Human, Coder, Tester | Everything | The spec (with the human) | The tests |
-| **Coder** | Validator only | The spec | The implementation | Nothing it is judged by |
-| **Tester** | Validator only | The spec | The tests | Nothing |
+| **Coder** | Validator only | Ratified build input + derived construction IR | The implementation | Nothing it is judged by |
+| **Tester** | Validator only | Ratified build input only | The tests | Nothing |
 
 ### The correction flow uses the same three roles and the same three phases
 

@@ -14,9 +14,13 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+from factory_core.manifest import digest_bytes
+from factory_core.target import load_target_manifest
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
 
@@ -527,6 +531,17 @@ def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
         {},
     )
     assert r.returncode == 64 and "does not exist" in r.stderr
+
+
+def test_factory_refuses_a_git_target_without_an_operational_abi(tmp_path: Path) -> None:
+    repo = projection_fixture(tmp_path)
+    r = run(
+        ["bash", str(HARNESS / "factory.sh"), "runx", "some task", "--repo", str(repo)],
+        tmp_path,
+        {},
+    )
+    assert r.returncode == 66
+    assert "target manifest is required" in r.stderr
 
 
 # --------------------------------------------------------------------------
@@ -1674,7 +1689,26 @@ def dispatch_success_fixture(
     root = src / ".factory" / "runs" / "r1"
     art = root / "artifacts"
     art.mkdir(parents=True)
-    (root / "run.json").write_text(json.dumps({"repo": str(src), "base_sha": sha}))
+    target_source = Path(__file__).parent / "fixtures" / "synthetic_target" / "target.toml"
+    target_path = root / "target.toml"
+    target_path.write_bytes(target_source.read_bytes())
+    target = load_target_manifest(target_path)
+    target_record = {
+        "path": "target.toml",
+        "target_id": target.target_id,
+        "content_digest": target.content_digest,
+        "source_digest": digest_bytes(target_path.read_bytes()),
+        "build": dict(target.build),
+    }
+    (root / "run.json").write_text(
+        json.dumps(
+            {
+                "repo": str(src),
+                "base_sha": sha,
+                "target_manifest": target_record,
+            }
+        )
+    )
     for name, body in (
         ("product-specification.md", ADEQUATE_SPEC),
         ("architecture.md", "# Architecture\n"),
@@ -1701,7 +1735,11 @@ def dispatch_success_fixture(
 def _dispatch_env(stub: Path) -> dict[str, str]:
     # HARNESS_DIR is the relative .factory under the repo root (cwd); the stub
     # tmux shadows the real tmux so the lane launch is a no-op.
-    return {"HARNESS_DIR": ".factory", "PATH": f"{stub}:{os.environ['PATH']}"}
+    return {
+        "HARNESS_DIR": ".factory",
+        "PATH": f"{stub}:{os.environ['PATH']}",
+        "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
+    }
 
 
 def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
@@ -1717,6 +1755,21 @@ def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
     )
     assert r.returncode == 70, r.stdout + r.stderr
     assert "no kindex primer" in r.stderr and "Gate C" in r.stderr
+
+
+def test_dispatch_refuses_a_target_manifest_changed_after_ignition(tmp_path: Path) -> None:
+    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    target = root / "target.toml"
+    target.write_text(target.read_text().replace("max_attempts = 2", "max_attempts = 3"))
+
+    r = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        src,
+        _dispatch_env(stub),
+    )
+
+    assert r.returncode == 70
+    assert "target manifest no longer matches run-bound target record" in r.stderr
 
 
 def test_dispatch_primer_is_role_specific_not_shared(tmp_path: Path) -> None:
@@ -3388,3 +3441,19 @@ def test_promote_is_sole_writer_of_closed() -> None:
     assert writer_names == ["promote.sh"], (
         f'only promote.sh may write "closed"; found: {writer_names}'
     )
+
+
+def test_endgame_routes_only_a_fully_green_run_through_gate_l() -> None:
+    """Live close wiring is structural: endgame owns the call, but never owns the verdict."""
+
+    text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
+    invocation = 'HARNESS_DIR="$H" "$D/promote.sh" "$RUN"'
+    assert invocation in text
+    assert text.index(invocation) > text.index("== changeset hygiene")
+    assert text.index(invocation) < text.index('python3 - "$ROOT" "$RUN" "$SHA" "$FAILED"')
+    assert 'if [ "$FAILED" -eq 0 ]; then' in text[text.index("== sole advancement") :]
+
+    missing_target_branch = text[
+        text.index('if [ -f "$H/target.conf" ]') : text.index("== changeset hygiene")
+    ]
+    assert "FAILED=1" in missing_target_branch
