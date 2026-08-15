@@ -171,12 +171,17 @@ def freeze_blob(store_root: str | Path, *, label: str, data: bytes) -> FrozenBlo
                 }
             ),
         )
-        temporary.chmod(0o555)
         try:
             os.rename(temporary, destination)
         except FileExistsError:
             temporary.chmod(0o755)
             shutil.rmtree(temporary)
+        else:
+            # Hosted macOS refuses to rename a directory after its owner-write bit is
+            # removed. Publish the hidden staging directory first, then immediately seal
+            # its final address. Payloads are already read-only, and the verifier below
+            # refuses any concurrent disturbance or a directory that remained writable.
+            destination.chmod(0o555)
         return verify_frozen_blob(destination, expected_digest=digest, label=label)
     finally:
         if temporary.exists():
@@ -258,12 +263,16 @@ def freeze_tree(
         for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
             directory.chmod(0o555)
         files.chmod(0o555)
-        temporary.chmod(0o555)
         try:
             os.rename(temporary, destination)
         except FileExistsError:
             _make_tree_writable(temporary)
             shutil.rmtree(temporary)
+        else:
+            # See freeze_blob: some macOS filesystems refuse to rename the sealed staging
+            # root. All descendants are already read-only; seal the published root and
+            # re-derive the complete snapshot before returning it.
+            destination.chmod(0o555)
         return verify_frozen_tree(destination, expected_digest=digest)
     finally:
         if temporary.exists():
