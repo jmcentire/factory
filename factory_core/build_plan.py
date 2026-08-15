@@ -483,7 +483,7 @@ def verify_build_plan(bundle: BuildPlanBundle) -> BuildPlanReport:
                 issues.append(f"build-step-dependency-self:{step_id}")
             elif dependency not in declared_ids:
                 issues.append(f"build-step-dependency-unknown:{step_id}:{dependency}")
-        if pattern is not None and step.pattern_digest == pattern.content_digest:
+        if selected_pattern is not None and step.pattern_digest == selected_pattern.content_digest:
             verified_steps.append(step_id)
     for step_id in _cycle_nodes(plan.steps, set(step_index)):
         issues.append(f"build-step-dependency-cycle:{step_id}")
