@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Founder-owned, portable software-factory core (generic; imports nothing target-specific)."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 authors = [{ name = "Jeremy McEntire", email = "jandrewmcentire@gmail.com" }]
 # The ONLY third-party runtime dependency. No target pack is (or may be) listed here — the
 # reverse-dependency check in scripts/check_core_purity.py enforces that.
