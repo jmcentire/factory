@@ -2,6 +2,81 @@
 # Shared checked projection loader. This is sourced by harness entry points; it never selects a
 # repository, ref, SHA, or working directory from cwd, an operator checkout, or harness metadata.
 
+factory_verify_resume_anchor() {
+  local run="${1:?run id required}"
+  local runs="${2:?runs root required}"
+  local cli="${FACTORY_CLI:-factory}"
+  local checkpoint="${FACTORY_RESUME_CHECKPOINT:-}"
+  local checkpoint_digest="${FACTORY_RESUME_CHECKPOINT_DIGEST:-}"
+  local genesis="${FACTORY_GENESIS:-}"
+  local root_key="${FACTORY_ROOT_PUBLIC_KEY:-}"
+  local config_manifest="${FACTORY_RESUME_CONFIG_MANIFEST:-}"
+  local predecessors="${FACTORY_RESUME_ACCEPTED_PREDECESSORS:-}"
+  local tessera="${FACTORY_TESSERA_BIN:-tessera}"
+  declare -ga FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
+  declare -ga FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
+
+  [ -f "$checkpoint" ] && [ ! -L "$checkpoint" ] || {
+    echo "Factory resume checkpoint is not an externally supplied regular file" >&2
+    return 72
+  }
+  [[ "$checkpoint_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Factory resume checkpoint digest is absent or non-canonical" >&2
+    return 72
+  }
+  [ -f "$genesis" ] && [ ! -L "$genesis" ] || {
+    echo "Factory genesis is not an externally supplied regular file" >&2
+    return 72
+  }
+  [[ "$root_key" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Factory externally pinned root public key is absent or non-canonical" >&2
+    return 72
+  }
+  [ -f "$config_manifest" ] && [ ! -L "$config_manifest" ] || {
+    echo "Factory resume configuration manifest is absent or not regular" >&2
+    return 72
+  }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}=/.+ ]] || {
+      echo "Invalid Factory resume configuration source: $line" >&2
+      return 72
+    }
+    FACTORY_VERIFIED_RESUME_CONFIG_ARGS+=(--config-source "$line")
+  done < "$config_manifest"
+  [ "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" -gt 0 ] || {
+    echo "Factory resume configuration manifest is empty" >&2
+    return 72
+  }
+  if [ -n "$predecessors" ]; then
+    [ -f "$predecessors" ] && [ ! -L "$predecessors" ] || {
+      echo "Factory resume predecessor set is not a regular file" >&2
+      return 72
+    }
+    while IFS= read -r digest || [ -n "$digest" ]; do
+      [ -z "$digest" ] && continue
+      [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        echo "Invalid Factory resume predecessor digest: $digest" >&2
+        return 72
+      }
+      FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS+=(
+        --accepted-previous-checkpoint-digest "$digest"
+      )
+    done < "$predecessors"
+  fi
+
+  # The expected digest, checkpoint, root key, genesis, and configuration list all arrive from
+  # outside the mutable run root.  The runtime freezes those bytes before opening run state.
+  $cli verify-resume-checkpoint \
+    --runs "$runs" --run-id "$run" \
+    --checkpoint "$checkpoint" --checkpoint-digest "$checkpoint_digest" \
+    --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera" \
+    "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
+    "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}" >/dev/null || return $?
+  FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST="$checkpoint_digest"
+  export FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST
+}
+
 factory_load_context() {
   local run="${1:?run id required}"
   local runs_in="${2:?runs root required}"
@@ -16,6 +91,7 @@ factory_load_context() {
   runs="$(cd "$runs_in" && pwd -P)"
   root="$runs/$run"
   [ -d "$root" ] || { echo "Factory run does not exist: $root" >&2; return 64; }
+  factory_verify_resume_anchor "$run" "$runs" || return $?
   status="$($cli status --runs "$runs" --run-id "$run")" || return $?
 
   local values=()
@@ -24,7 +100,7 @@ factory_load_context() {
 import json, pathlib, sys
 expected_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 doc = json.load(sys.stdin)
-if doc.get("schema_version") != "factory-run/3":
+if doc.get("schema_version") != "factory-run/4":
     raise SystemExit("legacy run schemas cannot dispatch")
 allowed = {
     "intake", "product-specification-ratified", "architecture-ratified",

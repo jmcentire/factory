@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from collections.abc import Callable, Sequence
@@ -11,13 +12,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from factory_core.manifest import digest_bytes
+from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.acceptance_obligations import validator_execution_digests
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationQualification,
     MacOSSandbox,
 )
-from factory_runtime.snapshot import FrozenTree, freeze_tree, verify_frozen_tree
+from factory_runtime.snapshot import FrozenTree, freeze_tree, tree_digest, verify_frozen_tree
 
 
 class LaneError(RuntimeError):
@@ -118,6 +120,7 @@ class IsolatedBuildLoop:
         validator_trusted_paths: Sequence[str | Path] = (),
         build_plan_path: str | Path | None = None,
         pattern_catalog_path: str | Path | None = None,
+        acceptance_catalog_path: str | Path | None = None,
         review_snapshot_store: str | Path | None = None,
         before_validation: Callable[[LaneExecution, LaneExecution, FrozenTree, FrozenTree], None]
         | None = None,
@@ -126,7 +129,10 @@ class IsolatedBuildLoop:
 
         if self.root.exists():
             raise LaneError(f"refusing to reuse build-loop directory: {self.root}")
-        self.root.mkdir(parents=True)
+        try:
+            self.root.mkdir(parents=True)
+        except FileExistsError as exc:
+            raise LaneError(f"refusing raced build-loop directory: {self.root}") from exc
         qualification = self.sandbox.qualify(self.root / "qualification")
         if not qualification.satisfied:
             raise LaneError("isolation backend did not prove read, write, and network denial")
@@ -139,6 +145,11 @@ class IsolatedBuildLoop:
         catalog_bytes = (
             Path(pattern_catalog_path).read_bytes() if pattern_catalog_path is not None else None
         )
+        acceptance_catalog_bytes = (
+            Path(acceptance_catalog_path).read_bytes()
+            if acceptance_catalog_path is not None
+            else None
+        )
 
         coder = self._prepare_lane(
             LaneRole.CODER,
@@ -146,7 +157,11 @@ class IsolatedBuildLoop:
             plan_bytes=plan_bytes,
             catalog_bytes=catalog_bytes,
         )
-        tester = self._prepare_lane(LaneRole.TESTER, input_bytes)
+        tester = self._prepare_lane(
+            LaneRole.TESTER,
+            input_bytes,
+            acceptance_catalog_bytes=acceptance_catalog_bytes,
+        )
         coder_runners = tuple(Path(path).resolve() for path in coder_trusted_paths)
         tester_runners = tuple(Path(path).resolve() for path in tester_trusted_paths)
         validator_runners = tuple(Path(path).resolve() for path in validator_trusted_paths)
@@ -199,6 +214,7 @@ class IsolatedBuildLoop:
             expected_input_digest,
             plan_bytes,
             catalog_bytes,
+            acceptance_catalog_bytes,
         )
         return ValidationExecution(
             coder=coder_result,
@@ -216,6 +232,7 @@ class IsolatedBuildLoop:
         *,
         plan_bytes: bytes | None = None,
         catalog_bytes: bytes | None = None,
+        acceptance_catalog_bytes: bytes | None = None,
     ) -> Path:
         lane = self.root / role
         (lane / "input").mkdir(parents=True)
@@ -226,6 +243,10 @@ class IsolatedBuildLoop:
         if role is LaneRole.CODER and plan_bytes is not None and catalog_bytes is not None:
             (lane / "input" / "build-plan.json").write_bytes(plan_bytes)
             (lane / "input" / "pattern-catalog.json").write_bytes(catalog_bytes)
+        if role is LaneRole.TESTER and acceptance_catalog_bytes is not None:
+            (lane / "input" / "acceptance-obligation-catalog.json").write_bytes(
+                acceptance_catalog_bytes
+            )
         (lane / "private" / "sentinel.txt").write_text(
             f"{role}-private",
             encoding="utf-8",
@@ -262,6 +283,18 @@ class IsolatedBuildLoop:
                         "FACTORY_PATTERN_CATALOG_SOURCE_DIGEST": digest_bytes(catalog.read_bytes()),
                     }
                 )
+        elif role is LaneRole.TESTER:
+            acceptance_catalog = lane / "input" / "acceptance-obligation-catalog.json"
+            if acceptance_catalog.is_file():
+                readable_paths = (build_input, acceptance_catalog, *runners)
+                environment.update(
+                    {
+                        "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_PATH": str(acceptance_catalog),
+                        "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_SOURCE_DIGEST": digest_bytes(
+                            acceptance_catalog.read_bytes()
+                        ),
+                    }
+                )
         process = self.sandbox.run(
             command,
             cwd=lane / "work",
@@ -281,6 +314,7 @@ class IsolatedBuildLoop:
         expected_input_digest: str,
         plan_bytes: bytes | None,
         catalog_bytes: bytes | None,
+        acceptance_catalog_bytes: bytes | None,
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -312,6 +346,25 @@ class IsolatedBuildLoop:
                     "FACTORY_PATTERN_CATALOG_SOURCE_DIGEST": digest_bytes(catalog_bytes),
                 }
             )
+        if acceptance_catalog_bytes is not None:
+            acceptance_catalog = input_directory / "acceptance-obligation-catalog.json"
+            acceptance_catalog.write_bytes(acceptance_catalog_bytes)
+            readable_inputs.append(acceptance_catalog)
+            try:
+                acceptance_document = json.loads(acceptance_catalog_bytes)
+            except json.JSONDecodeError as exc:
+                raise LaneError(f"acceptance-obligation catalog is invalid JSON: {exc}") from exc
+            if not isinstance(acceptance_document, dict):
+                raise LaneError("acceptance-obligation catalog must be an object")
+            environment.update(
+                {
+                    "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_PATH": str(acceptance_catalog),
+                    "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_SOURCE_DIGEST": digest_bytes(
+                        acceptance_catalog_bytes
+                    ),
+                    "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_DIGEST": digest_obj(acceptance_document),
+                }
+            )
         implementation = input_directory / "implementation"
         tests = input_directory / "tests"
         coder = verify_frozen_tree(coder.directory, expected_digest=coder.digest)
@@ -322,6 +375,20 @@ class IsolatedBuildLoop:
             {
                 "FACTORY_IMPLEMENTATION_DIR": str(implementation),
                 "FACTORY_TEST_DIR": str(tests),
+                "FACTORY_CANDIDATE_DIGEST": tree_digest(implementation / "artifact"),
+                "FACTORY_ACCEPTANCE_TESTS_DIGEST": tree_digest(tests / "tests"),
+                "FACTORY_CODER_OUTPUT_SNAPSHOT_DIGEST": coder.digest,
+                "FACTORY_TESTER_OUTPUT_SNAPSHOT_DIGEST": tester.digest,
+            }
+        )
+        command_digest, configuration_digest, environment_digest = validator_execution_digests(
+            command
+        )
+        environment.update(
+            {
+                "FACTORY_VALIDATOR_COMMAND_DIGEST": command_digest,
+                "FACTORY_VALIDATOR_CONFIGURATION_DIGEST": configuration_digest,
+                "FACTORY_VALIDATOR_ENVIRONMENT_DIGEST": environment_digest,
             }
         )
         process = self.sandbox.run(

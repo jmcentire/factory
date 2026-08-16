@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/transition-obligation-set/1",
+  "title": "Factory code-owned state-triggered obligation selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "catalog_digest",
+    "selector_id",
+    "run_id",
+    "generation",
+    "from_state",
+    "to_state",
+    "prior_ledger_head",
+    "target_state_digest",
+    "phase_artifact_digests",
+    "acceptance_obligation_catalog_digest",
+    "obligations"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-transition-obligation-set/1"},
+    "catalog_digest": {"$ref": "#/$defs/digest"},
+    "selector_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "from_state": {"type": "string", "minLength": 1},
+    "to_state": {"type": "string", "minLength": 1},
+    "prior_ledger_head": {"$ref": "#/$defs/digest"},
+    "target_state_digest": {
+      "oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]
+    },
+    "phase_artifact_digests": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/digest"}
+    },
+    "acceptance_obligation_catalog_digest": {
+      "oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]
+    },
+    "obligations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["obligation_id", "verifier_id", "criterion"],
+        "properties": {
+          "obligation_id": {"$ref": "#/$defs/id"},
+          "verifier_id": {"$ref": "#/$defs/id"},
+          "criterion": {"type": "string", "minLength": 1, "maxLength": 4096}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

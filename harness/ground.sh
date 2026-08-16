@@ -92,6 +92,7 @@ fi
 # full grounding window; it is not a timestamp asserted over a target verified only at entry.
 if [ -n "$RUN" ]; then
   $FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null
+  factory_verify_resume_anchor "$RUN" "$FACTORY_RUNS_ROOT"
 fi
 python3 - "$MARKER" <<'PY'
 import datetime, os, pathlib, tempfile, sys

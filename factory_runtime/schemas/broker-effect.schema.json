@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/broker-effect/1",
+  "title": "Factory verified typed broker effect",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "effect_id",
+    "run_id",
+    "generation",
+    "role",
+    "request_digest",
+    "capability_digest",
+    "operation_id",
+    "operation_kind",
+    "operation_definition_digest",
+    "idempotency_key",
+    "verifier_kind",
+    "exit_status",
+    "stdout_digest",
+    "stderr_digest",
+    "artifact_digest",
+    "verified",
+    "started_at",
+    "finished_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-broker-effect/1"},
+    "effect_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "request_digest": {"$ref": "#/$defs/digest"},
+    "capability_digest": {"$ref": "#/$defs/digest"},
+    "operation_id": {"$ref": "#/$defs/id"},
+    "operation_kind": {"enum": ["read-artifact", "publish-artifact", "run-verifier"]},
+    "operation_definition_digest": {"$ref": "#/$defs/digest"},
+    "idempotency_key": {"$ref": "#/$defs/id"},
+    "verifier_kind": {"enum": ["content-rehash", "durable-rehash", "deterministic-rerun"]},
+    "exit_status": {"type": "integer"},
+    "stdout_digest": {"$ref": "#/$defs/digest"},
+    "stderr_digest": {"$ref": "#/$defs/digest"},
+    "artifact_digest": {"$ref": "#/$defs/digest"},
+    "verified": {"const": true},
+    "started_at": {"type": "integer", "minimum": 1},
+    "finished_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/runner-projection/1",
+  "title": "Factory path-free role projection for the outer model runner",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generation",
+    "role",
+    "target_state_digest",
+    "resolved_commit",
+    "resolved_tree",
+    "projection_manifest_digest",
+    "projection_receipt_digest",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-runner-projection/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "projection_manifest_digest": {"$ref": "#/$defs/digest"},
+    "projection_receipt_digest": {"$ref": "#/$defs/digest"},
+    "files": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relative_path", "mode", "content_digest", "content_base64"],
+        "properties": {
+          "relative_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "mode": {"type": "integer", "minimum": 0, "maximum": 4095},
+          "content_digest": {"$ref": "#/$defs/digest"},
+          "content_base64": {"type": "string", "maxLength": 2097152}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

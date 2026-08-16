@@ -1,4 +1,4 @@
-"""Existing tests change only with artifact supersession plus an exact human impact ruling."""
+"""Existing tests change only with artifact supersession plus an exact dual-ratified ruling."""
 
 from __future__ import annotations
 
@@ -122,7 +122,10 @@ def _authorization(
         authorization_id="change-tests-1",
         version="1",
         run_id=RUN_ID,
+        generation=1,
+        target_state_digest=digest_obj({"target-state": RUN_ID}),
         human_authorizer="human:founder",
+        validator_ratifier="agent:validator",
         ruling="change-expected-behavior",
         expected_change_statement=next(
             item.canonical_statement
@@ -177,7 +180,7 @@ def test_supersession_still_requires_an_affirmative_human_test_impact_ruling() -
     )
 
     assert without_ruling.action == TEST_ACTION_ROUTE_HUMAN
-    assert without_ruling.reason == "human-test-change-authorization-required"
+    assert without_ruling.reason == "dual-test-change-authorization-required"
     assert decision.action == TEST_ACTION_UPDATE
     assert decision.superseding_backreference == new_behavior
     assert decision.test_change_authorization_digest == authorization.content_digest

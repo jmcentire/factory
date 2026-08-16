@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/broker-capability/1",
+  "title": "Factory signed broker capability handle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capability_id",
+    "run_id",
+    "repository_id",
+    "generation",
+    "role",
+    "target_state_digest",
+    "operation_id",
+    "operation_kind",
+    "operation_definition_digest",
+    "configuration_digest",
+    "issuer_identity",
+    "max_uses",
+    "issued_at",
+    "expires_at",
+    "nonce"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-broker-capability/1"},
+    "capability_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "repository_id": {"type": "string", "minLength": 1},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "operation_id": {"$ref": "#/$defs/id"},
+    "operation_kind": {"enum": ["read-artifact", "publish-artifact", "run-verifier"]},
+    "operation_definition_digest": {"$ref": "#/$defs/digest"},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "issuer_identity": {"type": "string", "minLength": 1},
+    "max_uses": {"type": "integer", "minimum": 1, "maximum": 1000},
+    "issued_at": {"type": "integer", "minimum": 1},
+    "expires_at": {"type": "integer", "minimum": 1},
+    "nonce": {"type": "string", "minLength": 16}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

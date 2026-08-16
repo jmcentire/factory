@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/broker-registry/1",
+  "title": "Factory host-owned typed broker operation registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_id",
+    "run_id",
+    "generation",
+    "role",
+    "target_state_digest",
+    "operations",
+    "capabilities",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-broker-registry/1"},
+    "registry_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "operations": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "kind",
+          "verifier_kind",
+          "resource_id",
+          "resource_root",
+          "relative_path",
+          "command",
+          "command_readable_paths"
+        ],
+        "properties": {
+          "operation_id": {"$ref": "#/$defs/id"},
+          "kind": {"enum": ["read-artifact", "publish-artifact", "run-verifier"]},
+          "verifier_kind": {
+            "enum": ["content-rehash", "durable-rehash", "deterministic-rerun"]
+          },
+          "resource_id": {"type": "string", "maxLength": 128},
+          "resource_root": {"type": "string", "maxLength": 4096},
+          "relative_path": {"type": "string", "maxLength": 4096},
+          "command": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "command_readable_paths": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^/", "maxLength": 4096}
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability_digest", "envelope_path"],
+        "properties": {
+          "capability_digest": {"$ref": "#/$defs/digest"},
+          "envelope_path": {"type": "string", "pattern": "^/", "maxLength": 4096}
+        }
+      }
+    },
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

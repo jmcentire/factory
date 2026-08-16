@@ -29,10 +29,15 @@ from factory_core.manifest import LedgerEntry
 from factory_runtime.resources import ResourceLedger
 from factory_runtime.state import _ANCHOR_STATE_KEYS, RunState, RunStateError, RunStore
 from tests.conftest import (
+    acceptance_catalog_artifacts,
+    build_payload,
+    ci_artifacts,
     create_intake_run,
     generation_artifacts,
+    preview_artifacts,
     ratification_receipts,
     terminalize_run_resources,
+    validation_artifacts,
 )
 
 TARGET = "sha256:" + ("1" * 64)
@@ -77,11 +82,26 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         "run-1",
         RunState.BUILDING,
         actor="validator",
-        artifact_digests=generation_artifacts(),
-        payload={"attempt_number": 1, "attempt_limit": 1},
+        artifact_digests={
+            **generation_artifacts(include_acceptance_catalog=False),
+            **acceptance_catalog_artifacts(store),
+        },
+        payload=build_payload(),
     )
-    store.transition("run-1", RunState.VALIDATING, actor="validator")
-    store.transition("run-1", RunState.PREVIEW, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="validator",
+        artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+    )
     return store
 
 
@@ -138,7 +158,7 @@ def test_promoting_a_different_digest_than_was_approved_is_refused(tmp_path: Pat
     """The byte-for-byte property: promote what the human approved, or refuse."""
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
 
     with pytest.raises(RunStateError, match="approved candidate"):
         store.transition(
@@ -152,7 +172,7 @@ def test_promoting_a_different_digest_than_was_approved_is_refused(tmp_path: Pat
 def test_promoting_without_naming_the_artifact_is_refused(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store)
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
 
     with pytest.raises(RunStateError, match="promoted-artifact"):
         store.transition("run-1", RunState.PROMOTED, actor="validator")
@@ -161,7 +181,7 @@ def test_promoting_without_naming_the_artifact_is_refused(tmp_path: Path) -> Non
 def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
     terminalize_run_resources(store, run_id="run-1")
     projection = store.transition(
         "run-1",
@@ -182,7 +202,7 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
 def test_direct_promoted_ledger_append_cannot_bypass_resource_close(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
     ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
         generation=1,
         resource_id="unfinished-workspace",
@@ -225,20 +245,20 @@ def test_crash_after_resource_seal_is_a_promotion_only_resumable_state(
 ) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
     terminalize_run_resources(store, run_id="run-1")
-    ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).seal_for_close(
-        actor="gate-l"
-    )
+    ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).seal_for_close(actor="gate-l")
 
     assert store.load("run-1").state == RunState.CI
     with pytest.raises(RunStateError, match="only an idempotent promotion retry"):
-        store.transition("run-1", RunState.BLOCKED, actor="validator")
+        store.transition(
+            "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "test-block"}
+        )
 
     promoted = store.transition(
         "run-1",
         RunState.PROMOTED,
-        actor="validator",
+        actor="gate-l",
         artifact_digests={"promoted-artifact": CANDIDATE},
     )
     assert promoted.state == RunState.PROMOTED
@@ -302,6 +322,7 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
                 "target": TARGET,
                 "target-state": current.target_state_digest,
                 "source": SOURCE,
+                "acceptance_obligation_catalog": (current.acceptance_obligation_catalog_digest),
                 "phase_artifacts": {
                     "product-specification": PRODUCT,
                     "architecture": ARCHITECTURE,
@@ -348,7 +369,7 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
     prior = RunState.PREVIEW
     if anchor_state is not RunState.HUMAN_APPROVED:
         _approve(store)
-        store.transition("run-1", RunState.CI, actor="validator")
+        store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
         prior = RunState.CI
     store._ledger("run-1").append(
         LedgerEntry(
@@ -362,6 +383,7 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
                 "target": TARGET,
                 "target-state": current.target_state_digest,
                 "source": SOURCE,
+                "acceptance_obligation_catalog": (current.acceptance_obligation_catalog_digest),
                 "phase_artifacts": phase_artifacts,
                 "generation_artifacts": generation,
             },

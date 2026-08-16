@@ -278,6 +278,7 @@ from factory_core.target import (
     TargetManifest,
     TargetManifestError,
     load_target_manifest,
+    load_target_manifest_bytes,
 )
 from factory_core.test_disposition import (
     TEST_ACTION_FIX_IMPLEMENTATION,
@@ -334,7 +335,7 @@ from factory_core.triage import (
     decide_triage,
 )
 
-__version__ = "0.0.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ADAPTER_PROTOCOLS",
@@ -568,6 +569,7 @@ __all__ = [
     "launch_ready",
     "load_delta",
     "load_target_manifest",
+    "load_target_manifest_bytes",
     "normalize_checklist_id",
     "normalize_control_role",
     "normalize_label",

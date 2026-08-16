@@ -68,7 +68,7 @@ from factory_runtime.generation import GenerationPreparer, build_input_document
 from factory_runtime.schema import DocumentValidationError
 from factory_runtime.snapshot import freeze_tree, tree_digest
 from factory_runtime.state import RunState, RunStore
-from tests.conftest import create_intake_run, ratification_receipts
+from tests.conftest import build_payload, create_intake_run, ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -248,8 +248,14 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
         "run-1",
         RunState.BUILDING,
         actor="validator",
-        artifact_digests=prepared.artifact_digests,
-        payload={"attempt_number": 1, "attempt_limit": 1},
+        artifact_digests={
+            **prepared.artifact_digests,
+            "resume-checkpoint": "sha256:" + ("d" * 64),
+            "acceptance-obligation-catalog": "sha256:" + ("1" * 64),
+            "acceptance-obligation-catalog:human-receipt": "sha256:" + ("2" * 64),
+            "acceptance-obligation-catalog:validator-receipt": "sha256:" + ("3" * 64),
+        },
+        payload=build_payload(),
     )
     coder_output = root / "coder-output"
     tester_output = root / "tester-output"
@@ -276,6 +282,8 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
             "coder-output-snapshot": coder_snapshot.digest,
             "tester-output-snapshot": tester_snapshot.digest,
         },
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
     )
     return store, artifacts
 

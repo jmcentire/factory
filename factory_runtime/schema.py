@@ -13,8 +13,15 @@ from referencing import Registry, Resource
 
 SCHEMA_NAMES = frozenset(
     {
+        "acceptance-obligation-catalog",
+        "acceptance-obligation-observations",
+        "acceptance-obligation-report",
         "authorization-request",
         "authority-receipt",
+        "broker-capability",
+        "broker-effect",
+        "broker-registry",
+        "broker-request",
         "evidence-bundle",
         "build-plan",
         "execution-request",
@@ -22,9 +29,16 @@ SCHEMA_NAMES = frozenset(
         "pattern-catalog",
         "phase-artifact",
         "resource-record",
+        "resume-checkpoint",
+        "runner-manifest",
+        "runner-output",
+        "runner-projection",
+        "runner-receipt",
         "target-resolution-request",
         "target-state",
         "test-change-authorization",
+        "transition-obligation-report",
+        "transition-obligation-set",
     }
 )
 

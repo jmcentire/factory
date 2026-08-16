@@ -3,8 +3,9 @@
 The three phase artifacts remain the only authority for expected behavior. A newly ratified
 artifact may state that behavior changed by exactly superseding the old intent item, but that
 does not silently grant an agent permission to edit a guardrail. Updating an existing test also
-requires a separately trusted, affirmative human ruling over the exact run, old and new behavior,
-current phase versions, and either one assertion or an explicitly frozen test family.
+requires a separately trusted, affirmative ruling over the exact run, old and new behavior,
+current phase versions, and either one assertion or an explicitly frozen test family. The ruling
+names both its human authorizer and a distinct Validator ratifier; runtime verifies both receipts.
 
 The test-change authorization is therefore an impact disposition, not a fourth source of intent:
 it can acknowledge the unique change already present in the phase artifacts; it cannot invent,
@@ -33,7 +34,7 @@ _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 @dataclass(frozen=True)
 class TestAssertionBinding:
-    """One exact test assertion covered by a human ruling."""
+    """One exact test assertion covered by a dual-ratified ruling."""
 
     test_id: str
     assertion_digest: str
@@ -91,7 +92,10 @@ class TestChangeAuthorization:
     authorization_id: str
     version: str
     run_id: str
+    generation: int
+    target_state_digest: str
     human_authorizer: str
+    validator_ratifier: str
     ruling: str
     expected_change_statement: str
     phase_artifact_digests: Mapping[str, str] = field(default_factory=dict)
@@ -112,7 +116,10 @@ class TestChangeAuthorization:
             "authorization_id": self.authorization_id,
             "version": self.version,
             "run_id": self.run_id,
+            "generation": self.generation,
+            "target_state_digest": self.target_state_digest,
             "human_authorizer": self.human_authorizer,
+            "validator_ratifier": self.validator_ratifier,
             "ruling": self.ruling,
             "expected_change_statement": self.expected_change_statement,
             "phase_artifact_digests": dict(sorted(self.phase_artifact_digests.items())),
@@ -135,7 +142,10 @@ class TestChangeAuthorization:
             authorization_id=str(raw.get("authorization_id", "")),
             version=str(raw.get("version", "")),
             run_id=str(raw.get("run_id", "")),
+            generation=int(raw.get("generation", 0)),
+            target_state_digest=str(raw.get("target_state_digest", "")),
             human_authorizer=str(raw.get("human_authorizer", "")),
+            validator_ratifier=str(raw.get("validator_ratifier", "")),
             ruling=str(raw.get("ruling", "")),
             expected_change_statement=str(raw.get("expected_change_statement", "")),
             phase_artifact_digests=(
@@ -206,7 +216,7 @@ def _authorization_issue(
     trusted_authorization_digest: str,
 ) -> str:
     if authorization is None:
-        return "human-test-change-authorization-required"
+        return "dual-test-change-authorization-required"
     if not trusted_authorization_digest or not verify_digest(
         authorization.body(), trusted_authorization_digest
     ):
@@ -217,8 +227,16 @@ def _authorization_issue(
         return "test-change-authorization-version-missing"
     if authorization.run_id != failure.run_id or not failure.run_id.strip():
         return "test-change-authorization-run-mismatch"
+    if authorization.generation < 1:
+        return "test-change-authorization-generation-invalid"
+    if not _SHA256_RE.fullmatch(authorization.target_state_digest):
+        return "test-change-authorization-target-state-invalid"
     if not authorization.human_authorizer.strip():
         return "test-change-authorization-human-missing"
+    if not authorization.validator_ratifier.strip():
+        return "test-change-authorization-validator-missing"
+    if authorization.human_authorizer == authorization.validator_ratifier:
+        return "test-change-authorization-self-ratification"
     if authorization.ruling != TEST_CHANGE_RULING:
         return "test-change-authorization-not-affirmative"
     if not authorization.expected_change_statement.strip():
@@ -351,7 +369,7 @@ def dispose_existing_test_failure(
         return ExistingTestDisposition(
             test_id,
             TEST_ACTION_UPDATE,
-            "artifact-supersession-and-human-test-impact-ruling-agree",
+            "artifact-supersession-and-dual-test-impact-ruling-agree",
             superseding_backreference=superseder,
             test_change_authorization_id=authorization.authorization_id,
             test_change_authorization_digest=authorization.content_digest,

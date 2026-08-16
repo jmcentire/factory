@@ -513,9 +513,9 @@ class FactoryWorkflow:
             consumed_nonces=tuple((*consumed, human_receipt.nonce)),
         )
         validator = self.policy.principal(validator_receipt.signer_identity)
-        if validator is None or validator.kind == "human":
+        if validator is None or validator.kind != "agent":
             raise AuthorityVerificationError(
-                "phase Validator ratifier must be an enrolled non-human principal"
+                "phase Validator ratifier must be an enrolled agent principal"
             )
 
         directory = (
