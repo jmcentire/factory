@@ -30,8 +30,9 @@ construction — the purity guard will (and must) reject it.
   absence-vs-integrity issue classification, including whole-artifact version binding.
 - `factory_core/build_plan.py` — qualified recipe-pattern catalog and disposable per-run build
   IR with immutable configuration, full intent coverage, oracle links, and freshness binding.
-- `factory_core/test_disposition.py` — same-phase signed supersession plus exact externally
-  trusted human impact ruling / regression / ambiguity classifier for formerly passing tests.
+- `factory_core/test_disposition.py` — same-phase signed supersession plus an exact externally
+  trusted, dual-ratified impact ruling / regression / ambiguity classifier for formerly passing
+  tests.
 - `factory_core/independence.py` — the five-tier independence ladder derived from the recorded
   arrangement, per-agent model/directive versions, and the structural-depth trade.
 - `factory_core/monitors.py` / `triage.py` — spec-derived monitors with resolvable authority and
@@ -52,6 +53,17 @@ construction — the purity guard will (and must) reject it.
   exact generation/review bytes.
 - `factory_runtime/isolation.py` / `lanes.py` — qualified platform isolation and asymmetric role
   projections (Tester never receives construction IR).
+- `factory_runtime/transition_obligations.py` / `acceptance_obligations.py` — code-selected,
+  versioned lifecycle obligations plus human+Validator-ratified acceptance catalogs and
+  host-derived reports over exact immutable subjects.
+- `factory_runtime/test_change_authority.py` — retained exact test-expectation rulings bound to
+  current phase supersession and independently signed by an enrolled human and Validator.
+- `factory_runtime/resume.py` — pre-mutable-state verification of externally supplied checkpoints
+  over retained signed roots, lineage, resources, configuration, and retention policy.
+- `factory_runtime/runner.py` / `runner_isolation.py` / `projection_bundle.py` — closed-environment,
+  resource-bounded, path-free model execution with canary and same-session-resume qualification.
+- `factory_runtime/broker.py` — typed signed capability handles resolved through checkpoint-bound
+  host registries; models never choose paths, executables, argv, working directories, or scripts.
 - `factory_runtime/evidence_plane.py` / `orchestrator.py` — retained-output evidence and runtime
   to signed preview.
 - `factory_runtime/cli.py` — executable command boundary.
@@ -90,6 +102,11 @@ make test-tessera   # real signing + runtime-through-preview proof
   fail closed.
 - **Checklist gates** — each required item is independently content-addressed against the
   candidate; unchecked/uncited remains a gap and negative or invalid evidence cannot pass.
+- **State-triggered obligations** — every legal transition code-selects a closed, versioned
+  lifecycle obligation set and re-derives the retained set/report on every load; unknown triggers,
+  missing or stale evidence, replay, and direct-ledger bypass deny. Acceptance catalogs separately
+  bind every ratified criterion to exact tests, assertions, expected effects, Validator execution
+  configuration, immutable subject, and bounded review rounds.
 - **Derived build IR** — Product, Architecture, and Testing/Monitoring artifacts remain the only
   intent authority. Recipe patterns are pre-qualified mechanisms; per-run recipe books carry
   instantiated configuration plus exact backreferences and oracle links, invalidate on any
@@ -98,12 +115,17 @@ make test-tessera   # real signing + runtime-through-preview proof
   generation tuple; reviewed Coder/Tester bytes are retained and re-derived; attempt ceilings
   live in both target ABI and plan and cannot rise after authoring starts.
 - **Existing tests are immutable by default** — changing one requires a unique same-phase signed
-  supersession plus an externally trusted affirmative human ruling over the exact assertion or
-  frozen family and exact expected replacement statement; a ruling alone cannot invert behavior.
+  supersession plus one exact affirmative ruling over the run/generation/target, current phase
+  versions, assertion or frozen family, and expected replacement statement. An enrolled human and
+  a distinct enrolled Validator must sign that same ruling; it cannot invent or invert behavior.
 - **Tool capability boundary** — every declared tool has exactly one signed tier and a
   phase-2/3 backreference; unknown/Verboten denies, Sign-off grants are scoped and expiring,
   and denial probes demonstrate enforcement. Platform credential/network removal remains an
   external integration obligation.
+- **Externally anchored resume and brokered execution** — grounding and dispatch verify an
+  independently supplied checkpoint before mutable state. Networked model lanes receive only a
+  bounded path-free projection in a closed named-secret environment, must pass canary/resume
+  qualification, and can request only typed host-owned effects under resource ceilings.
 - **Surface criticality** — human-decided Critical/Standard/Cosmetic per surface; declared side
   effects inherit the highest class; unclassified is Critical; a Critical gap has no waiver and
   Critical evidence has zero flake/retry tolerance. The accountable-human seat on a Critical

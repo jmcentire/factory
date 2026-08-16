@@ -1,8 +1,9 @@
 # harness/ — the run's externalized functions
 
-> Status: execution-truth PR1. Runtime Stage R/E authority selects and freezes the exact target;
-> the tmux layer only consumes that target and records run-owned resources. Interactive launcher
-> qualification, Seatbelt routing, canaries, and budget enforcement remain `UNQUALIFIED_PR2`.
+> Status: executable PR2. Runtime Stage R/E authority selects and freezes the exact target;
+> externally anchored resume verifies it before grounding or dispatch; and model lanes cross the
+> live boundary only through qualified macOS Seatbelt runners and signed typed broker operations.
+> The human/Validator tmux surface remains operator-owned coordination, not a qualified lane.
 > See `docs/EXECUTION-TRUTH.md` and `docs/HARNESS.md`.
 
 ## The two agent seats (founder-confirmed 2026-08-09, this session; enters the
@@ -31,9 +32,9 @@
 | 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens `ctl` and `validator` in the exact target workdir. |
 | 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Artifacts are settled one behavior-ledger row at a time and land content-addressed in `.factory/runs/<run>/artifacts/` with `.digest` files. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
-| 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` — refuses without the full authority tuple ("no oracle yet"). Lanes get asymmetric projections via `projection.sh`, never full clones. The orchestrator is two seats: `dispatcher.py` (resident script, window `ctl`, pays no tokens) + `/orchestrate` woken by `orchestrator_wake.sh` on triggers only. |
+| 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` — refuses without the full authority tuple, externally pinned resume checkpoint, role manifest, output schema, named-secret root, and broker registry. It bundles an asymmetric path-free projection, qualifies two canaries plus same-session resume, runs the task under hard resource ceilings, and executes only signed typed broker requests. No lane tmux process exists. The strategic orchestrator remains `dispatcher.py` plus trigger-only `/orchestrate`. |
 | 8. Orchestrator tracks tasks, takes minutes | `dispatcher.py` snapshots the human↔Validator window into `minutes/` — labeled `[INFERRED]`, non-authoritative, an index into the directive ledger, never the record. |
-| 9. Validator launches/injects via tmux; active poll | Validator injects through `inject.sh` (topology-enforced, receipted; coder-bound results pass the bare pass/fail filter). The *dispatcher* owns the poll — an agent-owned poll cadence is the postmortem's named disease. |
+| 9. Validator dispatches immutable objectives; active poll | Validator dispatches only through `dispatch_lane.sh`. Model output is a closed handoff, not a live conversational lane; questions and blocked status return as retained data. The *dispatcher* owns coordination cadence for the interactive Validator surface. |
 | Stalls / lulls | Dispatcher stall FSM: lane-tending metric, confirm-before-prod, `idle-awaiting-handoff` never prodded, repo-diff metrics forbidden. Prods go to the Validator, not past it. |
 | Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then routes to Gate L. It never sweeps ambient branches, stashes, worktrees, PRs, or dirt. |
 | Click-and-test proof | `proof.sh <run>` reads `.factory/target.conf` (see `target.conf.example`): a declared provision script, real entry-point probes (HTTP hits, CLI runs, out-of-band DB checks, screenshot/video captures — each receipted, outputs kept as evidence), access instructions for the human, teardown always. No target.conf = a **declared gap**, never a quiet pass. |
@@ -51,8 +52,10 @@ names a consuming project:
   records, harness coordination, and evidence live under `<runs>/<run>/`; source bytes do not.
 - Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
   from the immutable target workdir after target-state verification.
-- Env seams: `HARNESS_DIR`, `DIRECTIVE_LEDGER`, `HARNESS_SECRETS`,
-  `HARNESS_PROJECTION_CONF`, `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`.
+- Env seams: `HARNESS_DIR`, `DIRECTIVE_LEDGER`, `HARNESS_PROJECTION_CONF`,
+  `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`, plus externally supplied
+  `FACTORY_RESUME_*`, `FACTORY_RUNNER_*`, and `FACTORY_BROKER_REGISTRY_DIR` paths. Secrets are
+  read only from the named-secret root declared by the checkpoint-bound runner manifest.
 - The founder's hardware signing key is per-**founder**, not per-project: one key
   signs many project ledgers; each project's ledger root is its own chain.
 - This repo's own `.factory/` and `DIRECTIVES/` exist because the factory
@@ -62,16 +65,18 @@ names a consuming project:
 
 - `directive.py` — control 1/1a: verbatim hash-chained ledger, qualifier-preserving
   supersession, provisional side chain, `verify --sigs`.
-- `lane_env.sh` — capability = environment: `env -i` from a manifest; refuses HALT
-  and stale grounding. Live dispatch does not yet route through it; that is a named PR2 gap.
+- `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses HALT
+  and stale grounding. Model dispatch uses the stronger `factory run-model` boundary, which also
+  removes profile inheritance, qualifies Seatbelt, constrains process trees, and receipts config.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
 - `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.
 - `sched_audit.sh` — control 6: unregistered OS timer = hostile. (`SCHED_AUDIT_INPUT`
   is a test seam for the forced-negative drill.)
 - `ground.sh` — control 7 + 9: resume from disk; reconcilers under `.factory/reconcile.d/`.
-- `factory.sh`, `dispatch_lane.sh`, `projection.sh`, `inject.sh`, `dispatcher.py`,
-  `orchestrator_wake.sh`, `endgame.sh`, `postmortem.py` — the tmux layer (above).
+- `factory.sh` opens only the operator-owned coordination surface. `dispatch_lane.sh` and
+  `projection.sh` form the qualified model boundary; `inject.sh`, `dispatcher.py`, and
+  `orchestrator_wake.sh` serve coordination; `endgame.sh` and `postmortem.py` close and report.
 
 Forced-negative drills for all of it: `tests/test_harness_scripts.py`, wired into
 `make ship` via the `test` gate; syntax/chain gate via `make check-harness`.

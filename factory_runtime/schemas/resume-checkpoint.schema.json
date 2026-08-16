@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/resume-checkpoint/1",
+  "title": "Factory independently custodied resume checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "checkpoint_id",
+    "previous_checkpoint_digest",
+    "repository_id",
+    "run_id",
+    "trusted_root_public_key",
+    "genesis_envelope_digest",
+    "genesis_payload_digest",
+    "target_resolution_request_digest",
+    "target_resolution_receipt_digest",
+    "execution_request_digest",
+    "execution_receipt_digest",
+    "target_manifest_digest",
+    "target_state_digest",
+    "source_digest",
+    "generation",
+    "acceptance_obligation_catalog_digest",
+    "run_ledger_head",
+    "run_ledger_length",
+    "resource_ledger_head",
+    "resource_ledger_length",
+    "resource_seal_digest",
+    "configuration_digests",
+    "retention",
+    "issued_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-resume-checkpoint/1"},
+    "checkpoint_id": {"$ref": "#/$defs/id"},
+    "previous_checkpoint_digest": {
+      "oneOf": [
+        {"const": ""},
+        {"$ref": "#/$defs/digest"}
+      ]
+    },
+    "repository_id": {"type": "string", "minLength": 1},
+    "run_id": {"$ref": "#/$defs/id"},
+    "trusted_root_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "genesis_envelope_digest": {"$ref": "#/$defs/digest"},
+    "genesis_payload_digest": {"$ref": "#/$defs/digest"},
+    "target_resolution_request_digest": {"$ref": "#/$defs/digest"},
+    "target_resolution_receipt_digest": {"$ref": "#/$defs/digest"},
+    "execution_request_digest": {"$ref": "#/$defs/digest"},
+    "execution_receipt_digest": {"$ref": "#/$defs/digest"},
+    "target_manifest_digest": {"$ref": "#/$defs/digest"},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "source_digest": {"$ref": "#/$defs/digest"},
+    "generation": {"type": "integer", "minimum": 1},
+    "acceptance_obligation_catalog_digest": {
+      "oneOf": [
+        {"const": ""},
+        {"$ref": "#/$defs/digest"}
+      ]
+    },
+    "run_ledger_head": {"$ref": "#/$defs/digest"},
+    "run_ledger_length": {"type": "integer", "minimum": 3},
+    "resource_ledger_head": {"$ref": "#/$defs/digest"},
+    "resource_ledger_length": {"type": "integer", "minimum": 1},
+    "resource_seal_digest": {
+      "oneOf": [
+        {"const": ""},
+        {"$ref": "#/$defs/digest"}
+      ]
+    },
+    "configuration_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/digest"}
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "mode",
+        "retain_until",
+        "metadata_classes",
+        "erasure_authority"
+      ],
+      "properties": {
+        "policy_id": {"$ref": "#/$defs/id"},
+        "mode": {
+          "enum": ["retain-indefinitely", "retain-until", "erase-on-close"]
+        },
+        "retain_until": {"type": "integer", "minimum": 0},
+        "metadata_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "authority-envelopes",
+              "lifecycle-ledger",
+              "resource-ledger",
+              "runner-receipts",
+              "effect-evidence"
+            ]
+          }
+        },
+        "erasure_authority": {"type": "string", "minLength": 1}
+      }
+    },
+    "issued_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

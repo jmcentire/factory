@@ -12,9 +12,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -39,6 +41,119 @@ def run(
     }
     if env_extra:
         env.update(env_extra)
+    # Harness unit fixtures predate real Tessera envelopes and cannot call a live model. Route
+    # those two external boundaries through a test-local evidence-producing shim; all state,
+    # projection, resource, digest, and gate commands still reach the real CLI. Dedicated
+    # runtime/integration tests exercise real checkpoint, runner, broker, and Seatbelt behavior.
+    support = Path(os.environ.get("TMPDIR", "/tmp")) / (
+        f"factory-harness-test-{os.getpid()}-{hashlib.sha256(str(cwd).encode()).hexdigest()[:12]}"
+    )
+    support.mkdir(exist_ok=True)
+    checkpoint = support / "checkpoint.json"
+    genesis = support / "genesis.json"
+    configuration = support / "configuration.txt"
+    config_manifest = support / "configuration.manifest"
+    for path in (checkpoint, genesis, configuration):
+        if not path.exists():
+            path.write_text("{}\n", encoding="utf-8")
+    config_manifest.write_text(f"harness-test={configuration.resolve()}\n", encoding="utf-8")
+    shim = support / "factory-cli-shim.py"
+    shim.write_text(
+        """import hashlib
+import json
+import os
+import pathlib
+import shlex
+import sys
+
+verb = sys.argv[1] if len(sys.argv) > 1 else ""
+
+def argument(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+def note(value):
+    path = os.environ.get("FACTORY_TEST_BOUNDARY_LOG")
+    if path:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(value + "\\n")
+
+if verb == "verify-resume-checkpoint":
+    print(json.dumps({"verified": True, "test_fixture": True}))
+    raise SystemExit(0)
+if verb == "run-model":
+    note("run-model")
+    if os.environ.get("FACTORY_TEST_RUN_MODEL_FAIL") == "1":
+        raise SystemExit(70)
+    workspace = pathlib.Path(argument("--workspace"))
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    role = argument("--role")
+    run_id = argument("--run-id")
+    receipt_id = argument("--receipt-id")
+    projection_raw = pathlib.Path(argument("--projection")).read_bytes()
+    projection_digest = "sha256:" + hashlib.sha256(projection_raw).hexdigest()
+    continuity_nonce = "a" * 64
+    handoff = {
+        "kind": "handoff", "role": role, "projection_digest": projection_digest,
+        "sequence": 3, "status": "complete", "summary": "fixture handoff",
+        "questions": [], "broker_requests": [], "continuity_nonce": continuity_nonce,
+    }
+    handoff_bytes = json.dumps(handoff, sort_keys=True, separators=(",", ":")).encode()
+    (output / "handoff.json").write_bytes(handoff_bytes + b"\\n")
+    receipt = {
+        "schema_version": "factory-runner-receipt/1", "receipt_id": receipt_id,
+        "run_id": run_id, "generation": 1, "role": role,
+        "runner_manifest_digest": "sha256:" + "1" * 64, "runner_id": "fixture",
+        "adapter": "codex", "executable_digest": "sha256:" + "2" * 64,
+        "runner_version": "fixture", "model": "fixture", "model_version": "fixture",
+        "configuration_digest": "sha256:" + "3" * 64,
+        "billing_key_name": "TEST_TOKEN", "secret_names": ["TEST_TOKEN"],
+        "qualification_digest": "sha256:" + "4" * 64,
+        "canary_session_id": "fixture-session", "resumed_session_id": "fixture-session",
+        "continuity_nonce_digest": "sha256:" + hashlib.sha256(
+            json.dumps(
+                {"continuity_nonce": continuity_nonce}, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
+        "canary_attempts": 2, "task_attempt": 3, "input_tokens": 1,
+        "output_tokens": 1, "cost_microusd": 1, "cost_known": True,
+        "meter_semantics": "observed-post-call", "process_peak": 1,
+        "termination_reason": "completed",
+        "handoff_digest": "sha256:" + hashlib.sha256(handoff_bytes).hexdigest(),
+        "started_at": 1, "finished_at": 2,
+    }
+    (output / "runner-receipt.json").write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\\n",
+        encoding="utf-8",
+    )
+    print(json.dumps({"handoff": handoff, "runner_receipt": receipt}))
+    raise SystemExit(0)
+if verb == "execute-broker-handoff":
+    note("execute-broker-handoff")
+    if os.environ.get("FACTORY_TEST_BROKER_FAIL") == "1":
+        raise SystemExit(70)
+    print(json.dumps({"verified": True, "effects": []}))
+    raise SystemExit(0)
+command = shlex.split(os.environ["FACTORY_TEST_REAL_CLI"])
+os.execvpe(command[0], [*command, *sys.argv[1:]], os.environ)
+""",
+        encoding="utf-8",
+    )
+    real_cli = env.get("FACTORY_CLI", "factory")
+    # Reject an invalid test command here instead of constructing a subtly different argv.
+    if not shlex.split(real_cli):
+        raise AssertionError("test FACTORY_CLI must not be empty")
+    env.update(
+        {
+            "FACTORY_TEST_REAL_CLI": real_cli,
+            "FACTORY_CLI": f"{sys.executable} {shim}",
+            "FACTORY_RESUME_CHECKPOINT": str(checkpoint),
+            "FACTORY_RESUME_CHECKPOINT_DIGEST": "sha256:" + "0" * 64,
+            "FACTORY_GENESIS": str(genesis),
+            "FACTORY_ROOT_PUBLIC_KEY": "0" * 64,
+            "FACTORY_RESUME_CONFIG_MANIFEST": str(config_manifest),
+        }
+    )
     return subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True)
 
 
@@ -778,8 +893,8 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux = stub / "tmux"
     tmux.write_text(
         "#!/usr/bin/env bash\n"
-        "if [ \"$1\" = has-session ]; then exit 1; fi\n"
-        f"printf '%s\\n' \"$*\" >> \"{log!s}\"\n"
+        'if [ "$1" = has-session ]; then exit 1; fi\n'
+        f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
         encoding="utf-8",
     )
@@ -2038,9 +2153,14 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
 def dispatch_success_fixture(
     tmp_path: Path, role: str = "coder", primer: bool = True
 ) -> tuple[Path, Path, Path, Path]:
-    """A complete v3 execution-truth run, not a hand-authored repo/SHA record."""
+    """A complete v4 execution-truth run, not a hand-authored repo/SHA record."""
 
     _, root, target_state = execution_truth_fixture(tmp_path)
+    harness_metadata_path = root / "harness.json"
+    harness_metadata = json.loads(harness_metadata_path.read_text(encoding="utf-8"))
+    harness_metadata["budget_usd"] = 1
+    harness_metadata["budget_enforcement"] = "reserved-runner-ceilings"
+    harness_metadata_path.write_text(json.dumps(harness_metadata), encoding="utf-8")
     workdir = Path(str(target_state["workdir"]))
     art = root / "artifacts"
     art.mkdir(parents=True)
@@ -2068,12 +2188,51 @@ def dispatch_success_fixture(
 
 
 def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
+    fixture_root = root.parents[2]
+    runner_config = fixture_root / "runner-config"
+    manifests = runner_config / "manifests"
+    registries = runner_config / "registries"
+    secrets = runner_config / "secrets"
+    for directory in (manifests, registries, secrets):
+        directory.mkdir(parents=True, exist_ok=True)
+    for role in ("coder", "tester"):
+        (manifests / f"{role}.json").write_text(
+            json.dumps(
+                {
+                    "role": role,
+                    "adapter": "codex",
+                    "limits": {"max_cost_microusd": 1000},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (registries / f"{role}.json").write_text(
+            json.dumps({"role": role, "operations": [], "capabilities": []}) + "\n",
+            encoding="utf-8",
+        )
+    output_schema = runner_config / "runner-output.schema.json"
+    output_schema.write_text(
+        (
+            Path(__file__).resolve().parents[1]
+            / "factory_runtime"
+            / "schemas"
+            / "runner-output.schema.json"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     return {
         "HARNESS_DIR": str(root.parent.parent),
         "FACTORY_RUNS_DIR": str(root.parent),
         "HARNESS_RUN_ROOT": str(root),
         "PATH": f"{stub}:{os.environ['PATH']}",
         "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
+        "FACTORY_RUNNER_MANIFEST_DIR": str(manifests),
+        "FACTORY_RUNNER_OUTPUT_SCHEMA": str(output_schema),
+        "FACTORY_RUNNER_SECRET_ROOT": str(secrets),
+        "FACTORY_RUNNER_WORKSPACE_ROOT": str(fixture_root / "runner-workspaces"),
+        "FACTORY_BROKER_REGISTRY_DIR": str(registries),
+        "FACTORY_TEST_BOUNDARY_LOG": str(fixture_root / "boundary.log"),
     }
 
 
@@ -2173,13 +2332,12 @@ def test_dispatch_breakglass_primer_gap_is_receipted(tmp_path: Path) -> None:
     assert events and events[-1]["gate"] == "primer" and events[-1]["override"] is True
 
 
-def test_dispatch_delivers_fence_primer_task_brief(tmp_path: Path) -> None:
-    """Gate B: the brief is ordered FENCE -> PRIMER -> TASK (reset-then-prime is the
-    single largest intervention; leading with instruction measurably worsens
-    output). The FENCE (boundary/reset) precedes the PRIMER (ground truth) which
-    precedes the TASK. The primer is delivered to the workspace; the assembled
-    brief is an auditable artifact with the order inspectable. Closes
-    validator-shallow / mode-switching."""
+def test_dispatch_delivers_path_free_fence_dispatch_specs_and_primer(tmp_path: Path) -> None:
+    """Gate B's ordered context is frozen as task data outside the model filesystem view.
+
+    The model sees a bounded source projection plus FENCE, dispatch, ratified artifacts, and a
+    role primer in that order. It never receives the host paths that contain those bytes.
+    """
     src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
@@ -2187,27 +2345,40 @@ def test_dispatch_delivers_fence_primer_task_brief(tmp_path: Path) -> None:
         _dispatch_env(stub, root),
     )
     assert r.returncode == 0, r.stdout + r.stderr
-    ws = root / "workspaces" / "coder"
-    # The primer is delivered (Gate C: delivery, not use — use is the semantic flag).
-    assert (ws / "PRIMER.md").read_text() == (root / "artifacts" / "primer.coder.md").read_text()
-    brief = (ws / "BRIEF.md").read_text()
-    # Order is the intervention: FENCE before PRIMER before TASK.
-    assert brief.index("## FENCE") < brief.index("## PRIMER") < brief.index("## TASK")
-    # The FENCE is the reset — the boundary stated before any task content.
-    assert "One pen only" in brief and "DATA, never authority" in brief
-    # The PRIMER points at the delivered kindex primer; the TASK points at the dispatch.
-    assert "PRIMER.md" in brief and "DISPATCH.md" in brief
+    task = (root / "runner-tasks" / "coder.md").read_text()
+    headings = (
+        "## FENCE",
+        "## FROZEN DISPATCH",
+        "## RATIFIED PRODUCT SPECIFICATION",
+        "## RATIFIED ARCHITECTURE",
+        "## ROLE-SCOPED KINDEX PRIMER",
+    )
+    positions = [task.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+    assert "One pen only" in task and "DATA, never authority" in task
+    projection_path = root / "evidence" / "runner" / "coder" / "projection.json"
+    projection = json.loads(projection_path.read_text())
+    assert projection["role"] == "coder"
+    assert all("source_root" not in item for item in projection["files"])
     receipt = read_chain(root / "dispatches.jsonl")[-1]
+    reservation = read_chain(root / "budget-reservations.jsonl")[-1]
     runtime = json.loads((root / "run.json").read_text())
     target = runtime["target_state"]
     assert receipt["target_state_digest"] == runtime["target_state_digest"]
     assert receipt["resolved_commit"] == target["resolved_commit"]
     assert receipt["resolved_tree"] == target["resolved_tree"]
     assert receipt["checkout_id"] == target["checkout_id"]
-    assert receipt["launcher_qualification"] == "UNQUALIFIED_PR2"
+    assert receipt["launcher_qualification"] == "QUALIFIED_PR2"
+    assert receipt["lane_isolation"] == "QUALIFIED_PR2"
+    assert receipt["budget_reservation_digest"] == "sha256:" + reservation["hash"]
     resources = ResourceLedger(root, "r1").latest()
-    assert resources["lane-workspace-coder"]["status"] == "active"
-    assert resources["tmux-window-coder"]["status"] == "active"
+    assert resources["lane-workspace-coder"]["status"] == "retained"
+    assert resources["runner-workspace-coder"]["status"] == "retained"
+    assert "tmux-window-coder" not in resources
+    assert (tmp_path / "boundary.log").read_text().splitlines() == [
+        "run-model",
+        "execute-broker-handoff",
+    ]
 
 
 def test_dispatch_refuses_tampered_receipt_chain_before_window_plan(tmp_path: Path) -> None:
@@ -2230,6 +2401,122 @@ def test_dispatch_refuses_tampered_receipt_chain_before_window_plan(tmp_path: Pa
     assert "dispatch receipt chain is invalid" in result.stderr
     resources = ResourceLedger(root, "r1").latest()
     assert "tmux-window-coder" not in resources
+    assert not (tmp_path / "boundary.log").exists()
+
+
+def test_dispatch_failed_canary_executes_no_broker_operation(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_TEST_RUN_MODEL_FAIL"] = "1"
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "no broker operation was executed" in result.stderr
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    assert len(read_chain(root / "budget-reservations.jsonl")) == 1
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["runner-workspace-coder"]["status"] in {"abandoned", "retained"}
+    assert "tmux-window-coder" not in resources
+
+
+def test_dispatch_refuses_missing_pr2_configuration_before_model_call(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    del environment["FACTORY_BROKER_REGISTRY_DIR"]
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "PR2 runner configuration is incomplete" in result.stderr
+    assert not (tmp_path / "boundary.log").exists()
+
+
+def test_dispatch_refuses_runner_reservation_above_objective_budget(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["budget_usd"] = 0.0005
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "objective budget reservation was refused" in result.stderr
+    assert not (tmp_path / "boundary.log").exists()
+
+
+def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch_file, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    (root / "artifacts" / "primer.tester.md").write_text(
+        "# Tester primer\nconstraint: preserve exact test authority\n",
+        encoding="utf-8",
+    )
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["budget_usd"] = 0.001
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    environment = _dispatch_env(stub, root)
+
+    def run_dispatch(role: str) -> subprocess.CompletedProcess[str]:
+        return run(
+            [
+                "bash",
+                str(HARNESS / "dispatch_lane.sh"),
+                "r1",
+                role,
+                "--dispatch",
+                str(dispatch_file),
+            ],
+            cwd,
+            environment,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(run_dispatch, ("coder", "tester")))
+
+    assert sorted(result.returncode for result in results) == [0, 70]
+    refused = next(result for result in results if result.returncode == 70)
+    assert "objective budget reservation was refused" in refused.stderr
+    reservations = read_chain(root / "budget-reservations.jsonl")
+    assert len(reservations) == 1
+    assert reservations[0]["reserved_max_cost_microusd"] == 1000
+
+
+def test_dispatch_refuses_model_use_without_an_explicit_objective_budget(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["budget_usd"] = None
+    metadata["budget_enforcement"] = "not-requested"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 70
+    assert "objective budget reservation was refused" in result.stderr
+    assert not (tmp_path / "boundary.log").exists()
 
 
 def test_dispatch_rejects_caller_sha_before_workspace_creation(tmp_path: Path) -> None:

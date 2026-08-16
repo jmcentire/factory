@@ -27,10 +27,24 @@ from factory_core.manifest import (
 )
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
+from factory_runtime.transition_obligations import (
+    REPORT_KEY as TRANSITION_OBLIGATION_REPORT_KEY,
+)
+from factory_runtime.transition_obligations import (
+    SET_KEY as TRANSITION_OBLIGATION_SET_KEY,
+)
+from factory_runtime.transition_obligations import (
+    TransitionObligationError,
+    assert_catalog_covers,
+    derive_transition_obligations,
+    retain_transition_obligations,
+    verify_retained_transition_obligations,
+)
 
-RUN_SCHEMA_VERSION = "factory-run/3"
-LEGACY_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/1", "factory-run/2"})
-GENERATION_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/2", RUN_SCHEMA_VERSION})
+RUN_SCHEMA_VERSION = "factory-run/4"
+LEGACY_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/1", "factory-run/2", "factory-run/3"})
+TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/3", RUN_SCHEMA_VERSION})
+GENERATION_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/2", "factory-run/3", RUN_SCHEMA_VERSION})
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -43,6 +57,11 @@ GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
     "build-input",
     "generation-readiness",
 )
+
+ACCEPTANCE_OBLIGATION_CATALOG_KEY = "acceptance-obligation-catalog"
+ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY = "acceptance_obligation_catalog"
+ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
+TEST_CHANGE_AUTHORIZATION_KEY = "test-change-authorization"
 
 
 class RunState(StrEnum):
@@ -138,6 +157,13 @@ ALLOWED_TRANSITIONS: Mapping[RunState, frozenset[RunState]] = {
     ),
 }
 
+assert_catalog_covers(
+    {
+        str(source): tuple(str(destination) for destination in destinations)
+        for source, destinations in ALLOWED_TRANSITIONS.items()
+    }
+)
+
 _PHASE_STATE_KEYS: Mapping[RunState, str] = {
     RunState.PRODUCT_SPECIFICATION_RATIFIED: "product-specification",
     RunState.ARCHITECTURE_RATIFIED: "architecture",
@@ -180,6 +206,7 @@ class RunProjection:
     created_at: int
     updated_at: int
     approved_candidate_digest: str = ""
+    acceptance_obligation_catalog_digest: str = ""
     generation_artifact_digests: Mapping[str, str] = field(default_factory=dict)
     build_attempt_count: int = 0
     build_attempt_limit: int = 0
@@ -203,9 +230,7 @@ class RunProjection:
             source_digest=str(raw.get("source_digest", "")),
             target_state_digest=str(raw.get("target_state_digest", "")),
             target_state=(
-                dict(raw["target_state"])
-                if isinstance(raw.get("target_state"), Mapping)
-                else {}
+                dict(raw["target_state"]) if isinstance(raw.get("target_state"), Mapping) else {}
             ),
             generation=_as_int(raw.get("generation")),
             phase_artifact_digests=(
@@ -217,6 +242,9 @@ class RunProjection:
             created_at=_as_int(raw.get("created_at")),
             updated_at=_as_int(raw.get("updated_at")),
             approved_candidate_digest=str(raw.get("approved_candidate_digest", "")),
+            acceptance_obligation_catalog_digest=str(
+                raw.get("acceptance_obligation_catalog_digest", "")
+            ),
             generation_artifact_digests=(
                 {str(key): str(value) for key, value in generation_raw.items()}
                 if isinstance(generation_raw, Mapping)
@@ -363,7 +391,7 @@ def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
 
 
 def _require_receipts_belong_here(
-    digests: Mapping[str, Any], phase_key: str | None, *, context: str
+    digests: Mapping[str, Any], artifact_keys: Collection[str], *, context: str
 ) -> None:
     """A receipt digest may only appear on the ratification of the phase it ratifies.
 
@@ -380,11 +408,11 @@ def _require_receipts_belong_here(
     ``WorkflowEngine.ratify_phase`` records exactly the two keys for the phase it ratified, so
     nothing on the real path is affected.
     """
-    allowed = (
-        {f"{phase_key}:{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES}
-        if phase_key
-        else set()
-    )
+    allowed = {
+        f"{artifact_key}:{role}-receipt"
+        for artifact_key in artifact_keys
+        for role in _RATIFICATION_RECEIPT_ROLES
+    }
     stray = sorted(_receipt_keys(digests) - allowed)
     if stray:
         raise RunStateError(
@@ -542,7 +570,7 @@ class RunStore:
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
     ) -> RunProjection:
-        """Create a v3 run at the authorized target-resolution boundary.
+        """Create a v4 run at the authorized target-resolution boundary.
 
         Ordinary intake is deliberately impossible here. The exact target state must first be
         recorded, then a second execution receipt must establish the verbatim source digest.
@@ -552,6 +580,14 @@ class RunStore:
         if not actor.strip():
             raise RunStateError("actor is required")
         supplied = dict(artifact_digests or {})
+        reserved_obligation_keys = {
+            TRANSITION_OBLIGATION_SET_KEY,
+            TRANSITION_OBLIGATION_REPORT_KEY,
+        }
+        if reserved_obligation_keys.intersection(supplied):
+            raise RunStateError(
+                "transition obligation digests are derived by the store, not supplied by callers"
+            )
         for key, value in supplied.items():
             _require_digest(value, f"artifact_digests[{key!r}]")
         _require_digest_keys(
@@ -590,6 +626,7 @@ class RunStore:
                     "source": "",
                     "phase_artifacts": {},
                     "generation_artifacts": {},
+                    ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY: "",
                 },
                 payload={
                     **dict(payload or {}),
@@ -726,9 +763,7 @@ class RunStore:
         entries = self._ledger(run_id).verified_entries()
         if not entries or entries[-1].get("entry_hash") != projection.ledger_head:
             raise RunStateError("run ledger changed while Stage-E authority was being read")
-        intake_entries = [
-            record for record in entries if record.get("to_state") == RunState.INTAKE
-        ]
+        intake_entries = [record for record in entries if record.get("to_state") == RunState.INTAKE]
         if len(intake_entries) != 1:
             raise RunStateError("run ledger must contain exactly one Stage-E intake entry")
         raw = intake_entries[0].get("artifact_digests")
@@ -832,11 +867,21 @@ class RunStore:
             )
 
         supplied = dict(artifact_digests or {})
+        reserved_obligation_keys = {
+            TRANSITION_OBLIGATION_SET_KEY,
+            TRANSITION_OBLIGATION_REPORT_KEY,
+        }
+        if reserved_obligation_keys.intersection(supplied):
+            raise RunStateError(
+                "transition obligation digests are derived by the store, not supplied by callers"
+            )
         for key, value in supplied.items():
             _require_digest(value, f"artifact_digests[{key!r}]")
         phases = dict(current.phase_artifact_digests)
+        next_acceptance_catalog_digest = current.acceptance_obligation_catalog_digest
         transition_payload = dict(payload or {})
         next_target_state_digest = current.target_state_digest
+        next_target_state = dict(current.target_state)
         next_source_digest = current.source_digest
         if destination is RunState.TARGET_RESOLVED:
             _require_digest_keys(
@@ -852,6 +897,7 @@ class RunStore:
             except DocumentValidationError as exc:
                 raise RunStateError(str(exc)) from exc
             next_target_state_digest = digest_obj(dict(raw_target_state))
+            next_target_state = dict(raw_target_state)
             if supplied["target-state"] != next_target_state_digest:
                 raise RunStateError("target-state digest does not address payload.target_state")
             if raw_target_state.get("run_id") != run_id:
@@ -897,18 +943,167 @@ class RunStore:
                     + ", ".join(forbidden_subject_keys)
                 )
         phase_key = _PHASE_STATE_KEYS.get(destination)
-        _require_receipts_belong_here(supplied, phase_key, context=str(destination))
+        catalog_activation = destination is RunState.BUILDING and not next_acceptance_catalog_digest
+        changed_tests_raw = transition_payload.get("changed_existing_tests", [])
+        if not isinstance(changed_tests_raw, list):
+            raise RunStateError("changed_existing_tests must be an exact array")
+        changed_tests = [str(test_id) for test_id in changed_tests_raw]
+        test_change_activation = bool(changed_tests)
+        if test_change_activation and destination is not RunState.BUILDING:
+            raise RunStateError(
+                "test expectation changes may be authorized only when entering building"
+            )
+        ratified_artifact_keys = {
+            key
+            for key in (
+                phase_key,
+                ACCEPTANCE_OBLIGATION_CATALOG_KEY if catalog_activation else None,
+                TEST_CHANGE_AUTHORIZATION_KEY if test_change_activation else None,
+            )
+            if key is not None
+        }
+        _require_receipts_belong_here(
+            supplied,
+            ratified_artifact_keys,
+            context=str(destination),
+        )
+        already_recorded_receipts = set(_recorded_receipt_digests(self._ledger(run_id).entries()))
         if phase_key:
             phase_digest = supplied.get(phase_key, "")
             if not phase_digest:
                 raise RunStateError(f"{destination} requires artifact digest {phase_key!r}")
-            _require_ratification_receipts(
+            already_recorded_receipts |= _require_ratification_receipts(
                 supplied,
                 phase_key,
                 context=str(destination),
-                already_recorded=_recorded_receipt_digests(self._ledger(run_id).entries()),
+                already_recorded=already_recorded_receipts,
             )
             phases[phase_key] = phase_digest
+        if catalog_activation:
+            catalog_digest = str(supplied.get(ACCEPTANCE_OBLIGATION_CATALOG_KEY, ""))
+            if not catalog_digest:
+                raise RunStateError(
+                    "first build requires a human and Validator ratified "
+                    "acceptance-obligation catalog"
+                )
+            already_recorded_receipts |= _require_ratification_receipts(
+                supplied,
+                ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+                context=str(destination),
+                already_recorded=already_recorded_receipts,
+            )
+            next_acceptance_catalog_digest = catalog_digest
+        elif ACCEPTANCE_OBLIGATION_CATALOG_KEY in supplied:
+            raise RunStateError(
+                "acceptance-obligation catalog may be supplied only on its first build activation"
+            )
+        if test_change_activation:
+            test_change_digest = str(supplied.get(TEST_CHANGE_AUTHORIZATION_KEY, ""))
+            if not test_change_digest:
+                raise RunStateError(
+                    "changed existing tests require a human and Validator ratified "
+                    "test-change-authorization"
+                )
+            already_recorded_receipts |= _require_ratification_receipts(
+                supplied,
+                TEST_CHANGE_AUTHORIZATION_KEY,
+                context=str(destination),
+                already_recorded=already_recorded_receipts,
+            )
+        elif TEST_CHANGE_AUTHORIZATION_KEY in supplied:
+            raise RunStateError(
+                "test-change authorization may be supplied only with an exact nonempty "
+                "changed_existing_tests set"
+            )
+
+        expected_authority_nonces = (
+            (1 if destination is RunState.INTAKE else 0)
+            + (2 if catalog_activation else 0)
+            + (2 if test_change_activation else 0)
+        )
+        transition_nonces = transition_payload.get("authority_receipt_nonces", [])
+        if not isinstance(transition_nonces, list):
+            raise RunStateError("authority_receipt_nonces must be an array")
+        normalized_nonces = [str(nonce) for nonce in transition_nonces]
+        allowed_authority_nonce_counts = {expected_authority_nonces}
+        if phase_key:
+            # Legacy direct-store tests and ledgers predate nonce recording for phase receipts;
+            # the workflow path records both. Receipt digests remain mandatory in either form.
+            allowed_authority_nonce_counts.add(expected_authority_nonces + 2)
+        if len(normalized_nonces) not in allowed_authority_nonce_counts:
+            raise RunStateError(
+                f"{destination} requires authority receipt nonce count in "
+                f"{sorted(allowed_authority_nonce_counts)} for the ratifications recorded on "
+                "this transition"
+            )
+        if any(not nonce.strip() for nonce in normalized_nonces):
+            raise RunStateError("authority receipt nonces must be nonempty")
+        if len(normalized_nonces) != len(set(normalized_nonces)):
+            raise RunStateError("authority receipt nonces must be unique")
+        replayed_nonces = sorted(set(normalized_nonces) & self.consumed_authority_nonces(run_id))
+        if replayed_nonces:
+            raise RunStateError("authority receipt nonce replay: " + ", ".join(replayed_nonces))
+        if destination is RunState.SPECIFICATION_DEFECT:
+            next_acceptance_catalog_digest = ""
+
+        if destination is RunState.PREVIEW:
+            _require_digest_keys(
+                supplied,
+                (
+                    "candidate",
+                    "acceptance-tests",
+                    ACCEPTANCE_OBLIGATION_REPORT_KEY,
+                    "evidence-bundle",
+                    "evidence-envelope",
+                ),
+                context=str(destination),
+            )
+            prior_artifacts = self.current_artifact_digests(run_id)
+            trusted_evidence = {
+                key: str(prior_artifacts.get(key, ""))
+                for key in (
+                    "candidate",
+                    "acceptance-tests",
+                    "coder-output-snapshot",
+                    "tester-output-snapshot",
+                )
+            }
+            _require_digest_keys(
+                trusted_evidence,
+                trusted_evidence,
+                context=f"{destination} prior validation",
+            )
+            for key in ("candidate", "acceptance-tests"):
+                if supplied[key] != trusted_evidence[key]:
+                    raise RunStateError(
+                        f"{destination} changes {key} after immutable validation began"
+                    )
+            try:
+                from factory_runtime.acceptance_obligations import (
+                    AcceptanceObligationError,
+                    verify_retained_acceptance_obligation_report,
+                )
+
+                verify_retained_acceptance_obligation_report(
+                    self._run_dir(run_id),
+                    catalog_digest=next_acceptance_catalog_digest,
+                    report_digest=supplied[ACCEPTANCE_OBLIGATION_REPORT_KEY],
+                    run_id=run_id,
+                    generation=current.generation,
+                    source=str(source),
+                    destination=str(destination),
+                    target_state_digest=current.target_state_digest,
+                    resolved_commit=str(current.target_state.get("resolved_commit", "")),
+                    resolved_tree=str(current.target_state.get("resolved_tree", "")),
+                    phase_artifact_digests=phases,
+                    candidate_digest=supplied["candidate"],
+                    acceptance_tests_digest=supplied["acceptance-tests"],
+                    trusted_evidence_digests=trusted_evidence,
+                )
+            except AcceptanceObligationError as exc:
+                raise RunStateError(
+                    f"{destination} acceptance-obligation report is invalid: {exc}"
+                ) from exc
 
         generation = dict(current.generation_artifact_digests)
         if destination is RunState.BUILDING:
@@ -986,6 +1181,34 @@ class RunStore:
 
         now = self._clock()
         try:
+            obligation_set, obligation_report = derive_transition_obligations(
+                run_id=run_id,
+                generation=current.generation,
+                source=str(source),
+                destination=str(destination),
+                prior_ledger_head=current.ledger_head,
+                target_state_digest=next_target_state_digest,
+                target_state=next_target_state,
+                phase_artifact_digests=phases,
+                acceptance_obligation_catalog_digest=next_acceptance_catalog_digest,
+                supplied_artifact_digests=supplied,
+                payload=transition_payload,
+                approved_candidate_digest=current.approved_candidate_digest,
+                recorded_at=now,
+                implementer_identity=implementer_identity,
+                verifier_identity=verifier_identity,
+                approver_identity=approver_identity,
+            )
+            obligation_set_digest, obligation_report_digest = retain_transition_obligations(
+                self._run_dir(run_id),
+                obligation_set,
+                obligation_report,
+            )
+        except TransitionObligationError as exc:
+            raise RunStateError(f"state-triggered obligation gate refused: {exc}") from exc
+        supplied[TRANSITION_OBLIGATION_SET_KEY] = obligation_set_digest
+        supplied[TRANSITION_OBLIGATION_REPORT_KEY] = obligation_report_digest
+        try:
             self._ledger(run_id).append(
                 LedgerEntry(
                     capability_id=run_id,
@@ -1001,6 +1224,9 @@ class RunStore:
                         "source": next_source_digest,
                         "phase_artifacts": phases,
                         "generation_artifacts": generation,
+                        ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY: (
+                            next_acceptance_catalog_digest
+                        ),
                     },
                     payload=transition_payload,
                     actor=actor.strip(),
@@ -1036,6 +1262,8 @@ class RunStore:
         approved_candidate = ""
         phase_artifacts: dict[str, str] = {}
         generation_artifacts: dict[str, str] = {}
+        acceptance_obligation_catalog_digest = ""
+        validation_evidence: dict[str, str] = {}
         build_attempt_count = 0
         build_attempt_limit = 0
         schema_version = ""
@@ -1078,6 +1306,10 @@ class RunStore:
             payload_raw = record.get("payload")
             if not isinstance(payload_raw, Mapping):
                 raise RunStateError(f"ledger entry {index} has no payload object")
+            stamp = _as_int(record.get("created_at"))
+            if stamp <= 0:
+                raise RunStateError(f"ledger entry {index} has no valid created_at")
+            prior_approved_candidate = approved_candidate
             if index == 0:
                 target_digest = str(digests.get("target", ""))
                 source_digest = str(digests.get("source", ""))
@@ -1089,7 +1321,7 @@ class RunStore:
                     )
                 expected_genesis = (
                     RunState.TARGET_RESOLUTION_AUTHORIZED
-                    if schema_version == RUN_SCHEMA_VERSION
+                    if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS
                     else RunState.INTAKE
                 )
                 if source_raw or destination is not expected_genesis:
@@ -1097,7 +1329,7 @@ class RunStore:
                         "run genesis must transition from empty to "
                         f"{expected_genesis} for {schema_version}"
                     )
-                if schema_version == RUN_SCHEMA_VERSION:
+                if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
                     if source_digest or str(digests.get("target-state", "")):
                         raise RunStateError(
                             "v3 target-resolution genesis cannot preselect source or target-state"
@@ -1121,7 +1353,7 @@ class RunStore:
             elif digests.get("target") != target_digest:
                 raise RunStateError(f"ledger entry {index} changes the target manifest")
 
-            if schema_version == RUN_SCHEMA_VERSION:
+            if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
                 declared_target_state = str(digests.get("target-state", ""))
                 declared_source = str(digests.get("source", ""))
                 if destination is RunState.TARGET_RESOLVED:
@@ -1154,9 +1386,8 @@ class RunStore:
                         raise RunStateError(
                             f"ledger entry {index} target-state binds another generation"
                         )
-                    if (
-                        candidate_target_state.get("resource_ledger_head")
-                        != digests.get("resource-ledger")
+                    if candidate_target_state.get("resource_ledger_head") != digests.get(
+                        "resource-ledger"
                     ):
                         raise RunStateError(
                             f"ledger entry {index} target-state resource head mismatch"
@@ -1194,27 +1425,51 @@ class RunStore:
                         )
                 else:
                     if declared_target_state != target_state_digest:
-                        raise RunStateError(
-                            f"ledger entry {index} changes or omits target-state"
-                        )
+                        raise RunStateError(f"ledger entry {index} changes or omits target-state")
                     if not source_digest or declared_source != source_digest:
                         raise RunStateError(f"ledger entry {index} changes or omits source")
             elif index > 0 and digests.get("source") != source_digest:
                 raise RunStateError(f"ledger entry {index} changes the legacy run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
-            _require_receipts_belong_here(
-                digests, derived_phase_key, context=f"ledger entry {index}"
+            derived_catalog_activation = (
+                schema_version == RUN_SCHEMA_VERSION
+                and destination is RunState.BUILDING
+                and not acceptance_obligation_catalog_digest
             )
+            derived_changed_tests_raw = payload_raw.get("changed_existing_tests", [])
+            if not isinstance(derived_changed_tests_raw, list):
+                raise RunStateError(
+                    f"ledger entry {index} changed_existing_tests must be an exact array"
+                )
+            derived_changed_tests = [str(test_id) for test_id in derived_changed_tests_raw]
+            derived_test_change_activation = bool(derived_changed_tests)
+            if derived_test_change_activation and destination is not RunState.BUILDING:
+                raise RunStateError(
+                    f"ledger entry {index} authorizes a test expectation change outside building"
+                )
+            derived_ratified_keys = {
+                key
+                for key in (
+                    derived_phase_key,
+                    (ACCEPTANCE_OBLIGATION_CATALOG_KEY if derived_catalog_activation else None),
+                    (TEST_CHANGE_AUTHORIZATION_KEY if derived_test_change_activation else None),
+                )
+                if key is not None
+            }
+            _require_receipts_belong_here(
+                digests, derived_ratified_keys, context=f"ledger entry {index}"
+            )
+            entry_recorded_receipts = set(recorded_receipts)
             if derived_phase_key:
                 # Same reason as the anchor states below: the chain proves an entry was not
                 # edited, not that it was written through `transition`. A direct append chains
                 # validly and would otherwise project as a ratification with no receipts.
-                _require_ratification_receipts(
+                entry_recorded_receipts |= _require_ratification_receipts(
                     digests,
                     derived_phase_key,
                     context=f"ledger entry {index} ratification",
-                    already_recorded=recorded_receipts,
+                    already_recorded=entry_recorded_receipts,
                 )
                 # The entry records the ratified artifact twice — at the top level and in the
                 # phase map. `transition` writes one value into both; two records of the same
@@ -1227,10 +1482,49 @@ class RunStore:
                         f"ledger entry {index} disagrees with itself about the "
                         f"{derived_phase_key!r} artifact digest"
                     )
+            if derived_catalog_activation:
+                entry_recorded_receipts |= _require_ratification_receipts(
+                    digests,
+                    ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+                    context=f"ledger entry {index} acceptance-obligation catalog",
+                    already_recorded=entry_recorded_receipts,
+                )
+                acceptance_obligation_catalog_digest = str(
+                    digests[ACCEPTANCE_OBLIGATION_CATALOG_KEY]
+                )
+            elif ACCEPTANCE_OBLIGATION_CATALOG_KEY in digests:
+                raise RunStateError(
+                    f"ledger entry {index} supplies an acceptance-obligation catalog outside "
+                    "its first build activation"
+                )
+            if derived_test_change_activation:
+                entry_recorded_receipts |= _require_ratification_receipts(
+                    digests,
+                    TEST_CHANGE_AUTHORIZATION_KEY,
+                    context=f"ledger entry {index} test-change authorization",
+                    already_recorded=entry_recorded_receipts,
+                )
+            elif TEST_CHANGE_AUTHORIZATION_KEY in digests:
+                raise RunStateError(
+                    f"ledger entry {index} supplies a test-change authorization without an "
+                    "exact nonempty changed_existing_tests set"
+                )
             # Accumulated by the same rule `transition` reads the ledger with, and for every entry
             # rather than only the ratifying ones, so the two paths cannot disagree about which
             # digests are spent.
             recorded_receipts |= _receipt_digests_in(digests)
+
+            if destination is RunState.SPECIFICATION_DEFECT:
+                acceptance_obligation_catalog_digest = ""
+            if schema_version == RUN_SCHEMA_VERSION:
+                declared_acceptance_catalog = str(
+                    digests.get(ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY, "")
+                )
+                if declared_acceptance_catalog != acceptance_obligation_catalog_digest:
+                    raise RunStateError(
+                        f"ledger entry {index} changes or omits the active "
+                        "acceptance-obligation catalog"
+                    )
 
             if schema_version in GENERATION_RUN_SCHEMA_VERSIONS:
                 if destination is RunState.BUILDING:
@@ -1305,7 +1599,7 @@ class RunStore:
                     raise RunStateError(
                         f"ledger entry {index} promotes a digest that was never approved"
                     )
-                if schema_version == RUN_SCHEMA_VERSION:
+                if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
                     _require_digest(
                         str(digests.get("resource-ledger", "")),
                         f"ledger entry {index} promotion resource-ledger digest",
@@ -1346,12 +1640,44 @@ class RunStore:
             if len(entry_nonces) != len(set(entry_nonces)):
                 raise RunStateError(f"ledger entry {index} repeats an authority nonce")
             if schema_version == RUN_SCHEMA_VERSION:
-                if destination in {
-                    RunState.TARGET_RESOLUTION_AUTHORIZED,
-                    RunState.INTAKE,
-                } and len(entry_nonces) != 1:
+                expected_entry_nonces = (
+                    (
+                        1
+                        if destination
+                        in {
+                            RunState.TARGET_RESOLUTION_AUTHORIZED,
+                            RunState.INTAKE,
+                        }
+                        else 0
+                    )
+                    + (2 if derived_catalog_activation else 0)
+                    + (2 if derived_test_change_activation else 0)
+                )
+                allowed_entry_nonce_counts = {expected_entry_nonces}
+                if derived_phase_key:
+                    allowed_entry_nonce_counts.add(expected_entry_nonces + 2)
+                if len(entry_nonces) not in allowed_entry_nonce_counts:
+                    raise RunStateError(
+                        f"ledger entry {index} {destination} requires authority nonce count in "
+                        f"{sorted(allowed_entry_nonce_counts)} for the authority artifacts "
+                        "recorded on that entry"
+                    )
+            elif schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
+                if (
+                    destination
+                    in {
+                        RunState.TARGET_RESOLUTION_AUTHORIZED,
+                        RunState.INTAKE,
+                    }
+                    and len(entry_nonces) != 1
+                ):
                     raise RunStateError(
                         f"ledger entry {index} {destination} requires exactly one authority nonce"
+                    )
+                if derived_catalog_activation and len(entry_nonces) != 2:
+                    raise RunStateError(
+                        f"ledger entry {index} acceptance-obligation catalog activation "
+                        "requires exactly two authority nonces"
                     )
                 if destination is RunState.TARGET_RESOLVED and entry_nonces:
                     raise RunStateError(
@@ -1372,9 +1698,122 @@ class RunStore:
                 _require_digest(value, f"phase_artifacts[{key!r}]")
             phase_artifacts = candidate_phases
 
-            stamp = _as_int(record.get("created_at"))
-            if stamp <= 0:
-                raise RunStateError(f"ledger entry {index} has no valid created_at")
+            if schema_version == RUN_SCHEMA_VERSION:
+                validation_keys = (
+                    "candidate",
+                    "acceptance-tests",
+                    "coder-output-snapshot",
+                    "tester-output-snapshot",
+                )
+                if destination is RunState.BUILDING:
+                    validation_evidence = {}
+                elif destination is RunState.VALIDATING:
+                    _require_digest_keys(
+                        digests,
+                        validation_keys,
+                        context=f"ledger entry {index} validating",
+                    )
+                    validation_evidence = {key: str(digests[key]) for key in validation_keys}
+                elif destination is RunState.PREVIEW:
+                    _require_digest_keys(
+                        digests,
+                        (
+                            "candidate",
+                            "acceptance-tests",
+                            ACCEPTANCE_OBLIGATION_REPORT_KEY,
+                            "evidence-bundle",
+                            "evidence-envelope",
+                        ),
+                        context=f"ledger entry {index} preview",
+                    )
+                    if not validation_evidence:
+                        raise RunStateError(
+                            f"ledger entry {index} preview has no immutable validation subject"
+                        )
+                    for key in ("candidate", "acceptance-tests"):
+                        if digests[key] != validation_evidence[key]:
+                            raise RunStateError(
+                                f"ledger entry {index} preview changes {key} after validation"
+                            )
+                    try:
+                        from factory_runtime.acceptance_obligations import (
+                            AcceptanceObligationError,
+                            verify_retained_acceptance_obligation_report,
+                        )
+
+                        verify_retained_acceptance_obligation_report(
+                            self._run_dir(run_id),
+                            catalog_digest=acceptance_obligation_catalog_digest,
+                            report_digest=str(digests[ACCEPTANCE_OBLIGATION_REPORT_KEY]),
+                            run_id=run_id,
+                            generation=generation,
+                            source=source_raw,
+                            destination=str(destination),
+                            target_state_digest=target_state_digest,
+                            resolved_commit=str(target_state.get("resolved_commit", "")),
+                            resolved_tree=str(target_state.get("resolved_tree", "")),
+                            phase_artifact_digests=phase_artifacts,
+                            candidate_digest=str(digests["candidate"]),
+                            acceptance_tests_digest=str(digests["acceptance-tests"]),
+                            trusted_evidence_digests=validation_evidence,
+                        )
+                    except AcceptanceObligationError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} preview acceptance-obligation report is "
+                            f"invalid: {exc}"
+                        ) from exc
+                elif destination is RunState.SPECIFICATION_DEFECT:
+                    validation_evidence = {}
+
+            if schema_version == RUN_SCHEMA_VERSION and index > 0:
+                structural = {
+                    "target",
+                    "target-state",
+                    "source",
+                    "phase_artifacts",
+                    "generation_artifacts",
+                    TRANSITION_OBLIGATION_SET_KEY,
+                    TRANSITION_OBLIGATION_REPORT_KEY,
+                    ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY,
+                }
+                transition_supplied = {
+                    str(key): value for key, value in digests.items() if key not in structural
+                }
+                if destination is RunState.TARGET_RESOLVED:
+                    transition_supplied["target-state"] = str(digests["target-state"])
+                if destination is RunState.INTAKE:
+                    transition_supplied["source"] = str(digests["source"])
+                try:
+                    expected_set, expected_report = derive_transition_obligations(
+                        run_id=run_id,
+                        generation=generation,
+                        source=source_raw,
+                        destination=str(destination),
+                        prior_ledger_head=str(record.get("prev_hash", "")),
+                        target_state_digest=target_state_digest,
+                        target_state=target_state,
+                        phase_artifact_digests=phase_artifacts,
+                        acceptance_obligation_catalog_digest=(acceptance_obligation_catalog_digest),
+                        supplied_artifact_digests=transition_supplied,
+                        payload=payload_raw,
+                        approved_candidate_digest=prior_approved_candidate,
+                        recorded_at=stamp,
+                        implementer_identity=str(record.get("implementer_identity", "")),
+                        verifier_identity=str(record.get("verifier_identity", "")),
+                        approver_identity=str(record.get("approver_identity", "")),
+                    )
+                    verify_retained_transition_obligations(
+                        self._run_dir(run_id),
+                        expected_set=expected_set,
+                        expected_report=expected_report,
+                        set_digest=str(digests.get(TRANSITION_OBLIGATION_SET_KEY, "")),
+                        report_digest=str(digests.get(TRANSITION_OBLIGATION_REPORT_KEY, "")),
+                    )
+                except TransitionObligationError as exc:
+                    raise RunStateError(
+                        f"ledger entry {index} state-triggered obligations are invalid: {exc}"
+                    ) from exc
+
             if index == 0:
                 created_at = stamp
             updated_at = stamp
@@ -1394,6 +1833,7 @@ class RunStore:
             created_at=created_at,
             updated_at=updated_at,
             approved_candidate_digest=approved_candidate,
+            acceptance_obligation_catalog_digest=acceptance_obligation_catalog_digest,
             generation_artifact_digests=generation_artifacts,
             build_attempt_count=build_attempt_count,
             build_attempt_limit=build_attempt_limit,

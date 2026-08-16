@@ -18,7 +18,7 @@ fail-closed; `make ship` runs it first.
 See `CLAUDE.md` "Layout". In short:
 `factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,build_plan,test_disposition,tool_policy,target,adapters,roles}.py`,
 the executable boundary under
-`factory_runtime/{state,schema,tessera,authority,workflow,generation,snapshot,isolation,lanes,evidence_plane,orchestrator,cli}.py`,
+`factory_runtime/{state,schema,tessera,authority,workflow,generation,snapshot,isolation,lanes,transition_obligations,acceptance_obligations,test_change_authority,resume,runner,runner_isolation,projection_bundle,broker,evidence_plane,orchestrator,cli}.py`,
 the guards in `scripts/`, tests in `tests/`, and the synthetic empty target under
 `tests/fixtures/synthetic_target/`.
 
@@ -41,9 +41,10 @@ artifacts with artifact-version invalidation · evidence-backed checklist items 
 tool tiers (unknown and Verboten deny; Sign-off authority expires) · authorization-based
 existing-test disposition · human-decided surface criticality (unclassified is Critical; no
 waiver or flake tolerance on Critical) · authority-bound recipe/build IR · exact retained
-generation/review bytes · bounded build attempts · human-authorized exact test changes ·
+generation/review bytes · bounded build attempts · human+Validator-authorized exact test changes ·
 data-only targets with an operational build ABI (no code references) · portability
-(green with no target pack present). All are enforced by the guards and the test suite, not
+(green with no target pack present) · code-selected transition/acceptance obligations ·
+externally anchored resume · closed path-free model runners and typed brokered effects. All are enforced by the guards and the test suite, not
 merely documented.
 
 ## Durable knowledge

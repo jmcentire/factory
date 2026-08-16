@@ -3,13 +3,16 @@
   "$id": "factory://schemas/test-change-authorization/1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "authorization_id", "version", "run_id", "human_authorizer", "ruling", "expected_change_statement", "phase_artifact_digests", "old_behavior", "new_behavior", "selection"],
+  "required": ["schema_version", "authorization_id", "version", "run_id", "generation", "target_state_digest", "human_authorizer", "validator_ratifier", "ruling", "expected_change_statement", "phase_artifact_digests", "old_behavior", "new_behavior", "selection"],
   "properties": {
     "schema_version": {"const": "factory-test-change-authorization/1"},
     "authorization_id": {"type": "string", "minLength": 1},
     "version": {"type": "string", "minLength": 1},
     "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "generation": {"type": "integer", "minimum": 1},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
     "human_authorizer": {"type": "string", "minLength": 1},
+    "validator_ratifier": {"type": "string", "minLength": 1},
     "ruling": {"const": "change-expected-behavior"},
     "expected_change_statement": {"type": "string", "minLength": 1},
     "phase_artifact_digests": {

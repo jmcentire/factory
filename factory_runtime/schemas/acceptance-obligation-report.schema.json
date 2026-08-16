@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/acceptance-obligation-report/1",
+  "title": "Factory point-for-point acceptance-obligation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generation",
+    "catalog_digest",
+    "trigger_id",
+    "from_state",
+    "to_state",
+    "target_state_digest",
+    "resolved_commit",
+    "resolved_tree",
+    "phase_artifact_digests",
+    "candidate_digest",
+    "acceptance_tests_digest",
+    "observations",
+    "observations_digest",
+    "command_digest",
+    "configuration_digest",
+    "environment_digest",
+    "started_at",
+    "finished_at",
+    "idempotency_key",
+    "results",
+    "satisfied"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-acceptance-obligation-report/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "catalog_digest": {"$ref": "#/$defs/digest"},
+    "trigger_id": {"$ref": "#/$defs/id"},
+    "from_state": {"type": "string", "minLength": 1},
+    "to_state": {"type": "string", "minLength": 1},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "resolved_commit": {"type": "string", "minLength": 1},
+    "resolved_tree": {"type": "string", "minLength": 1},
+    "phase_artifact_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product-specification", "architecture", "operational-maturity"],
+      "properties": {
+        "product-specification": {"$ref": "#/$defs/digest"},
+        "architecture": {"$ref": "#/$defs/digest"},
+        "operational-maturity": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "acceptance_tests_digest": {"$ref": "#/$defs/digest"},
+    "observations": {"type": "object", "minProperties": 1},
+    "observations_digest": {"$ref": "#/$defs/digest"},
+    "command_digest": {"$ref": "#/$defs/digest"},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "environment_digest": {"$ref": "#/$defs/digest"},
+    "started_at": {"type": "integer", "minimum": 1},
+    "finished_at": {"type": "integer", "minimum": 1},
+    "idempotency_key": {"$ref": "#/$defs/digest"},
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "obligation_id",
+          "criterion",
+          "verifier_id",
+          "intent_backreferences",
+          "required_evidence_ids",
+          "test_assertions",
+          "evidence_digests",
+          "test_results",
+          "effect_digest",
+          "passed"
+        ],
+        "properties": {
+          "obligation_id": {"$ref": "#/$defs/id"},
+          "criterion": {"type": "string", "minLength": 1, "maxLength": 8192},
+          "verifier_id": {"$ref": "#/$defs/id"},
+          "intent_backreferences": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+          "required_evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+          "test_assertions": {"type": "array", "items": {"type": "object"}},
+          "evidence_digests": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/digest"}},
+          "test_results": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["test_id", "assertion_digest", "exit_status", "output_digest"],
+              "properties": {
+                "test_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "assertion_digest": {"$ref": "#/$defs/digest"},
+                "exit_status": {"const": 0},
+                "output_digest": {"$ref": "#/$defs/digest"}
+              }
+            }
+          },
+          "effect_digest": {"$ref": "#/$defs/digest"},
+          "passed": {"const": true}
+        }
+      }
+    },
+    "satisfied": {"const": true}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -83,11 +83,13 @@ def test_terminal_seal_is_idempotent_and_refuses_every_later_event(tmp_path: Pat
     )
 
     first = ledger.seal_for_close(actor="validator")
-    second = ledger.seal_for_close(actor="validator-retry")
+    second = ledger.seal_for_close(actor="validator")
 
     assert second == first
     assert first["ledger_head"] == ledger.head()
     assert ledger.verify_sealed_for_close()[0] == first
+    with pytest.raises(ResourceLedgerError, match="retry actor"):
+        ledger.seal_for_close(actor="validator-retry")
     with pytest.raises(ResourceLedgerError, match="sealed"):
         _append(
             ledger,

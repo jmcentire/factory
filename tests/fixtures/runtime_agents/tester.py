@@ -21,6 +21,20 @@ if _digest(input_bytes) != os.environ["FACTORY_BUILD_INPUT_DIGEST"]:
 build_input = json.loads(input_bytes)
 if "FACTORY_BUILD_PLAN_PATH" in os.environ or "FACTORY_PATTERN_CATALOG_PATH" in os.environ:
     raise SystemExit("Tester received Coder-only construction IR")
+acceptance_catalog_bytes = Path(
+    os.environ["FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_PATH"]
+).read_bytes()
+if (
+    _digest(acceptance_catalog_bytes)
+    != os.environ["FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_SOURCE_DIGEST"]
+):
+    raise SystemExit("Tester received stale acceptance obligations")
+acceptance_catalog = json.loads(acceptance_catalog_bytes)
+trigger = next(
+    item
+    for item in acceptance_catalog["triggers"]
+    if item["from_state"] == "validating" and item["to_state"] == "preview"
+)
 
 coder_sentinel = Path.cwd().parent.parent / "coder" / "private" / "sentinel.txt"
 try:
@@ -48,6 +62,25 @@ examples = (
     ("AC-1", 2, 3, 5),
     ("AC-2", -7, 4, -3),
 )
+expected_assertions = [
+    {
+        "test_id": criterion_id,
+        "assertion_digest": _digest_obj(
+            {
+                "test_id": criterion_id,
+                "left": left,
+                "right": right,
+                "expected": expected,
+            }
+        ),
+    }
+    for criterion_id, left, right, expected in examples
+]
+if (
+    len(trigger["obligations"]) != 1
+    or trigger["obligations"][0]["test_assertions"] != expected_assertions
+):
+    raise SystemExit("Tester received a catalog that does not authorize the exact examples")
 test_source = [
     "from __future__ import annotations",
     "",

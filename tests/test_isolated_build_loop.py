@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from factory_core.manifest import digest_obj
+from factory_runtime.acceptance_obligations import validator_execution_digests
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationError,
@@ -18,6 +20,77 @@ from factory_runtime.isolation import (
 from factory_runtime.lanes import IsolatedBuildLoop, LaneError, temporary_build_loop_root
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
+
+
+def _acceptance_catalog(tmp_path: Path, validator_command: tuple[str, ...]) -> Path:
+    build_input = json.loads((FIXTURES / "build-input.json").read_text())
+    phases = {
+        artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
+    }
+    command_digest, configuration_digest, environment_digest = validator_execution_digests(
+        validator_command
+    )
+    examples = (("AC-1", 2, 3, 5), ("AC-2", -7, 4, -3))
+    document = {
+        "schema_version": "factory-acceptance-obligation-catalog/1",
+        "catalog_id": "fixture-acceptance",
+        "version": "1",
+        "run_id": "fixture-run",
+        "generation": 1,
+        "target_state_digest": "sha256:" + ("8" * 64),
+        "phase_artifact_digests": phases,
+        "human_ratifier": "human:founder",
+        "validator_ratifier": "agent:validator",
+        "max_review_rounds": 2,
+        "triggers": [
+            {
+                "trigger_id": "validating-to-preview",
+                "from_state": "validating",
+                "to_state": "preview",
+                "command_digest": command_digest,
+                "configuration_digest": configuration_digest,
+                "environment_digest": environment_digest,
+                "obligations": [
+                    {
+                        "obligation_id": "addition-examples",
+                        "criterion": "The exact addition examples pass.",
+                        "verifier_id": "validator-test-execution-v1",
+                        "intent_backreferences": [
+                            {
+                                "artifact_id": "synthetic-product-specification",
+                                "artifact_digest": phases["product-specification"],
+                                "item_id": "product:addition",
+                                "intent_digest": "sha256:" + ("7" * 64),
+                            }
+                        ],
+                        "required_evidence_ids": [
+                            "candidate",
+                            "acceptance-tests",
+                            "coder-output-snapshot",
+                            "tester-output-snapshot",
+                        ],
+                        "test_assertions": [
+                            {
+                                "test_id": test_id,
+                                "assertion_digest": digest_obj(
+                                    {
+                                        "test_id": test_id,
+                                        "left": left,
+                                        "right": right,
+                                        "expected": expected,
+                                    }
+                                ),
+                            }
+                            for test_id, left, right, expected in examples
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    path = tmp_path / "acceptance-obligation-catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
 
 
 class _UnqualifiedBackend:
@@ -47,13 +120,15 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
     tmp_path: Path,
 ) -> None:
     root = temporary_build_loop_root(tmp_path)
+    validator_command = (sys.executable, str(FIXTURES / "validator.py"))
     result = IsolatedBuildLoop(root).execute(
         build_input_path=FIXTURES / "build-input.json",
         build_plan_path=FIXTURES / "build-plan.json",
         pattern_catalog_path=FIXTURES / "pattern-catalog.json",
         coder_command=(sys.executable, str(FIXTURES / "coder.py")),
         tester_command=(sys.executable, str(FIXTURES / "tester.py")),
-        validator_command=(sys.executable, str(FIXTURES / "validator.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=_acceptance_catalog(tmp_path, validator_command),
         coder_trusted_paths=(FIXTURES / "coder.py",),
         tester_trusted_paths=(FIXTURES / "tester.py",),
         validator_trusted_paths=(FIXTURES / "validator.py",),

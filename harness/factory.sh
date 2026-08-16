@@ -115,11 +115,14 @@ metadata = {
     "resolved_commit": commit,
     "checkout_id": checkout_id,
     "budget_usd": budget_value,
-    "budget_enforcement": "UNQUALIFIED_PR2",
+    "budget_enforcement": (
+        "reserved-runner-ceilings" if budget_value is not None else "not-requested"
+    ),
     "audit_interval_min": audit_value,
     "promise_window_min": 10,
-    "launcher_qualification": "UNQUALIFIED_PR2",
-    "lane_isolation": "UNQUALIFIED_PR2",
+    "launcher_qualification": "QUALIFIED_PR2",
+    "lane_isolation": "QUALIFIED_PR2",
+    "interactive_validator_boundary": "operator-owned-tmux",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
 path = pathlib.Path(metadata_path)
@@ -158,7 +161,7 @@ resource_event '{}' planned
 
 printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q python3 %q --run %q --root %q' \
   "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$D/dispatcher.py" "$RUN" "$ROOT"
-VALIDATOR_PROMPT="/validate - the verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch lanes only through harness/dispatch_lane.sh. The tmux launcher and lane isolation remain UNQUALIFIED_PR2."
+VALIDATOR_PROMPT="/validate - the verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %q' \
   "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
 
@@ -167,11 +170,16 @@ if ! tmux new-session -d -s "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
   echo "factory: failed to create tmux session" >&2
   exit 70
 fi
-resource_event '{}' active
 if ! tmux new-window -t "$RUN" -n validator -c "$FACTORY_WORKDIR" "$VALIDATOR_CMD"; then
-  echo "factory: validator window failed; tmux session remains recorded active" >&2
+  if tmux kill-session -t "$RUN" 2>/dev/null; then
+    resource_event '{"reason":"validator window failed; created session removed","residue":false}' abandoned || true
+  else
+    resource_event '{"reason":"validator window failed; session cleanup unverified","residue":true}' failed || true
+  fi
+  echo "factory: validator window failed; created tmux session was terminally accounted" >&2
   exit 70
 fi
+resource_event '{}' active
 
 echo "factory '$RUN' is live: tmux attach -t $RUN"
 echo "  exact commit : $FACTORY_BASE_COMMIT"
@@ -179,4 +187,5 @@ echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
 echo "  control root : $ROOT"
 echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
-echo "  launcher     : UNQUALIFIED_PR2"
+echo "  model lanes  : QUALIFIED_PR2"
+echo "  validator    : operator-owned coordination"

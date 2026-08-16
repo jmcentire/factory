@@ -7,14 +7,21 @@ import json
 import os
 import stat
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import digest_bytes, digest_obj
-from factory_core.target import load_target_manifest
+from factory_core.target import load_target_manifest_bytes
 from factory_runtime.authority import load_genesis
+from factory_runtime.broker import TypedOperationBroker, load_broker_registry
+from factory_runtime.isolation import MacOSSandbox
+from factory_runtime.projection_bundle import bundle_runner_projection
 from factory_runtime.resources import ResourceLedger
+from factory_runtime.resume import derive_resume_checkpoint, verify_resume_checkpoint
+from factory_runtime.runner import HardenedModelRunner, NamedSecretStore
+from factory_runtime.runner_isolation import MacOSNetworkedRunner
 from factory_runtime.schema import SCHEMA_NAMES, validate_document
 from factory_runtime.state import RunStore
 from factory_runtime.target_state import verify_target_state
@@ -177,6 +184,113 @@ def _parser() -> argparse.ArgumentParser:
         help="required identity label when --seal is used",
     )
 
+    derive_resume = commands.add_parser(
+        "derive-resume-checkpoint",
+        help="derive a checkpoint for independent custody (derivation does not anchor it)",
+    )
+    derive_resume.add_argument("--runs", required=True)
+    derive_resume.add_argument("--run-id", required=True)
+    derive_resume.add_argument("--checkpoint-id", required=True)
+    derive_resume.add_argument("--previous-checkpoint-digest", default="")
+    derive_resume.add_argument("--acceptance-obligation-catalog-digest", default=None)
+    derive_resume.add_argument("--config-source", action="append", default=[], metavar="NAME=PATH")
+    derive_resume.add_argument("--retention-policy-id", required=True)
+    derive_resume.add_argument(
+        "--retention-mode",
+        required=True,
+        choices=("retain-indefinitely", "retain-until", "erase-on-close"),
+    )
+    derive_resume.add_argument("--retain-until", type=int, default=0)
+    derive_resume.add_argument("--erasure-authority", required=True)
+    derive_resume.add_argument("--output", required=True)
+    _add_authority_arguments(derive_resume)
+
+    verify_resume = commands.add_parser(
+        "verify-resume-checkpoint",
+        help="verify an independently pinned checkpoint before grounding or dispatch",
+    )
+    verify_resume.add_argument("--runs", required=True)
+    verify_resume.add_argument("--run-id", required=True)
+    verify_resume.add_argument("--checkpoint", required=True)
+    verify_resume.add_argument("--checkpoint-digest", required=True)
+    verify_resume.add_argument("--acceptance-obligation-catalog-digest", default=None)
+    verify_resume.add_argument("--config-source", action="append", default=[], metavar="NAME=PATH")
+    verify_resume.add_argument(
+        "--accepted-previous-checkpoint-digest",
+        action="append",
+        default=[],
+    )
+    _add_authority_arguments(verify_resume)
+
+    bundle_projection = commands.add_parser(
+        "bundle-runner-projection",
+        help="freeze one asymmetric lane tree into a bounded path-free model projection",
+    )
+    bundle_projection.add_argument("--runs", required=True)
+    bundle_projection.add_argument("--run-id", required=True)
+    bundle_projection.add_argument("--role", required=True, choices=("coder", "tester"))
+    bundle_projection.add_argument("--projection-root", required=True)
+    bundle_projection.add_argument("--projection-receipt", required=True)
+    bundle_projection.add_argument("--output", required=True)
+
+    run_model = commands.add_parser(
+        "run-model",
+        help="dispatch a qualified closed-environment model from a path-free projection",
+    )
+    run_model.add_argument("--runs", required=True)
+    run_model.add_argument("--run-id", required=True)
+    run_model.add_argument(
+        "--role", required=True, choices=("coder", "tester", "validator")
+    )
+    run_model.add_argument("--receipt-id", required=True)
+    run_model.add_argument("--runner-manifest", required=True)
+    run_model.add_argument("--runner-manifest-digest", required=True)
+    run_model.add_argument("--runner-config-source-name", required=True)
+    run_model.add_argument("--projection", required=True)
+    run_model.add_argument("--output-schema", required=True)
+    run_model.add_argument("--output-schema-digest", required=True)
+    run_model.add_argument("--output-schema-config-source-name", required=True)
+    run_model.add_argument("--task-file", required=True)
+    run_model.add_argument("--task-digest", required=True)
+    run_model.add_argument("--workspace", required=True)
+    run_model.add_argument("--secret-root", required=True)
+    run_model.add_argument("--checkpoint", required=True)
+    run_model.add_argument("--checkpoint-digest", required=True)
+    run_model.add_argument("--config-source", action="append", default=[], metavar="NAME=PATH")
+    run_model.add_argument(
+        "--accepted-previous-checkpoint-digest",
+        action="append",
+        default=[],
+    )
+    _add_authority_arguments(run_model)
+
+    execute_broker = commands.add_parser(
+        "execute-broker-handoff",
+        help="execute only externally anchored typed operations from a qualified runner handoff",
+    )
+    execute_broker.add_argument("--runs", required=True)
+    execute_broker.add_argument("--run-id", required=True)
+    execute_broker.add_argument(
+        "--role", required=True, choices=("coder", "tester", "validator")
+    )
+    execute_broker.add_argument("--receipt-id", required=True)
+    execute_broker.add_argument("--runner-receipt", required=True)
+    execute_broker.add_argument("--handoff", required=True)
+    execute_broker.add_argument("--registry", required=True)
+    execute_broker.add_argument("--registry-digest", required=True)
+    execute_broker.add_argument("--registry-config-source-name", required=True)
+    execute_broker.add_argument("--checkpoint", required=True)
+    execute_broker.add_argument("--checkpoint-digest", required=True)
+    execute_broker.add_argument(
+        "--config-source", action="append", default=[], metavar="NAME=PATH"
+    )
+    execute_broker.add_argument(
+        "--accepted-previous-checkpoint-digest",
+        action="append",
+        default=[],
+    )
+    _add_authority_arguments(execute_broker)
+
     record_resource = commands.add_parser(
         "record-resource",
         help="append one validated run-resource lifecycle event",
@@ -288,6 +402,39 @@ def _parse_inline_object(raw: str, *, label: str) -> dict[str, Any]:
     return value
 
 
+def _parse_named_paths(values: list[str], *, label: str) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for value in values:
+        name, separator, raw_path = value.partition("=")
+        if not separator or not name or not raw_path:
+            raise ValueError(f"{label} must use NAME=PATH: {value!r}")
+        if name in result:
+            raise ValueError(f"duplicate {label} name: {name}")
+        result[name] = Path(raw_path)
+    if not result:
+        raise ValueError(f"at least one {label} is required")
+    return result
+
+
+def _write_json_once(path: str | Path, document: Mapping[str, Any]) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(destination, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(
+                json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _execute(arguments: argparse.Namespace) -> None:
     if arguments.command == "validate-document":
         document = _read_object(arguments.input)
@@ -306,12 +453,16 @@ def _execute(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "inspect-target":
         manifest_path = Path(arguments.manifest)
-        manifest = load_target_manifest(manifest_path)
+        manifest_bytes = _read_regular_bytes(manifest_path, label="target manifest")
+        manifest = load_target_manifest_bytes(
+            manifest_bytes,
+            source_label=str(manifest_path),
+        )
         _emit(
             {
                 "target_id": manifest.target_id,
                 "content_digest": manifest.content_digest,
-                "source_digest": digest_bytes(manifest_path.read_bytes()),
+                "source_digest": digest_bytes(manifest_bytes),
                 "repo": dict(manifest.repo),
                 "build": dict(manifest.build),
             }
@@ -341,6 +492,323 @@ def _execute(arguments: argparse.Namespace) -> None:
                 "bootstrap_scope": sorted(policy.bootstrap_scope),
             }
         )
+        return
+    if arguments.command == "derive-resume-checkpoint":
+        checkpoint = derive_resume_checkpoint(
+            arguments.runs,
+            arguments.run_id,
+            checkpoint_id=arguments.checkpoint_id,
+            previous_checkpoint_digest=arguments.previous_checkpoint_digest,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=_tessera(arguments.tessera_bin),
+            configuration_sources=_parse_named_paths(
+                arguments.config_source,
+                label="configuration source",
+            ),
+            acceptance_obligation_catalog_digest=(
+                arguments.acceptance_obligation_catalog_digest
+            ),
+            retention={
+                "policy_id": arguments.retention_policy_id,
+                "mode": arguments.retention_mode,
+                "retain_until": arguments.retain_until,
+                "metadata_classes": [
+                    "authority-envelopes",
+                    "lifecycle-ledger",
+                    "resource-ledger",
+                    "runner-receipts",
+                    "effect-evidence",
+                ],
+                "erasure_authority": arguments.erasure_authority,
+            },
+            clock=lambda: int(time.time()),
+        )
+        _write_json_once(arguments.output, checkpoint)
+        _emit(
+            {
+                "checkpoint_digest": digest_obj(checkpoint),
+                "checkpoint_id": checkpoint["checkpoint_id"],
+                "output": str(Path(arguments.output)),
+                "anchored": False,
+            }
+        )
+        return
+    if arguments.command == "verify-resume-checkpoint":
+        resume_verification = verify_resume_checkpoint(
+            arguments.checkpoint,
+            expected_checkpoint_digest=arguments.checkpoint_digest,
+            runs_root=arguments.runs,
+            run_id=arguments.run_id,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=_tessera(arguments.tessera_bin),
+            configuration_sources=_parse_named_paths(
+                arguments.config_source,
+                label="configuration source",
+            ),
+            expected_acceptance_obligation_catalog_digest=(
+                arguments.acceptance_obligation_catalog_digest
+            ),
+            accepted_previous_checkpoint_digests=(
+                arguments.accepted_previous_checkpoint_digest
+            ),
+        )
+        _emit(resume_verification.__dict__)
+        return
+    if arguments.command == "bundle-runner-projection":
+        projection = RunStore(arguments.runs).load(arguments.run_id)
+        if not projection.target_state or not projection.target_state_digest:
+            raise ValueError("run has no checked target-state for a runner projection")
+        projection_receipt_document = _read_object(arguments.projection_receipt)
+        document = bundle_runner_projection(
+            arguments.projection_root,
+            projection_receipt=projection_receipt_document,
+            run_id=arguments.run_id,
+            generation=projection.generation,
+            role=arguments.role,
+            target_state_digest=projection.target_state_digest,
+            resolved_commit=str(projection.target_state["resolved_commit"]),
+            resolved_tree=str(projection.target_state["resolved_tree"]),
+        )
+        _write_json_once(arguments.output, document)
+        _emit(
+            {
+                "run_id": arguments.run_id,
+                "role": arguments.role,
+                "projection_digest": digest_obj(document),
+                "projection_manifest_digest": document["projection_manifest_digest"],
+                "output": str(Path(arguments.output)),
+            }
+        )
+        return
+    if arguments.command == "run-model":
+        resume = verify_resume_checkpoint(
+            arguments.checkpoint,
+            expected_checkpoint_digest=arguments.checkpoint_digest,
+            runs_root=arguments.runs,
+            run_id=arguments.run_id,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=_tessera(arguments.tessera_bin),
+            configuration_sources=_parse_named_paths(
+                arguments.config_source,
+                label="configuration source",
+            ),
+            accepted_previous_checkpoint_digests=(
+                arguments.accepted_previous_checkpoint_digest
+            ),
+        )
+        projection_state = RunStore(arguments.runs).load(arguments.run_id)
+        runner_manifest_bytes = _read_regular_bytes(
+            arguments.runner_manifest,
+            label="runner manifest",
+        )
+        runner_manifest = _read_object(arguments.runner_manifest)
+        if resume.configuration_digests.get(arguments.runner_config_source_name) != digest_bytes(
+            runner_manifest_bytes
+        ):
+            raise ValueError("runner manifest is not bound by the external resume checkpoint")
+        if digest_obj(runner_manifest) != arguments.runner_manifest_digest:
+            raise ValueError("runner manifest differs from its externally expected digest")
+        if runner_manifest.get("role") != arguments.role:
+            raise ValueError("runner manifest belongs to another role")
+        model_projection = _read_object(arguments.projection)
+        validate_document("runner-projection", model_projection)
+        expected_projection = {
+            "run_id": arguments.run_id,
+            "generation": projection_state.generation,
+            "role": arguments.role,
+            "target_state_digest": projection_state.target_state_digest,
+            "resolved_commit": projection_state.target_state.get("resolved_commit"),
+            "resolved_tree": projection_state.target_state.get("resolved_tree"),
+        }
+        for field, expected in expected_projection.items():
+            if model_projection.get(field) != expected:
+                raise ValueError(f"runner projection has wrong {field}")
+        output_schema_bytes = _read_regular_bytes(
+            arguments.output_schema,
+            label="runner output schema",
+        )
+        output_schema_digest = digest_bytes(output_schema_bytes)
+        if resume.configuration_digests.get(
+            arguments.output_schema_config_source_name
+        ) != output_schema_digest:
+            raise ValueError("runner output schema is not bound by the external resume checkpoint")
+        if output_schema_digest != arguments.output_schema_digest:
+            raise ValueError("runner output schema differs from its externally expected digest")
+        if runner_manifest.get("output_schema_digest") != output_schema_digest:
+            raise ValueError("runner manifest binds a different output schema")
+        task_bytes = _read_regular_bytes(arguments.task_file, label="runner task")
+        if digest_bytes(task_bytes) != arguments.task_digest:
+            raise ValueError("runner task differs from its expected digest")
+        try:
+            task = task_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("runner task must be UTF-8") from exc
+        forbidden: list[Path] = []
+        for field in ("control_root", "source_root", "workdir", "object_store"):
+            value = projection_state.target_state.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"target-state has no forbidden runner root {field}")
+            path = Path(value).resolve(strict=True)
+            if path not in forbidden:
+                forbidden.append(path)
+        workspace = Path(arguments.workspace)
+        if not workspace.is_absolute():
+            raise ValueError("runner workspace must be an absolute host-owned path")
+        handoff, runner_receipt = HardenedModelRunner(
+            backend=MacOSNetworkedRunner(),
+            secret_store=NamedSecretStore(arguments.secret_root),
+        ).dispatch(
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            receipt_id=arguments.receipt_id,
+            manifest_document=runner_manifest,
+            projection_path=arguments.projection,
+            output_schema_path=arguments.output_schema,
+            task=task,
+            workspace_root=workspace,
+            forbidden_paths=forbidden,
+        )
+        _emit(
+            {
+                "run_id": arguments.run_id,
+                "role": arguments.role,
+                "resume_checkpoint_digest": resume.checkpoint_digest,
+                "handoff": handoff,
+                "runner_receipt": dict(runner_receipt.document),
+                "workspace": str(workspace),
+            }
+        )
+        return
+    if arguments.command == "execute-broker-handoff":
+        configuration_sources = _parse_named_paths(
+            arguments.config_source,
+            label="configuration source",
+        )
+        tessera = _tessera(arguments.tessera_bin)
+        resume = verify_resume_checkpoint(
+            arguments.checkpoint,
+            expected_checkpoint_digest=arguments.checkpoint_digest,
+            runs_root=arguments.runs,
+            run_id=arguments.run_id,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=tessera,
+            configuration_sources=configuration_sources,
+            accepted_previous_checkpoint_digests=(
+                arguments.accepted_previous_checkpoint_digest
+            ),
+        )
+        projection_state = RunStore(arguments.runs).load(arguments.run_id)
+        if not projection_state.target_state or not projection_state.target_state_digest:
+            raise ValueError("run has no checked target-state for broker execution")
+        retained_runner_receipt = _read_object(arguments.runner_receipt)
+        validate_document("runner-receipt", retained_runner_receipt)
+        expected_receipt = {
+            "receipt_id": arguments.receipt_id,
+            "run_id": arguments.run_id,
+            "generation": projection_state.generation,
+            "role": arguments.role,
+        }
+        for field, expected in expected_receipt.items():
+            if retained_runner_receipt.get(field) != expected:
+                raise ValueError(f"runner receipt has wrong {field}")
+        handoff = _read_object(arguments.handoff)
+        validate_document("runner-output", handoff)
+        if len(handoff["broker_requests"]) > 64:
+            raise ValueError("runner handoff exceeds the broker-request ceiling")
+        expected_handoff = {
+            "kind": "handoff",
+            "role": arguments.role,
+            "sequence": 3,
+        }
+        for field, expected in expected_handoff.items():
+            if handoff.get(field) != expected:
+                raise ValueError(f"runner handoff has wrong {field}")
+        if digest_obj(handoff) != retained_runner_receipt["handoff_digest"]:
+            raise ValueError("runner handoff differs from the qualified runner receipt")
+        if retained_runner_receipt["continuity_nonce_digest"] != digest_obj(
+            {"continuity_nonce": handoff["continuity_nonce"]}
+        ):
+            raise ValueError("runner handoff does not carry the qualified session continuity")
+        registry_bytes = _read_regular_bytes(arguments.registry, label="broker registry")
+        registry_document = _read_object(arguments.registry)
+        registry_digest = digest_obj(registry_document)
+        if registry_digest != arguments.registry_digest:
+            raise ValueError("broker registry differs from its externally expected digest")
+        if resume.configuration_digests.get(
+            arguments.registry_config_source_name
+        ) != digest_bytes(registry_bytes):
+            raise ValueError("broker registry is not bound by the external resume checkpoint")
+        resource_ledger = ResourceLedger(
+            Path(arguments.runs) / arguments.run_id,
+            arguments.run_id,
+        )
+        registry = load_broker_registry(
+            registry_document,
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            role=arguments.role,
+            target_state_digest=projection_state.target_state_digest,
+            resources=resource_ledger.latest(),
+        )
+        policy = load_genesis(
+            arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=tessera,
+        )
+        broker_root = (
+            Path(arguments.runs)
+            / arguments.run_id
+            / "evidence"
+            / "broker"
+        )
+        broker = TypedOperationBroker(
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            role=arguments.role,
+            target_state_digest=projection_state.target_state_digest,
+            configuration_digest=registry.configuration_digest,
+            operations=registry.operations,
+            evidence_root=broker_root / "effects",
+            policy=policy,
+            tessera=tessera,
+            isolation=MacOSSandbox(),
+        )
+        effects = []
+        for request in handoff["broker_requests"]:
+            capability_digest = str(request["capability_digest"])
+            capability_envelope = registry.capability_envelopes.get(capability_digest)
+            if capability_envelope is None:
+                raise ValueError("runner requested a capability absent from the broker registry")
+            effects.append(
+                broker.execute(
+                    request,
+                    capability_envelope_path=capability_envelope,
+                ).to_dict()
+            )
+        report = {
+            "schema_version": "factory-broker-execution-report/1",
+            "run_id": arguments.run_id,
+            "generation": projection_state.generation,
+            "role": arguments.role,
+            "receipt_id": arguments.receipt_id,
+            "resume_checkpoint_digest": resume.checkpoint_digest,
+            "runner_receipt_digest": digest_obj(retained_runner_receipt),
+            "handoff_digest": digest_obj(handoff),
+            "registry_digest": registry.configuration_digest,
+            "effect_digests": [digest_obj(effect) for effect in effects],
+            "verified": True,
+        }
+        report_path = broker_root / "reports" / f"{arguments.receipt_id}.json"
+        if report_path.exists() or report_path.is_symlink():
+            if _read_object(str(report_path)) != report:
+                raise ValueError("retained broker report differs from the re-derived execution")
+        else:
+            _write_json_once(report_path, report)
+        _emit({**report, "effects": effects, "report": str(report_path)})
         return
     if arguments.command == "authorize-target-resolution":
         workflow = _load_workflow(arguments)

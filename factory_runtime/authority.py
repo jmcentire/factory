@@ -21,6 +21,10 @@ ACTION_CAPABILITY: Mapping[str, str] = {
     "ratify-product-specification": "factory:ratify-product-specification",
     "ratify-architecture": "factory:ratify-architecture",
     "ratify-operational-maturity": "factory:ratify-operational-maturity",
+    "ratify-acceptance-obligation-catalog": (
+        "factory:ratify-acceptance-obligation-catalog"
+    ),
+    "ratify-test-change-authorization": "factory:ratify-test-change-authorization",
     "approve-promotion": "factory:approve-promotion",
     "activate-policy": "factory:activate-policy",
 }

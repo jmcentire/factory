@@ -499,6 +499,10 @@ class ResourceLedger:
                 if existing is not None:
                     if existing["ledger_head"] != head:
                         raise ResourceLedgerError("resource ledger changed after it was sealed")
+                    if existing["actor"] != actor.strip():
+                        raise ResourceLedgerError(
+                            "resource seal retry actor differs from the sealing actor"
+                        )
                     return existing
                 body = {
                     "schema_version": _SEAL_SCHEMA_VERSION,

@@ -38,10 +38,15 @@ from factory_core.monitors import (
 )
 from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest
+from factory_runtime.acceptance_obligations import (
+    AcceptanceObligationCatalog,
+    validator_execution_digests,
+)
 from factory_runtime.authority import load_genesis
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
 from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import FactoryOrchestrator, OrchestrationError
+from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState
 from factory_runtime.target_state import normalize_repository_url
@@ -154,6 +159,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                     "factory:ratify-product-specification",
                     "factory:ratify-architecture",
                     "factory:ratify-operational-maturity",
+                    "factory:ratify-acceptance-obligation-catalog",
                     "factory:approve-promotion",
                     "factory:activate-policy",
                 ],
@@ -166,6 +172,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                     "factory:ratify-product-specification",
                     "factory:ratify-architecture",
                     "factory:ratify-operational-maturity",
+                    "factory:ratify-acceptance-obligation-catalog",
                 ],
             },
             {
@@ -519,6 +526,141 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     plan_path = tmp_path / "build-plan.json"
     plan_path.write_text(json.dumps(plan.body()), encoding="utf-8")
+    tester_command = (sys.executable, str(RUNTIME_FIXTURES / "tester.py"))
+    validator_command = (sys.executable, str(RUNTIME_FIXTURES / "validator.py"))
+    command_digest, configuration_digest, environment_digest = validator_execution_digests(
+        validator_command
+    )
+    examples = (
+        ("AC-1", 2, 3, 5),
+        ("AC-2", -7, 4, -3),
+    )
+    acceptance_catalog_document = {
+        "schema_version": "factory-acceptance-obligation-catalog/1",
+        "catalog_id": "synthetic-acceptance",
+        "version": "1",
+        "run_id": "synthetic-run",
+        "generation": ratified.generation,
+        "target_state_digest": ratified.target_state_digest,
+        "phase_artifact_digests": dict(ratified.phase_artifact_digests),
+        "human_ratifier": "human:founder",
+        "validator_ratifier": "agent:validator",
+        "max_review_rounds": 2,
+        "triggers": [
+            {
+                "trigger_id": "validating-to-preview",
+                "from_state": "validating",
+                "to_state": "preview",
+                "command_digest": command_digest,
+                "configuration_digest": configuration_digest,
+                "environment_digest": environment_digest,
+                "obligations": [
+                    {
+                        "obligation_id": "integer-addition-examples",
+                        "criterion": (
+                            "Every ratified integer-addition example passes against the exact "
+                            "candidate and independently authored test snapshot."
+                        ),
+                        "verifier_id": "validator-test-execution-v1",
+                        "intent_backreferences": [
+                            product.backreference(product.items[0]).to_dict(),
+                            operations.backreference(operations.items[0]).to_dict(),
+                        ],
+                        "required_evidence_ids": [
+                            "candidate",
+                            "acceptance-tests",
+                            "coder-output-snapshot",
+                            "tester-output-snapshot",
+                        ],
+                        "test_assertions": [
+                            {
+                                "test_id": test_id,
+                                "assertion_digest": digest_obj(
+                                    {
+                                        "test_id": test_id,
+                                        "left": left,
+                                        "right": right,
+                                        "expected": expected,
+                                    }
+                                ),
+                            }
+                            for test_id, left, right, expected in examples
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    acceptance_catalog = AcceptanceObligationCatalog.from_dict(acceptance_catalog_document)
+    resume_config = tmp_path / "resume-config.json"
+    resume_config.write_text('{"runner":"synthetic"}\n', encoding="utf-8")
+    resume_checkpoint_document = derive_resume_checkpoint(
+        workflow.root,
+        "synthetic-run",
+        checkpoint_id="synthetic-checkpoint-1",
+        previous_checkpoint_digest="",
+        genesis_path=genesis_path,
+        trusted_root_public_key=root_public_key,
+        tessera=cli,
+        configuration_sources={"runner": resume_config},
+        acceptance_obligation_catalog_digest=acceptance_catalog.content_digest,
+        retention={
+            "policy_id": "synthetic-retention-1",
+            "mode": "retain-indefinitely",
+            "retain_until": 0,
+            "metadata_classes": [
+                "authority-envelopes",
+                "lifecycle-ledger",
+                "resource-ledger",
+            ],
+            "erasure_authority": "human:founder",
+        },
+        clock=lambda: now,
+    )
+    resume_checkpoint = tmp_path / "resume-checkpoint.json"
+    resume_checkpoint.write_text(
+        json.dumps(resume_checkpoint_document),
+        encoding="utf-8",
+    )
+    acceptance_catalog_path = tmp_path / "acceptance-obligation-catalog.json"
+    acceptance_catalog_path.write_text(
+        json.dumps(acceptance_catalog_document),
+        encoding="utf-8",
+    )
+    acceptance_receipt_base = {
+        "schema_version": "factory-authority-receipt/1",
+        "run_id": "synthetic-run",
+        "repository_id": "synthetic-factory-target",
+        "action": "ratify-acceptance-obligation-catalog",
+        "subject_digest": acceptance_catalog.content_digest,
+        "capabilities": ["factory:ratify-acceptance-obligation-catalog"],
+        "issued_at": now,
+        "expires_at": now + 600,
+    }
+    acceptance_human_receipt_path = tmp_path / "acceptance.human.tessera.json"
+    cli.wrap_json(
+        {
+            **acceptance_receipt_base,
+            "receipt_id": "acceptance-human",
+            "signer_identity": "human:founder",
+            "nonce": "acceptance-human-nonce",
+        },
+        kind="factory-authority-receipt",
+        key_path=root_key,
+        output_path=acceptance_human_receipt_path,
+    )
+    acceptance_validator_receipt_path = tmp_path / "acceptance.validator.tessera.json"
+    cli.wrap_json(
+        {
+            **acceptance_receipt_base,
+            "receipt_id": "acceptance-validator",
+            "signer_identity": "agent:validator",
+            "nonce": "acceptance-validator-nonce",
+        },
+        kind="factory-authority-receipt",
+        key_path=validator_key,
+        output_path=acceptance_validator_receipt_path,
+    )
     surface_evidence = (
         SurfaceEvidence(
             surface_id="synthetic-control-plane",
@@ -592,11 +734,18 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "target_manifest_path": target_path,
         "pattern_catalog_path": catalog_path,
         "build_plan_path": plan_path,
-        "tester_command": (sys.executable, str(RUNTIME_FIXTURES / "tester.py")),
-        "validator_command": (sys.executable, str(RUNTIME_FIXTURES / "validator.py")),
+        "acceptance_catalog_path": acceptance_catalog_path,
+        "acceptance_catalog_human_receipt_path": acceptance_human_receipt_path,
+        "acceptance_catalog_validator_receipt_path": acceptance_validator_receipt_path,
+        "tester_command": tester_command,
+        "validator_command": validator_command,
         "coder_trusted_paths": (RUNTIME_FIXTURES / "coder.py",),
         "tester_trusted_paths": (RUNTIME_FIXTURES / "tester.py",),
         "validator_trusted_paths": (RUNTIME_FIXTURES / "validator.py",),
+        "resume_checkpoint_path": resume_checkpoint,
+        "expected_resume_checkpoint_digest": digest_obj(resume_checkpoint_document),
+        "genesis_path": genesis_path,
+        "resume_configuration_sources": {"runner": resume_config},
         "implementer_identity": "agent:coder",
         "tester_identity": "agent:tester",
         "verifier_identity": "agent:validator",

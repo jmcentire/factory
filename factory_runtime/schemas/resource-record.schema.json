@@ -28,7 +28,7 @@
     "generation": {"type": "integer", "minimum": 1},
     "resource_id": {"$ref": "#/$defs/id"},
     "resource_type": {
-      "enum": ["repository-contact", "object-store", "source-worktree", "lane-workspace", "endgame-worktree", "tmux-session", "tmux-window", "branch", "schedule", "pull-request"]
+      "enum": ["repository-contact", "object-store", "source-worktree", "lane-workspace", "runner-workspace", "endgame-worktree", "tmux-session", "tmux-window", "branch", "schedule", "pull-request"]
     },
     "identifier": {"type": "string", "minLength": 1},
     "creator_action": {"type": "string", "minLength": 1},

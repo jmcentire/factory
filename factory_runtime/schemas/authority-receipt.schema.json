@@ -40,6 +40,8 @@
         "ratify-product-specification",
         "ratify-architecture",
         "ratify-operational-maturity",
+        "ratify-acceptance-obligation-catalog",
+        "ratify-test-change-authorization",
         "approve-promotion",
         "activate-policy"
       ]

@@ -134,6 +134,26 @@ def load_target_manifest(
     require_signature: bool = False,
     verify_signature: Callable[[bytes, dict[str, Any]], bool] | None = None,
 ) -> TargetManifest:
+    """Read a target manifest, then validate the exact bytes obtained from that read."""
+
+    source = Path(path)
+    return load_target_manifest_bytes(
+        source.read_bytes(),
+        schema_path=schema_path,
+        require_signature=require_signature,
+        verify_signature=verify_signature,
+        source_label=str(source),
+    )
+
+
+def load_target_manifest_bytes(
+    raw_bytes: bytes,
+    *,
+    schema_path: str | Path = SCHEMA_PATH,
+    require_signature: bool = False,
+    verify_signature: Callable[[bytes, dict[str, Any]], bool] | None = None,
+    source_label: str = "<bytes>",
+) -> TargetManifest:
     """Load, validate, and content-address a target manifest — fail-closed, before any adapter
     is resolved.
 
@@ -152,8 +172,6 @@ def load_target_manifest(
     enforced (a dev posture); anchoring the key out-of-repo with rotation/revocation is a
     deferred founder decision, wired here but not bundled.
     """
-    p = Path(path)
-    raw_bytes = p.read_bytes()
     source_digest = digest_bytes(raw_bytes)
 
     try:
@@ -165,9 +183,9 @@ def load_target_manifest(
     try:
         jsonschema.validate(instance=data, schema=schema)
     except jsonschema.ValidationError as exc:
-        location = "/".join(str(p) for p in exc.absolute_path) or "<root>"
+        location = "/".join(str(part) for part in exc.absolute_path) or "<root>"
         raise TargetManifestError(
-            f"target manifest schema violation at {location}: {exc.message}"
+            f"target manifest {source_label} schema violation at {location}: {exc.message}"
         ) from exc
 
     # The signature block carries integrity metadata (content digests look like ``module:attr``

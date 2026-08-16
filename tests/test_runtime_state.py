@@ -8,9 +8,14 @@ import pytest
 from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy
 from factory_runtime.state import RunState, RunStateError, RunStore
 from tests.conftest import (
+    acceptance_catalog_artifacts,
+    build_payload,
+    ci_artifacts,
     generation_artifacts,
+    preview_artifacts,
     ratification_receipts,
     terminalize_run_resources,
+    validation_artifacts,
 )
 
 TARGET = "sha256:" + ("1" * 64)
@@ -136,12 +141,22 @@ def _ratify_all(store: RunStore) -> None:
 
 
 def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
+    first_activation = not store.load("run-1").acceptance_obligation_catalog_digest
+    seed = f"attempt-{attempt}"
+    artifacts = generation_artifacts(seed, include_acceptance_catalog=False)
+    if first_activation:
+        artifacts.update(acceptance_catalog_artifacts(store))
     store.transition(
         "run-1",
         RunState.BUILDING,
         actor="validator",
-        artifact_digests=generation_artifacts(f"attempt-{attempt}"),
-        payload={"attempt_number": attempt, "attempt_limit": limit},
+        artifact_digests=artifacts,
+        payload=build_payload(
+            attempt_number=attempt,
+            attempt_limit=limit,
+            seed=seed,
+            activate_catalog=first_activation,
+        ),
     )
 
 
@@ -250,8 +265,20 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     _ratify_all(store)
 
     _start_build(store)
-    for state in (RunState.VALIDATING, RunState.PREVIEW):
-        store.transition("run-1", state, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="validator",
+        artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+    )
 
     # The two anchor states carry authority. This previously walked them with nothing but
     # actor="validator" — a validator human-approving its own run — which is exactly the hole
@@ -264,7 +291,7 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         implementer_identity="coder",
         approver_identity="human-approver",
     )
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
     terminalize_run_resources(store, run_id="run-1")
     store.transition(
         "run-1",
@@ -290,8 +317,20 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
     _create_intake(store)
     _ratify_all(store)
     _start_build(store)
-    for state in (RunState.VALIDATING, RunState.PREVIEW):
-        store.transition("run-1", state, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="validator",
+        artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+    )
     store.transition(
         "run-1",
         RunState.HUMAN_APPROVED,
@@ -300,7 +339,7 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
         implementer_identity="coder",
         approver_identity="human-approver",
     )
-    store.transition("run-1", RunState.CI, actor="validator")
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
     ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
         generation=1,
         resource_id="unfinished-workspace",
@@ -335,12 +374,20 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
     _create_intake(store)
     _ratify_all(store)
     _start_build(store)
-    store.transition("run-1", RunState.VALIDATING, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts("stale", candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
     stale = store.load("run-1")
     RunStore(tmp_path, clock=_Clock()).transition(
         "run-1",
         RunState.PREVIEW,
         actor="other-validator",
+        artifact_digests=preview_artifacts(store, "stale", candidate=CANDIDATE),
     )
     monkeypatch.setattr(store, "load", lambda _run_id: stale)
 
@@ -349,8 +396,13 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
             "run-1",
             RunState.BUILDING,
             actor="stale-validator",
-            artifact_digests=generation_artifacts("stale-retry"),
-            payload={"attempt_number": 2, "attempt_limit": 2},
+            artifact_digests=generation_artifacts("stale-retry", include_acceptance_catalog=False),
+            payload=build_payload(
+                attempt_number=2,
+                attempt_limit=2,
+                seed="stale-retry",
+                activate_catalog=False,
+            ),
         )
 
     assert RunStore(tmp_path, clock=_Clock()).load("run-1").state == RunState.PREVIEW
@@ -377,7 +429,7 @@ def test_building_requires_the_complete_generation_readiness_tuple(tmp_path: Pat
             RunState.BUILDING,
             actor="validator",
             artifact_digests=incomplete,
-            payload={"attempt_number": 1, "attempt_limit": 2},
+            payload=build_payload(attempt_limit=2),
         )
 
 
@@ -386,7 +438,9 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
     _create_intake(store)
     _ratify_all(store)
     _start_build(store, attempt=1, limit=2)
-    first = store.transition("run-1", RunState.BLOCKED, actor="validator")
+    first = store.transition(
+        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
+    )
     assert first.build_attempt_count == 1
     assert first.build_attempt_limit == 2
 
@@ -394,7 +448,9 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
         _start_build(store, attempt=2, limit=3)
 
     _start_build(store, attempt=2, limit=2)
-    second = store.transition("run-1", RunState.BLOCKED, actor="validator")
+    second = store.transition(
+        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
+    )
     assert second.build_attempt_count == 2
     assert second.build_attempt_limit == 2
 

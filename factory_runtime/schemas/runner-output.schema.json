@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/runner-output/1",
+  "title": "Factory outer-runner structured canary or broker handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "role",
+    "projection_digest",
+    "sequence",
+    "continuity_nonce",
+    "status",
+    "broker_requests"
+  ],
+  "properties": {
+    "kind": {"enum": ["canary", "handoff"]},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "projection_digest": {"$ref": "#/$defs/digest"},
+    "sequence": {"type": "integer", "minimum": 1, "maximum": 3},
+    "continuity_nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["qualified", "complete", "blocked"]},
+    "summary": {"type": "string", "maxLength": 16384},
+    "questions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "broker_requests": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/broker_request"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "canary"}}, "required": ["kind"]},
+      "then": {
+        "properties": {
+          "sequence": {"enum": [1, 2]},
+          "status": {"const": "qualified"},
+          "broker_requests": {"maxItems": 0}
+        }
+      },
+      "else": {
+        "properties": {
+          "sequence": {"const": 3},
+          "status": {"enum": ["complete", "blocked"]}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "broker_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "generation",
+        "role",
+        "capability_digest",
+        "operation_kind",
+        "idempotency_key",
+        "input",
+        "input_digest",
+        "created_at"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-broker-request/1"},
+        "request_id": {"$ref": "#/$defs/id"},
+        "run_id": {"$ref": "#/$defs/id"},
+        "generation": {"type": "integer", "minimum": 1},
+        "role": {"enum": ["coder", "tester", "validator"]},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "operation_kind": {"enum": ["read-artifact", "publish-artifact", "run-verifier"]},
+        "idempotency_key": {"$ref": "#/$defs/id"},
+        "input": {"type": "object"},
+        "input_digest": {"$ref": "#/$defs/digest"},
+        "created_at": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

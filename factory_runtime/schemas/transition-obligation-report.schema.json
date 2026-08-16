@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/transition-obligation-report/1",
+  "title": "Factory state-transition obligation satisfaction report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generation",
+    "obligation_set_digest",
+    "selector_id",
+    "from_state",
+    "to_state",
+    "target_state_digest",
+    "resolved_commit",
+    "resolved_tree",
+    "candidate_digest",
+    "diff_digest",
+    "command_digest",
+    "test_id",
+    "test_family",
+    "configuration_digest",
+    "environment_digest",
+    "output_digest",
+    "recorded_at",
+    "idempotency_key",
+    "results",
+    "satisfied"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-transition-obligation-report/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "obligation_set_digest": {"$ref": "#/$defs/digest"},
+    "selector_id": {"$ref": "#/$defs/id"},
+    "from_state": {"type": "string", "minLength": 1},
+    "to_state": {"type": "string", "minLength": 1},
+    "target_state_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "resolved_commit": {"type": "string"},
+    "resolved_tree": {"type": "string"},
+    "candidate_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "diff_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "command_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "test_id": {"type": "string"},
+    "test_family": {"type": "string"},
+    "configuration_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "environment_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "output_digest": {"oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]},
+    "recorded_at": {"type": "integer", "minimum": 1},
+    "idempotency_key": {"$ref": "#/$defs/digest"},
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "obligation_id",
+          "verifier_id",
+          "criterion",
+          "passed",
+          "observations",
+          "evidence_digest"
+        ],
+        "properties": {
+          "obligation_id": {"$ref": "#/$defs/id"},
+          "verifier_id": {"$ref": "#/$defs/id"},
+          "criterion": {"type": "string", "minLength": 1},
+          "passed": {"const": true},
+          "observations": {"type": "object", "minProperties": 1},
+          "evidence_digest": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "satisfied": {"const": true}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

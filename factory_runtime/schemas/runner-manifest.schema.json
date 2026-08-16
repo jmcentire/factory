@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/runner-manifest/1",
+  "title": "Factory hardened model runner manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "runner_id",
+    "role",
+    "adapter",
+    "executable",
+    "child_executables",
+    "runner_version",
+    "model",
+    "model_version",
+    "configuration_digest",
+    "billing_key_name",
+    "secret_names",
+    "output_schema_digest",
+    "network_mode",
+    "limits",
+    "pricing",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-runner-manifest/1"},
+    "runner_id": {"$ref": "#/$defs/id"},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "adapter": {"enum": ["codex", "ollama-codex"]},
+    "executable": {"type": "string", "pattern": "^/"},
+    "child_executables": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^/"}
+    },
+    "runner_version": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "billing_key_name": {"$ref": "#/$defs/env_name"},
+    "secret_names": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/env_name"}
+    },
+    "output_schema_digest": {"$ref": "#/$defs/digest"},
+    "network_mode": {"const": "model-api-only"},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_seconds",
+        "idle_seconds",
+        "max_processes",
+        "max_attempts",
+        "max_output_bytes",
+        "max_tokens",
+        "max_cost_microusd"
+      ],
+      "properties": {
+        "wall_seconds": {"type": "integer", "minimum": 1, "maximum": 21600},
+        "idle_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "max_processes": {"type": "integer", "minimum": 1, "maximum": 64},
+        "max_attempts": {"type": "integer", "minimum": 3, "maximum": 16},
+        "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 104857600},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "max_cost_microusd": {"type": "integer", "minimum": 0}
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_microusd_per_million", "output_microusd_per_million"],
+      "properties": {
+        "input_microusd_per_million": {
+          "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+        },
+        "output_microusd_per_million": {
+          "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+        }
+      }
+    },
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "env_name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$"}
+  }
+}

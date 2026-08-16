@@ -198,15 +198,28 @@ The baseline source checkout is immutable. Before and after each projection, and
 the harness re-derives the retained target-state digest; verifies the object-store commit/tree and
 detached baseline commit; and rejects any tracked, staged, or untracked baseline change as
 `target-state-diverged`. The event marks the resource compromised, admits no lane output produced
-after divergence, and blocks close pending explicit disposition. PR1 does not claim instantaneous
-revocation of an already-running process; that is part of the PR2 launcher boundary.
+after divergence, and blocks close pending explicit disposition. The PR2 supervisor terminates
+the qualified runner process group on wall, idle, output, or process-limit breach; it does not
+claim instantaneous revocation against a compromised host kernel.
 
-## PR1 boundary
+## PR1 and PR2 boundaries
 
-This contract does not claim the interactive model runner is isolated. PR1 reports that boundary
-as unqualified and does not use target correctness to imply launcher correctness. Brokered live
-isolation, hardened runner environments, qualification canaries, process/resource containment,
-and metering semantics are the next independent slice.
+The live model lane is now an executable PR2 boundary. It receives a bounded path-free data
+projection in a fresh workspace, a closed environment with only manifest-named secrets, dedicated
+configuration homes, and no source/control/object-store path. macOS Seatbelt permits the exact
+Codex executable (directly or through `ollama launch codex`), network access, and private runner
+workspace while denying arbitrary shell execution and target/control access. Two canaries must
+pass and the second must resume the first session before the task is sent. Process-tree, wall,
+idle, output, token, attempt, and monetary ceilings fail closed; monetary evidence is labeled
+`observed-post-call` unless the provider supplies a hard limit.
+
+The model cannot name a path, command, argv, script, or working directory. It may emit only a
+closed typed broker request carrying an opaque signed capability digest and kind-specific data.
+The host resolves that handle through an externally checkpoint-bound registry, requires file
+roots to equal active run-owned resource-ledger identifiers, or uses fixed host-owned verifier
+argv, and verifies effects by content rehash, durable reopen/rehash, or two identical no-network
+runs. A failed canary reaches no broker operation. The interactive human/Validator tmux window is
+operator-owned coordination and is not represented as a qualified model lane.
 
 The runtime proves that a valid enrolled-human signature covers the canonical Stage-E request; it
 does not prove that a particular UI made the human meaningfully inspect it. A production signing
@@ -214,14 +227,15 @@ surface must present the canonical URL, requested ref, exact commit, subpath, ta
 verbatim task, and requested outcome together without a hidden or bulk-approval path. That UX is
 not claimed by this CLI/runtime PR.
 
-PR1's durable local ledger is tamper-evident, not a WORM service or a defense against arbitrary
-host-owner compromise. Tessera signatures are verified against the externally pinned genesis at
-Stage R/E creation, and later harness reads re-derive retained bytes against that checked local
-history. A principal able to replace the entire control root can recompute an internally coherent
-unsigned lifecycle ledger; live resume does not yet re-verify every retained Tessera envelope
-against a separately supplied root on every read. Deployments requiring that threat model must
-place the ledger behind independent append-only custody or add externally anchored resume-time
-receipt verification. PR1 does not claim that stronger storage boundary.
+The durable local ledger remains tamper-evident, not a WORM service or a defense against arbitrary
+host-owner compromise. Grounding and dispatch now require a separately supplied content-addressed
+checkpoint and independently obtained expected digest before opening mutable run state. The
+checkpoint itself is not signed by Factory; verification rechecks the pinned root/genesis,
+retained Stage-R/Stage-E Tessera envelopes, lifecycle/resource prefixes, target/source/generation,
+configuration bytes, predecessor lineage, and retention policy; rollback, fork, whole-root
+substitution, and configuration drift deny. Factory does not provide independent custody,
+timestamping, or erasure enforcement for that checkpoint. Deployments requiring those properties
+must anchor it in a separately administered append-only service or equivalent WORM medium.
 
 ## Test and mutation plan
 
@@ -246,6 +260,18 @@ The implementation must prove at least:
 - unrelated user worktrees, branches, stashes, PRs, and untracked files are neither deleted nor
   terminal-close blockers;
 - run-created unledgered or undisposed resources block close;
+- full-control-root substitution, checkpoint rollback/fork, retained authority-envelope mutation,
+  configuration drift, and retention-policy substitution deny before mutable state is trusted;
+- ambient credentials never enter the runner; wrong executable/model/config/output schema denies;
+  failed canary, failed same-session resume, no-artifact stall, cost/token/process/output ceilings,
+  and process-tree escape stop without a broker effect;
+- a model-supplied path, command, argv, script, unknown capability, wrong operation definition,
+  wrong run-owned resource root, capability replay, or idempotency-key substitution denies;
+- every transition re-derives its code-selected obligation set/report; unknown trigger, missing
+  evidence, direct ledger bypass, or changed test without one exact current ruling signed by both
+  an enrolled human and distinct Validator denies, as does receipt replay;
+- acceptance reports bind the exact tests, assertions, expected effects, evidence membership,
+  Validator argv/config, immutable snapshots, phase versions, and bounded review round;
 - promotion binds a durable terminal resource seal, later resource appends deny, and a direct
   ledger append without that exact seal fails projection re-derivation;
 - deleting each new subject/receipt/digest/containment check makes a mutation test fail.

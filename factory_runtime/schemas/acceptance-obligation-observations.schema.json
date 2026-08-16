@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/acceptance-obligation-observations/1",
+  "title": "Factory Validator observations for one acceptance-obligation trigger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generation",
+    "catalog_digest",
+    "trigger_id",
+    "candidate_digest",
+    "acceptance_tests_digest",
+    "command_digest",
+    "configuration_digest",
+    "environment_digest",
+    "started_at",
+    "finished_at",
+    "results"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-acceptance-obligation-observations/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "catalog_digest": {"$ref": "#/$defs/digest"},
+    "trigger_id": {"$ref": "#/$defs/id"},
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "acceptance_tests_digest": {"$ref": "#/$defs/digest"},
+    "command_digest": {"$ref": "#/$defs/digest"},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "environment_digest": {"$ref": "#/$defs/digest"},
+    "started_at": {"type": "integer", "minimum": 1},
+    "finished_at": {"type": "integer", "minimum": 1},
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/result"}
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "test_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_id", "assertion_digest", "exit_status", "output_digest"],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "assertion_digest": {"$ref": "#/$defs/digest"},
+        "exit_status": {"const": 0},
+        "output_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "obligation_id",
+        "verifier_id",
+        "passed",
+        "evidence_digests",
+        "test_results",
+        "effect_digest"
+      ],
+      "properties": {
+        "obligation_id": {"$ref": "#/$defs/id"},
+        "verifier_id": {
+          "enum": [
+            "validator-test-execution-v1",
+            "validator-artifact-rehash-v1",
+            "validator-exact-value-v1"
+          ]
+        },
+        "passed": {"const": true},
+        "evidence_digests": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        },
+        "test_results": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/test_result"}
+        },
+        "effect_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

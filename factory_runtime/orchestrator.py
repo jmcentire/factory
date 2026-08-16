@@ -12,6 +12,16 @@ from factory_core.correction import CorrectionRecord
 from factory_core.independence import IndependenceRecord
 from factory_core.monitors import Monitor
 from factory_core.provenance import ProvenanceClaim
+from factory_runtime.acceptance_obligations import (
+    REPORT_ARTIFACT_KEY,
+    AcceptanceObligationCatalog,
+    AcceptanceObligationError,
+    derive_acceptance_obligation_report,
+    load_retained_acceptance_catalog,
+    retain_acceptance_obligation_report,
+    validator_execution_digests,
+    verify_and_retain_acceptance_catalog,
+)
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
     DeterminismRecord,
@@ -25,9 +35,14 @@ from factory_runtime.lanes import (
     LaneExecution,
     ValidationExecution,
 )
+from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.tessera import VerifiedEnvelope
+from factory_runtime.test_change_authority import (
+    TestChangeAuthorityError,
+    verify_and_retain_test_change_authorization,
+)
 from factory_runtime.workflow import FactoryWorkflow
 
 BUILD_CHECKLIST = (
@@ -51,6 +66,9 @@ class BuildOutcome:
     projection: RunProjection
     evidence_report: EvidenceBundleReport | None
     evidence_envelope: VerifiedEnvelope | None
+    acceptance_report: Mapping[str, object] | None
+    acceptance_report_digest: str
+    resume_verification: ResumeVerification
 
     @property
     def passed(self) -> bool:
@@ -59,6 +77,8 @@ class BuildOutcome:
             and self.evidence_report is not None
             and self.evidence_report.mechanically_satisfied
             and self.evidence_envelope is not None
+            and self.acceptance_report is not None
+            and bool(self.acceptance_report_digest)
             and self.projection.state == RunState.PREVIEW
         )
 
@@ -90,6 +110,18 @@ def _claims(path: Path) -> tuple[ProvenanceClaim, ...]:
     if len(claims) != len(raw_claims) or not claims:
         raise OrchestrationError("Tester assertion manifest contains malformed or no claims")
     return claims
+
+
+def _object(path: Path, *, label: str) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise OrchestrationError(f"{label} is missing, not regular, or symlinked")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OrchestrationError(f"{label} is unreadable: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise OrchestrationError(f"{label} must be a JSON object")
+    return {str(key): value for key, value in raw.items()}
 
 
 class FactoryOrchestrator:
@@ -134,12 +166,19 @@ class FactoryOrchestrator:
         target_manifest_path: str | Path,
         pattern_catalog_path: str | Path,
         build_plan_path: str | Path,
+        acceptance_catalog_path: str | Path,
+        acceptance_catalog_human_receipt_path: str | Path,
+        acceptance_catalog_validator_receipt_path: str | Path,
         coder_command: Sequence[str],
         tester_command: Sequence[str],
         validator_command: Sequence[str],
         coder_trusted_paths: Sequence[str | Path],
         tester_trusted_paths: Sequence[str | Path],
         validator_trusted_paths: Sequence[str | Path],
+        resume_checkpoint_path: str | Path,
+        expected_resume_checkpoint_digest: str,
+        genesis_path: str | Path,
+        resume_configuration_sources: Mapping[str, str | Path],
         implementer_identity: str,
         tester_identity: str,
         verifier_identity: str,
@@ -151,13 +190,44 @@ class FactoryOrchestrator:
         monitors: Sequence[Monitor] = (),
         monitor_declared_unit_count: int = 0,
         correction: CorrectionRecord | None = None,
+        changed_existing_tests: Sequence[str] = (),
+        test_change_authorization_path: str | Path | None = None,
+        test_change_human_receipt_path: str | Path | None = None,
+        test_change_validator_receipt_path: str | Path | None = None,
     ) -> BuildOutcome:
         if not _ATTEMPT_ID.fullmatch(attempt_id):
             raise OrchestrationError(
                 "attempt_id must start with an alphanumeric and contain only letters, "
                 "numbers, dot, underscore, or dash"
             )
+        # Freeze the proposed catalog subject before opening the mutable run root.  The external
+        # checkpoint must name this exact digest even on first activation; later authority and
+        # provenance checks decide whether those bytes may actually become active.
+        try:
+            proposed_catalog = AcceptanceObligationCatalog.from_dict(
+                _object(
+                    Path(acceptance_catalog_path),
+                    label="acceptance-obligation catalog",
+                )
+            )
+        except AcceptanceObligationError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        resume = verify_resume_checkpoint(
+            resume_checkpoint_path,
+            expected_checkpoint_digest=expected_resume_checkpoint_digest,
+            runs_root=self.workflow.root,
+            run_id=run_id,
+            genesis_path=genesis_path,
+            trusted_root_public_key=self.workflow.policy.root_public_key,
+            tessera=self.workflow.tessera,
+            configuration_sources=resume_configuration_sources,
+            expected_acceptance_obligation_catalog_digest=(proposed_catalog.content_digest),
+        )
         current = self.workflow.store.load(run_id)
+        if current.ledger_head != resume.current_run_ledger_head:
+            raise OrchestrationError(
+                "run advanced after external resume verification; retry from a fresh checkpoint"
+            )
         if current.state not in {
             RunState.OPERATIONAL_MATURITY_RATIFIED,
             RunState.BLOCKED,
@@ -166,18 +236,121 @@ class FactoryOrchestrator:
                 "build requires ratified invariant documents or a recoverable blocked attempt"
             )
         verifier = self.workflow.policy.principal(verifier_identity)
-        if verifier is None or verifier.kind == "human":
+        if verifier is None or verifier.kind != "agent":
             raise OrchestrationError("Validator verifier identity is not an enrolled agent")
         implementer = self.workflow.policy.principal(implementer_identity)
         tester = self.workflow.policy.principal(tester_identity)
-        if implementer is None or implementer.kind == "human":
+        if implementer is None or implementer.kind != "agent":
             raise OrchestrationError("Coder implementer identity is not an enrolled agent")
-        if tester is None or tester.kind == "human":
+        if tester is None or tester.kind != "agent":
             raise OrchestrationError("Tester identity is not an enrolled agent")
         if len({implementer_identity, tester_identity, verifier_identity}) != 3:
             raise OrchestrationError("Coder, Tester, and Validator identities must be distinct")
         if len({implementer.public_key, tester.public_key, verifier.public_key}) != 3:
             raise OrchestrationError("Coder, Tester, and Validator must not share signing keys")
+
+        activating_catalog = current.state == RunState.OPERATIONAL_MATURITY_RATIFIED
+        try:
+            if activating_catalog:
+                stored_catalog = verify_and_retain_acceptance_catalog(
+                    self.workflow.root,
+                    run_id,
+                    catalog_path=acceptance_catalog_path,
+                    human_receipt_path=acceptance_catalog_human_receipt_path,
+                    validator_receipt_path=acceptance_catalog_validator_receipt_path,
+                    policy=self.workflow.policy,
+                    tessera=self.workflow.tessera,
+                )
+                acceptance_catalog = stored_catalog.catalog
+                catalog_activation_artifacts = dict(stored_catalog.artifact_digests)
+                catalog_activation_nonces = [
+                    stored_catalog.human_receipt.nonce,
+                    stored_catalog.validator_receipt.nonce,
+                ]
+            else:
+                acceptance_catalog = load_retained_acceptance_catalog(
+                    self.workflow.root,
+                    run_id,
+                    expected_digest=current.acceptance_obligation_catalog_digest,
+                )
+                supplied_catalog = AcceptanceObligationCatalog.from_dict(
+                    _object(
+                        Path(acceptance_catalog_path),
+                        label="acceptance-obligation catalog",
+                    )
+                )
+                if supplied_catalog.content_digest != acceptance_catalog.content_digest:
+                    raise AcceptanceObligationError(
+                        "retry supplied a different acceptance-obligation catalog"
+                    )
+                catalog_activation_artifacts = {}
+                catalog_activation_nonces = []
+        except AcceptanceObligationError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        if acceptance_catalog.content_digest != resume.acceptance_obligation_catalog_digest:
+            raise OrchestrationError(
+                "ratified acceptance-obligation catalog differs from the external checkpoint"
+            )
+
+        changed_test_ids = tuple(str(test_id) for test_id in changed_existing_tests)
+        test_change_paths = (
+            test_change_authorization_path,
+            test_change_human_receipt_path,
+            test_change_validator_receipt_path,
+        )
+        if changed_test_ids and not all(path is not None for path in test_change_paths):
+            raise OrchestrationError(
+                "changed existing tests require authorization plus human and Validator receipts"
+            )
+        if not changed_test_ids and any(path is not None for path in test_change_paths):
+            raise OrchestrationError(
+                "test-change authority cannot be supplied without changed_existing_tests"
+            )
+        test_change_artifacts: dict[str, str] = {}
+        test_change_nonces: list[str] = []
+        if changed_test_ids:
+            assert test_change_authorization_path is not None
+            assert test_change_human_receipt_path is not None
+            assert test_change_validator_receipt_path is not None
+            try:
+                stored_test_change = verify_and_retain_test_change_authorization(
+                    self.workflow.root,
+                    run_id,
+                    authorization_path=test_change_authorization_path,
+                    human_receipt_path=test_change_human_receipt_path,
+                    validator_receipt_path=test_change_validator_receipt_path,
+                    changed_existing_tests=changed_test_ids,
+                    policy=self.workflow.policy,
+                    tessera=self.workflow.tessera,
+                    additional_consumed_nonces=catalog_activation_nonces,
+                )
+            except TestChangeAuthorityError as exc:
+                raise OrchestrationError(str(exc)) from exc
+            test_change_artifacts = dict(stored_test_change.artifact_digests)
+            test_change_nonces = list(stored_test_change.authority_nonces)
+
+        retained_acceptance_catalog_path = (
+            self.workflow.root
+            / run_id
+            / "evidence"
+            / "acceptance-obligation-catalogs"
+            / acceptance_catalog.content_digest.removeprefix("sha256:")
+            / "catalog.json"
+        )
+        command_digest, configuration_digest, environment_digest = validator_execution_digests(
+            validator_command
+        )
+        trigger = acceptance_catalog.select("validating", "preview")
+        expected_execution = {
+            "command_digest": command_digest,
+            "configuration_digest": configuration_digest,
+            "environment_digest": environment_digest,
+        }
+        for field, expected in expected_execution.items():
+            if trigger[field] != expected:
+                raise OrchestrationError(
+                    f"acceptance-obligation catalog does not authorize Validator {field}"
+                )
 
         try:
             prepared = GenerationPreparer(self.workflow.root).prepare(
@@ -188,6 +361,10 @@ class FactoryOrchestrator:
             )
         except GenerationError as exc:
             raise OrchestrationError(str(exc)) from exc
+        if prepared.plan.max_build_attempts > int(acceptance_catalog.document["max_review_rounds"]):
+            raise OrchestrationError(
+                "build plan attempt limit exceeds the ratified acceptance review limit"
+            )
 
         attempt_root = self.workflow.root / run_id / "evidence" / "build-attempts" / attempt_id
         if attempt_root.exists():
@@ -196,13 +373,34 @@ class FactoryOrchestrator:
             run_id,
             RunState.BUILDING,
             actor="validator",
-            artifact_digests=prepared.artifact_digests,
+            artifact_digests={
+                **prepared.artifact_digests,
+                "resume-checkpoint": resume.checkpoint_digest,
+                **catalog_activation_artifacts,
+                **test_change_artifacts,
+            },
             payload={
                 "attempt_id": attempt_id,
                 "attempt_number": prepared.attempt_number,
                 "attempt_limit": prepared.plan.max_build_attempts,
                 "construction_mode": prepared.plan.construction_mode,
+                "resume_checkpoint_id": resume.checkpoint_id,
+                "anchored_run_ledger_head": resume.anchored_run_ledger_head,
+                "anchored_run_ledger_length": resume.anchored_run_ledger_length,
+                "changed_existing_tests": list(changed_test_ids),
+                **(
+                    {
+                        "authority_receipt_nonces": [
+                            *catalog_activation_nonces,
+                            *test_change_nonces,
+                        ]
+                    }
+                    if catalog_activation_nonces or test_change_nonces
+                    else {}
+                ),
             },
+            implementer_identity=implementer_identity,
+            verifier_identity=verifier_identity,
         )
         loop = IsolatedBuildLoop(attempt_root)
         candidate_digest = ""
@@ -279,6 +477,7 @@ class FactoryOrchestrator:
                 validator_trusted_paths=validator_trusted_paths,
                 build_plan_path=prepared.build_plan_path,
                 pattern_catalog_path=prepared.pattern_catalog_path,
+                acceptance_catalog_path=retained_acceptance_catalog_path,
                 review_snapshot_store=(
                     self.workflow.root / run_id / "evidence" / "review-snapshots"
                 ),
@@ -303,7 +502,17 @@ class FactoryOrchestrator:
                     "tester_identity": tester_identity,
                 },
             )
-            return BuildOutcome("", "", execution, projection, None, None)
+            return BuildOutcome(
+                candidate_digest="",
+                tests_digest="",
+                execution=execution,
+                projection=projection,
+                evidence_report=None,
+                evidence_envelope=None,
+                acceptance_report=None,
+                acceptance_report_digest="",
+                resume_verification=resume,
+            )
         if journal is None or not candidate_digest or not tests_digest:
             raise OrchestrationError("validation entered without candidate evidence")
 
@@ -336,17 +545,56 @@ class FactoryOrchestrator:
                 verifier_identity=verifier_identity,
             )
             return BuildOutcome(
-                candidate_digest,
-                tests_digest,
-                execution,
-                projection,
-                None,
-                None,
+                candidate_digest=candidate_digest,
+                tests_digest=tests_digest,
+                execution=execution,
+                projection=projection,
+                evidence_report=None,
+                evidence_envelope=None,
+                acceptance_report=None,
+                acceptance_report_digest="",
+                resume_verification=resume,
             )
 
+        product_acceptance_report: Mapping[str, object] | None = None
+        product_acceptance_report_digest = ""
         try:
             if execution.tester_snapshot is None:
                 raise OrchestrationError("Tester review snapshot is missing")
+            validation_projection = self.workflow.store.load(run_id)
+            trusted_acceptance_evidence = {
+                "candidate": candidate_digest,
+                "acceptance-tests": tests_digest,
+                "coder-output-snapshot": coder_snapshot_digest,
+                "tester-output-snapshot": tester_snapshot_digest,
+            }
+            observations = _object(
+                execution.validator.output_directory / "acceptance-obligation-observations.json",
+                label="Validator acceptance-obligation observations",
+            )
+            product_acceptance_report = derive_acceptance_obligation_report(
+                acceptance_catalog,
+                observations=observations,
+                run_id=run_id,
+                generation=validation_projection.generation,
+                source=str(RunState.VALIDATING),
+                destination=str(RunState.PREVIEW),
+                target_state_digest=validation_projection.target_state_digest,
+                resolved_commit=str(validation_projection.target_state.get("resolved_commit", "")),
+                resolved_tree=str(validation_projection.target_state.get("resolved_tree", "")),
+                phase_artifact_digests=validation_projection.phase_artifact_digests,
+                candidate_digest=candidate_digest,
+                acceptance_tests_digest=tests_digest,
+                command_digest=command_digest,
+                configuration_digest=configuration_digest,
+                environment_digest=environment_digest,
+                trusted_evidence_digests=trusted_acceptance_evidence,
+            )
+            product_acceptance_report_digest = retain_acceptance_obligation_report(
+                self.workflow.root,
+                run_id,
+                product_acceptance_report,
+            )
             claims = _claims(
                 execution.tester_snapshot.files_directory / "evidence" / "assertions.json"
             )
@@ -385,12 +633,15 @@ class FactoryOrchestrator:
                     verifier_identity=verifier_identity,
                 )
                 return BuildOutcome(
-                    candidate_digest,
-                    tests_digest,
-                    execution,
-                    projection,
-                    report,
-                    None,
+                    candidate_digest=candidate_digest,
+                    tests_digest=tests_digest,
+                    execution=execution,
+                    projection=projection,
+                    evidence_report=report,
+                    evidence_envelope=None,
+                    acceptance_report=product_acceptance_report,
+                    acceptance_report_digest=product_acceptance_report_digest,
+                    resume_verification=resume,
                 )
 
             bundle_path = attempt_root / "evidence-bundle.tessera.json"
@@ -411,6 +662,7 @@ class FactoryOrchestrator:
                 artifact_digests={
                     "candidate": candidate_digest,
                     "acceptance-tests": tests_digest,
+                    REPORT_ARTIFACT_KEY: product_acceptance_report_digest,
                     "evidence-bundle": envelope.payload_digest,
                     "evidence-envelope": envelope.envelope_digest,
                 },
@@ -419,6 +671,10 @@ class FactoryOrchestrator:
                     "standard_gate_issues": list(report.gate_issues),
                     "reports": list(report.reports),
                     "tester_identity": tester_identity,
+                    "command_digest": command_digest,
+                    "configuration_digest": configuration_digest,
+                    "environment_digest": environment_digest,
+                    "test_family": trigger["trigger_id"],
                 },
                 implementer_identity=implementer_identity,
                 verifier_identity=verifier_identity,
@@ -433,10 +689,13 @@ class FactoryOrchestrator:
             )
             raise
         return BuildOutcome(
-            candidate_digest,
-            tests_digest,
-            execution,
-            projection,
-            report,
-            envelope,
+            candidate_digest=candidate_digest,
+            tests_digest=tests_digest,
+            execution=execution,
+            projection=projection,
+            evidence_report=report,
+            evidence_envelope=envelope,
+            acceptance_report=product_acceptance_report,
+            acceptance_report_digest=product_acceptance_report_digest,
+            resume_verification=resume,
         )
