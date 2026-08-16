@@ -16,7 +16,8 @@
 # usage: proof.sh <run>
 set -uo pipefail
 RUN="${1:?usage: proof.sh <run>}"
-H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
+H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
+ROOT="${HARNESS_RUN_ROOT:-$H/runs/$RUN}"
 CONF="${HARNESS_TARGET_CONF:-$H/target.conf}"
 D="$(cd "$(dirname "$0")" && pwd)"
 

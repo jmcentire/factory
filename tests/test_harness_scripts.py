@@ -19,8 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import digest_bytes
+from factory_core.manifest import LedgerEntry, digest_bytes, digest_obj
 from factory_core.target import load_target_manifest
+from factory_runtime.resources import ResourceLedger
+from factory_runtime.state import RunState, RunStore
+from factory_runtime.target_state import TargetResolver, normalize_repository_url, normalize_subpath
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
 
@@ -389,18 +392,13 @@ def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
 
 
 def test_dispatch_refuses_unconfirmed_interpretation(tmp_path: Path) -> None:
-    root = tmp_path / ".harness" / "runs" / "r2"
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(json.dumps({"repo": str(tmp_path), "base_sha": "x"}))
-    for name in ("product-specification.md", "architecture.md"):
-        (root / "artifacts" / name).write_text("content\n")
-        (root / "artifacts" / f"{name}.digest").write_text("digest\n")
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
     dispatch = tmp_path / "d.md"
     dispatch.write_text("requirement: build the thing\n")  # restatement gate missing
     r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r2", "coder", "--dispatch", str(dispatch)],
-        tmp_path,
-        {"HARNESS_DIR": str(tmp_path / ".harness")},
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
     )
     assert r.returncode == 70 and "interpretation_confirmed" in r.stderr
 
@@ -413,7 +411,7 @@ def test_dispatch_refuses_unconfirmed_interpretation(tmp_path: Path) -> None:
 def projection_fixture(tmp: Path) -> Path:
     src = tmp / "src"
     src.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=src, check=True)
     (src / "impl.py").write_text("def f() -> int:\n    return 1\n")
     tests_dir = src / "tests"
     tests_dir.mkdir()
@@ -436,13 +434,216 @@ def projection_fixture(tmp: Path) -> Path:
     return src
 
 
+def execution_truth_fixture(
+    tmp: Path,
+    *,
+    run_id: str = "r1",
+    task: str = "Build the exact authorized behavior.",
+    projection_conf: str = "coder-exclude: tests\ntester-include: impl.py\n",
+    harness_status: str | None = "open",
+    terminal_resources: bool = False,
+) -> tuple[Path, Path, dict[str, object]]:
+    """Create a real v3 intake run with a verified run-owned target checkout.
+
+    Harness tests must not manufacture the retired ``repo/base_sha`` JSON shape: the scripts
+    under test now consume the same ledger-derived target-state as production.
+    """
+
+    operator = projection_fixture(tmp)
+    config = operator / ".factory" / "projection.conf"
+    config.parent.mkdir()
+    config.write_text(projection_conf, encoding="utf-8")
+    subprocess.run(["git", "add", ".factory/projection.conf"], cwd=operator, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "projection contract",
+        ],
+        cwd=operator,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/acme/widget.git",
+        ],
+        cwd=operator,
+        check=True,
+    )
+
+    manifest = load_target_manifest(
+        Path(__file__).parent / "fixtures" / "synthetic_target" / "target.toml"
+    )
+    runs = tmp / ".factory" / "runs"
+    store = RunStore(runs, clock=lambda: 100)
+
+    def address(label: str) -> str:
+        return "sha256:" + hashlib.sha256(f"{run_id}:{label}".encode()).hexdigest()
+
+    resolution_request: dict[str, object] = {
+        "schema_version": "factory-target-resolution-request/1",
+        "request_id": f"{run_id}-resolution",
+        "run_id": run_id,
+        "repository_id": "factory-test",
+        "generation": 1,
+        "target_manifest_digest": manifest.content_digest,
+        "target_manifest_source_digest": manifest.source_digest,
+        "normalized_url": normalize_repository_url(str(manifest.repo["url"])),
+        "requested_ref": str(manifest.repo["ref"]),
+        "subpath": normalize_subpath(str(manifest.repo.get("subpath", ""))),
+        "allowed_contact_operations": ["git-local-object-read"],
+        "lane_execution": False,
+        "nonce": f"{run_id}-resolution-nonce",
+        "created_at": 50,
+        "expires_at": 200,
+    }
+    store.create(
+        run_id,
+        target_digest=manifest.content_digest,
+        actor="validator",
+        artifact_digests={
+            "target-manifest-source": manifest.source_digest,
+            "target-resolution-request": digest_obj(resolution_request),
+            "target-resolution-receipt": address("resolution-receipt"),
+            "authority-genesis": address("genesis"),
+        },
+        payload={"authority_receipt_nonces": [f"{run_id}-resolution-nonce"]},
+    )
+    resolver = TargetResolver(
+        runs / run_id,
+        run_id,
+        repository_id="factory-test",
+        generation=1,
+        clock=lambda: 100,
+    )
+    target_state = resolver.resolve(
+        manifest=manifest,
+        request=resolution_request,
+        object_source=operator,
+    )
+    target_evidence = runs / run_id / "evidence" / "target-resolution"
+    target_evidence.mkdir(parents=True)
+    (target_evidence / "target-state.json").write_text(
+        json.dumps(target_state, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    store.record_target_state(
+        run_id,
+        target_state=target_state,
+        actor="target-resolver",
+        artifact_digests={"resource-ledger": str(target_state["resource_ledger_head"])},
+    )
+    source_digest = digest_bytes(task.encode())
+    execution_request: dict[str, object] = {
+        "schema_version": "factory-execution-request/1",
+        "request_id": f"{run_id}-execution",
+        "run_id": run_id,
+        "repository_id": "factory-test",
+        "generation": 1,
+        "target_manifest_digest": manifest.content_digest,
+        "target_state_digest": digest_obj(target_state),
+        "resolved_commit": target_state["resolved_commit"],
+        "proposed_by": "human:test",
+        "verbatim_request": task,
+        "verbatim_request_digest": source_digest,
+        "requested_outcome": "The authorized behavior works.",
+        "surfaces": [
+            {
+                "surface_id": "fixture",
+                "proposed_criticality": "critical",
+                "reason": "The fixture exercises the executable boundary.",
+            }
+        ],
+        "created_at": 75,
+    }
+    intake = runs / run_id / "evidence" / "intake"
+    intake.mkdir(parents=True)
+    (intake / "execution-request.json").write_text(
+        json.dumps(execution_request, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    projection = store.authorize_intake(
+        run_id,
+        source_digest=source_digest,
+        actor="validator",
+        artifact_digests={
+            "execution-request": digest_obj(execution_request),
+            "execution-receipt": address("execution-receipt"),
+            "authority-genesis": address("genesis"),
+        },
+        payload={"authority_receipt_nonces": [f"{run_id}-execution-nonce"]},
+        approver_identity="human:test",
+    )
+    root = runs / run_id
+    if terminal_resources:
+        ledger = ResourceLedger(root, run_id, clock=lambda: 101)
+        for resource_id in ("target-objects", "target-source"):
+            prior = ledger.latest()[resource_id]
+            ledger.append(
+                generation=projection.generation,
+                resource_id=resource_id,
+                resource_type=str(prior["resource_type"]),
+                identifier=str(prior["identifier"]),
+                creator_action=str(prior["creator_action"]),
+                ownership=str(prior["ownership"]),
+                baseline=dict(prior["baseline"]),
+                disposition={"reason": "retained fixture evidence", "residue": True},
+                status="retained",
+                evidence_digests={},
+                actor="fixture",
+            )
+    if harness_status is not None:
+        (root / "TASK.md").write_text(task, encoding="utf-8")
+        (root / "grounded").write_text("2026-08-15T00:00:00Z\n", encoding="utf-8")
+        (root / "harness.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "factory-harness/1",
+                    "run_id": run_id,
+                    "status": harness_status,
+                    "task_digest": source_digest,
+                    "target_state_digest": projection.target_state_digest,
+                    "target_manifest_digest": projection.target_digest,
+                    "resolved_commit": target_state["resolved_commit"],
+                    "checkout_id": target_state["checkout_id"],
+                    "budget_usd": None,
+                    "budget_enforcement": "UNQUALIFIED_PR2",
+                    "audit_interval_min": 45,
+                    "promise_window_min": 10,
+                    "launcher_qualification": "UNQUALIFIED_PR2",
+                    "lane_isolation": "UNQUALIFIED_PR2",
+                    "created_at": "2026-08-15T00:00:00+00:00",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return operator, root, target_state
+
+
 def test_coder_projection_excludes_declared_paths_and_history(tmp_path: Path) -> None:
     src = projection_fixture(tmp_path)
+    conf = src / ".factory" / "projection.conf"
+    conf.parent.mkdir()
+    conf.write_text("coder-exclude: tests\n")
+    subprocess.run(["git", "add", ".factory/projection.conf"], cwd=src, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "config"],
+        cwd=src,
+        check=True,
+    )
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
     ).stdout.strip()
-    conf = tmp_path / "projection.conf"
-    conf.write_text("coder-exclude: tests\n")
     dest = tmp_path / "ws-coder"
     r = run(
         ["bash", str(HARNESS / "projection.sh"), "coder", str(src), sha, str(dest)],
@@ -480,11 +681,18 @@ def test_tester_projection_refuses_undeclared_view(tmp_path: Path) -> None:
 
 def test_tester_projection_is_interface_only(tmp_path: Path) -> None:
     src = projection_fixture(tmp_path)
+    conf = src / ".factory" / "projection.conf"
+    conf.parent.mkdir()
+    conf.write_text("tester-include: impl.py\n")
+    subprocess.run(["git", "add", ".factory/projection.conf"], cwd=src, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "config"],
+        cwd=src,
+        check=True,
+    )
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
     ).stdout.strip()
-    conf = tmp_path / "projection.conf"
-    conf.write_text("tester-include: impl.py\n")
     dest = tmp_path / "ws-tester"
     r = run(
         ["bash", str(HARNESS / "projection.sh"), "tester", str(src), sha, str(dest)],
@@ -498,6 +706,25 @@ def test_tester_projection_is_interface_only(tmp_path: Path) -> None:
         ["git", "log", "--all", "--format=%s"], cwd=dest, capture_output=True, text=True
     ).stdout
     assert "SECRET-CONTEXT" not in log
+
+
+def test_projection_refuses_config_outside_immutable_source(tmp_path: Path) -> None:
+    src = projection_fixture(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    outside = tmp_path / "outside.conf"
+    outside.write_text("coder-exclude: tests\n", encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "projection.sh"), "coder", str(src), sha, str(tmp_path / "ws")],
+        tmp_path,
+        {"HARNESS_PROJECTION_CONF": str(outside)},
+    )
+
+    assert result.returncode != 0
+    assert "escapes the immutable source root" in result.stderr
+    assert not (tmp_path / "ws").exists()
 
 
 # --------------------------------------------------------------------------
@@ -514,7 +741,7 @@ def test_factory_refuses_a_non_git_target(tmp_path: Path) -> None:
         {},
     )
     assert r.returncode == 64
-    assert "not a git repository" in r.stderr and "target" in r.stderr
+    assert "--repo is forbidden" in r.stderr and "Stage R/E" in r.stderr
 
 
 def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
@@ -530,7 +757,7 @@ def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
         tmp_path,
         {},
     )
-    assert r.returncode == 64 and "does not exist" in r.stderr
+    assert r.returncode == 64 and "--repo is forbidden" in r.stderr
 
 
 def test_factory_refuses_a_git_target_without_an_operational_abi(tmp_path: Path) -> None:
@@ -540,8 +767,102 @@ def test_factory_refuses_a_git_target_without_an_operational_abi(tmp_path: Path)
         tmp_path,
         {},
     )
-    assert r.returncode == 66
-    assert "target manifest is required" in r.stderr
+    assert r.returncode == 64
+    assert "--repo is forbidden" in r.stderr
+
+
+def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Path]:
+    stub = tmp_path / "factory-bin"
+    stub.mkdir()
+    log = tmp_path / "tmux.log"
+    tmux = stub / "tmux"
+    tmux.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = has-session ]; then exit 1; fi\n"
+        f"printf '%s\\n' \"$*\" >> \"{log!s}\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+    timers = tmp_path / "timers.txt"
+    timers.write_text("", encoding="utf-8")
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    return (
+        {
+            "PATH": f"{stub}:{os.environ['PATH']}",
+            "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
+            "FACTORY_RUNS_DIR": str(root.parent),
+            "SCHED_AUDIT_INPUT": str(timers),
+            "TRANSCRIPTS": str(transcripts),
+            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
+        },
+        log,
+    )
+
+
+def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, target = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status=None,
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "factory.sh"),
+            "r1",
+            task,
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    runtime = json.loads((root / "run.json").read_text())
+    assert harness["target_state_digest"] == runtime["target_state_digest"]
+    assert harness["resolved_commit"] == target["resolved_commit"]
+    assert (root / "TASK.md").read_text() == task
+    assert "repo" not in harness and "base_sha" not in harness
+    assert str(target["workdir"]) in tmux_log.read_text()
+    assert str(operator) not in tmux_log.read_text()
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["tmux-session"]["status"] == "active"
+
+
+def test_factory_task_mismatch_has_zero_tmux_or_harness_mutation(tmp_path: Path) -> None:
+    _, root, _ = execution_truth_fixture(
+        tmp_path,
+        task="Authorized request",
+        harness_status=None,
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "factory.sh"),
+            "r1",
+            "Different request",
+            "--runs",
+            str(root.parent),
+        ],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert "differ" in result.stderr
+    assert not (root / "harness.json").exists()
+    assert not (root / "TASK.md").exists()
+    assert not tmux_log.exists()
+    assert "tmux-session" not in ResourceLedger(root, "r1").latest()
 
 
 # --------------------------------------------------------------------------
@@ -699,8 +1020,17 @@ def mkrun(tmp: Path, spec: str, strat: str | None, contract: bool = True) -> Pat
 
 
 def p1(tmp: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    root = tmp / ".factory" / "runs" / "r1"
     return run(
-        ["bash", str(HARNESS / "phase1_gate.sh"), "r1", "--repo", str(tmp)],
+        [
+            "bash",
+            str(HARNESS / "phase1_gate.sh"),
+            "r1",
+            "--root",
+            str(root),
+            "--workdir",
+            str(tmp),
+        ],
         cwd=tmp,
         env_extra=env or None,
     )
@@ -805,6 +1135,32 @@ def test_projection_receipt_does_not_gate_the_coder(tmp_path: Path) -> None:
     art.write_text("Coder reads src/pkg/config.py.\n")
     r = pr(tmp_path, "coder", art)
     assert r.returncode == 0 and "not include-listed" in r.stdout
+
+
+def test_projection_receipt_refuses_unsafe_include_path(tmp_path: Path) -> None:
+    mkproj(tmp_path, "../outside")
+    art = tmp_path / "s.md"
+    art.write_text("Cases land in tests/test_boundary.py.\n")
+
+    r = pr(tmp_path, "tester", art)
+
+    assert r.returncode != 0
+    assert "unsafe tester-include path" in r.stderr
+
+
+def test_projection_receipt_refuses_symlinked_config(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.conf"
+    outside.write_text("tester-include: tests\n")
+    config_dir = tmp_path / ".factory"
+    config_dir.mkdir()
+    (config_dir / "projection.conf").symlink_to(outside)
+    art = tmp_path / "s.md"
+    art.write_text("Cases land in tests/test_boundary.py.\n")
+
+    r = pr(tmp_path, "tester", art)
+
+    assert r.returncode == 66
+    assert "regular non-symlink" in r.stderr
 
 
 # --------------------------------------------------------------------------
@@ -1554,6 +1910,26 @@ def test_dispatcher_kills_hung_wake_past_timeout(tmp_path: Path) -> None:
     )
 
 
+def test_dispatcher_distinguishes_unavailable_verifier_from_target_divergence(
+    tmp_path: Path,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text("{}", encoding="utf-8")
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.factory_cli = [str(tmp_path / "missing-factory")]
+    dispatcher.wake_orchestrator = lambda _: None
+
+    dispatcher.check_validator_failure_modes("")
+
+    events = read_chain(root / "events.jsonl")
+    assert events[0]["kind"] == "target_state_verifier_unavailable"
+    blocking = read_chain(root / "lanes" / "validator.blocking")
+    assert blocking[0]["class"] == "target_state_verifier_unavailable"
+
+
 def test_lane_env_refuses_past_blocking_event(tmp_path: Path) -> None:
     env = lane_env_setup(tmp_path)
     root = tmp_path / ".harness" / "runs" / "rA"
@@ -1639,24 +2015,13 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
     and the lanes actually call), not just lane_env.sh. A validator with an
     unconsumed attention event cannot dispatch new lane work until it consumes the
     event (harness/consume_block.sh). This is the production enforcement site."""
-    root = tmp_path / ".harness" / "runs" / "r1"
-    art = root / "artifacts"
-    art.mkdir(parents=True)
-    (art / "product-specification.md").write_text(ADEQUATE_SPEC)
-    (art / "product-specification.md.digest").write_text("d1\n")
-    (art / "architecture.md").write_text("arch\n")
-    (art / "architecture.md.digest").write_text("d2\n")
-    (art / "testing-strategy.md").write_text(ADEQUATE_STRAT)
-    (art / "oracle-contract.md").write_text("contract\n")
-    (root / "run.json").write_text(json.dumps({"repo": str(tmp_path), "base_sha": "x"}))
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
     (root / "lanes").mkdir(parents=True)
     (root / "lanes" / "validator.blocking").write_text('{"class":"orchestrator_response"}\n')
-    dispatch = tmp_path / "d.md"
-    dispatch.write_text("interpretation_confirmed: true\nrequirement: build it\n")
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        tmp_path,
-        {"HARNESS_DIR": ".harness"},
+        cwd,
+        _dispatch_env(stub, root),
     )
     assert r.returncode == 81, r.stdout + r.stderr
     assert "blocking event pending" in r.stderr
@@ -1673,42 +2038,12 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
 def dispatch_success_fixture(
     tmp_path: Path, role: str = "coder", primer: bool = True
 ) -> tuple[Path, Path, Path, Path]:
-    """A complete, dispatchable run that passes every precondition through to the
-    lane launch. The run lives under the target repo's git root (``<repo>/.factory/
-    runs/<run>``) — the real factory layout, where ``dispatch_lane``'s
-    ``$HARNESS_DIR``-relative ROOT and ``phase1_gate``'s ``$REPO/$HARNESS_DIR`` ROOT
-    agree (both anchor at the repo root when ``HARNESS_DIR`` is the relative
-    ``.factory``). Includes a real git repo (so projection works at the real SHA),
-    adequate Phase-1 artifacts (so the adequacy gate is clean), no blocking event,
-    a role-specific kindex primer (Gate C), and a stub ``tmux`` so the launch is a
-    no-op. Returns (repo, root, dispatch_path, stub_bin_dir)."""
-    src = projection_fixture(tmp_path)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    root = src / ".factory" / "runs" / "r1"
+    """A complete v3 execution-truth run, not a hand-authored repo/SHA record."""
+
+    _, root, target_state = execution_truth_fixture(tmp_path)
+    workdir = Path(str(target_state["workdir"]))
     art = root / "artifacts"
     art.mkdir(parents=True)
-    target_source = Path(__file__).parent / "fixtures" / "synthetic_target" / "target.toml"
-    target_path = root / "target.toml"
-    target_path.write_bytes(target_source.read_bytes())
-    target = load_target_manifest(target_path)
-    target_record = {
-        "path": "target.toml",
-        "target_id": target.target_id,
-        "content_digest": target.content_digest,
-        "source_digest": digest_bytes(target_path.read_bytes()),
-        "build": dict(target.build),
-    }
-    (root / "run.json").write_text(
-        json.dumps(
-            {
-                "repo": str(src),
-                "base_sha": sha,
-                "target_manifest": target_record,
-            }
-        )
-    )
     for name, body in (
         ("product-specification.md", ADEQUATE_SPEC),
         ("architecture.md", "# Architecture\n"),
@@ -1729,14 +2064,14 @@ def dispatch_success_fixture(
     stub.mkdir()
     (stub / "tmux").write_text("#!/usr/bin/env bash\nexit 0\n")
     os.chmod(stub / "tmux", 0o755)
-    return src, root, dispatch, stub
+    return workdir, root, dispatch, stub
 
 
-def _dispatch_env(stub: Path) -> dict[str, str]:
-    # HARNESS_DIR is the relative .factory under the repo root (cwd); the stub
-    # tmux shadows the real tmux so the lane launch is a no-op.
+def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
     return {
-        "HARNESS_DIR": ".factory",
+        "HARNESS_DIR": str(root.parent.parent),
+        "FACTORY_RUNS_DIR": str(root.parent),
+        "HARNESS_RUN_ROOT": str(root),
         "PATH": f"{stub}:{os.environ['PATH']}",
         "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
     }
@@ -1751,7 +2086,7 @@ def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
         src,
-        _dispatch_env(stub),
+        _dispatch_env(stub, root),
     )
     assert r.returncode == 70, r.stdout + r.stderr
     assert "no kindex primer" in r.stderr and "Gate C" in r.stderr
@@ -1759,17 +2094,52 @@ def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
 
 def test_dispatch_refuses_a_target_manifest_changed_after_ignition(tmp_path: Path) -> None:
     src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    target = root / "target.toml"
-    target.write_text(target.read_text().replace("max_attempts = 2", "max_attempts = 3"))
+    target = root / "evidence" / "target-resolution" / "target-state.json"
+    document = json.loads(target.read_text())
+    document["resolved_tree"] = "f" * 40
+    target.write_text(json.dumps(document))
 
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
         src,
-        _dispatch_env(stub),
+        _dispatch_env(stub, root),
     )
 
     assert r.returncode == 70
-    assert "target manifest no longer matches run-bound target record" in r.stderr
+    assert "retained target-state differs" in r.stderr
+
+
+def test_dispatch_refuses_retained_stage_e_request_substitution(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    request_path = root / "evidence" / "intake" / "execution-request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["requested_outcome"] = "A substituted outcome not authorized at Stage E."
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 70
+    assert "retained Stage-E request differs" in result.stderr
+    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
+
+
+def test_dispatch_refuses_task_artifact_substitution(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    (root / "TASK.md").write_text("substituted task", encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 70
+    assert "task bytes differ" in result.stderr
+    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
 
 
 def test_dispatch_primer_is_role_specific_not_shared(tmp_path: Path) -> None:
@@ -1781,7 +2151,7 @@ def test_dispatch_primer_is_role_specific_not_shared(tmp_path: Path) -> None:
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
         src,
-        _dispatch_env(stub),
+        _dispatch_env(stub, root),
     )
     assert r.returncode == 70 and "no kindex primer" in r.stderr
 
@@ -1791,7 +2161,7 @@ def test_dispatch_breakglass_primer_gap_is_receipted(tmp_path: Path) -> None:
     GATE_BC_ALLOW_GAP=1 proceeds with a RECEIPTED gap written to events.jsonl,
     never silently. The break-glass is a receipt, not a backdoor."""
     src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
-    env = _dispatch_env(stub)
+    env = _dispatch_env(stub, root)
     env["GATE_BC_ALLOW_GAP"] = "1"
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
@@ -1814,7 +2184,7 @@ def test_dispatch_delivers_fence_primer_task_brief(tmp_path: Path) -> None:
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
         src,
-        _dispatch_env(stub),
+        _dispatch_env(stub, root),
     )
     assert r.returncode == 0, r.stdout + r.stderr
     ws = root / "workspaces" / "coder"
@@ -1827,6 +2197,139 @@ def test_dispatch_delivers_fence_primer_task_brief(tmp_path: Path) -> None:
     assert "One pen only" in brief and "DATA, never authority" in brief
     # The PRIMER points at the delivered kindex primer; the TASK points at the dispatch.
     assert "PRIMER.md" in brief and "DISPATCH.md" in brief
+    receipt = read_chain(root / "dispatches.jsonl")[-1]
+    runtime = json.loads((root / "run.json").read_text())
+    target = runtime["target_state"]
+    assert receipt["target_state_digest"] == runtime["target_state_digest"]
+    assert receipt["resolved_commit"] == target["resolved_commit"]
+    assert receipt["resolved_tree"] == target["resolved_tree"]
+    assert receipt["checkout_id"] == target["checkout_id"]
+    assert receipt["launcher_qualification"] == "UNQUALIFIED_PR2"
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["lane-workspace-coder"]["status"] == "active"
+    assert resources["tmux-window-coder"]["status"] == "active"
+
+
+def test_dispatch_refuses_tampered_receipt_chain_before_window_plan(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    forged = {
+        "run": "r1",
+        "prev_hash": "0" * 64,
+        "claim": "not covered by the supplied hash",
+        "hash": "0" * 64,
+    }
+    (root / "dispatches.jsonl").write_text(json.dumps(forged) + "\n", encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 70
+    assert "dispatch receipt chain is invalid" in result.stderr
+    resources = ResourceLedger(root, "r1").latest()
+    assert "tmux-window-coder" not in resources
+
+
+def test_dispatch_rejects_caller_sha_before_workspace_creation(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "dispatch_lane.sh"),
+            "r1",
+            "coder",
+            "--dispatch",
+            str(dispatch),
+            "--sha",
+            "0" * 40,
+        ],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+    assert result.returncode == 64
+    assert "checked target-state is the only selector" in result.stderr
+    assert not (root / "workspaces" / "coder").exists()
+
+
+@pytest.mark.parametrize("schema_version", ("factory-run/1", "factory-run/2"))
+def test_dispatch_refuses_legacy_run_schema(tmp_path: Path, schema_version: str) -> None:
+    runs = tmp_path / ".factory" / "runs"
+    store = RunStore(runs)
+    artifacts: dict[str, object] = {
+        "target": "sha256:" + ("1" * 64),
+        "source": "sha256:" + ("2" * 64),
+        "phase_artifacts": {},
+    }
+    if schema_version == "factory-run/2":
+        artifacts["generation_artifacts"] = {}
+    store._ledger("legacy").append(
+        LedgerEntry(
+            capability_id="legacy",
+            from_state="",
+            to_state=RunState.INTAKE,
+            artifact_digests=artifacts,
+            payload={"run_schema_version": schema_version},
+            actor="validator",
+            created_at="100",
+        )
+    )
+    store.rebuild_projection("legacy")
+    dispatch = tmp_path / "dispatch.md"
+    dispatch.write_text("interpretation_confirmed: true\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "dispatch_lane.sh"),
+            "legacy",
+            "coder",
+            "--dispatch",
+            str(dispatch),
+            "--runs",
+            str(runs),
+        ],
+        tmp_path,
+        {"FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli"},
+    )
+
+    assert result.returncode == 70
+    assert "legacy run schemas cannot dispatch" in result.stderr
+    assert not (runs / "legacy" / "workspaces").exists()
+
+
+def test_dispatch_ignores_operator_checkout_dirt(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    operator = tmp_path / "src"
+    (operator / "operator-only-dirt.txt").write_text("unrelated\n", encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (root / "workspaces" / "coder" / "operator-only-dirt.txt").exists()
+
+
+def test_dispatch_refuses_run_owned_source_divergence_before_resource_plan(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    target = json.loads((root / "run.json").read_text())["target_state"]
+    (Path(target["source_root"]) / "diverged.txt").write_text("changed\n", encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+
+    assert result.returncode == 70
+    assert "target-state-diverged" in result.stderr
+    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
 
 
 # --------------------------------------------------------------------------
@@ -3232,7 +3735,7 @@ def test_receipt_pass_warn_keeps_count_not_vacuous(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Gate L — promote.sh is the SOLE writer of run.json "closed", reached only
+# Gate L — promote.sh is the SOLE writer of harness.json "closed", reached only
 # through decide_promotion (the factory CLI). A run with no gathered evidence,
 # a blocked decision, or an unreachable CLI closes nothing (fail-closed).
 # --------------------------------------------------------------------------
@@ -3252,31 +3755,22 @@ def _factory_cli_env() -> dict[str, str]:
 
 
 def _make_run(tmp: Path, *, run_id: str = "r1", status: str = "open") -> Path:
-    root = tmp / ".factory" / "runs" / run_id
-    root.mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps(
-            {
-                "run": run_id,
-                "repo": str(tmp),
-                "base_sha": "0" * 40,
-                "task_digest": "x" * 64,
-                "status": status,
-                "created_at": "2026-08-14T00:00:00+00:00",
-            },
-            indent=2,
-        )
+    _, root, _ = execution_truth_fixture(
+        tmp,
+        run_id=run_id,
+        harness_status=status,
+        terminal_resources=True,
     )
     return root
 
 
 def _run_status(root: Path) -> str:
-    return json.loads((root / "run.json").read_text())["status"]
+    return json.loads((root / "harness.json").read_text())["status"]
 
 
 def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     """The happy path: a run with gathered promoting evidence closes through decide_promotion.
-    This is the sole advancement path — promote.sh writes 'closed' iff the verdict allows."""
+    This is the sole harness-close path — promote.sh writes 'closed' iff the verdict allows."""
     from tests.conftest import promoting_promotion_inputs, write_promoting_chain
 
     root = _make_run(tmp_path)
@@ -3295,6 +3789,13 @@ def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     )
     assert r.returncode == 0, r.stderr
     assert _run_status(root) == "closed"
+    assert "status" not in json.loads((root / "run.json").read_text())
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["promotion_verdict"] == "promotion_verdict.json"
+    assert harness["promotion_verdict_digest"] == digest_bytes(
+        (root / "promotion_verdict.json").read_bytes()
+    )
+    assert harness["closed_at"].endswith("+00:00")
     # The audited verdict file is written for the postmortem.
     assert (root / "promotion_verdict.json").exists()
     verdict = json.loads((root / "promotion_verdict.json").read_text())
@@ -3378,8 +3879,9 @@ def test_promote_refuses_stale_or_forged_verdict(tmp_path: Path) -> None:
     )
     assert r.returncode != 0, "a forged verdict must not close the run"
     assert _run_status(root) == "open"
-    # The forged verdict is removed; no fresh verdict was rendered by the no-op CLI.
-    assert not (root / "promotion_verdict.json").exists()
+    # Execution truth fails before destructive freshness handling; the forged file remains
+    # inert and harness.json stays open.
+    assert (root / "promotion_verdict.json").exists()
 
 
 def test_promote_refuses_verdict_that_differs_from_cli_stdout(tmp_path: Path) -> None:
@@ -3421,14 +3923,14 @@ def test_promote_refuses_run_with_no_run_json(tmp_path: Path) -> None:
         _factory_cli_env(),
     )
     assert r.returncode == 64
-    assert "no run.json" in r.stderr
+    assert "Factory run does not exist" in r.stderr
 
 
 def test_promote_is_sole_writer_of_closed() -> None:
-    """The sole-advancement invariant: NO harness shell script other than promote.sh writes the
-    JSON value "closed". factory.sh writes "open"; the dispatcher READS "closed" to stop but
-    never writes it. If another script gained a "closed" writer, advancement would have a second
-    path and Gate L would be route-aroundable — this test fails closed the moment that happens."""
+    """The sole harness-close invariant: no shell script other than promote.sh writes the
+    JSON value "closed". factory.sh writes harness state "open"; the dispatcher reads "closed"
+    to stop but never writes it. Authoritative RunStore advancement is a separate unwired control.
+    If another script gained a writer, Gate L would be route-aroundable."""
     import subprocess
 
     writers = subprocess.run(
@@ -3447,13 +3949,15 @@ def test_endgame_routes_only_a_fully_green_run_through_gate_l() -> None:
     """Live close wiring is structural: endgame owns the call, but never owns the verdict."""
 
     text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
-    invocation = 'HARNESS_DIR="$H" "$D/promote.sh" "$RUN"'
+    invocation = '"$D/promote.sh" "$RUN" --runs "$FACTORY_RUNS_ROOT"'
     assert invocation in text
-    assert text.index(invocation) > text.index("== changeset hygiene")
-    assert text.index(invocation) < text.index('python3 - "$ROOT" "$RUN" "$SHA" "$FAILED"')
-    assert 'if [ "$FAILED" -eq 0 ]; then' in text[text.index("== sole advancement") :]
+    assert text.index(invocation) > text.index("== exact-subject and run-owned-resource hygiene")
+    assert text.index(invocation) < text.index('python3 - "$ROOT" "$RUN" "$SHA"')
+    assert 'if [ "$FAILED" -eq 0 ]; then' in text[text.index("== sole harness close") :]
 
     missing_target_branch = text[
-        text.index('if [ -f "$H/target.conf" ]') : text.index("== changeset hygiene")
+        text.index('if [ -f "$TARGET_CONF" ]') : text.index(
+            "== exact-subject and run-owned-resource hygiene"
+        )
     ]
     assert "FAILED=1" in missing_target_branch

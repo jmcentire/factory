@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """postmortem.py — a postmortem is derived from primary sources or it is fiction.
 
-Reads ONLY the run's recorded artifacts: run.json, events.jsonl, dispatches.jsonl,
+Reads ONLY the run's recorded artifacts: authoritative run.json, harness.json, events.jsonl,
 injections.jsonl, wakes/, the receipt chain, and lane session usage where locatable.
 Every number in the output carries its derivation; a value with no primary source is
 rendered UNDERIVED rather than estimated — the 5-vs-96 counting error was an agent
@@ -33,9 +33,14 @@ def read_jsonl(path: pathlib.Path) -> list[dict[str, Any]]:
     return out
 
 
-def lane_usage(workspace: pathlib.Path) -> dict[str, Any]:
+def lane_usage(workspace: pathlib.Path, agent: str) -> dict[str, Any]:
     """Best-effort token/cost recovery from Claude Code session logs for a lane
     workspace. Absence yields UNDERIVED, never an estimate."""
+    if agent != "claude":
+        return {
+            "tokens": f"UNDERIVED (no {agent} usage adapter; PR2 qualification gap)",
+            "source": None,
+        }
     slug = str(workspace.resolve()).replace("/", "-")
     projects = pathlib.Path.home() / ".claude" / "projects" / slug
     if not projects.is_dir():
@@ -63,12 +68,14 @@ def main() -> None:
     if not run_file.exists():
         sys.exit(f"no run.json under {root} — nothing to derive from")
     run = json.loads(run_file.read_text())
+    harness_file = root / "harness.json"
+    harness = json.loads(harness_file.read_text()) if harness_file.exists() else {}
 
     events = read_jsonl(root / "events.jsonl")
     dispatches = read_jsonl(root / "dispatches.jsonl")
     injections = read_jsonl(root / "injections.jsonl")
     wakes = read_jsonl(root / "wakes" / "receipts.jsonl")
-    receipts = read_jsonl(pathlib.Path(".factory/receipts/chain.jsonl"))
+    receipts = read_jsonl(root.parent.parent / "receipts" / "chain.jsonl")
     verdict_file = root / "endgame" / "verdict.json"
     verdict = json.loads(verdict_file.read_text()) if verdict_file.exists() else None
 
@@ -82,20 +89,41 @@ def main() -> None:
 
     lines: list[str] = []
     w = lines.append
-    w(f"# Postmortem — run `{run['run']}`")
+    run_id = str(run.get("run_id") or run.get("run") or "UNDERIVED")
+    w(f"# Postmortem — run `{run_id}`")
     w("")
-    w(f"Generated {datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')} "
+    w(f"Generated {datetime.datetime.now(datetime.UTC).isoformat(timespec='seconds')} "
       f"from primary sources under `{root}`. Numbers without a source say UNDERIVED.")
     w("")
     w("## Run")
-    w(f"- base SHA: `{run['base_sha']}` (run.json)")
-    w(f"- task digest: `{run['task_digest']}` (run.json; verbatim task in TASK.md)")
-    w(f"- declared budget: {run.get('budget_usd') or 'none declared'} (run.json)")
-    w(f"- endgame verdict: "
-      f"{verdict['verdict'] + ' (endgame/verdict.json)' if verdict else 'UNDERIVED (endgame never ran)'}")
+    target = run.get("target_state", {})
+    w(
+        f"- exact commit: `{target.get('resolved_commit', 'UNDERIVED')}` "
+        "(checked run.json target-state)"
+    )
+    w(f"- target-state digest: `{run.get('target_state_digest', 'UNDERIVED')}` (run.json)")
+    w(
+        f"- source/workdir: `{target.get('source_root', 'UNDERIVED')}` / "
+        f"`{target.get('workdir', 'UNDERIVED')}`"
+    )
+    w(
+        f"- task digest: `{harness.get('task_digest', 'UNDERIVED')}` "
+        "(harness.json; bound to Stage E)"
+    )
+    w(f"- declared budget: {harness.get('budget_usd') or 'none declared'}; "
+      f"enforcement={harness.get('budget_enforcement', 'UNQUALIFIED')}")
+    w(f"- launcher/isolation: {harness.get('launcher_qualification', 'UNQUALIFIED')} / "
+      f"{harness.get('lane_isolation', 'UNQUALIFIED')}")
+    endgame = (
+        verdict["verdict"] + " (endgame/verdict.json)"
+        if verdict
+        else "UNDERIVED (endgame never ran)"
+    )
+    w(f"- endgame verdict: {endgame}")
     w("")
     w("## Derived counts (source: events.jsonl / dispatches.jsonl / injections.jsonl / wakes)")
-    w(f"- events: {len(events)} total — " + ", ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
+    event_counts = ", ".join(f"{key}={value}" for key, value in sorted(by_kind.items()))
+    w(f"- events: {len(events)} total — {event_counts}")
     w(f"- lane dispatches: {len(dispatches)} ({', '.join(lanes)})")
     w(f"- injections: {len(injections)} total; validator→lanes {len(build)}, "
       f"coordination (dispatcher/orchestrator→validator) {len(coord)}")
@@ -126,10 +154,16 @@ def main() -> None:
     w("## Spend per lane (source: Claude Code session logs; absence = UNDERIVED)")
     for d in dispatches:
         ws = d.get("projection", {}).get("dest", "")
-        u = lane_usage(pathlib.Path(ws)) if ws else {"tokens": "UNDERIVED", "source": None}
+        u = (
+            lane_usage(pathlib.Path(ws), str(d.get("agent", "unknown")))
+            if ws
+            else {"tokens": "UNDERIVED", "source": None}
+        )
         w(f"- {d.get('role')}: tokens={u['tokens']}" + (f" — {u['source']}" if u["source"] else ""))
-    vu = lane_usage(pathlib.Path(run.get("repo", ".")))
-    w(f"- validator (repo cwd): tokens={vu['tokens']}" + (f" — {vu['source']}" if vu["source"] else ""))
+    validator_workdir = pathlib.Path(str(target.get("workdir", ".")))
+    vu = lane_usage(validator_workdir, "claude")
+    validator_source = f" — {vu['source']}" if vu["source"] else ""
+    w(f"- validator (exact target workdir): tokens={vu['tokens']}{validator_source}")
     w("")
     w("## Coordination vs build")
     w("Coordination = dispatcher/orchestrator traffic + wakes; build = validator→lane "

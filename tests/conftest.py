@@ -55,6 +55,122 @@ def generation_artifacts(seed: str = "default") -> dict[str, str]:
     }
 
 
+def create_intake_run(
+    store: Any,
+    *,
+    run_id: str,
+    target_digest: str,
+    source_digest: str,
+    target_manifest_source_digest: str | None = None,
+) -> Any:
+    """Drive a RunStore through the v3 Stage-R/target-state/Stage-E intake boundary.
+
+    Store-level tests do not exercise Git or Tessera; this fixture supplies canonical stand-in
+    digests and a schema-valid target-state so those tests still begin at intake without adding a
+    production bypass around the two-stage authority model.
+    """
+
+    def address(label: str) -> str:
+        return "sha256:" + hashlib.sha256(f"{run_id}:{label}".encode()).hexdigest()
+
+    manifest_source = target_manifest_source_digest or address("target-manifest-source")
+    resource_head = address("resource-ledger")
+    run_dir = (store.root / run_id).resolve()
+    source_root = run_dir / "target" / "source"
+    commit = hashlib.sha256(f"{run_id}:commit".encode()).hexdigest()[:40]
+    store.create(
+        run_id,
+        target_digest=target_digest,
+        actor="validator",
+        artifact_digests={
+            "target-manifest-source": manifest_source,
+            "target-resolution-request": address("target-resolution-request"),
+            "target-resolution-receipt": address("target-resolution-receipt"),
+            "authority-genesis": address("authority-genesis"),
+        },
+        payload={"authority_receipt_nonces": [f"{run_id}-resolution-nonce"]},
+    )
+    target_state = {
+        "schema_version": "factory-target-state/1",
+        "run_id": run_id,
+        "repository_id": "fixture",
+        "generation": 1,
+        "target_id": "fixture",
+        "target_manifest_digest": target_digest,
+        "target_manifest_source_digest": manifest_source,
+        "requested_url": "https://example.test/repository.git",
+        "canonical_url": "https://example.test/repository.git",
+        "requested_ref": "refs/heads/main",
+        "observed_ref_object": commit,
+        "peeled_object": commit,
+        "resolved_commit": commit,
+        "resolved_tree": hashlib.sha256(f"{run_id}:tree".encode()).hexdigest()[:40],
+        "control_root": str(run_dir),
+        "object_store": str(run_dir / "target" / "objects.git"),
+        "source_root": str(source_root),
+        "subpath": "",
+        "workdir": str(source_root),
+        "checkout_id": address("checkout"),
+        "observation_method": "remote",
+        "remote_freshness": "PROVED",
+        "contact_ledger_head": address("contact-ledger"),
+        "resource_ledger_head": resource_head,
+        "created_at": 1,
+    }
+    store.record_target_state(
+        run_id,
+        target_state=target_state,
+        actor="target-resolver",
+        artifact_digests={"resource-ledger": resource_head},
+    )
+    return store.authorize_intake(
+        run_id,
+        source_digest=source_digest,
+        actor="validator",
+        artifact_digests={
+            "execution-request": address("execution-request"),
+            "execution-receipt": address("execution-receipt"),
+            "authority-genesis": address("authority-genesis"),
+        },
+        payload={"authority_receipt_nonces": [f"{run_id}-execution-nonce"]},
+        approver_identity="human-approver",
+    )
+
+
+def terminalize_run_resources(store: Any, *, run_id: str) -> str:
+    """Give a state-machine unit run one explicitly retained run-owned resource.
+
+    The production resolver creates several real resources.  Store-level tests intentionally do
+    not invoke Git, but a successful ``PROMOTED`` transition must still exercise the same
+    resource-close precondition instead of acquiring a test-only bypass.  The transition itself
+    installs the terminal seal; this helper stops at a closeable ledger head.
+    """
+
+    from factory_runtime.resources import ResourceLedger
+
+    ledger = ResourceLedger(store.root / run_id, run_id, clock=lambda: 100)
+    identifier = str((store.root / run_id / "fixture-retained-resource").resolve())
+    common = {
+        "generation": 1,
+        "resource_id": "fixture-retained-resource",
+        "resource_type": "source-worktree",
+        "identifier": identifier,
+        "creator_action": "state-machine-test-fixture",
+        "ownership": "run-owned",
+        "baseline": {"absent_at_plan": True},
+        "evidence_digests": {},
+        "actor": "fixture",
+    }
+    ledger.append(**common, disposition={}, status="planned")
+    ledger.append(**common, disposition={}, status="active")
+    ledger.append(
+        **common,
+        disposition={"reason": "retained state-machine fixture", "residue": True},
+        status="retained",
+    )
+    return ledger.head()
+
+
 def _freeze(obj: object) -> object:
     """Serialize a dataclass request/policy/profile to the dict shape ``from_dict`` reads.
 

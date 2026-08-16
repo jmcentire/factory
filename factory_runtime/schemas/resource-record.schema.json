@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/resource-record/1",
+  "title": "Factory run-resource event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_id",
+    "run_id",
+    "generation",
+    "resource_id",
+    "resource_type",
+    "identifier",
+    "creator_action",
+    "ownership",
+    "baseline",
+    "disposition",
+    "status",
+    "evidence_digests",
+    "actor",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-resource-record/1"},
+    "record_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "resource_id": {"$ref": "#/$defs/id"},
+    "resource_type": {
+      "enum": ["repository-contact", "object-store", "source-worktree", "lane-workspace", "endgame-worktree", "tmux-session", "tmux-window", "branch", "schedule", "pull-request"]
+    },
+    "identifier": {"type": "string", "minLength": 1},
+    "creator_action": {"type": "string", "minLength": 1},
+    "ownership": {"enum": ["run-owned", "external-non-owned"]},
+    "baseline": {"type": "object"},
+    "disposition": {"type": "object"},
+    "status": {
+      "enum": ["planned", "active", "succeeded", "failed", "retained", "removed", "unchanged", "compromised", "abandoned", "disposed"]
+    },
+    "evidence_digests": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/digest"}
+    },
+    "actor": {"type": "string", "minLength": 1},
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

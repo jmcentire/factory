@@ -1,15 +1,18 @@
 # The Harness
 
 > Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
-> wired into `harness/lane_env.sh` and enforced; the build-time gates are wired into the
-> `make ship` order (purity → doctrine → authority → harness → denial-probes → lint →
-> typecheck → test) and fail the build closed. `endgame.sh` now invokes the
-> sole-advancement-authority (Gate L) only after its deterministic gates, required live proof,
-> and hygiene checks are green; the promotion renderer also enforces the F3/R2/R3 chain anchor.
-> The evidence pipeline still does not automatically produce `promotion_inputs.json`, the R1
-> cross-run receipt binding and R4 chain authenticity gaps remain, and the harness close is not
-> yet a RunStore `PROMOTED` ledger transition. A green build is not a verified run; a verified
-> run is the cage refusing on every gap.
+> implemented in `harness/lane_env.sh`, but live dispatch does not yet route through it or
+> Seatbelt and is explicitly `UNQUALIFIED_PR2`. Execution-truth PR1 (2026-08-15) wires Stage R/E
+> authority, exact run-owned target-state, control/source-root separation, and run-resource
+> accounting into the runtime and tmux consumers. Build-time gates remain in the `make ship`
+> order (purity → doctrine → authority → harness → denial-probes → lint → typecheck → test).
+> `endgame.sh` invokes Gate L only after deterministic gates, live proof, exact target
+> re-verification, and a terminal run-resource seal. Gate L closes `harness.json`; it does not
+> itself create a RunStore `PROMOTED` transition, although that transition now independently
+> requires and binds the same sealed resource head. The evidence pipeline still does not automatically
+> produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
+> gaps remain. A green build is not a verified run; a verified run is the cage refusing on every
+> gap.
 > Canonical copy: `~/Code/factory/docs/HARNESS.md`. Mirror: `~/Code/tools/HARNESS.md`.
 > Skill form: `/orchestrate` (`skills/orchestrate.md` here and in `~/.claude/commands/`).
 
@@ -184,9 +187,11 @@ the runner's lease table is, which is a runner requirement, not a script.
 
 **7. Session grounding.** Every failure of the resume path came from consulting an
 agent-authored summary. Session start and post-compaction re-entry re-derive from disk:
-ledger verified and re-read, `origin/main` pinned by SHA, channel list pulled live and
-diffed against the registry, cadence audited, tripwire run. Lane execution is blocked
-without a fresh grounding receipt.
+the authority and resource ledgers are verified and re-read; the retained target-state digest,
+exact commit/tree, and clean run-owned checkout are re-derived; channel list is pulled live and
+diffed against the registry; cadence is audited; and the tripwire runs. No `origin/main`, ambient
+`HEAD`, operator checkout, or caller-supplied SHA participates in target selection. Lane execution
+is blocked without a fresh grounding receipt.
 
 **8. Failure classes as runner state.** A failure's class determines who may resolve it —
 never the agent's prose. The classes that matter most, from the postmortems and the
@@ -305,23 +310,26 @@ dependency-free (bash + python3 + git):
   (`--sigs` requires signature-clean git history), `provisional`/`ratify` for the
   live-ruling bridge (control 1a), `active` listing both chains.
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
-  a fresh grounding marker.
+  a fresh grounding marker. It is a built control, but live dispatch routing through it and
+  Seatbelt remains the explicit PR2 qualification boundary.
 - `harness/receipt.sh` — wraps any command; exit code, log digest, tree SHA, dirty-state
   digest, flock-serialized per-worktree chain.
 - `harness/tripwire.sh` — credential-shaped content (incl. GCP service-account JSON)
   halts every lane via `HALT`; only a human clears it.
 - `harness/sched_audit.sh` — every OS timer must match the human-approved registry.
-- `harness/ground.sh` — ledger verify, origin pin, cadence audit, tripwire, channel-list
-  diff, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
-- `harness/factory.sh` — ignition; refuses a missing/invalid target operational ABI, retains the
-  exact target-manifest bytes and addresses, then opens the coordination surface.
-- `harness/dispatch_lane.sh` — re-derives the retained target pack before dispatch and records its
-  source/content addresses. This detects drift against the harness record; signed target authority
-  belongs to the runtime authorization ledger.
-- `harness/endgame.sh` — fresh-checkout ship/isolation/live-proof/hygiene sweep; missing live proof
-  is red, and only an otherwise-green run reaches Gate L.
+- `harness/ground.sh` — verifies the runtime-selected target-state, authority ledger, cadence,
+  tripwire, channel list, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
+- `harness/factory.sh` — ignition only after Stage E; verifies exact task bytes and target-state,
+  writes separate coordination metadata, records tmux intent, then opens the coordination surface.
+- `harness/dispatch_lane.sh` — re-derives target-state, freezes dispatch bytes, mints the declared
+  asymmetric projection, verifies/appends the dispatch chain, and records exact workspace/window
+  resources before launch. It records launcher/isolation as `UNQUALIFIED_PR2`.
+- `harness/endgame.sh` — accepts only an exact candidate SHA in a named run-owned resource,
+  archives it into a recorded endgame worktree, runs ship/isolation/live proof, verifies exact
+  target and terminal resource dispositions, and never inspects or cleans ambient user state.
 - `harness/promote.sh` — Gate L harness close, driven only by the pure promotion verdict and its
-  chain-anchor checks. It does not create a RunStore `PROMOTED` transition.
+  chain-anchor checks. After an allowing verdict it seals the exact terminal resource head. It
+  does not create a RunStore `PROMOTED` transition.
 
 The active scripts live in `~/Code/factory/harness/`; tests and the denial-probe registry are the
 enforcement inventory, not this prose.

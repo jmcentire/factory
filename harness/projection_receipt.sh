@@ -23,7 +23,10 @@ CONF="${HARNESS_PROJECTION_CONF:-.factory/projection.conf}"
 shift 2
 while [ $# -gt 0 ]; do case "$1" in --conf) CONF="$2"; shift 2 ;; *) shift ;; esac; done
 
-[ -s "$ART" ] || { echo "projection-receipt: no artifact at $ART" >&2; exit 64; }
+[ -s "$ART" ] && [ ! -L "$ART" ] || {
+  echo "projection-receipt: artifact is missing, empty, or a symlink: $ART" >&2
+  exit 64
+}
 
 # The coder receives the full tree minus explicit exclusions, so an unreachable
 # path is not a meaningful category there. Only the include-listed roles are gated.
@@ -31,9 +34,39 @@ if [ "$ROLE" != "tester" ]; then
   echo "projection-receipt: role '$ROLE' is not include-listed; nothing to verify"
   exit 0
 fi
-[ -f "$CONF" ] || { echo "projection-receipt: no $CONF — projection is undeclared" >&2; exit 66; }
+[ -f "$CONF" ] && [ ! -L "$CONF" ] || {
+  echo "projection-receipt: no regular non-symlink $CONF — projection is undeclared" >&2
+  exit 66
+}
 
-mapfile -t INCL < <(grep -E "^tester-include:" "$CONF" | sed 's/^tester-include:[[:space:]]*//')
+INCLUDE_TEXT=$(python3 - "$CONF" "${FACTORY_SOURCE_ROOT:-}" <<'PY'
+import pathlib, sys
+
+config = pathlib.Path(sys.argv[1])
+source_text = sys.argv[2]
+if config.is_symlink() or not config.is_file():
+    raise SystemExit("projection-receipt: config must be a regular non-symlink file")
+if source_text:
+    source = pathlib.Path(source_text).resolve(strict=True)
+    if not config.resolve(strict=True).is_relative_to(source):
+        raise SystemExit("projection-receipt: config escapes the immutable source root")
+for number, line in enumerate(config.read_text(encoding="utf-8").splitlines(), 1):
+    prefix = "tester-include:"
+    if not line.startswith(prefix):
+        continue
+    value = line[len(prefix):].strip()
+    path = pathlib.PurePosixPath(value)
+    if (not value or value == "." or "\\" in value or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or path.as_posix() != value.rstrip("/")):
+        raise SystemExit(
+            f"projection-receipt: unsafe tester-include path on line {number}: {value!r}"
+        )
+    print(path.as_posix())
+PY
+) || exit $?
+INCL=()
+[ -z "$INCLUDE_TEXT" ] || mapfile -t INCL <<<"$INCLUDE_TEXT"
 [ "${#INCL[@]}" -gt 0 ] || { echo "projection-receipt: no tester-include lines in $CONF" >&2; exit 66; }
 
 # Candidate paths named by the artifact: repo-relative, with a real extension or a

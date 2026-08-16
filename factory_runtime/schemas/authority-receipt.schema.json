@@ -35,6 +35,7 @@
     },
     "action": {
       "enum": [
+        "authorize-target-resolution",
         "authorize-change",
         "ratify-product-specification",
         "ratify-architecture",

@@ -1,6 +1,6 @@
-"""Gate L runtime: the sole advancement path through ``decide_promotion``.
+"""Gate L runtime: the sole harness-close path through ``decide_promotion``.
 
-The harness (``promote.sh``) is the sole writer of a run's ``"closed"`` status, and it
+The harness (``promote.sh``) is the sole writer of ``harness.json`` ``"closed"`` status, and it
 reaches the promotion decision ONLY through this module — invoked as a subprocess via the
 factory CLI (``factory promote``), so the generic harness never imports the factory package.
 This module is the wire that makes the deterministic cage (``factory_core.promotion``) live
@@ -13,7 +13,8 @@ gates, provenance, tool policy, independence, monitors, the candidate-build rece
 the ``SegregationPolicy`` (enrollment, from the intake authority) and ``CriticalityProfile``
 (surface criticality, from the ratified architecture). It builds the request and calls the
 PURE ``decide_promotion``; it performs no promotion itself. The CLI writes the decision to
-``promotion_verdict.json``; ``promote.sh`` writes ``"closed"`` only when the decision allows.
+``promotion_verdict.json``; ``promote.sh`` closes harness coordination only when the decision
+allows. It never mutates authoritative RunStore ``run.json``.
 
 An absent or malformed ``promotion_inputs.json`` is FAIL-CLOSED: a run that has not
 gathered its evidence cannot close, and the close-path refuses rather than advancing on no

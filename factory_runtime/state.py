@@ -18,10 +18,19 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy
+from factory_core.manifest import (
+    Ledger,
+    LedgerEntry,
+    LedgerIntegrityError,
+    SegregationPolicy,
+    digest_obj,
+)
+from factory_runtime.resources import ResourceLedger, ResourceLedgerError
+from factory_runtime.schema import DocumentValidationError, validate_document
 
-RUN_SCHEMA_VERSION = "factory-run/2"
-LEGACY_RUN_SCHEMA_VERSION = "factory-run/1"
+RUN_SCHEMA_VERSION = "factory-run/3"
+LEGACY_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/1", "factory-run/2"})
+GENERATION_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/2", RUN_SCHEMA_VERSION})
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -39,6 +48,8 @@ GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
 class RunState(StrEnum):
     """The only states an executable Factory run may occupy."""
 
+    TARGET_RESOLUTION_AUTHORIZED = "target-resolution-authorized"
+    TARGET_RESOLVED = "target-resolved"
     INTAKE = "intake"
     PRODUCT_SPECIFICATION_RATIFIED = "product-specification-ratified"
     ARCHITECTURE_RATIFIED = "architecture-ratified"
@@ -54,6 +65,8 @@ class RunState(StrEnum):
 
 
 ALLOWED_TRANSITIONS: Mapping[RunState, frozenset[RunState]] = {
+    RunState.TARGET_RESOLUTION_AUTHORIZED: frozenset({RunState.TARGET_RESOLVED}),
+    RunState.TARGET_RESOLVED: frozenset({RunState.INTAKE}),
     RunState.INTAKE: frozenset({RunState.PRODUCT_SPECIFICATION_RATIFIED}),
     RunState.PRODUCT_SPECIFICATION_RATIFIED: frozenset(
         {
@@ -159,6 +172,9 @@ class RunProjection:
     state: str
     target_digest: str
     source_digest: str
+    target_state_digest: str
+    target_state: Mapping[str, Any]
+    generation: int
     phase_artifact_digests: Mapping[str, str]
     ledger_head: str
     created_at: int
@@ -171,6 +187,7 @@ class RunProjection:
 
     def to_dict(self) -> dict[str, Any]:
         body = asdict(self)
+        body["target_state"] = dict(self.target_state)
         body["phase_artifact_digests"] = dict(self.phase_artifact_digests)
         body["generation_artifact_digests"] = dict(self.generation_artifact_digests)
         return body
@@ -184,6 +201,13 @@ class RunProjection:
             state=str(raw.get("state", "")),
             target_digest=str(raw.get("target_digest", "")),
             source_digest=str(raw.get("source_digest", "")),
+            target_state_digest=str(raw.get("target_state_digest", "")),
+            target_state=(
+                dict(raw["target_state"])
+                if isinstance(raw.get("target_state"), Mapping)
+                else {}
+            ),
+            generation=_as_int(raw.get("generation")),
             phase_artifact_digests=(
                 {str(key): str(value) for key, value in phase_raw.items()}
                 if isinstance(phase_raw, Mapping)
@@ -435,11 +459,28 @@ def _canonical_json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _require_digest_keys(
+    digests: Mapping[str, Any],
+    keys: Iterable[str],
+    *,
+    context: str,
+) -> None:
+    for key in keys:
+        value = str(digests.get(key, ""))
+        if not value:
+            raise RunStateError(f"{context} requires artifact digest {key!r}")
+        _require_digest(value, f"artifact_digests[{key!r}]")
+
+
 def _required_phase_keys(
     state: RunState,
     payload: Mapping[str, Any],
 ) -> frozenset[str]:
-    if state is RunState.INTAKE:
+    if state in {
+        RunState.TARGET_RESOLUTION_AUTHORIZED,
+        RunState.TARGET_RESOLVED,
+        RunState.INTAKE,
+    }:
         return frozenset()
     if state is RunState.PRODUCT_SPECIFICATION_RATIFIED:
         return frozenset(_PHASE_ORDER[:1])
@@ -495,22 +536,39 @@ class RunStore:
         run_id: str,
         *,
         target_digest: str,
-        source_digest: str,
         actor: str,
         artifact_digests: Mapping[str, str] | None = None,
         payload: Mapping[str, Any] | None = None,
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
     ) -> RunProjection:
-        """Create the immutable intake/genesis transition for a new run."""
+        """Create a v3 run at the authorized target-resolution boundary.
+
+        Ordinary intake is deliberately impossible here. The exact target state must first be
+        recorded, then a second execution receipt must establish the verbatim source digest.
+        """
 
         _require_digest(target_digest, "target_digest")
-        _require_digest(source_digest, "source_digest")
         if not actor.strip():
             raise RunStateError("actor is required")
         supplied = dict(artifact_digests or {})
         for key, value in supplied.items():
             _require_digest(value, f"artifact_digests[{key!r}]")
+        _require_digest_keys(
+            supplied,
+            (
+                "target-manifest-source",
+                "target-resolution-request",
+                "target-resolution-receipt",
+                "authority-genesis",
+            ),
+            context=str(RunState.TARGET_RESOLUTION_AUTHORIZED),
+        )
+        request_nonces = dict(payload or {}).get("authority_receipt_nonces")
+        if not isinstance(request_nonces, list) or len(request_nonces) != 1:
+            raise RunStateError(
+                "target-resolution authorization requires exactly one authority receipt nonce"
+            )
         run_dir = self._run_dir(run_id)
         if run_dir.exists() and not run_dir.is_dir():
             raise RunStateError(f"run path is not a directory: {run_id}")
@@ -523,17 +581,19 @@ class RunStore:
             LedgerEntry(
                 capability_id=run_id,
                 from_state="",
-                to_state=RunState.INTAKE,
+                to_state=RunState.TARGET_RESOLUTION_AUTHORIZED,
                 approver_identity=approver_identity,
                 artifact_digests={
                     **supplied,
                     "target": target_digest,
-                    "source": source_digest,
+                    "target-state": "",
+                    "source": "",
                     "phase_artifacts": {},
                     "generation_artifacts": {},
                 },
                 payload={
                     **dict(payload or {}),
+                    "generation": 1,
                     "run_schema_version": RUN_SCHEMA_VERSION,
                 },
                 actor=actor.strip(),
@@ -544,6 +604,54 @@ class RunStore:
         projection = self._derive(run_id)
         self._write_projection(projection)
         return projection
+
+    def record_target_state(
+        self,
+        run_id: str,
+        *,
+        target_state: Mapping[str, Any],
+        actor: str,
+        artifact_digests: Mapping[str, str] | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> RunProjection:
+        """Record immutable target-state bytes after the authorized contact operation."""
+
+        state_digest = digest_obj(dict(target_state))
+        supplied = dict(artifact_digests or {})
+        claimed = supplied.get("target-state", state_digest)
+        if claimed != state_digest:
+            raise RunStateError("target-state digest does not address the supplied document")
+        return self.transition(
+            run_id,
+            RunState.TARGET_RESOLVED,
+            actor=actor,
+            artifact_digests={**supplied, "target-state": state_digest},
+            payload={**dict(payload or {}), "target_state": dict(target_state)},
+        )
+
+    def authorize_intake(
+        self,
+        run_id: str,
+        *,
+        source_digest: str,
+        actor: str,
+        artifact_digests: Mapping[str, str],
+        payload: Mapping[str, Any],
+        approver_identity: str,
+        policy: SegregationPolicy | None = None,
+    ) -> RunProjection:
+        """Establish Stage-E authority for one exact target-state and verbatim request."""
+
+        _require_digest(source_digest, "source_digest")
+        return self.transition(
+            run_id,
+            RunState.INTAKE,
+            actor=actor,
+            artifact_digests={**dict(artifact_digests), "source": source_digest},
+            payload=payload,
+            approver_identity=approver_identity,
+            policy=policy,
+        )
 
     def load(self, run_id: str) -> RunProjection:
         """Verify the ledger and require the convenience projection to match it exactly."""
@@ -605,6 +713,45 @@ class RunStore:
             raise RunStateError("latest run ledger entry has no artifact digest map")
         return dict(raw)
 
+    def execution_authority_digests(self, run_id: str) -> Mapping[str, str]:
+        """Return the unique Stage-E artifact bindings from one verified run snapshot.
+
+        Stage-E evidence is established at intake and need not be repeated on every later
+        transition.  Harness consumers must nevertheless re-derive the retained request against
+        that original authoritative entry, not trust a neighboring evidence file merely because
+        it lives under the run directory.
+        """
+
+        projection = self.load(run_id)
+        entries = self._ledger(run_id).verified_entries()
+        if not entries or entries[-1].get("entry_hash") != projection.ledger_head:
+            raise RunStateError("run ledger changed while Stage-E authority was being read")
+        intake_entries = [
+            record for record in entries if record.get("to_state") == RunState.INTAKE
+        ]
+        if len(intake_entries) != 1:
+            raise RunStateError("run ledger must contain exactly one Stage-E intake entry")
+        raw = intake_entries[0].get("artifact_digests")
+        if not isinstance(raw, Mapping):
+            raise RunStateError("Stage-E intake has no artifact digest map")
+        keys = (
+            "execution-request",
+            "execution-receipt",
+            "authority-genesis",
+            "target",
+            "target-state",
+            "source",
+        )
+        _require_digest_keys(raw, keys, context="Stage-E intake")
+        bindings = {key: str(raw[key]) for key in keys}
+        if bindings["target"] != projection.target_digest:
+            raise RunStateError("Stage-E intake target differs from the current run subject")
+        if bindings["target-state"] != projection.target_state_digest:
+            raise RunStateError("Stage-E intake target-state differs from the current run subject")
+        if bindings["source"] != projection.source_digest:
+            raise RunStateError("Stage-E intake source differs from the current run subject")
+        return bindings
+
     def transition(
         self,
         run_id: str,
@@ -617,6 +764,40 @@ class RunStore:
         verifier_identity: str = "",
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
+    ) -> RunProjection:
+        """Serialize one state transition with terminal resource sealing for this run."""
+
+        try:
+            resources = ResourceLedger(self._run_dir(run_id), run_id)
+            with resources.run_transition_guard():
+                return self._transition_guarded(
+                    run_id,
+                    to_state,
+                    actor=actor,
+                    artifact_digests=artifact_digests,
+                    payload=payload,
+                    implementer_identity=implementer_identity,
+                    verifier_identity=verifier_identity,
+                    approver_identity=approver_identity,
+                    policy=policy,
+                    resource_ledger=resources,
+                )
+        except ResourceLedgerError as exc:
+            raise RunStateError(f"run transition guard failed: {exc}") from exc
+
+    def _transition_guarded(
+        self,
+        run_id: str,
+        to_state: RunState | str,
+        *,
+        actor: str,
+        artifact_digests: Mapping[str, str] | None = None,
+        payload: Mapping[str, Any] | None = None,
+        implementer_identity: str = "",
+        verifier_identity: str = "",
+        approver_identity: str = "",
+        policy: SegregationPolicy | None = None,
+        resource_ledger: ResourceLedger,
     ) -> RunProjection:
         """Append one authorized state transition and refresh the checked projection."""
 
@@ -636,11 +817,85 @@ class RunStore:
         if not actor.strip():
             raise RunStateError("actor is required")
 
+        # A terminal resource seal is the promotion commit point.  If the process crashed after
+        # installing it but before appending PROMOTED, the CI state is intentionally resumable but
+        # no longer an ordinary live run: only the exact promotion retry may follow.  Reopening
+        # authoring would require a new run rather than silently breaking the sealed accounting.
+        try:
+            existing_resource_seal = resource_ledger.terminal_seal()
+        except ResourceLedgerError as exc:
+            raise RunStateError(f"run resource seal is invalid: {exc}") from exc
+        if existing_resource_seal is not None and destination is not RunState.PROMOTED:
+            raise RunStateError(
+                "run resources are terminally sealed; only an idempotent promotion retry is "
+                "allowed (start a new run to resume authoring)"
+            )
+
         supplied = dict(artifact_digests or {})
         for key, value in supplied.items():
             _require_digest(value, f"artifact_digests[{key!r}]")
         phases = dict(current.phase_artifact_digests)
         transition_payload = dict(payload or {})
+        next_target_state_digest = current.target_state_digest
+        next_source_digest = current.source_digest
+        if destination is RunState.TARGET_RESOLVED:
+            _require_digest_keys(
+                supplied,
+                ("target-state", "resource-ledger"),
+                context=str(destination),
+            )
+            raw_target_state = transition_payload.get("target_state")
+            if not isinstance(raw_target_state, Mapping):
+                raise RunStateError("target-resolved requires payload.target_state")
+            try:
+                validate_document("target-state", raw_target_state)
+            except DocumentValidationError as exc:
+                raise RunStateError(str(exc)) from exc
+            next_target_state_digest = digest_obj(dict(raw_target_state))
+            if supplied["target-state"] != next_target_state_digest:
+                raise RunStateError("target-state digest does not address payload.target_state")
+            if raw_target_state.get("run_id") != run_id:
+                raise RunStateError("target-state belongs to another run")
+            if raw_target_state.get("target_manifest_digest") != current.target_digest:
+                raise RunStateError("target-state binds another target manifest")
+            if raw_target_state.get("generation") != current.generation:
+                raise RunStateError("target-state binds another run generation")
+            if raw_target_state.get("resource_ledger_head") != supplied["resource-ledger"]:
+                raise RunStateError("target-state resource ledger head does not match transition")
+        elif destination is RunState.INTAKE:
+            _require_digest_keys(
+                supplied,
+                ("execution-request", "execution-receipt", "authority-genesis", "source"),
+                context=str(destination),
+            )
+            verified_entries = self._ledger(run_id).verified_entries()
+            if (
+                not verified_entries
+                or verified_entries[-1].get("entry_hash") != current.ledger_head
+            ):
+                raise RunStateError("run ledger changed while Stage-E authority was being bound")
+            genesis_digests = verified_entries[0].get("artifact_digests")
+            if not isinstance(genesis_digests, Mapping):
+                raise RunStateError("run genesis has no artifact digest map")
+            if supplied["authority-genesis"] != genesis_digests.get("authority-genesis"):
+                raise RunStateError("Stage-E authority genesis differs from Stage R")
+            request_nonces = transition_payload.get("authority_receipt_nonces")
+            if not isinstance(request_nonces, list) or len(request_nonces) != 1:
+                raise RunStateError(
+                    "execution authorization requires exactly one authority receipt nonce"
+                )
+            if not current.target_state_digest or not current.target_state:
+                raise RunStateError("intake requires a previously recorded target-state")
+            next_source_digest = supplied["source"]
+        else:
+            forbidden_subject_keys = sorted(
+                {"target", "target-state", "source"}.intersection(supplied)
+            )
+            if forbidden_subject_keys:
+                raise RunStateError(
+                    f"{destination} may not resupply run subject digest(s): "
+                    + ", ".join(forbidden_subject_keys)
+                )
         phase_key = _PHASE_STATE_KEYS.get(destination)
         _require_receipts_belong_here(supplied, phase_key, context=str(destination))
         if phase_key:
@@ -702,44 +957,82 @@ class RunStore:
                 f"{destination} requires prior ratified phase artifacts: {', '.join(missing)}"
             )
 
+        if destination is RunState.PROMOTED:
+            # Promotion is terminal only when resource accounting is terminal too.  This lives
+            # in RunStore rather than the harness so a direct state transition cannot route
+            # around cleanup.  Sealing serializes against supported resource appends, is
+            # resumable after a crash, and gives the run ledger an exact head to bind.
+            try:
+                seal = resource_ledger.seal_for_close(
+                    actor=actor,
+                    transition_guarded=True,
+                )
+            except ResourceLedgerError as exc:
+                raise RunStateError(
+                    "promoted requires all run resources to have admissible terminal "
+                    f"dispositions and a durable seal: {exc}"
+                ) from exc
+            promotion_resource_digests = {
+                "resource-ledger": str(seal["ledger_head"]),
+                "resource-ledger-seal": str(seal["seal_digest"]),
+            }
+            for key, value in promotion_resource_digests.items():
+                claimed = supplied.get(key)
+                if claimed is not None and claimed != value:
+                    raise RunStateError(
+                        f"promoted {key} digest does not match the verified resource seal"
+                    )
+                supplied[key] = value
+
         now = self._clock()
-        self._ledger(run_id).append(
-            LedgerEntry(
-                capability_id=run_id,
-                from_state=source,
-                to_state=destination,
-                implementer_identity=implementer_identity,
-                verifier_identity=verifier_identity,
-                approver_identity=approver_identity,
-                artifact_digests={
-                    **supplied,
-                    "target": current.target_digest,
-                    "source": current.source_digest,
-                    "phase_artifacts": phases,
-                    "generation_artifacts": generation,
-                },
-                payload=transition_payload,
-                actor=actor.strip(),
-                created_at=str(now),
-            ),
-            policy,
-        )
+        try:
+            self._ledger(run_id).append(
+                LedgerEntry(
+                    capability_id=run_id,
+                    from_state=source,
+                    to_state=destination,
+                    implementer_identity=implementer_identity,
+                    verifier_identity=verifier_identity,
+                    approver_identity=approver_identity,
+                    artifact_digests={
+                        **supplied,
+                        "target": current.target_digest,
+                        "target-state": next_target_state_digest,
+                        "source": next_source_digest,
+                        "phase_artifacts": phases,
+                        "generation_artifacts": generation,
+                    },
+                    payload=transition_payload,
+                    actor=actor.strip(),
+                    created_at=str(now),
+                ),
+                policy,
+                expected_head=current.ledger_head,
+            )
+        except LedgerIntegrityError as exc:
+            raise RunStateError(
+                "run changed after the transition subject was derived; retry from the new head"
+            ) from exc
         projection = self._derive(run_id)
         self._write_projection(projection)
         return projection
 
     def _derive(self, run_id: str) -> RunProjection:
         ledger = self._ledger(run_id)
-        ok, detail = ledger.verify_chain()
-        if not ok:
-            raise RunStateError(f"run ledger verification failed: {detail}")
-        entries = ledger.entries()
+        try:
+            entries = ledger.verified_entries()
+        except LedgerIntegrityError as exc:
+            raise RunStateError(f"run ledger verification failed: {exc}") from exc
         if not entries:
             raise RunStateError(f"run does not exist or has no ledger entries: {run_id}")
 
         prior = ""
         target_digest = ""
         source_digest = ""
+        target_state_digest = ""
+        target_state: dict[str, Any] = {}
+        authority_genesis_digest = ""
+        generation = 0
         approved_candidate = ""
         phase_artifacts: dict[str, str] = {}
         generation_artifacts: dict[str, str] = {}
@@ -762,10 +1055,7 @@ class RunStore:
                     f"ledger entry {index} has unsupported state {destination_raw!r}"
                 ) from exc
             source_raw = str(record.get("from_state", ""))
-            if index == 0:
-                if source_raw or destination is not RunState.INTAKE:
-                    raise RunStateError("run genesis must transition from empty to intake")
-            else:
+            if index > 0:
                 if source_raw != prior:
                     raise RunStateError(
                         f"ledger entry {index} from_state does not match prior state"
@@ -792,17 +1082,125 @@ class RunStore:
                 target_digest = str(digests.get("target", ""))
                 source_digest = str(digests.get("source", ""))
                 _require_digest(target_digest, "target_digest")
-                _require_digest(source_digest, "source_digest")
                 schema_version = str(payload_raw.get("run_schema_version", ""))
-                if schema_version not in {
-                    LEGACY_RUN_SCHEMA_VERSION,
-                    RUN_SCHEMA_VERSION,
-                }:
+                if schema_version not in {*LEGACY_RUN_SCHEMA_VERSIONS, RUN_SCHEMA_VERSION}:
                     raise RunStateError(
                         f"run genesis has unsupported schema version {schema_version!r}"
                     )
-            elif digests.get("target") != target_digest or digests.get("source") != source_digest:
-                raise RunStateError(f"ledger entry {index} changes the run subject")
+                expected_genesis = (
+                    RunState.TARGET_RESOLUTION_AUTHORIZED
+                    if schema_version == RUN_SCHEMA_VERSION
+                    else RunState.INTAKE
+                )
+                if source_raw or destination is not expected_genesis:
+                    raise RunStateError(
+                        "run genesis must transition from empty to "
+                        f"{expected_genesis} for {schema_version}"
+                    )
+                if schema_version == RUN_SCHEMA_VERSION:
+                    if source_digest or str(digests.get("target-state", "")):
+                        raise RunStateError(
+                            "v3 target-resolution genesis cannot preselect source or target-state"
+                        )
+                    generation = _as_int(payload_raw.get("generation"))
+                    if generation != 1:
+                        raise RunStateError("v3 run genesis requires generation 1")
+                    _require_digest_keys(
+                        digests,
+                        (
+                            "target-manifest-source",
+                            "target-resolution-request",
+                            "target-resolution-receipt",
+                            "authority-genesis",
+                        ),
+                        context="v3 target-resolution genesis",
+                    )
+                    authority_genesis_digest = str(digests["authority-genesis"])
+                else:
+                    _require_digest(source_digest, "source_digest")
+            elif digests.get("target") != target_digest:
+                raise RunStateError(f"ledger entry {index} changes the target manifest")
+
+            if schema_version == RUN_SCHEMA_VERSION:
+                declared_target_state = str(digests.get("target-state", ""))
+                declared_source = str(digests.get("source", ""))
+                if destination is RunState.TARGET_RESOLVED:
+                    _require_digest_keys(
+                        digests,
+                        ("target-state", "resource-ledger"),
+                        context=f"ledger entry {index} target resolution",
+                    )
+                    raw_target_state = payload_raw.get("target_state")
+                    if not isinstance(raw_target_state, Mapping):
+                        raise RunStateError(
+                            f"ledger entry {index} target resolution has no target_state"
+                        )
+                    try:
+                        validate_document("target-state", raw_target_state)
+                    except DocumentValidationError as exc:
+                        raise RunStateError(f"ledger entry {index}: {exc}") from exc
+                    candidate_target_state = dict(raw_target_state)
+                    if digest_obj(candidate_target_state) != declared_target_state:
+                        raise RunStateError(
+                            f"ledger entry {index} target-state digest does not re-derive"
+                        )
+                    if candidate_target_state.get("run_id") != run_id:
+                        raise RunStateError(f"ledger entry {index} target-state belongs elsewhere")
+                    if candidate_target_state.get("target_manifest_digest") != target_digest:
+                        raise RunStateError(
+                            f"ledger entry {index} target-state binds another manifest"
+                        )
+                    if candidate_target_state.get("generation") != generation:
+                        raise RunStateError(
+                            f"ledger entry {index} target-state binds another generation"
+                        )
+                    if (
+                        candidate_target_state.get("resource_ledger_head")
+                        != digests.get("resource-ledger")
+                    ):
+                        raise RunStateError(
+                            f"ledger entry {index} target-state resource head mismatch"
+                        )
+                    if declared_source:
+                        raise RunStateError(
+                            f"ledger entry {index} establishes source before Stage E"
+                        )
+                    target_state_digest = declared_target_state
+                    target_state = candidate_target_state
+                elif destination is RunState.INTAKE:
+                    if not target_state_digest or declared_target_state != target_state_digest:
+                        raise RunStateError(
+                            f"ledger entry {index} intake changes or omits target-state"
+                        )
+                    _require_digest_keys(
+                        digests,
+                        (
+                            "execution-request",
+                            "execution-receipt",
+                            "authority-genesis",
+                            "source",
+                        ),
+                        context=f"ledger entry {index} intake",
+                    )
+                    if digests.get("authority-genesis") != authority_genesis_digest:
+                        raise RunStateError(
+                            f"ledger entry {index} Stage-E authority genesis differs from Stage R"
+                        )
+                    source_digest = declared_source
+                elif index == 0:
+                    if declared_target_state or declared_source:
+                        raise RunStateError(
+                            "v3 target-resolution genesis preselects execution subject"
+                        )
+                else:
+                    if declared_target_state != target_state_digest:
+                        raise RunStateError(
+                            f"ledger entry {index} changes or omits target-state"
+                        )
+                    if not source_digest or declared_source != source_digest:
+                        raise RunStateError(f"ledger entry {index} changes or omits source")
+            elif index > 0 and digests.get("source") != source_digest:
+                raise RunStateError(f"ledger entry {index} changes the legacy run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
             _require_receipts_belong_here(
@@ -834,7 +1232,7 @@ class RunStore:
             # digests are spent.
             recorded_receipts |= _receipt_digests_in(digests)
 
-            if schema_version == RUN_SCHEMA_VERSION:
+            if schema_version in GENERATION_RUN_SCHEMA_VERSIONS:
                 if destination is RunState.BUILDING:
                     generation_artifacts = _require_generation_artifacts(
                         digests,
@@ -907,6 +1305,31 @@ class RunStore:
                     raise RunStateError(
                         f"ledger entry {index} promotes a digest that was never approved"
                     )
+                if schema_version == RUN_SCHEMA_VERSION:
+                    _require_digest(
+                        str(digests.get("resource-ledger", "")),
+                        f"ledger entry {index} promotion resource-ledger digest",
+                    )
+                    _require_digest(
+                        str(digests.get("resource-ledger-seal", "")),
+                        f"ledger entry {index} promotion resource-ledger-seal digest",
+                    )
+                    try:
+                        seal, _ = ResourceLedger(
+                            self._run_dir(run_id), run_id
+                        ).verify_sealed_for_close()
+                    except ResourceLedgerError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} has no valid terminal resource seal: {exc}"
+                        ) from exc
+                    if digests.get("resource-ledger") != seal["ledger_head"]:
+                        raise RunStateError(
+                            f"ledger entry {index} resource-ledger head differs from terminal seal"
+                        )
+                    if digests.get("resource-ledger-seal") != seal["seal_digest"]:
+                        raise RunStateError(
+                            f"ledger entry {index} resource-ledger seal digest does not match"
+                        )
 
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):
@@ -922,6 +1345,18 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} contains an empty authority nonce")
             if len(entry_nonces) != len(set(entry_nonces)):
                 raise RunStateError(f"ledger entry {index} repeats an authority nonce")
+            if schema_version == RUN_SCHEMA_VERSION:
+                if destination in {
+                    RunState.TARGET_RESOLUTION_AUTHORIZED,
+                    RunState.INTAKE,
+                } and len(entry_nonces) != 1:
+                    raise RunStateError(
+                        f"ledger entry {index} {destination} requires exactly one authority nonce"
+                    )
+                if destination is RunState.TARGET_RESOLVED and entry_nonces:
+                    raise RunStateError(
+                        f"ledger entry {index} target resolution may not consume authority"
+                    )
             replayed = sorted(set(entry_nonces) & consumed_nonces)
             if replayed:
                 raise RunStateError(
@@ -951,8 +1386,11 @@ class RunStore:
             state=current,
             target_digest=target_digest,
             source_digest=source_digest,
+            target_state_digest=target_state_digest,
+            target_state=target_state,
+            generation=generation,
             phase_artifact_digests=phase_artifacts,
-            ledger_head=ledger.head_hash(),
+            ledger_head=str(entries[-1]["entry_hash"]),
             created_at=created_at,
             updated_at=updated_at,
             approved_candidate_digest=approved_candidate,

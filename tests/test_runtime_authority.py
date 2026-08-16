@@ -62,6 +62,7 @@ def _genesis_payload() -> dict[str, Any]:
                 "kind": "human",
                 "public_key": ROOT_KEY,
                 "capabilities": [
+                    "factory:authorize-target-resolution",
                     "factory:authorize-change",
                     "factory:ratify-product-specification",
                     "factory:ratify-architecture",
@@ -83,7 +84,11 @@ def _genesis_payload() -> dict[str, Any]:
         ],
         "bootstrap": {
             "enabled": True,
-            "scope": ["authorize-change", "activate-policy"],
+            "scope": [
+                "authorize-target-resolution",
+                "authorize-change",
+                "activate-policy",
+            ],
             "deactivates_when": "the first non-bootstrap policy activation receipt is consumed",
         },
         "issued_at": 100,

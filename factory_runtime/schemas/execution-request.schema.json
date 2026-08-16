@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/execution-request/1",
+  "title": "Factory exact-target execution request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "run_id",
+    "repository_id",
+    "generation",
+    "target_manifest_digest",
+    "target_state_digest",
+    "resolved_commit",
+    "proposed_by",
+    "verbatim_request",
+    "verbatim_request_digest",
+    "requested_outcome",
+    "surfaces",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-execution-request/1"},
+    "request_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "repository_id": {"type": "string", "minLength": 1},
+    "generation": {"type": "integer", "minimum": 1},
+    "target_manifest_digest": {"$ref": "#/$defs/digest"},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "resolved_commit": {"$ref": "#/$defs/object_id"},
+    "proposed_by": {"type": "string", "minLength": 1},
+    "verbatim_request": {"type": "string", "minLength": 1},
+    "verbatim_request_digest": {"$ref": "#/$defs/digest"},
+    "requested_outcome": {"type": "string", "minLength": 1},
+    "surfaces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["surface_id", "proposed_criticality", "reason"],
+        "properties": {
+          "surface_id": {"type": "string", "minLength": 1},
+          "proposed_criticality": {"enum": ["critical", "standard", "cosmetic"]},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "object_id": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Authorized-change intake and invariant-document ratification.
+"""Two-stage target authority, authorized-change intake, and phase ratification.
 
 The runtime does not infer authority from a ticket, branch, or chat transcript. A canonical
 request enters only with a subject-bound human receipt. Each phase artifact then enters only
@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ from factory_core.manifest import (
     digest_obj,
 )
 from factory_core.provenance import PhaseArtifact
+from factory_core.target import TargetManifestError, load_target_manifest
 from factory_runtime.authority import (
     AuthorityPolicy,
     AuthorityVerificationError,
@@ -30,6 +32,13 @@ from factory_runtime.authority import (
 )
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
+from factory_runtime.target_state import (
+    TargetResolutionError,
+    TargetResolver,
+    normalize_repository_url,
+    normalize_subpath,
+    verify_target_state,
+)
 from factory_runtime.tessera import TesseraCli
 
 _PHASE_ACTIONS: Mapping[str, tuple[str, RunState]] = {
@@ -66,6 +75,8 @@ class StoredRatification:
 
 def _read_json_object(path: str | Path) -> tuple[dict[str, Any], bytes]:
     source = Path(path)
+    if source.is_symlink():
+        raise WorkflowError(f"refusing symlink JSON document: {source}")
     try:
         raw = source.read_bytes()
         document = json.loads(raw)
@@ -98,6 +109,11 @@ def _write_once(path: Path, content: bytes) -> None:
             os.fsync(handle.fileno())
         try:
             os.link(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         except FileExistsError:
             if not path.is_symlink() and path.is_file() and path.read_bytes() == content:
                 return
@@ -116,6 +132,8 @@ def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
 def _verified_envelope_bytes(receipt: VerifiedReceipt) -> bytes:
     """Read the exact verified envelope and refuse a verify-to-copy swap."""
 
+    if receipt.envelope.path.is_symlink():
+        raise WorkflowError("verified receipt envelope may not be a symlink")
     try:
         content = receipt.envelope.path.read_bytes()
     except OSError as exc:
@@ -161,32 +179,237 @@ class FactoryWorkflow:
         self.store = RunStore(self.root, clock=clock)
         self._clock = clock
 
-    def authorize_change(
+    def authorize_target_resolution(
         self,
         run_id: str,
         *,
-        target_digest: str,
+        manifest_path: str | Path,
         request_path: str | Path,
         receipt_path: str | Path,
         actor: str = "validator",
     ) -> RunProjection:
-        """Create intake only after a human authorizes the exact canonical request."""
+        """Create Stage R before any repository contact or source inspection."""
 
         request, _ = _read_json_object(request_path)
         try:
-            validate_document("authorization-request", request)
+            validate_document("target-resolution-request", request)
+            if Path(manifest_path).is_symlink():
+                raise WorkflowError("target manifest may not be a symlink")
+            manifest = load_target_manifest(manifest_path)
+            normalized_url = normalize_repository_url(str(manifest.repo["url"]))
+            subpath = normalize_subpath(str(manifest.repo.get("subpath", "")))
+        except (DocumentValidationError, TargetManifestError, TargetResolutionError) as exc:
+            raise WorkflowError(str(exc)) from exc
+        if request["run_id"] != run_id:
+            raise WorkflowError("target-resolution request belongs to a different Factory run")
+        if request["repository_id"] != self.policy.repository_id:
+            raise WorkflowError("target-resolution request belongs to a different repository")
+        if request["generation"] != 1:
+            raise WorkflowError("new target-resolution requests must begin at generation 1")
+        if request["target_manifest_digest"] != manifest.content_digest:
+            raise WorkflowError("target-resolution request binds another target manifest")
+        if request["target_manifest_source_digest"] != manifest.source_digest:
+            raise WorkflowError("target-resolution request binds other manifest bytes")
+        if request["normalized_url"] != normalized_url:
+            raise WorkflowError("target-resolution request binds another repository URL")
+        if request["requested_ref"] != str(manifest.repo["ref"]):
+            raise WorkflowError("target-resolution request binds another ref")
+        if request["subpath"] != subpath:
+            raise WorkflowError("target-resolution request binds another subpath")
+        request_digest = digest_obj(request)
+        receipt = verify_receipt(
+            receipt_path,
+            policy=self.policy,
+            expected_action="authorize-target-resolution",
+            expected_subject_digest=request_digest,
+            expected_run_id=run_id,
+            tessera=self.tessera,
+            clock=self._clock,
+        )
+        principal = self.policy.principal(receipt.signer_identity)
+        if principal is None or principal.kind != "human":
+            raise AuthorityVerificationError(
+                "only an enrolled human may authorize target resolution"
+            )
+        if receipt.nonce != request["nonce"]:
+            raise AuthorityVerificationError(
+                "target-resolution receipt nonce differs from the signed request"
+            )
+        if receipt.expires_at != request["expires_at"]:
+            raise AuthorityVerificationError(
+                "target-resolution receipt expiry differs from the signed request"
+            )
+        now = (self._clock or (lambda: int(time.time())))()
+        if request["created_at"] > now:
+            raise AuthorityVerificationError("target-resolution request was created in the future")
+        if request["expires_at"] <= request["created_at"]:
+            raise AuthorityVerificationError(
+                "target-resolution request expiry is not after creation"
+            )
+        if self.policy.bootstrap_enabled and (
+            "authorize-target-resolution" not in self.policy.bootstrap_scope
+        ):
+            raise AuthorityVerificationError(
+                "bootstrap policy does not permit target resolution"
+            )
+
+        evidence_dir = self.root / run_id / "evidence" / "target-resolution"
+        manifest_bytes = Path(manifest_path).read_bytes()
+        if digest_bytes(manifest_bytes) != manifest.source_digest:
+            raise WorkflowError("target manifest changed before evidence persistence")
+        _write_once(evidence_dir / "target-manifest.toml", manifest_bytes)
+        _write_once(evidence_dir / "target-resolution-request.json", _canonical_bytes(request))
+        _write_once(
+            evidence_dir / "target-resolution-receipt.tessera.json",
+            _verified_envelope_bytes(receipt),
+        )
+        return self.store.create(
+            run_id,
+            target_digest=manifest.content_digest,
+            actor=actor,
+            artifact_digests={
+                "target-manifest-source": manifest.source_digest,
+                "target-resolution-request": request_digest,
+                "target-resolution-receipt": receipt.envelope.envelope_digest,
+                "authority-genesis": self.policy.genesis_digest,
+            },
+            payload={
+                "target_resolution_request_id": request["request_id"],
+                "target_resolution_receipt_id": receipt.receipt_id,
+                "authority_receipt_nonces": [receipt.nonce],
+            },
+            approver_identity=receipt.signer_identity,
+            policy=_segregation_policy(self.policy),
+        )
+
+    def resolve_target(
+        self,
+        run_id: str,
+        *,
+        object_source: str | Path | None = None,
+        actor: str = "target-resolver",
+    ) -> RunProjection:
+        """Resolve only the retained Stage-R subject into a run-owned checkout."""
+
+        current = self.store.load(run_id)
+        if current.state != RunState.TARGET_RESOLUTION_AUTHORIZED:
+            raise WorkflowError("target resolution requires target-resolution-authorized state")
+        evidence_dir = self.root / run_id / "evidence" / "target-resolution"
+        manifest_path = evidence_dir / "target-manifest.toml"
+        request_path = evidence_dir / "target-resolution-request.json"
+        receipt_path = evidence_dir / "target-resolution-receipt.tessera.json"
+        if manifest_path.is_symlink():
+            raise WorkflowError("retained target manifest may not be a symlink")
+        try:
+            manifest = load_target_manifest(manifest_path)
+            request, _ = _read_json_object(request_path)
+            validate_document("target-resolution-request", request)
+        except (TargetManifestError, DocumentValidationError) as exc:
+            raise WorkflowError(str(exc)) from exc
+        artifacts = self.store.current_artifact_digests(run_id)
+        if manifest.content_digest != current.target_digest:
+            raise WorkflowError("retained target manifest differs from the run subject")
+        if manifest.source_digest != artifacts.get("target-manifest-source"):
+            raise WorkflowError("retained target manifest bytes differ from Stage R")
+        if digest_obj(request) != artifacts.get("target-resolution-request"):
+            raise WorkflowError("retained target-resolution request differs from Stage R")
+        if self.policy.genesis_digest != artifacts.get("authority-genesis"):
+            raise WorkflowError("current authority genesis differs from Stage R")
+        now = (self._clock or (lambda: int(time.time())))()
+        if request["expires_at"] <= now:
+            raise WorkflowError("target-resolution authority expired before repository contact")
+        try:
+            receipt = verify_receipt(
+                receipt_path,
+                policy=self.policy,
+                expected_action="authorize-target-resolution",
+                expected_subject_digest=digest_obj(request),
+                expected_run_id=run_id,
+                tessera=self.tessera,
+                clock=self._clock,
+            )
+        except AuthorityVerificationError as exc:
+            raise WorkflowError(f"retained target-resolution authority is invalid: {exc}") from exc
+        if receipt.envelope.envelope_digest != artifacts.get("target-resolution-receipt"):
+            raise WorkflowError("retained target-resolution receipt differs from Stage R")
+        principal = self.policy.principal(receipt.signer_identity)
+        if principal is None or principal.kind != "human":
+            raise WorkflowError("retained target-resolution authority is not human")
+        if receipt.nonce != request["nonce"] or receipt.expires_at != request["expires_at"]:
+            raise WorkflowError("retained target-resolution receipt differs from its request")
+        resolver = TargetResolver(
+            self.root / run_id,
+            run_id,
+            repository_id=self.policy.repository_id,
+            generation=current.generation,
+            clock=self._clock,
+        )
+        try:
+            target_state = resolver.resolve(
+                manifest=manifest,
+                request=request,
+                object_source=object_source,
+            )
+        except TargetResolutionError as exc:
+            raise WorkflowError(str(exc)) from exc
+        _write_once(evidence_dir / "target-state.json", _canonical_bytes(target_state))
+        return self.store.record_target_state(
+            run_id,
+            target_state=target_state,
+            actor=actor,
+            artifact_digests={
+                "resource-ledger": str(target_state["resource_ledger_head"]),
+            },
+            payload={"observation_method": target_state["observation_method"]},
+        )
+
+    def authorize_change(
+        self,
+        run_id: str,
+        *,
+        request_path: str | Path,
+        receipt_path: str | Path,
+        actor: str = "validator",
+    ) -> RunProjection:
+        """Create intake only after a human authorizes the exact resolved target state."""
+
+        current = self.store.load(run_id)
+        if current.state != RunState.TARGET_RESOLVED:
+            raise WorkflowError("authorized-change intake requires target-resolved state")
+        request, _ = _read_json_object(request_path)
+        try:
+            validate_document("execution-request", request)
         except DocumentValidationError as exc:
             raise WorkflowError(str(exc)) from exc
         if request["run_id"] != run_id:
-            raise WorkflowError("authorization request belongs to a different Factory run")
+            raise WorkflowError("execution request belongs to a different Factory run")
         if request["repository_id"] != self.policy.repository_id:
-            raise WorkflowError("authorization request belongs to a different repository")
-        if request["target_digest"] != target_digest:
-            raise WorkflowError("authorization request binds a different target digest")
+            raise WorkflowError("execution request belongs to a different repository")
+        if request["generation"] != current.generation:
+            raise WorkflowError("execution request binds a different run generation")
+        if request["target_manifest_digest"] != current.target_digest:
+            raise WorkflowError("execution request binds a different target manifest")
+        if request["target_state_digest"] != current.target_state_digest:
+            raise WorkflowError("execution request binds a different target-state")
+        if request["resolved_commit"] != current.target_state.get("resolved_commit"):
+            raise WorkflowError("execution request binds a different resolved commit")
+        target_state_path = (
+            self.root / run_id / "evidence" / "target-resolution" / "target-state.json"
+        )
+        retained_target_state, _ = _read_json_object(target_state_path)
+        if digest_obj(retained_target_state) != current.target_state_digest:
+            raise WorkflowError("retained target-state bytes differ from the run ledger")
+        try:
+            verify_target_state(
+                retained_target_state,
+                expected_digest=current.target_state_digest,
+            )
+        except TargetResolutionError as exc:
+            raise WorkflowError(str(exc)) from exc
         verbatim = str(request["verbatim_request"])
         source_digest = digest_bytes(verbatim.encode("utf-8"))
         if source_digest != request["verbatim_request_digest"]:
-            raise WorkflowError("authorization request verbatim digest does not re-derive")
+            raise WorkflowError("execution request verbatim digest does not re-derive")
         request_digest = digest_obj(request)
         receipt = verify_receipt(
             receipt_path,
@@ -196,6 +419,7 @@ class FactoryWorkflow:
             expected_run_id=run_id,
             tessera=self.tessera,
             clock=self._clock,
+            consumed_nonces=tuple(self.store.consumed_authority_nonces(run_id)),
         )
         principal = self.policy.principal(receipt.signer_identity)
         if principal is None or principal.kind != "human":
@@ -206,24 +430,23 @@ class FactoryWorkflow:
             )
 
         evidence_dir = self.root / run_id / "evidence" / "intake"
-        _write_once(evidence_dir / "authorization-request.json", _canonical_bytes(request))
+        _write_once(evidence_dir / "execution-request.json", _canonical_bytes(request))
         _write_once(
-            evidence_dir / "authorization-receipt.tessera.json",
+            evidence_dir / "execution-receipt.tessera.json",
             _verified_envelope_bytes(receipt),
         )
-        return self.store.create(
+        return self.store.authorize_intake(
             run_id,
-            target_digest=target_digest,
             source_digest=source_digest,
             actor=actor,
             artifact_digests={
-                "authorization-request": request_digest,
-                "authorization-receipt": receipt.envelope.envelope_digest,
+                "execution-request": request_digest,
+                "execution-receipt": receipt.envelope.envelope_digest,
                 "authority-genesis": self.policy.genesis_digest,
             },
             payload={
-                "authorization_request_id": request["request_id"],
-                "authorization_receipt_id": receipt.receipt_id,
+                "execution_request_id": request["request_id"],
+                "execution_receipt_id": receipt.receipt_id,
                 "authority_receipt_nonces": [receipt.nonce],
             },
             approver_identity=receipt.signer_identity,

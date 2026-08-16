@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# promote.sh — Gate L: the SOLE writer of a run's "closed" status.
+# promote.sh — Gate L: the SOLE writer of a harness.json "closed" status.
 #
 # Why this exists: the doctrine (HARNESS.md, "two-layer validation split") holds that a
 # judge is never a gate — semantic verdicts advise, they do not advance. Advancement is
 # deterministic: a run closes ONLY through decide_promotion, the pure promotion decision in
-# factory_core. Before this script, nothing wrote run.json "closed" (factory.sh writes
-# "open"; the dispatcher READS "closed" to stop but never writes it), so a green `make ship`
-# was the de-facto close path — a route-around with no verified evidence. This script renders
+# factory_core. Harness status lives separately from authoritative run.json, so a green
+# `make ship` cannot silently masquerade as a runtime transition. This script renders
 # the decide_promotion verdict (via the factory CLI, the trust anchor) and writes "closed"
 # ONLY when the verdict allows. Fail-closed otherwise — a run with no gathered evidence, a
 # blocked decision, or an unreachable CLI closes nothing.
@@ -18,23 +17,78 @@
 # on PATH); FACTORY_CLI overrides the binary so tests can point at a venv or module form.
 #
 # HONEST SCOPE (2026-08-14): endgame.sh now invokes this script after every preceding gate,
-# live proof, and hygiene check is green, so Gate L is the live harness close path and a missing
-# promotion_inputs.json fails that close. The evidence-production pipeline still does not gather
+# live proof, exact target verification, and resource checks are green, so Gate L is the live
+# harness close path and a missing promotion_inputs.json fails that close. The evidence pipeline
+# does not gather
 # promotion_inputs.json automatically, and this harness status update is not a RunStore PROMOTED
 # ledger transition. Those are separate remaining controls; neither is implied by this wiring.
 #
-#   usage: promote.sh <run>
+#   usage: promote.sh <run> [--runs <path>]
 set -uo pipefail
 
-RUN="${1:?usage: promote.sh <run>}"
-H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
-[ -f "$ROOT/run.json" ] || { echo "promote: no run.json at $ROOT — run from the target repo root" >&2; exit 64; }
-
+RUN="${1:?usage: promote.sh <run> [--runs <path>]}"; shift || true
+RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
+while [ $# -gt 0 ]; do case "$1" in
+  --runs) RUNS_ARG="$2"; shift 2 ;;
+  *) echo "promote: unknown argument: $1" >&2; exit 64 ;;
+esac; done
+D="$(cd "$(dirname "$0")" && pwd -P)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
+# shellcheck source=harness/run_context.sh
+source "$D/run_context.sh"
+factory_load_context "$RUN" "$RUNS_ARG" || exit $?
+ROOT="$FACTORY_CONTROL_ROOT"
+[ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ] || {
+  echo "promote: no checked harness.json at $ROOT" >&2; exit 64;
+}
+python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
+  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY' || exit 66
+import json, os, stat, sys
+path, run, target_state, commit, checkout = sys.argv[1:]
+fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        raise SystemExit("promote: harness metadata is not a regular file")
+    with os.fdopen(fd, encoding="utf-8") as handle:
+        fd = -1
+        doc = json.load(handle)
+finally:
+    if fd >= 0:
+        os.close(fd)
+expected = {
+    "schema_version": "factory-harness/1", "run_id": run,
+    "target_state_digest": target_state, "resolved_commit": commit,
+    "checkout_id": checkout,
+}
+if any(doc.get(key) != value for key, value in expected.items()):
+    raise SystemExit("promote: harness metadata is not bound to current target-state")
+base_fields = {
+    "schema_version", "run_id", "status", "task_digest", "target_state_digest",
+    "target_manifest_digest", "resolved_commit", "checkout_id", "budget_usd",
+    "budget_enforcement", "audit_interval_min", "promise_window_min",
+    "launcher_qualification", "lane_isolation", "created_at",
+}
+close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
+if set(doc) not in (base_fields, base_fields | close_fields):
+    raise SystemExit("promote: harness metadata has unknown or missing fields")
+if doc.get("status") not in {"open", "closed"}:
+    raise SystemExit("promote: harness status is invalid")
+PY
+
 VERDICT_FILE="$ROOT/promotion_verdict.json"
 VERDICT_STDOUT="$ROOT/promotion_verdict.json.stdout"
 REJECTION="$ROOT/promotion_rejection.txt"
-CLOSE_AUDIT="$ROOT/close.json"
+
+# A close is about this exact target and only this run's resources. The operator's ambient
+# checkout, branches, worktrees, stashes, and PRs are not inspected. Every run-created or
+# contacted resource must already have an admissible explicit terminal disposition.
+$FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null || exit $?
+if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --for-close \
+  >/dev/null 2>"$REJECTION"; then
+  echo "promote: run-owned resources lack a terminal disposition" >&2
+  [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
+  exit 2
+fi
 
 # --- render the verdict: the factory CLI calls decide_promotion (pure, fail-closed) -----
 # Exit 2 from the CLI means a refused control (missing/unreadable promotion_inputs.json, or
@@ -45,7 +99,7 @@ CLOSE_AUDIT="$ROOT/close.json"
 # only way a verdict file can exist after this point is that THIS invocation's CLI wrote it.
 # A no-op FACTORY_CLI (e.g. `true`) writes nothing and the close fail-closes below.
 rm -f "$VERDICT_FILE" "$VERDICT_STDOUT"
-if ! $FACTORY_CLI promote --runs "$H/runs" --run-id "$RUN" >"$VERDICT_STDOUT" 2>"$REJECTION"; then
+if ! $FACTORY_CLI promote --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >"$VERDICT_STDOUT" 2>"$REJECTION"; then
   echo "promote: refused — no verdict rendered (decide_promotion could not ground a decision)" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 2
@@ -91,31 +145,68 @@ if [ "$ALLOWED" != "true" ]; then
   exit 1
 fi
 
-# --- SOLE WRITER: flip run.json status open -> closed (atomic) -------------------------
-# No other harness script writes "closed". The dispatcher reads it to stop; factory.sh
-# writes "open". This is the one advancement path, reached only through decide_promotion.
+# Freeze the exact terminal resource head only after the promotion verdict allows. The first
+# close check above prevents wasted evidence work; this second check is the commit point. It
+# re-verifies under the resource guard, writes a content-addressed/fsynced seal, and makes every
+# supported later resource append fail. A blocked verdict therefore does not prematurely seal a
+# still-open run, while a race between the first check and this point is caught here.
+if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+  --for-close --seal --actor gate-l >/dev/null 2>"$REJECTION"; then
+  echo "promote: terminal resource seal refused — run not closed" >&2
+  [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
+  exit 2
+fi
+
+# --- SOLE WRITER: flip harness.json status open -> closed (atomic) ---------------------
+# No other harness script writes "closed". The dispatcher reads harness.json to stop;
+# factory.sh writes "open". This is the one harness-close path.
 #
-# This run.json is the manual harness control record written by factory.sh; it is not the
-# authoritative RunStore projection used by factory_runtime. promote.sh edits only its harness
-# "status" key, which the dispatcher reads. The close audit metadata lives in a separate
-# close.json. A RunStore PROMOTED transition, including its signed approval/CI evidence, remains
-# a separate unwired runtime control and must never be inferred from this harness close.
+# harness.json is coordination metadata, separate from authoritative RunStore run.json.
+# A RunStore PROMOTED transition remains a separate unwired runtime control and must never be
+# inferred from this harness close.
 #
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
-# half-written run.json. Exit 70 on write-failure (Opus F7) so it is distinct from BLOCKED (1).
-if ! python3 - "$ROOT/run.json" "$RUN" "$VERDICT_FILE" "$CLOSE_AUDIT" <<'PY' 2>>"$REJECTION"
-import json, os, sys, datetime, pathlib, tempfile
+# half-written harness.json. Exit 70 on write-failure so it is distinct from BLOCKED (1).
+if ! python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" <<'PY' 2>>"$REJECTION"
+import datetime, hashlib, json, os, pathlib, stat, sys, tempfile
 run_path = pathlib.Path(sys.argv[1])
 run = sys.argv[2]  # the run id — a string, not a path
 verdict_file = pathlib.Path(sys.argv[3])
-close_audit = pathlib.Path(sys.argv[4])
-doc = json.loads(run_path.read_text())
+
+def read_regular(path: pathlib.Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def sync_parent(path: pathlib.Path) -> None:
+    fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(f"parent is not a directory: {path.parent}")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+doc = json.loads(read_regular(run_path))
 if doc.get("status") == "closed":
     print(f"promote: {run} already closed — nothing to do (idempotent)")
     sys.exit(0)
+closed_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+verdict_bytes = read_regular(verdict_file)
 doc["status"] = "closed"
+doc["closed_at"] = closed_at
+doc["promotion_verdict"] = verdict_file.name
+doc["promotion_verdict_digest"] = "sha256:" + hashlib.sha256(verdict_bytes).hexdigest()
 # Atomic replace: write a temp file in the same dir, fsync, then os.replace (rename is atomic
-# on POSIX). A crash mid-write leaves the old "open" run.json intact rather than a truncated one.
+# on POSIX). The verdict identity is part of this same atomic record, so a crash cannot expose a
+# closed status without its close audit.
 tmp = tempfile.NamedTemporaryFile(
     mode="w", dir=str(run_path.parent), suffix=".tmp", delete=False)
 try:
@@ -124,21 +215,14 @@ try:
     os.fsync(tmp.fileno())
     tmp.close()
     os.replace(tmp.name, run_path)
+    sync_parent(run_path)
 except OSError:
     os.unlink(tmp.name) if os.path.exists(tmp.name) else None
     raise  # surfaces as a non-zero exit; the `if !` below maps it to exit 70
-# Close audit: a separate record rebuild-projection cannot erase. Carries the verdict file
-# name and a timestamp so the postmortem can re-locate the decision that closed this run.
-audit = {
-    "run": run,
-    "closed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-    "promotion_verdict": verdict_file.name,
-}
-close_audit.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
 print(f"promote: {run} closed — sole-advancement via decide_promotion verdict")
 PY
 then
-  echo "promote: run.json close write failed — run NOT closed" >&2
+  echo "promote: harness.json close write failed — run NOT closed" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 70
 fi

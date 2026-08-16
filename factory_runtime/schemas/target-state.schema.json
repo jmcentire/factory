@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/target-state/1",
+  "title": "Factory canonical resolved target state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "repository_id",
+    "generation",
+    "target_id",
+    "target_manifest_digest",
+    "target_manifest_source_digest",
+    "requested_url",
+    "canonical_url",
+    "requested_ref",
+    "observed_ref_object",
+    "peeled_object",
+    "resolved_commit",
+    "resolved_tree",
+    "control_root",
+    "object_store",
+    "source_root",
+    "subpath",
+    "workdir",
+    "checkout_id",
+    "observation_method",
+    "remote_freshness",
+    "contact_ledger_head",
+    "resource_ledger_head",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-target-state/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "repository_id": {"type": "string", "minLength": 1},
+    "generation": {"type": "integer", "minimum": 1},
+    "target_id": {"type": "string", "minLength": 1},
+    "target_manifest_digest": {"$ref": "#/$defs/digest"},
+    "target_manifest_source_digest": {"$ref": "#/$defs/digest"},
+    "requested_url": {"type": "string", "minLength": 1},
+    "canonical_url": {"type": "string", "minLength": 1},
+    "requested_ref": {"type": "string", "minLength": 1},
+    "observed_ref_object": {"$ref": "#/$defs/object_id"},
+    "peeled_object": {"$ref": "#/$defs/object_id"},
+    "resolved_commit": {"$ref": "#/$defs/object_id"},
+    "resolved_tree": {"$ref": "#/$defs/object_id"},
+    "control_root": {"type": "string", "minLength": 1},
+    "object_store": {"type": "string", "minLength": 1},
+    "source_root": {"type": "string", "minLength": 1},
+    "subpath": {"type": "string"},
+    "workdir": {"type": "string", "minLength": 1},
+    "checkout_id": {"$ref": "#/$defs/digest"},
+    "observation_method": {"enum": ["remote", "local-object-source"]},
+    "remote_freshness": {"enum": ["PROVED", "UNPROVED"]},
+    "contact_ledger_head": {"$ref": "#/$defs/digest"},
+    "resource_ledger_head": {"$ref": "#/$defs/digest"},
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "object_id": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }
+  }
+}

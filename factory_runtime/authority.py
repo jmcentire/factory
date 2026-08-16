@@ -16,6 +16,7 @@ from factory_runtime.tessera import TesseraCli, TesseraVerificationError, Verifi
 _PUBLIC_KEY = re.compile(r"^[0-9a-f]{64}$")
 
 ACTION_CAPABILITY: Mapping[str, str] = {
+    "authorize-target-resolution": "factory:authorize-target-resolution",
     "authorize-change": "factory:authorize-change",
     "ratify-product-specification": "factory:ratify-product-specification",
     "ratify-architecture": "factory:ratify-architecture",

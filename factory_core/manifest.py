@@ -35,6 +35,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -46,6 +47,10 @@ class SegregationError(ValueError):
 
     Fail-closed: the ledger never appends an entry whose implementer/verifier/approver
     identities overlap (or, under a policy, whose approver is not an enrolled human)."""
+
+
+class LedgerIntegrityError(ValueError):
+    """A ledger append could not prove exclusive, intact, durable prior state."""
 
 
 # --------------------------------------------------------------------------- #
@@ -288,59 +293,28 @@ class Ledger:
     def __init__(self, path: str) -> None:
         self.path = path
 
-    def _records(self) -> list[dict[str, Any]]:
-        if not os.path.exists(self.path):
-            return []
+    @staticmethod
+    def _parse_records(fh: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        with open(self.path, encoding="utf-8") as fh:
-            for line in fh:
+        try:
+            fh.seek(0)
+            for index, line in enumerate(fh):
                 line = line.strip()
                 if line:
-                    records.append(json.loads(line))
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise LedgerIntegrityError(
+                            f"ledger entry {index} is not a JSON object"
+                        )
+                    records.append(value)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise LedgerIntegrityError(f"ledger is unreadable: {exc}") from exc
         return records
 
-    def __len__(self) -> int:
-        return len(self._records())
-
-    def head_hash(self) -> str:
-        """The content address of the most recent entry, or "" if the ledger is empty."""
-        records = self._records()
-        return records[-1]["entry_hash"] if records else ""
-
-    def append(self, entry: LedgerEntry, policy: SegregationPolicy | None = None) -> str:
-        """Append a transition entry, chaining it to the current head. Returns the new entry's
-        content address. Refuses (raises ``SegregationError``) if SoD is violated — fail closed."""
-        records = self._records()
-        entry.seq = len(records)
-        entry.prev_hash = records[-1]["entry_hash"] if records else ""
-
-        violations = entry.validate_sod(policy)
-        if violations:
-            raise SegregationError(
-                "segregation-of-duties violation; ledger append refused:\n  "
-                + "\n  ".join(violations)
-            )
-
-        addr = entry.content_digest()
-        record = {"entry_hash": addr, **entry.body()}
-        parent = os.path.dirname(self.path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, sort_keys=True) + "\n")
-        return addr
-
-    def entries(self) -> list[dict[str, Any]]:
-        """All persisted entry records (including their ``entry_hash``), in order."""
-        return self._records()
-
-    def verify_chain(self) -> tuple[bool, str]:
-        """Walk the whole chain and prove it is untampered. Checks, per entry: the stored
-        address re-derives from the body (content-address integrity), the sequence increments
-        by one, and the recorded ``prev_hash`` equals the prior entry's address (chain
-        linkage). Returns ``(ok, detail)``."""
+    @staticmethod
+    def _verify_records(records: list[dict[str, Any]]) -> tuple[bool, str]:
         prev = ""
-        for i, record in enumerate(self._records()):
+        for i, record in enumerate(records):
             stored = record.get("entry_hash", "")
             body = {k: val for k, val in record.items() if k != "entry_hash"}
             recomputed = digest_obj(body)
@@ -356,6 +330,171 @@ class Ledger:
                     f"entry {i}: broken hash-chain link (prev_hash does not match prior entry)"
                 )
             prev = stored
+        return True, "chain intact"
+
+    @staticmethod
+    def _require_regular(fd: int, *, label: str) -> None:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise LedgerIntegrityError(f"{label} must be a regular file")
+
+    @staticmethod
+    def _sync_directory(path: str) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(path, flags)
+        try:
+            if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+                raise LedgerIntegrityError("ledger parent must be a directory")
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def _records(self) -> list[dict[str, Any]]:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            fd = os.open(self.path, flags)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise LedgerIntegrityError(f"ledger is unreadable: {exc}") from exc
+        try:
+            self._require_regular(fd, label="ledger")
+            with os.fdopen(fd, encoding="utf-8") as fh:
+                fd = -1
+                return self._parse_records(fh)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def __len__(self) -> int:
+        return len(self._records())
+
+    def head_hash(self) -> str:
+        """The content address of the most recent entry, or "" if the ledger is empty."""
+        records = self._records()
+        return records[-1]["entry_hash"] if records else ""
+
+    def append(
+        self,
+        entry: LedgerEntry,
+        policy: SegregationPolicy | None = None,
+        *,
+        expected_head: str | None = None,
+    ) -> str:
+        """Append a transition entry, chaining it to the current head. Returns the new entry's
+        content address. The append is serialized by a fail-closed lock, verifies the existing
+        chain before extending it, and fsyncs both the record and a newly-created parent entry
+        before returning. A stale lock is evidence of an interrupted append and therefore blocks
+        rather than being guessed away.
+
+        Refuses (raises ``SegregationError``) if SoD is violated and
+        ``LedgerIntegrityError`` if exclusive/intact prior state cannot be proven.
+        """
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        lock_path = f"{self.path}.lock"
+        lock_flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        lock_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            lock_fd = os.open(lock_path, lock_flags, 0o600)
+        except FileExistsError as exc:
+            raise LedgerIntegrityError(
+                f"ledger append lock already exists (concurrent or interrupted append): {lock_path}"
+            ) from exc
+        except OSError as exc:
+            raise LedgerIntegrityError(f"ledger append lock could not be created: {exc}") from exc
+        lock_ready = False
+        try:
+            self._require_regular(lock_fd, label="ledger append lock")
+            os.write(lock_fd, f"pid={os.getpid()}\n".encode())
+            os.fsync(lock_fd)
+            os.close(lock_fd)
+            lock_fd = -1
+            if parent:
+                self._sync_directory(parent)
+            lock_ready = True
+
+            ledger_flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+            ledger_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            try:
+                ledger_fd = os.open(self.path, ledger_flags, 0o600)
+            except OSError as exc:
+                raise LedgerIntegrityError(f"ledger could not be opened safely: {exc}") from exc
+            try:
+                self._require_regular(ledger_fd, label="ledger")
+                with os.fdopen(ledger_fd, "r+", encoding="utf-8") as fh:
+                    ledger_fd = -1
+                    records = self._parse_records(fh)
+                    intact, detail = self._verify_records(records)
+                    if not intact:
+                        raise LedgerIntegrityError(f"refusing to extend invalid ledger: {detail}")
+                    actual_head = records[-1]["entry_hash"] if records else ""
+                    if expected_head is not None and not _const_time_eq(actual_head, expected_head):
+                        raise LedgerIntegrityError(
+                            "ledger changed after the caller derived its transition; retry from "
+                            "the new verified head"
+                        )
+                    entry.seq = len(records)
+                    entry.prev_hash = actual_head
+
+                    violations = entry.validate_sod(policy)
+                    if violations:
+                        raise SegregationError(
+                            "segregation-of-duties violation; ledger append refused:\n  "
+                            + "\n  ".join(violations)
+                        )
+
+                    addr = entry.content_digest()
+                    record = {"entry_hash": addr, **entry.body()}
+                    fh.seek(0, os.SEEK_END)
+                    fh.write(json.dumps(record, sort_keys=True) + "\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            finally:
+                if ledger_fd >= 0:
+                    os.close(ledger_fd)
+            if parent:
+                self._sync_directory(parent)
+            return addr
+        finally:
+            if lock_fd >= 0:
+                os.close(lock_fd)
+            if lock_ready:
+                try:
+                    os.unlink(lock_path)
+                    if parent:
+                        self._sync_directory(parent)
+                except FileNotFoundError:
+                    pass
+
+    def entries(self) -> list[dict[str, Any]]:
+        """All intact persisted entries; invalid chains are never returned as data."""
+
+        return self.verified_entries()
+
+    def verified_entries(self) -> list[dict[str, Any]]:
+        """Return one intact ledger snapshot or refuse it.
+
+        Callers that need both the entries and their head must not verify one file read and
+        consume a second.  This method reads once, verifies that exact snapshot, and returns
+        those same records so a derived receipt cannot accidentally combine two ledger heads.
+        """
+
+        records = self._records()
+        intact, detail = self._verify_records(records)
+        if not intact:
+            raise LedgerIntegrityError(f"ledger verification failed: {detail}")
+        return records
+
+    def verify_chain(self) -> tuple[bool, str]:
+        """Walk the whole chain and prove it is untampered. Checks, per entry: the stored
+        address re-derives from the body (content-address integrity), the sequence increments
+        by one, and the recorded ``prev_hash`` equals the prior entry's address (chain
+        linkage). Returns ``(ok, detail)``."""
+        try:
+            self.verified_entries()
+        except LedgerIntegrityError as exc:
+            return False, str(exc)
         return True, "chain intact"
 
 
