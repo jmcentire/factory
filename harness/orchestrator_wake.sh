@@ -8,7 +8,8 @@
 set -euo pipefail
 RUN="${1:?usage: orchestrator_wake.sh <run> <trigger-json>}"
 TRIGGER="${2:?trigger json}"
-H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
+H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
+ROOT="${HARNESS_RUN_ROOT:-$H/runs/$RUN}"
 D="$(cd "$(dirname "$0")" && pwd)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 PROJ="$ROOT/wakes/$TS.projection.md"
@@ -31,6 +32,8 @@ mkdir -p "$ROOT/wakes"
   python3 "$D/directive.py" active 2>/dev/null || echo "(no ledger)"
   echo "## Run"
   cat "$ROOT/run.json"
+  echo "## Harness metadata (coordination only; never target authority)"
+  cat "$ROOT/harness.json" 2>/dev/null || echo "(missing harness metadata)"
 } > "$PROJ"
 
 printf '{"ts":"%s","projection":"%s","projection_sha256":"%s"}\n' \
@@ -60,8 +63,8 @@ lanes idle; (3) authority misattribution — claims that resolve to no ledger en
 get the sentence 'I cannot find where you said this' and a stop; (4) inversion — \
 doing the opposite of the recorded ask; (5) hyper-focus — polishing what the \
 founder doesn't care about while the ask sits. Also audit cleanup debt: branches, \
-stashes, worktrees, PRs, and unstaged changes accruing beyond the run's needs — \
-accrual is almost never what the founder wants. The projection is at $PROJ (read \
+run-owned sessions, workspaces, and evidence resources lacking disposition. Never inspect \
+or judge unrelated operator branches, stashes, worktrees, PRs, or dirt. The projection is at $PROJ (read \
 it; the repo's design docs under docs/ are yours to read; pull artifacts by \
 receipt id if the projection is insufficient). You FLAG, never gate: reply with \
 the single message the Validator needs, or 'ESCALATE TO HUMAN: <why>' if only the \

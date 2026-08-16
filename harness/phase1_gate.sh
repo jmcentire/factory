@@ -13,13 +13,23 @@
 # This gate measures adequacy on the three axes v8 actually failed, and it is
 # fail-closed: a run that cannot pass it should not launch lanes.
 #
-#   usage: phase1_gate.sh <run> [--repo <path>]
+#   usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]
 #   override: PHASE1_ALLOW_GAPS=1 (receipted, countable, and visible in the verdict)
 set -uo pipefail
-RUN="${1:?usage: phase1_gate.sh <run> [--repo <path>]}"; shift || true
-REPO="$PWD"
-while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2 ;; *) shift ;; esac; done
-H="${HARNESS_DIR:-.factory}"; ROOT="$REPO/$H/runs/$RUN"; ART="$ROOT/artifacts"
+RUN="${1:?usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]}"; shift || true
+ROOT="${HARNESS_RUN_ROOT:-}"
+WORKDIR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT="$2"; shift 2 ;;
+    --workdir) WORKDIR="$2"; shift 2 ;;
+    --repo) echo "phase1: --repo is forbidden; pass checked --root/--workdir" >&2; exit 64 ;;
+    *) echo "phase1: unknown argument: $1" >&2; exit 64 ;;
+  esac
+done
+[ -n "$ROOT" ] || ROOT="${HARNESS_DIR:-.factory}/runs/$RUN"
+[ -z "$WORKDIR" ] || [ -d "$WORKDIR" ] || { echo "phase1: workdir missing: $WORKDIR" >&2; exit 64; }
+ART="$ROOT/artifacts"
 [ -d "$ART" ] || { echo "phase1: no artifacts dir at $ART" >&2; exit 64; }
 
 SPEC="$ART/product-specification.md"

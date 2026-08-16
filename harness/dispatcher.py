@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -67,7 +68,7 @@ def detect_authority_claims(text: str) -> list[str]:
 
 
 def now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
 def sh(cmd: list[str]) -> str:
@@ -99,17 +100,24 @@ class Dispatcher:
         self.promises: dict[str, tuple[float, int, int, str]] = {}
         self.last_audit = time.monotonic()
         self.repo_dirty_seen: set[str] = set()
-        self.ignition_dirty: set[str] | None = None  # baseline, set on first pass
         try:
-            cfg = json.loads((root / "run.json").read_text())
+            runtime = json.loads((root / "run.json").read_text())
+            cfg = json.loads((root / "harness.json").read_text())
         except (OSError, json.JSONDecodeError):
+            runtime = {}
             cfg = {}
-        self.repo = cfg.get("repo", ".")
+        target = runtime.get("target_state")
+        if not isinstance(target, dict):
+            target = {}
+        self.source_root = str(target.get("source_root", ""))
+        self.workdir = str(target.get("workdir", ""))
+        self.runs_root = root.parent
+        self.factory_cli = shlex.split(os.environ.get("FACTORY_CLI", "factory"))
         self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
 
     def counts(self) -> tuple[int, int]:
-        receipts = len(read_lines(pathlib.Path(".factory/receipts/chain.jsonl")))
+        receipts = len(read_lines(self.root.parent.parent / "receipts" / "chain.jsonl"))
         dispatches = len(read_lines(self.root / "dispatches.jsonl"))
         return receipts, dispatches
 
@@ -204,7 +212,7 @@ class Dispatcher:
 
     # -- checks ---------------------------------------------------------------
     def check_halt(self) -> None:
-        halt = pathlib.Path(os.environ.get("HARNESS_DIR", ".factory")) / "HALT"
+        halt = self.root.parent.parent / "HALT"
         if halt.exists() and not self.halted:
             self.halted = True
             head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"
@@ -335,41 +343,48 @@ class Dispatcher:
                     f"said this; I may have invented it', then stop",
                     wake=True,
                 )
-        # 3. Triumvirate bypass: the target repo moving with no coder lane dispatched.
-        # Compared against an IGNITION SNAPSHOT, not against clean: a run legitimately
-        # starts on a dirty tree (preflight infra, config the run itself needs), and
-        # comparing to clean re-fires on that same pre-existing dirt every cycle —
-        # batch0 burned five orchestrator wakes on exactly this (upstream finding #2).
-        # Harness bookkeeping is excluded outright: .factory/ churn is the detector
-        # watching its own notes and calling it lane work.
-        _, dispatches = self.counts()
-        dirty_now = {ln[3:] for ln in
-                     sh(["git", "-C", self.repo, "status", "--porcelain"]).splitlines()
-                     if ln.strip() and not ln[3:].startswith((".harness/", ".factory/"))}
-        if self.ignition_dirty is None:
-            self.ignition_dirty = dirty_now      # first pass establishes the baseline
-            dirty_new: set[str] = set()
-        else:
-            dirty_new = dirty_now - self.ignition_dirty
-        dirty = "\n".join(sorted(dirty_new))
-        digest = hashlib.sha256(dirty.encode()).hexdigest()
-        if dirty.strip() and digest not in self.repo_dirty_seen:
-            self.repo_dirty_seen.add(digest)
-            has_coder = any('"role":"coder"' in ln or '"role": "coder"' in ln
-                            for ln in read_lines(self.root / "dispatches.jsonl"))
-            if not has_coder:
-                self.event(
-                    "triumvirate_bypass_suspected",
-                    "paths changed since ignition with no coder lane ever dispatched, "
-                    f"excluding harness bookkeeping: {dirty[:300]} — the Validator may "
-                    "be doing lane work itself (orchestrate-never-execute, §13.5)",
-                    wake=True,
-                )
+        # 3. Execution truth. Only the run-owned source checkout is this run's subject.
+        # Operator branches, worktrees, stashes, and dirt are neither alarms nor cleanup
+        # targets. A changed source checkout is instead an exact target-state failure.
+        failure_class = "target_state_diverged"
+        try:
+            verification = subprocess.run(
+                [
+                    *self.factory_cli,
+                    "verify-target-state",
+                    "--runs",
+                    str(self.runs_root),
+                    "--run-id",
+                    self.run,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return_code = verification.returncode
+            detail = (
+                verification.stderr
+                or verification.stdout
+                or "target-state verification failed"
+            ).strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return_code = 1
+            failure_class = "target_state_verifier_unavailable"
+            detail = f"target-state verifier unavailable: {exc}"
+        if return_code != 0:
+            digest = hashlib.sha256(detail.encode()).hexdigest()
+            if digest not in self.repo_dirty_seen:
+                self.repo_dirty_seen.add(digest)
+                self.event(failure_class, detail[:300], wake=True)
+                # Unavailability still blocks: inability to prove the subject is not evidence
+                # that it stayed intact. The distinct class avoids reporting PATH or packaging
+                # failure as checkout tampering.
+                self._block("validator", failure_class, detail[:200])
 
     def check_alignment_audit(self) -> None:
         """Periodic strategic audit — the Orchestrator reads the task, design docs,
         and recent activity, and answers: is the run still pointed at what the
-        founder asked for? Cadence is run.json data, ratified at ignition."""
+        founder asked for? Cadence is harness.json data, bound at ignition."""
         if self.audit_interval_min <= 0:
             return
         if (time.monotonic() - self.last_audit) / 60 >= self.audit_interval_min:
@@ -377,8 +392,8 @@ class Dispatcher:
             self.event(
                 "alignment_audit",
                 "scheduled strategic audit: check hyper-focus drift, promises vs "
-                "receipts, unnecessary waiting, doc currency, cleanup debt "
-                "(branches/stashes/worktrees/PRs accruing)",
+                "receipts, unnecessary waiting, doc currency, and run-owned "
+                "resource disposition",
                 wake=True,
             )
 
@@ -417,13 +432,13 @@ class Dispatcher:
     def run_loop(self) -> None:
         self.event("dispatcher_start", f"interval={self.interval}s run={self.run}")
         while True:
-            cfg = self.root / "run.json"
+            cfg = self.root / "harness.json"
             try:
                 if json.loads(cfg.read_text()).get("status") == "closed":
                     self.event("dispatcher_stop", "run closed")
                     return
             except (OSError, json.JSONDecodeError):
-                self.event("dispatcher_stop", "run.json unreadable — refusing to babysit")
+                self.event("dispatcher_stop", "harness.json unreadable — refusing to babysit")
                 return
             self.check_halt()
             for w in self.windows():
@@ -444,8 +459,8 @@ def main() -> None:
     p.add_argument("--interval", type=int, default=30)
     args = p.parse_args()
     root = pathlib.Path(args.root)
-    if not (root / "run.json").exists():
-        sys.exit(f"no run.json under {root} — harness/factory.sh creates runs")
+    if not (root / "run.json").exists() or not (root / "harness.json").exists():
+        sys.exit(f"no checked run.json + harness.json under {root}")
     Dispatcher(args.run, root, args.interval).run_loop()
 
 

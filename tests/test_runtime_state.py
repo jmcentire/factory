@@ -5,12 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import SegregationError, SegregationPolicy
+from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy
 from factory_runtime.state import RunState, RunStateError, RunStore
-from tests.conftest import generation_artifacts, ratification_receipts
+from tests.conftest import (
+    generation_artifacts,
+    ratification_receipts,
+    terminalize_run_resources,
+)
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
+TARGET_SOURCE = "sha256:" + ("6" * 64)
+RESOURCE_HEAD = "sha256:" + ("7" * 64)
 PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
@@ -28,6 +34,75 @@ class _Clock:
 
 def _store(tmp_path: Path) -> RunStore:
     return RunStore(tmp_path, clock=_Clock())
+
+
+def _target_state(store: RunStore) -> dict[str, object]:
+    run_dir = (store.root / "run-1").resolve()
+    source_root = run_dir / "target" / "source"
+    return {
+        "schema_version": "factory-target-state/1",
+        "run_id": "run-1",
+        "repository_id": "factory",
+        "generation": 1,
+        "target_id": "fixture",
+        "target_manifest_digest": TARGET,
+        "target_manifest_source_digest": TARGET_SOURCE,
+        "requested_url": "https://example.test/repository.git",
+        "canonical_url": "https://example.test/repository.git",
+        "requested_ref": "refs/heads/main",
+        "observed_ref_object": "b" * 40,
+        "peeled_object": "b" * 40,
+        "resolved_commit": "b" * 40,
+        "resolved_tree": "c" * 40,
+        "control_root": str(run_dir),
+        "object_store": str(run_dir / "target" / "objects.git"),
+        "source_root": str(source_root),
+        "subpath": "",
+        "workdir": str(source_root),
+        "checkout_id": "sha256:" + ("8" * 64),
+        "observation_method": "remote",
+        "remote_freshness": "PROVED",
+        "contact_ledger_head": "sha256:" + ("9" * 64),
+        "resource_ledger_head": RESOURCE_HEAD,
+        "created_at": 100,
+    }
+
+
+def _create_resolution(store: RunStore) -> None:
+    store.create(
+        "run-1",
+        target_digest=TARGET,
+        actor="validator",
+        artifact_digests={
+            "target-manifest-source": TARGET_SOURCE,
+            "target-resolution-request": "sha256:" + ("a" * 64),
+            "target-resolution-receipt": "sha256:" + ("b" * 64),
+            "authority-genesis": "sha256:" + ("c" * 64),
+        },
+        payload={"authority_receipt_nonces": ["resolution-nonce"]},
+    )
+
+
+def _create_intake(store: RunStore) -> None:
+    _create_resolution(store)
+    store.record_target_state(
+        "run-1",
+        target_state=_target_state(store),
+        actor="target-resolver",
+        artifact_digests={"resource-ledger": RESOURCE_HEAD},
+    )
+    store.authorize_intake(
+        "run-1",
+        source_digest=SOURCE,
+        actor="validator",
+        artifact_digests={
+            "execution-request": "sha256:" + ("d" * 64),
+            "execution-receipt": "sha256:" + ("e" * 64),
+            "authority-genesis": "sha256:" + ("c" * 64),
+        },
+        payload={"authority_receipt_nonces": ["execution-nonce"]},
+        approver_identity="human-approver",
+    )
 
 
 def _ratify_all(store: RunStore) -> None:
@@ -72,21 +147,106 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
 
 def test_create_and_rederive_run_from_authoritative_ledger(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    created = store.create(
-        "run-1",
-        target_digest=TARGET,
-        source_digest=SOURCE,
-        actor="validator",
-    )
+    _create_intake(store)
+    created = store.load("run-1")
 
     assert created.state == RunState.INTAKE
     assert store.load("run-1") == created
     assert (tmp_path / "run-1" / "ledger.jsonl").is_file()
 
 
+def test_stage_r_alone_has_no_source_or_checkout_and_cannot_skip_resolution(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_resolution(store)
+    projection = store.load("run-1")
+    assert projection.state == RunState.TARGET_RESOLUTION_AUTHORIZED
+    assert projection.source_digest == ""
+    assert projection.target_state_digest == ""
+    assert projection.target_state == {}
+
+    with pytest.raises(RunStateError, match="transition refused"):
+        store.authorize_intake(
+            "run-1",
+            source_digest=SOURCE,
+            actor="validator",
+            artifact_digests={
+                "execution-request": "sha256:" + ("d" * 64),
+                "execution-receipt": "sha256:" + ("e" * 64),
+            },
+            payload={"authority_receipt_nonces": ["execution-nonce"]},
+            approver_identity="human-approver",
+        )
+
+
+def test_stage_e_cannot_switch_the_stage_r_authority_genesis(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_resolution(store)
+    store.record_target_state(
+        "run-1",
+        target_state=_target_state(store),
+        actor="target-resolver",
+        artifact_digests={"resource-ledger": RESOURCE_HEAD},
+    )
+
+    with pytest.raises(RunStateError, match="authority genesis differs"):
+        store.authorize_intake(
+            "run-1",
+            source_digest=SOURCE,
+            actor="validator",
+            artifact_digests={
+                "execution-request": "sha256:" + ("d" * 64),
+                "execution-receipt": "sha256:" + ("e" * 64),
+                "authority-genesis": "sha256:" + ("f" * 64),
+            },
+            payload={"authority_receipt_nonces": ["execution-nonce"]},
+            approver_identity="human-approver",
+        )
+
+
+@pytest.mark.parametrize("schema_version", ("factory-run/1", "factory-run/2"))
+def test_legacy_runs_verify_and_rebuild_but_cannot_advance(
+    tmp_path: Path,
+    schema_version: str,
+) -> None:
+    store = _store(tmp_path)
+    artifact_digests: dict[str, object] = {
+        "target": TARGET,
+        "source": SOURCE,
+        "phase_artifacts": {},
+    }
+    if schema_version == "factory-run/2":
+        artifact_digests["generation_artifacts"] = {}
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state="",
+            to_state=RunState.INTAKE,
+            artifact_digests=artifact_digests,
+            payload={"run_schema_version": schema_version},
+            actor="validator",
+            created_at="100",
+        )
+    )
+    projection = store.rebuild_projection("run-1")
+    assert store.load("run-1") == projection
+    assert projection.schema_version == schema_version
+    with pytest.raises(RunStateError, match="legacy run schema cannot advance"):
+        store.transition(
+            "run-1",
+            RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            actor="validator",
+            artifact_digests={
+                "product-specification": PRODUCT,
+                **ratification_receipts("product-specification"),
+            },
+        )
+
+
 def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     _ratify_all(store)
 
     _start_build(store)
@@ -105,6 +265,7 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         approver_identity="human-approver",
     )
     store.transition("run-1", RunState.CI, actor="validator")
+    terminalize_run_resources(store, run_id="run-1")
     store.transition(
         "run-1",
         RunState.PROMOTED,
@@ -122,9 +283,82 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     }
 
 
+def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> None:
+    from factory_runtime.resources import ResourceLedger
+
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    for state in (RunState.VALIDATING, RunState.PREVIEW):
+        store.transition("run-1", state, actor="validator")
+    store.transition(
+        "run-1",
+        RunState.HUMAN_APPROVED,
+        actor="validator",
+        artifact_digests={"candidate": CANDIDATE},
+        implementer_identity="coder",
+        approver_identity="human-approver",
+    )
+    store.transition("run-1", RunState.CI, actor="validator")
+    ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
+        generation=1,
+        resource_id="unfinished-workspace",
+        resource_type="lane-workspace",
+        identifier=str(tmp_path / "run-1" / "workspaces" / "coder"),
+        creator_action="test",
+        ownership="run-owned",
+        baseline={"absent_at_plan": True},
+        disposition={},
+        status="planned",
+        evidence_digests={},
+        actor="test",
+    )
+
+    with pytest.raises(RunStateError, match="unfinished-workspace"):
+        store.transition(
+            "run-1",
+            RunState.PROMOTED,
+            actor="validator",
+            artifact_digests={"promoted-artifact": CANDIDATE},
+        )
+
+    assert store.load("run-1").state == RunState.CI
+    assert not (tmp_path / "run-1" / "resources.seal.json").exists()
+
+
+def test_transition_refuses_a_stale_lifecycle_head_without_appending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition("run-1", RunState.VALIDATING, actor="validator")
+    stale = store.load("run-1")
+    RunStore(tmp_path, clock=_Clock()).transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="other-validator",
+    )
+    monkeypatch.setattr(store, "load", lambda _run_id: stale)
+
+    with pytest.raises(RunStateError, match="run changed"):
+        store.transition(
+            "run-1",
+            RunState.BUILDING,
+            actor="stale-validator",
+            artifact_digests=generation_artifacts("stale-retry"),
+            payload={"attempt_number": 2, "attempt_limit": 2},
+        )
+
+    assert RunStore(tmp_path, clock=_Clock()).load("run-1").state == RunState.PREVIEW
+
+
 def test_skipping_a_phase_is_refused(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
 
     with pytest.raises(RunStateError, match="transition refused"):
         store.transition("run-1", RunState.BUILDING, actor="validator")
@@ -132,7 +366,7 @@ def test_skipping_a_phase_is_refused(tmp_path: Path) -> None:
 
 def test_building_requires_the_complete_generation_readiness_tuple(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     _ratify_all(store)
     incomplete = generation_artifacts()
     incomplete.pop("build-plan-source")
@@ -149,7 +383,7 @@ def test_building_requires_the_complete_generation_readiness_tuple(tmp_path: Pat
 
 def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     _ratify_all(store)
     _start_build(store, attempt=1, limit=2)
     first = store.transition("run-1", RunState.BLOCKED, actor="validator")
@@ -170,7 +404,7 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
 
 def test_ratified_state_requires_the_corresponding_artifact(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
 
     with pytest.raises(RunStateError, match="requires artifact digest"):
         store.transition(
@@ -182,7 +416,7 @@ def test_ratified_state_requires_the_corresponding_artifact(tmp_path: Path) -> N
 
 def test_tampered_projection_is_not_authority(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     path = tmp_path / "run-1" / "run.json"
     projection = json.loads(path.read_text())
     projection["state"] = RunState.PROMOTED
@@ -196,11 +430,13 @@ def test_tampered_projection_is_not_authority(tmp_path: Path) -> None:
 
 def test_tampered_ledger_blocks_even_if_projection_is_green(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     path = tmp_path / "run-1" / "ledger.jsonl"
-    record = json.loads(path.read_text())
+    lines = path.read_text().splitlines()
+    record = json.loads(lines[-1])
     record["to_state"] = RunState.PROMOTED
-    path.write_text(json.dumps(record) + "\n")
+    lines[-1] = json.dumps(record)
+    path.write_text("\n".join(lines) + "\n")
 
     with pytest.raises(RunStateError, match="ledger verification failed"):
         store.load("run-1")
@@ -208,7 +444,7 @@ def test_tampered_ledger_blocks_even_if_projection_is_green(tmp_path: Path) -> N
 
 def test_specification_defect_can_only_resume_through_a_ratified_phase(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     _ratify_all(store)
     _start_build(store)
     projection = store.transition(
@@ -243,7 +479,7 @@ def test_specification_defect_can_only_resume_through_a_ratified_phase(tmp_path:
 
 def test_specification_defect_requires_affected_phase(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     _ratify_all(store)
     _start_build(store)
 
@@ -253,7 +489,7 @@ def test_specification_defect_requires_affected_phase(tmp_path: Path) -> None:
 
 def test_sod_overlap_is_refused_at_transition_write(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    _create_intake(store)
     policy = SegregationPolicy(
         human_ids=frozenset({"human-1"}),
         excluded_service_identities=frozenset({"agent-*"}),
@@ -282,21 +518,11 @@ def test_run_store_refuses_symlinked_run_or_ledger_paths(tmp_path: Path) -> None
     store = _store(tmp_path)
 
     with pytest.raises(RunStateError, match="run directory cannot be a symlink"):
-        store.create(
-            "run-1",
-            target_digest=TARGET,
-            source_digest=SOURCE,
-            actor="validator",
-        )
+        _create_resolution(store)
 
     (tmp_path / "run-1").unlink()
     run_dir = tmp_path / "run-1"
     run_dir.mkdir()
     (run_dir / "ledger.jsonl").symlink_to(tmp_path / "missing-ledger")
     with pytest.raises(RunStateError, match="run ledger cannot be a symlink"):
-        store.create(
-            "run-1",
-            target_digest=TARGET,
-            source_digest=SOURCE,
-            actor="validator",
-        )
+        _create_resolution(store)

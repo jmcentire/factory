@@ -21,7 +21,7 @@ import pytest
 
 from factory_core.manifest import LedgerEntry
 from factory_runtime.state import RunState, RunStateError, RunStore
-from tests.conftest import ratification_receipts
+from tests.conftest import create_intake_run, ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -56,7 +56,12 @@ def _receipts(phase: str, *, human: str = "", validator: str = ""):
 
 def _store(tmp_path: Path) -> RunStore:
     store = RunStore(tmp_path, clock=_Clock())
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    create_intake_run(
+        store,
+        run_id="run-1",
+        target_digest=TARGET,
+        source_digest=SOURCE,
+    )
     return store
 
 
@@ -69,6 +74,16 @@ def _ratify(store: RunStore, **overrides: str) -> None:
         actor="validator",
         artifact_digests=digests,
     )
+
+
+def _subject(store: RunStore) -> dict[str, object]:
+    projection = store.load("run-1")
+    return {
+        "target": projection.target_digest,
+        "target-state": projection.target_state_digest,
+        "source": projection.source_digest,
+        "generation_artifacts": dict(projection.generation_artifact_digests),
+    }
 
 
 def test_ratification_with_both_receipts_succeeds(tmp_path: Path) -> None:
@@ -170,11 +185,10 @@ def test_derive_refuses_a_ratification_entry_appended_without_receipts(tmp_path:
             capability_id="run-1",
             from_state=RunState.INTAKE,
             to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
-            artifact_digests={
-                "product-specification": PRODUCT,  # no receipts: transition() would refuse this
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": PRODUCT},
+                artifact_digests={
+                    "product-specification": PRODUCT,  # no receipts: transition() would refuse this
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": PRODUCT},
             },
             actor="validator",
             created_at="101",
@@ -193,11 +207,10 @@ def test_derive_refuses_a_ratification_entry_whose_receipts_collapse(tmp_path: P
             to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
             artifact_digests={
                 "product-specification": PRODUCT,
-                "product-specification:human-receipt": OTHER_RECEIPT,
-                "product-specification:validator-receipt": OTHER_RECEIPT,
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": PRODUCT},
+                    "product-specification:human-receipt": OTHER_RECEIPT,
+                    "product-specification:validator-receipt": OTHER_RECEIPT,
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": PRODUCT},
             },
             actor="validator",
             created_at="101",
@@ -267,11 +280,12 @@ def test_derive_refuses_a_ledger_that_reuses_a_receipt(tmp_path: Path) -> None:
             to_state=RunState.ARCHITECTURE_RATIFIED,
             artifact_digests={
                 "architecture": ARCHITECTURE,
-                "architecture:human-receipt": reused["product-specification:human-receipt"],
-                "architecture:validator-receipt": reused["product-specification:validator-receipt"],
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {
+                    "architecture:human-receipt": reused["product-specification:human-receipt"],
+                    "architecture:validator-receipt": reused[
+                        "product-specification:validator-receipt"
+                    ],
+                    **_subject(store),
+                    "phase_artifacts": {
                     "product-specification": PRODUCT,
                     "architecture": ARCHITECTURE,
                 },
@@ -301,11 +315,10 @@ def test_derive_refuses_a_ratification_entry_that_omits_the_artifact_digest(
             from_state=RunState.INTAKE,
             to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
             artifact_digests={
-                # no top-level "product-specification": only the phase map carries it
-                **receipts,
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": PRODUCT},
+                    # no top-level "product-specification": only the phase map carries it
+                    **receipts,
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": PRODUCT},
             },
             actor="validator",
             created_at="101",
@@ -326,11 +339,10 @@ def test_derive_refuses_an_entry_that_disagrees_with_itself_about_the_artifact(
             from_state=RunState.INTAKE,
             to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
             artifact_digests={
-                "product-specification": PRODUCT,
-                **_receipts("product-specification"),
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": AMENDED},
+                    "product-specification": PRODUCT,
+                    **_receipts("product-specification"),
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": AMENDED},
             },
             actor="validator",
             created_at="101",
@@ -351,11 +363,10 @@ def test_a_whitespace_padded_receipt_digest_is_refused(tmp_path: Path) -> None:
             to_state=RunState.PRODUCT_SPECIFICATION_RATIFIED,
             artifact_digests={
                 "product-specification": PRODUCT,
-                "product-specification:human-receipt": padded,
-                "product-specification:validator-receipt": VALIDATOR_RECEIPT,
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": PRODUCT},
+                    "product-specification:human-receipt": padded,
+                    "product-specification:validator-receipt": VALIDATOR_RECEIPT,
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": PRODUCT},
             },
             actor="validator",
             created_at="101",
@@ -421,11 +432,10 @@ def test_derive_refuses_a_receipt_key_that_ratifies_nothing(tmp_path: Path) -> N
             artifact_digests={
                 "product-specification": PRODUCT,
                 **_receipts("product-specification"),
-                # parked: spends the architecture receipts one entry early
-                **_receipts("architecture"),
-                "target": TARGET,
-                "source": SOURCE,
-                "phase_artifacts": {"product-specification": PRODUCT},
+                    # parked: spends the architecture receipts one entry early
+                    **_receipts("architecture"),
+                    **_subject(store),
+                    "phase_artifacts": {"product-specification": PRODUCT},
             },
             actor="validator",
             created_at="101",

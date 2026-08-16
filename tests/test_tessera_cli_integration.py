@@ -44,6 +44,7 @@ from factory_runtime.generation import build_input_document, verify_prepared_gen
 from factory_runtime.orchestrator import FactoryOrchestrator, OrchestrationError
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState
+from factory_runtime.target_state import normalize_repository_url
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 from factory_runtime.workflow import FactoryWorkflow
 
@@ -148,6 +149,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                 "kind": "human",
                 "public_key": root_public_key,
                 "capabilities": [
+                    "factory:authorize-target-resolution",
                     "factory:authorize-change",
                     "factory:ratify-product-specification",
                     "factory:ratify-architecture",
@@ -181,7 +183,11 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         ],
         "bootstrap": {
             "enabled": True,
-            "scope": ["authorize-change", "activate-policy"],
+            "scope": [
+                "authorize-target-resolution",
+                "authorize-change",
+                "activate-policy",
+            ],
             "deactivates_when": "the first replacement policy activation is consumed",
         },
         "issued_at": now,
@@ -247,15 +253,101 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         ),
         encoding="utf-8",
     )
-    target_digest = load_target_manifest(target_path).content_digest
+    manifest = load_target_manifest(target_path)
+    target_digest = manifest.content_digest
     verbatim = "Build the synthetic authorized Factory change."
     source_digest = digest_bytes(verbatim.encode())
+
+    operator_source = tmp_path / "operator-source"
+    subprocess.run(
+        ["git", "init", "-b", "main", str(operator_source)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(operator_source), "config", "user.email", "factory@example.test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(operator_source), "config", "user.name", "Factory Test"],
+        check=True,
+    )
+    (operator_source / "README.md").write_text("synthetic target\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(operator_source), "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", str(operator_source), "commit", "-m", "synthetic target"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(operator_source),
+            "remote",
+            "add",
+            "origin",
+            str(manifest.repo["url"]),
+        ],
+        check=True,
+    )
+
+    resolution_request = {
+        "schema_version": "factory-target-resolution-request/1",
+        "request_id": "synthetic-resolution",
+        "run_id": "synthetic-run",
+        "repository_id": "synthetic-factory-target",
+        "generation": 1,
+        "target_manifest_digest": target_digest,
+        "target_manifest_source_digest": manifest.source_digest,
+        "normalized_url": normalize_repository_url(str(manifest.repo["url"])),
+        "requested_ref": str(manifest.repo["ref"]),
+        "subpath": "",
+        "allowed_contact_operations": ["git-local-object-read"],
+        "lane_execution": False,
+        "nonce": "synthetic-resolution-nonce",
+        "created_at": now,
+        "expires_at": now + 600,
+    }
+    resolution_request_path = tmp_path / "resolution-request.json"
+    resolution_request_path.write_text(json.dumps(resolution_request), encoding="utf-8")
+    resolution_receipt = {
+        "schema_version": "factory-authority-receipt/1",
+        "receipt_id": "resolve-synthetic",
+        "run_id": "synthetic-run",
+        "repository_id": "synthetic-factory-target",
+        "action": "authorize-target-resolution",
+        "subject_digest": digest_obj(resolution_request),
+        "signer_identity": "human:founder",
+        "capabilities": ["factory:authorize-target-resolution"],
+        "issued_at": now,
+        "expires_at": now + 600,
+        "nonce": "synthetic-resolution-nonce",
+    }
+    resolution_receipt_path = tmp_path / "resolution.tessera.json"
+    cli.wrap_json(
+        resolution_receipt,
+        kind="factory-authority-receipt",
+        key_path=root_key,
+        output_path=resolution_receipt_path,
+    )
+    workflow.authorize_target_resolution(
+        "synthetic-run",
+        manifest_path=target_path,
+        request_path=resolution_request_path,
+        receipt_path=resolution_receipt_path,
+    )
+    resolved = workflow.resolve_target("synthetic-run", object_source=operator_source)
+
     request = {
-        "schema_version": "factory-authorization-request/1",
+        "schema_version": "factory-execution-request/1",
         "request_id": "synthetic-request",
         "run_id": "synthetic-run",
         "repository_id": "synthetic-factory-target",
-        "target_digest": target_digest,
+        "generation": resolved.generation,
+        "target_manifest_digest": target_digest,
+        "target_state_digest": resolved.target_state_digest,
+        "resolved_commit": resolved.target_state["resolved_commit"],
         "proposed_by": "human:founder",
         "verbatim_request": verbatim,
         "verbatim_request_digest": source_digest,
@@ -293,7 +385,6 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     workflow.authorize_change(
         "synthetic-run",
-        target_digest=target_digest,
         request_path=request_path,
         receipt_path=authorize_receipt_path,
     )
@@ -388,7 +479,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "architecture",
         "operational-maturity",
     }
-    assert len(workflow.store.consumed_authority_nonces("synthetic-run")) == 7
+    assert len(workflow.store.consumed_authority_nonces("synthetic-run")) == 8
 
     product = phase_artifacts["product-specification"]
     architecture = phase_artifacts["architecture"]

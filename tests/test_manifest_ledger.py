@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 from factory_core.manifest import (
     Ledger,
     LedgerEntry,
+    LedgerIntegrityError,
     SegregationError,
     SegregationPolicy,
     digest_obj,
@@ -92,6 +94,20 @@ def test_empty_ledger_is_trivially_intact(tmp_path) -> None:
     assert ok
 
 
+def test_ledger_refuses_symlink_and_non_regular_subjects(tmp_path) -> None:
+    target = tmp_path / "target.jsonl"
+    target.write_text("", encoding="utf-8")
+    symlink = tmp_path / "symlink.jsonl"
+    symlink.symlink_to(target)
+    with pytest.raises(LedgerIntegrityError, match="unreadable"):
+        Ledger(str(symlink)).entries()
+
+    fifo = tmp_path / "ledger.fifo"
+    os.mkfifo(fifo)
+    with pytest.raises(LedgerIntegrityError, match="regular file"):
+        Ledger(str(fifo)).entries()
+
+
 # --------------------------------------------------------------------------- #
 # Tamper detection
 # --------------------------------------------------------------------------- #
@@ -114,6 +130,8 @@ def test_tamper_breaks_the_chain(tmp_path) -> None:
     ok, detail = ledger.verify_chain()
     assert not ok, "tampering must be detected"
     assert "entry 1" in detail
+    with pytest.raises(LedgerIntegrityError, match="content-address mismatch"):
+        ledger.entries()
 
 
 def test_tampering_with_stored_hash_breaks_the_next_link(tmp_path) -> None:

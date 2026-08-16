@@ -1,8 +1,9 @@
 # harness/ — the run's externalized functions
 
-> Status: scripts land per `docs/HARNESS.md` (unratified proposal, adoption steps 1–3)
-> plus the tmux layer binding the founder workflow. Deterministic pieces gate;
-> everything model-shaped flags. Remove the model — all of this still stands.
+> Status: execution-truth PR1. Runtime Stage R/E authority selects and freezes the exact target;
+> the tmux layer only consumes that target and records run-owned resources. Interactive launcher
+> qualification, Seatbelt routing, canaries, and budget enforcement remain `UNQUALIFIED_PR2`.
+> See `docs/EXECUTION-TRUTH.md` and `docs/HARNESS.md`.
 
 ## The two agent seats (founder-confirmed 2026-08-09, this session; enters the
 ## ledger verbatim at the first ceremony)
@@ -26,26 +27,30 @@
 
 | Founder workflow step | Mechanism |
 |---|---|
-| 1. Fire up the factory | `harness/factory.sh <run> "<task>"` — pins base SHA, records the task verbatim + digest, grounds (control 7), opens tmux session `<run>` with windows `ctl` (dispatcher) and `validator`. N factories = N runs; run state lives under `.factory/runs/<run>/`. |
+| 0. Authorize exact execution | Runtime Stage R authorizes bounded target resolution; `resolve-target` creates the exact run-owned target-state; distinct Stage E authorizes the verbatim request against that state. No tmux or lane exists yet. |
+| 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens `ctl` and `validator` in the exact target workdir. |
 | 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Artifacts are settled one behavior-ledger row at a time and land content-addressed in `.factory/runs/<run>/artifacts/` with `.digest` files. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
 | 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` — refuses without the full authority tuple ("no oracle yet"). Lanes get asymmetric projections via `projection.sh`, never full clones. The orchestrator is two seats: `dispatcher.py` (resident script, window `ctl`, pays no tokens) + `/orchestrate` woken by `orchestrator_wake.sh` on triggers only. |
 | 8. Orchestrator tracks tasks, takes minutes | `dispatcher.py` snapshots the human↔Validator window into `minutes/` — labeled `[INFERRED]`, non-authoritative, an index into the directive ledger, never the record. |
 | 9. Validator launches/injects via tmux; active poll | Validator injects through `inject.sh` (topology-enforced, receipted; coder-bound results pass the bare pass/fail filter). The *dispatcher* owns the poll — an agent-owned poll cadence is the postmortem's named disease. |
 | Stalls / lulls | Dispatcher stall FSM: lane-tending metric, confirm-before-prod, `idle-awaiting-handoff` never prodded, repo-diff metrics forbidden. Prods go to the Validator, not past it. |
-| Done-ness | `endgame.sh <run> <final-sha> [lane-branches...]` — fresh checkout, `make ship` + isolation proof, composition merge of all lane branches, live proof (below), hygiene sweep (stash/worktree/branch/PR/untracked), verdict receipt. Run by the Validator; demanded by the run, not by mood. |
+| Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then routes to Gate L. It never sweeps ambient branches, stashes, worktrees, PRs, or dirt. |
 | Click-and-test proof | `proof.sh <run>` reads `.factory/target.conf` (see `target.conf.example`): a declared provision script, real entry-point probes (HTTP hits, CLI runs, out-of-band DB checks, screenshot/video captures — each receipted, outputs kept as evidence), access instructions for the human, teardown always. No target.conf = a **declared gap**, never a quiet pass. |
 | Postmortem | `postmortem.py --root .factory/runs/<run>` — derives every number from recorded artifacts or prints UNDERIVED; per-agent feedback collected by the Validator, coordination-vs-build split for the next iteration. |
 
 ## Genericity: the target is data
 
-The scripts here are generic machinery. Every root they act on is **per-project
-data living with the target**, never with the factory checkout:
+The scripts here are generic machinery. The target is runtime data; core code never imports or
+names a consuming project:
 
-- `--repo <path>` on `factory.sh` names the target (default: the invoking
-  directory's repo). Run state lands in the **target's** `.factory/runs/<run>/`.
-- The target carries its own `.factory/` (schedule.registry, reconcile.d/,
-  projection.conf, target.conf) and its own `DIRECTIVES/` ledger repo.
+- A signed target-resolution request names one credential-free URL, exact requested ref, and
+  subpath. Runtime produces a fresh run-owned object store and detached checkout; `factory.sh`
+  has no repository, ref, SHA, or cwd fallback.
+- `--runs <path>` names the control plane. Runtime authority, retained target-state, resource
+  records, harness coordination, and evidence live under `<runs>/<run>/`; source bytes do not.
+- Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
+  from the immutable target workdir after target-state verification.
 - Env seams: `HARNESS_DIR`, `DIRECTIVE_LEDGER`, `HARNESS_SECRETS`,
   `HARNESS_PROJECTION_CONF`, `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`.
 - The founder's hardware signing key is per-**founder**, not per-project: one key
@@ -58,7 +63,7 @@ data living with the target**, never with the factory checkout:
 - `directive.py` — control 1/1a: verbatim hash-chained ledger, qualifier-preserving
   supersession, provisional side chain, `verify --sigs`.
 - `lane_env.sh` — capability = environment: `env -i` from a manifest; refuses HALT
-  and stale grounding.
+  and stale grounding. Live dispatch does not yet route through it; that is a named PR2 gap.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
 - `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.

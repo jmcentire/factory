@@ -25,8 +25,15 @@ from pathlib import Path
 
 import pytest
 
+from factory_core.manifest import LedgerEntry
+from factory_runtime.resources import ResourceLedger
 from factory_runtime.state import _ANCHOR_STATE_KEYS, RunState, RunStateError, RunStore
-from tests.conftest import generation_artifacts, ratification_receipts
+from tests.conftest import (
+    create_intake_run,
+    generation_artifacts,
+    ratification_receipts,
+    terminalize_run_resources,
+)
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -49,7 +56,12 @@ class _Clock:
 def _run_at_preview(tmp_path: Path) -> RunStore:
     """Drive a run to `preview`, which is as far as the machinery reached before slice 5."""
     store = RunStore(tmp_path, clock=_Clock())
-    store.create("run-1", target_digest=TARGET, source_digest=SOURCE, actor="validator")
+    create_intake_run(
+        store,
+        run_id="run-1",
+        target_digest=TARGET,
+        source_digest=SOURCE,
+    )
     for state, key, digest in (
         (RunState.PRODUCT_SPECIFICATION_RATIFIED, "product-specification", PRODUCT),
         (RunState.ARCHITECTURE_RATIFIED, "architecture", ARCHITECTURE),
@@ -150,6 +162,7 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
     store.transition("run-1", RunState.CI, actor="validator")
+    terminalize_run_resources(store, run_id="run-1")
     projection = store.transition(
         "run-1",
         RunState.PROMOTED,
@@ -161,6 +174,74 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
     reloaded = RunStore(tmp_path, clock=_Clock()).load("run-1")
     assert reloaded.state == RunState.PROMOTED
     assert reloaded.approved_candidate_digest == CANDIDATE
+    latest = store.current_artifact_digests("run-1")
+    assert latest["resource-ledger"].startswith("sha256:")
+    assert latest["resource-ledger-seal"].startswith("sha256:")
+
+
+def test_direct_promoted_ledger_append_cannot_bypass_resource_close(tmp_path: Path) -> None:
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    store.transition("run-1", RunState.CI, actor="validator")
+    ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
+        generation=1,
+        resource_id="unfinished-workspace",
+        resource_type="lane-workspace",
+        identifier=str(tmp_path / "run-1" / "workspaces" / "coder"),
+        creator_action="test",
+        ownership="run-owned",
+        baseline={"absent_at_plan": True},
+        disposition={},
+        status="planned",
+        evidence_digests={},
+        actor="test",
+    )
+    artifacts = dict(store.current_artifact_digests("run-1"))
+    artifacts.update(
+        {
+            "promoted-artifact": CANDIDATE,
+            "resource-ledger": "sha256:" + ("c" * 64),
+            "resource-ledger-seal": "sha256:" + ("d" * 64),
+        }
+    )
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state=RunState.CI,
+            to_state=RunState.PROMOTED,
+            artifact_digests=artifacts,
+            payload={},
+            actor="route-around",
+            created_at="101",
+        )
+    )
+
+    with pytest.raises(RunStateError, match="terminal resource seal"):
+        store.rebuild_projection("run-1")
+
+
+def test_crash_after_resource_seal_is_a_promotion_only_resumable_state(
+    tmp_path: Path,
+) -> None:
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    store.transition("run-1", RunState.CI, actor="validator")
+    terminalize_run_resources(store, run_id="run-1")
+    ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).seal_for_close(
+        actor="gate-l"
+    )
+
+    assert store.load("run-1").state == RunState.CI
+    with pytest.raises(RunStateError, match="only an idempotent promotion retry"):
+        store.transition("run-1", RunState.BLOCKED, actor="validator")
+
+    promoted = store.transition(
+        "run-1",
+        RunState.PROMOTED,
+        actor="validator",
+        artifact_digests={"promoted-artifact": CANDIDATE},
+    )
+    assert promoted.state == RunState.PROMOTED
 
 
 def test_specification_defect_invalidates_prior_candidate_approval(tmp_path: Path) -> None:
@@ -207,7 +288,8 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
     from factory_core.manifest import LedgerEntry
 
     store = _run_at_preview(tmp_path)
-    generation = dict(store.load("run-1").generation_artifact_digests)
+    current = store.load("run-1")
+    generation = dict(current.generation_artifact_digests)
     store._ledger("run-1").append(
         LedgerEntry(
             capability_id="run-1",
@@ -218,6 +300,7 @@ def test_derive_refuses_an_approval_entry_with_collapsed_identities(tmp_path: Pa
             artifact_digests={
                 "candidate": CANDIDATE,
                 "target": TARGET,
+                "target-state": current.target_state_digest,
                 "source": SOURCE,
                 "phase_artifacts": {
                     "product-specification": PRODUCT,
@@ -253,7 +336,8 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
 
     store = _run_at_preview(tmp_path)
     anchor_key = _ANCHOR_STATE_KEYS[anchor_state]
-    generation = dict(store.load("run-1").generation_artifact_digests)
+    current = store.load("run-1")
+    generation = dict(current.generation_artifact_digests)
     phase_artifacts = {
         "product-specification": PRODUCT,
         "architecture": ARCHITECTURE,
@@ -276,6 +360,7 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
             artifact_digests={
                 # no `anchor_key`: that is the omission under test
                 "target": TARGET,
+                "target-state": current.target_state_digest,
                 "source": SOURCE,
                 "phase_artifacts": phase_artifacts,
                 "generation_artifacts": generation,

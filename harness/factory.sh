@@ -1,98 +1,182 @@
 #!/usr/bin/env bash
-# factory.sh — ignition: one command, one task, one factory. N factories = N runs.
-#   harness/factory.sh <run-name> "<task text>"            (or a path to a task file)
-#   harness/factory.sh <run-name> <task> --target-manifest .factory/target.toml --budget 100
-# Creates .factory/runs/<run-name>/, pins the base SHA, records the task VERBATIM,
-# grounds the session, and opens the tmux session:
-#   window ctl        — the dispatcher (deterministic watcher; pays no model tokens)
-#   window validator  — the Validator lane (maximal context; the human talks here)
-# Coder/Tester windows are opened later by dispatch_lane.sh, only downstream of the
-# three signed phase artifacts. The orchestrator-agent is invoked, not resident.
+# Ignite coordination for an already Stage-E-authorized Factory run. Target selection belongs
+# exclusively to factory_runtime; this script may consume target-state, never invent it.
 set -euo pipefail
-RUN="${1:?usage: factory.sh <run-name> <task-text-or-file> [--repo <path>] [--target-manifest <path>] [--budget <usd>] [--audit-interval <min>]}"
-TASK_IN="${2:?task text or file}"; shift 2
-BUDGET=""; AUDIT_MIN="45"; REPO_ARG=""; TARGET_MANIFEST_ARG=""
-while [ $# -gt 0 ]; do case "$1" in
-  --repo) REPO_ARG="$2"; shift 2 ;;
-  --target-manifest) TARGET_MANIFEST_ARG="$2"; shift 2 ;;
-  --budget) BUDGET="$2"; shift 2 ;;
-  --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
-  *) echo "unknown arg: $1" >&2; exit 64 ;;
-esac; done
 
-D="$(cd "$(dirname "$0")" && pwd)"
-# The factory is generic; the TARGET is data. All run state, config, and authority
-# roots (.factory/, DIRECTIVES/) live with the target project, never with the
-# factory checkout. Default target: the invoking directory's repo.
-REPO="${REPO_ARG:-$PWD}"
-[ -d "$REPO" ] || { echo "target repo does not exist: $REPO" >&2; exit 64; }
-REPO="$(cd "$REPO" && pwd)"
-git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-  echo "target is not a git repository: $REPO — the factory is generic; the target" >&2
-  echo "is data. Point --repo at the project this run builds." >&2
-  exit 64
-}
-cd "$REPO"
-H="${HARNESS_DIR:-.factory}"; ROOT="$H/runs/$RUN"
-[ -e "$ROOT" ] && { echo "run '$RUN' already exists at $ROOT" >&2; exit 65; }
-tmux has-session -t "$RUN" 2>/dev/null && { echo "tmux session '$RUN' already live" >&2; exit 65; }
+RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>]}"
+TASK_IN="${2:?verbatim task text or file}"
+shift 2
+RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
+BUDGET=""
+AUDIT_MIN="45"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --runs) RUNS_ARG="$2"; shift 2 ;;
+    --budget) BUDGET="$2"; shift 2 ;;
+    --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
+    --repo|--target-manifest|--sha)
+      echo "factory: $1 is forbidden; authorize and resolve the exact target through Stage R/E" >&2
+      exit 64 ;;
+    *) echo "factory: unknown argument: $1" >&2; exit 64 ;;
+  esac
+done
 
-# The target pack is an operational ABI, not optional context. Validate it through the same
-# package boundary the runtime uses before creating any run state, then retain the exact bytes
-# under the run. A missing or malformed pack is AUTHORITY_BLOCKED, never a generic run with a
-# target name supplied later in prose.
-TARGET_MANIFEST="${TARGET_MANIFEST_ARG:-$REPO/$H/target.toml}"
-[ -f "$TARGET_MANIFEST" ] || {
-  echo "target manifest is required: $TARGET_MANIFEST" >&2
-  echo "provide --target-manifest with a valid factory-target-manifest/1 descriptor" >&2
-  exit 66
-}
+D="$(cd "$(dirname "$0")" && pwd -P)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
-if ! $FACTORY_CLI inspect-target --manifest "$TARGET_MANIFEST" >/dev/null; then
-  echo "target manifest failed the Factory operational-ABI gate: $TARGET_MANIFEST" >&2
+# shellcheck source=harness/run_context.sh
+source "$D/run_context.sh"
+factory_load_context "$RUN" "$RUNS_ARG"
+ROOT="$FACTORY_CONTROL_ROOT"
+
+case "$FACTORY_RUN_STATE" in
+  promoted|blocked)
+    echo "factory: run $RUN is $FACTORY_RUN_STATE and cannot be ignited" >&2
+    exit 66 ;;
+esac
+[ ! -e "$FACTORY_HARNESS_META" ] && [ ! -L "$FACTORY_HARNESS_META" ] || {
+  echo "factory: harness metadata already exists for $RUN" >&2
+  exit 65
+}
+tmux has-session -t "$RUN" 2>/dev/null && {
+  echo "factory: tmux session '$RUN' already exists; it is not adopted" >&2
+  exit 65
+}
+
+REQUEST="$ROOT/evidence/intake/execution-request.json"
+[ -f "$REQUEST" ] && [ ! -L "$REQUEST" ] || {
+  echo "factory: retained Stage-E execution request is missing or a symlink: $REQUEST" >&2
   exit 66
+}
+
+TASK_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-task.XXXXXX")"
+trap 'rm -f "$TASK_TMP"' EXIT
+if [ -f "$TASK_IN" ]; then
+  cp "$TASK_IN" "$TASK_TMP"
+else
+  printf '%s' "$TASK_IN" > "$TASK_TMP"
 fi
+TASK_DIGEST=$(python3 - "$TASK_TMP" "$REQUEST" "$FACTORY_SOURCE_DIGEST" <<'PY'
+import hashlib, json, pathlib, sys
+task_path = pathlib.Path(sys.argv[1])
+request_path = pathlib.Path(sys.argv[2])
+source_digest = sys.argv[3]
+raw = task_path.read_bytes()
+request = json.loads(request_path.read_text(encoding="utf-8"))
+expected = request.get("verbatim_request")
+digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+if not isinstance(expected, str) or raw != expected.encode("utf-8"):
+    raise SystemExit("factory: supplied task bytes differ from the retained Stage-E request")
+if request.get("verbatim_request_digest") != digest or source_digest != digest:
+    raise SystemExit("factory: supplied task digest differs from Stage-E authority")
+print(digest)
+PY
+) || exit $?
 
-mkdir -p "$ROOT/artifacts" "$ROOT/lanes" "$ROOT/leases" "$ROOT/minutes"
-cp "$TARGET_MANIFEST" "$ROOT/target.toml"
-$FACTORY_CLI inspect-target --manifest "$ROOT/target.toml" > "$ROOT/target.json"
-if [ -f "$TASK_IN" ]; then cp "$TASK_IN" "$ROOT/TASK.md"; else printf '%s\n' "$TASK_IN" > "$ROOT/TASK.md"; fi
+python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
+  "$BUDGET" "$AUDIT_MIN" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
+  "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY'
+import datetime, json, os, pathlib, sys, tempfile
+(
+    task_source, task_dest, metadata_path, run, budget, audit, task_digest,
+    target_state_digest, manifest_digest, commit, checkout_id,
+) = sys.argv[1:]
+audit_value = int(audit)
+if audit_value < 1:
+    raise SystemExit("factory: audit interval must be positive")
+budget_value = None if budget == "" else float(budget)
+if budget_value is not None and budget_value <= 0:
+    raise SystemExit("factory: budget must be positive")
+task_bytes = pathlib.Path(task_source).read_bytes()
+task_path = pathlib.Path(task_dest)
 
-git -C "$REPO" fetch --quiet origin 2>/dev/null || true
-BASE_SHA=$(git -C "$REPO" rev-parse origin/main 2>/dev/null || git -C "$REPO" rev-parse HEAD)
-python3 - "$ROOT" "$RUN" "$REPO" "$BASE_SHA" "$BUDGET" "$AUDIT_MIN" <<'PY'
-import hashlib, json, sys, datetime
-root, run, repo, sha, budget, audit = sys.argv[1:7]
-task = open(f"{root}/TASK.md", "rb").read()
-target = json.load(open(f"{root}/target.json"))
-json.dump({"run": run, "repo": repo, "base_sha": sha,
-           "task_digest": hashlib.sha256(task).hexdigest(),
-           "target_manifest": {"path": "target.toml",
-                               "target_id": target["target_id"],
-                               "content_digest": target["content_digest"],
-                               "source_digest": target["source_digest"],
-                               "build": target["build"]},
-           "budget_usd": float(budget) if budget else None,
-           "audit_interval_min": int(audit),
-           "status": "open",
-           "created_at": datetime.datetime.now(datetime.timezone.utc)
-                         .isoformat(timespec="seconds")},
-          open(f"{root}/run.json", "w"), indent=2)
-print(f"run.json written: base={sha[:12]} task_digest={hashlib.sha256(task).hexdigest()[:12]}")
+def sync_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path.parent, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+if task_path.exists() or task_path.is_symlink():
+    raise SystemExit(f"factory: refusing existing task artifact: {task_path}")
+fd = os.open(task_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+with os.fdopen(fd, "wb") as stream:
+    stream.write(task_bytes)
+    stream.flush()
+    os.fsync(stream.fileno())
+sync_parent(task_path)
+metadata = {
+    "schema_version": "factory-harness/1",
+    "run_id": run,
+    "status": "open",
+    "task_digest": task_digest,
+    "target_state_digest": target_state_digest,
+    "target_manifest_digest": manifest_digest,
+    "resolved_commit": commit,
+    "checkout_id": checkout_id,
+    "budget_usd": budget_value,
+    "budget_enforcement": "UNQUALIFIED_PR2",
+    "audit_interval_min": audit_value,
+    "promise_window_min": 10,
+    "launcher_qualification": "UNQUALIFIED_PR2",
+    "lane_isolation": "UNQUALIFIED_PR2",
+    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+}
+path = pathlib.Path(metadata_path)
+tmp = tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False, encoding="utf-8")
+try:
+    json.dump(metadata, tmp, indent=2, sort_keys=True)
+    tmp.write("\n")
+    tmp.flush()
+    os.fsync(tmp.fileno())
+    tmp.close()
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    os.link(tmp.name, path)
+    os.unlink(tmp.name)
+    sync_parent(path)
+except BaseException:
+    tmp.close()
+    if os.path.exists(tmp.name):
+        os.unlink(tmp.name)
+    raise
 PY
 
-echo "== grounding (control 7) =="
-( cd "$REPO" && "$D/ground.sh" )
+echo "== grounding against immutable target-state =="
+FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
+  "$D/ground.sh" --run "$RUN" --runs "$FACTORY_RUNS_ROOT"
 
-tmux new-session -d -s "$RUN" -n ctl -c "$REPO" \
-  "python3 '$D/dispatcher.py' --run '$RUN' --root '$ROOT'; echo '[dispatcher exited]'; read -r _"
-tmux new-window -t "$RUN" -n validator -c "$REPO" \
-  "claude \"/validate - the task is in $ROOT/TASK.md (verbatim; digest in run.json). Phase A0 first: search kindex, fetch authoritative docs, capture research nodes. Then Phase A with the founder in this window: product spec, architecture, test plan — each settled, signed, content-addressed into $ROOT/artifacts/. Lanes launch only via harness/dispatch_lane.sh, only after ratification.\""
+resource_event() {
+  $FACTORY_CLI record-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+    --resource-id tmux-session --resource-type tmux-session --identifier "$RUN" \
+    --creator-action harness-ignition --ownership run-owned \
+    --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \
+    --evidence-json "{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\"}" \
+    --status "$2" --actor harness-ignition >/dev/null
+}
+resource_event '{}' planned
 
-echo ""
-echo "factory '$RUN' is live:  tmux attach -t $RUN"
-echo "  base SHA   : $BASE_SHA"
-echo "  target ABI : $(python3 -c "import json; d=json.load(open('$ROOT/target.json')); print(d['target_id'], d['content_digest'][:19])")"
-echo "  run root   : $ROOT"
-echo "  budget     : ${BUDGET:-'(none declared — spend still receipted per objective)'}"
-echo "  next       : attach, talk to the Validator in window 'validator'"
+printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q python3 %q --run %q --root %q' \
+  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$D/dispatcher.py" "$RUN" "$ROOT"
+VALIDATOR_PROMPT="/validate - the verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch lanes only through harness/dispatch_lane.sh. The tmux launcher and lane isolation remain UNQUALIFIED_PR2."
+printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %q' \
+  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+
+if ! tmux new-session -d -s "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
+  resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
+  echo "factory: failed to create tmux session" >&2
+  exit 70
+fi
+resource_event '{}' active
+if ! tmux new-window -t "$RUN" -n validator -c "$FACTORY_WORKDIR" "$VALIDATOR_CMD"; then
+  echo "factory: validator window failed; tmux session remains recorded active" >&2
+  exit 70
+fi
+
+echo "factory '$RUN' is live: tmux attach -t $RUN"
+echo "  exact commit : $FACTORY_BASE_COMMIT"
+echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
+echo "  control root : $ROOT"
+echo "  source root  : $FACTORY_SOURCE_ROOT"
+echo "  workdir      : $FACTORY_WORKDIR"
+echo "  launcher     : UNQUALIFIED_PR2"

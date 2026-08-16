@@ -13,7 +13,7 @@ RESULTS=0
 [ "${1:-}" = "--results" ] && { RESULTS=1; shift; }
 MSG="${1:?message}"
 FROM="${INJECT_FROM:-validator}"
-ROOT="${HARNESS_DIR:-.factory}/runs/$RUN"
+ROOT="${HARNESS_RUN_ROOT:-${HARNESS_DIR:-.factory}/runs/$RUN}"
 
 case "$TO" in
   coder|tester)

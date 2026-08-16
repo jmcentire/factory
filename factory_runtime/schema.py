@@ -17,9 +17,13 @@ SCHEMA_NAMES = frozenset(
         "authority-receipt",
         "evidence-bundle",
         "build-plan",
+        "execution-request",
         "genesis",
         "pattern-catalog",
         "phase-artifact",
+        "resource-record",
+        "target-resolution-request",
+        "target-state",
         "test-change-authorization",
     }
 )

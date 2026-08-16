@@ -68,7 +68,7 @@ from factory_runtime.generation import GenerationPreparer, build_input_document
 from factory_runtime.schema import DocumentValidationError
 from factory_runtime.snapshot import freeze_tree, tree_digest
 from factory_runtime.state import RunState, RunStore
-from tests.conftest import ratification_receipts
+from tests.conftest import create_intake_run, ratification_receipts
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -167,11 +167,12 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
         encoding="utf-8",
     )
     target = load_target_manifest(target_path)
-    store.create(
-        "run-1",
+    create_intake_run(
+        store,
+        run_id="run-1",
         target_digest=target.content_digest,
         source_digest=SOURCE,
-        actor="validator",
+        target_manifest_source_digest=target.source_digest,
     )
     states = (
         RunState.PRODUCT_SPECIFICATION_RATIFIED,

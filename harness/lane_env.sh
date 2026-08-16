@@ -4,9 +4,10 @@
 # were never present) plus two harness preflights: no run during an incident
 # HALT, no run without a fresh grounding receipt.
 set -euo pipefail
-H="${HARNESS_DIR:-.factory}"
+H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
+GROUND_ROOT="${HARNESS_RUN_ROOT:-$H}"
 [ -e "$H/HALT" ] && { echo "HALT: $(head -1 "$H/HALT")" >&2; exit 75; }
-if [ ! -e "$H/grounded" ] || [ -n "$(find "$H/grounded" -mmin +"${HARNESS_MAX_GROUND_MIN:-360}" 2>/dev/null)" ]; then
+if [ ! -e "$GROUND_ROOT/grounded" ] || [ -n "$(find "$GROUND_ROOT/grounded" -mmin +"${HARNESS_MAX_GROUND_MIN:-360}" 2>/dev/null)" ]; then
   echo "not grounded: run harness/ground.sh (re-derive state from disk, not memory)" >&2
   exit 76
 fi
@@ -20,7 +21,7 @@ fi
 # Gated on HARNESS_RUN/HARNESS_LANE so standalone use (no run context) is
 # unaffected; the caller sets these when launching a lane under a run.
 if [ -n "${HARNESS_RUN:-}" ] && [ -n "${HARNESS_LANE:-}" ]; then
-  BF="$H/runs/$HARNESS_RUN/lanes/$HARNESS_LANE.blocking"
+  BF="${HARNESS_RUN_ROOT:-$H/runs/$HARNESS_RUN}/lanes/$HARNESS_LANE.blocking"
   if [ -s "$BF" ]; then
     echo "blocking event pending for lane '$HARNESS_LANE' (run $HARNESS_RUN):" >&2
     head -3 "$BF" | sed 's/^/  /' >&2
