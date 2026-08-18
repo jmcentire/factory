@@ -102,6 +102,64 @@ def _write_json_once(path: Path, document: dict[str, object]) -> None:
     )
 
 
+@contextlib.contextmanager
+def _anonymous_read_only_snapshot(content: bytes) -> Iterator[BinaryIO]:
+    directory = Path(tempfile.mkdtemp(prefix="factory-advisory-input."))
+    path = directory / "input"
+    descriptor = -1
+    try:
+        _write_once(path, content)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("anonymous advisory snapshot is not regular")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            confirmed = stream.read(len(content) + 1)
+            after = os.fstat(stream.fileno())
+            if confirmed != content or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                raise ValueError("anonymous advisory snapshot changed before launch")
+            stream.seek(0)
+            path.unlink()
+            directory.rmdir()
+            yield stream
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if path.exists():
+            path.unlink()
+        if directory.exists():
+            directory.rmdir()
+
+
+@contextlib.contextmanager
+def _client_stdin(stdin_mode: str, content: bytes) -> Iterator[BinaryIO]:
+    if stdin_mode == "closed":
+        with open(os.devnull, "rb") as stream:
+            yield stream
+        return
+    with _anonymous_read_only_snapshot(content) as stream:
+        yield stream
+
+
 def _process_group_exists(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
@@ -219,15 +277,9 @@ def supervise(
         else b""
     )
     _write_once(input_snapshot_path, input_bytes)
-    input_stream: BinaryIO
-    if stdin_mode == "prompt":
-        input_stream = tempfile.TemporaryFile(mode="w+b")
-        input_stream.write(input_bytes)
-        input_stream.flush()
-        input_stream.seek(0)
-    else:
-        input_stream = open(os.devnull, "rb")
-    with _capture_termination_signals(received_signal), input_stream as prompt:
+    with _capture_termination_signals(received_signal), _client_stdin(
+        stdin_mode, input_bytes
+    ) as prompt:
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -320,9 +372,12 @@ def supervise(
     _write_json_once(
         receipt_path,
         {
-            "schema_version": "factory-advisory-supervisor-receipt/2",
+            "schema_version": "factory-advisory-supervisor-receipt/3",
             "input_admitted": True,
             "stdin_mode": stdin_mode,
+            "input_descriptor_mode": (
+                "read-only" if stdin_mode == "prompt" else "closed"
+            ),
             "input_digest": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
             "input_byte_count": len(input_bytes),
             "stdout_digest": "sha256:" + hashlib.sha256(stdout_bytes).hexdigest(),
@@ -376,9 +431,10 @@ def main(argv: list[str] | None = None) -> int:
                 _write_json_once(
                     Path(arguments.receipt),
                     {
-                        "schema_version": "factory-advisory-supervisor-receipt/2",
+                        "schema_version": "factory-advisory-supervisor-receipt/3",
                         "input_admitted": input_admitted,
                         "stdin_mode": arguments.stdin_mode,
+                        "input_descriptor_mode": "not-presented",
                         "input_digest": "sha256:" + hashlib.sha256(admitted_input).hexdigest(),
                         "input_byte_count": len(admitted_input),
                         "stdout_digest": "sha256:" + hashlib.sha256(b"").hexdigest(),

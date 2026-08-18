@@ -1574,7 +1574,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[0]
     )
     assert wake_receipt["agent"] == "agy"
-    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/3"
+    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
     assert wake_receipt["status"] == "projection-prepared"
     assert (
         wake_receipt["sandbox_enforcement"]
@@ -1584,7 +1584,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[1]
     )
     assert completed_receipt["status"] == "completed"
-    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/3"
+    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
     assert completed_receipt["exit_code"] == 0
     assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
     assert (
@@ -1600,6 +1600,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     assert len(client_inputs) == 1
     assert completed_receipt["client_input_id"] == client_inputs[0].name
     assert completed_receipt["client_input_transport"] == "agy-stream-json-stdin"
+    assert completed_receipt["client_input_descriptor_mode"] == "read-only"
     assert completed_receipt["client_input_digest"] == digest_bytes(client_inputs[0].read_bytes())
     assert completed_receipt["client_input_byte_count"] == len(client_inputs[0].read_bytes())
     assert completed_receipt["client_input_bytes_retained"] is True
@@ -2026,9 +2027,15 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     received = tmp_path / "received"
     reader = tmp_path / "delayed_reader.py"
     reader.write_text(
-        "import pathlib, sys, time\n"
+        "import os, pathlib, sys, time\n"
         f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
         "time.sleep(0.3)\n"
+        "try:\n"
+        "    os.write(sys.stdin.fileno(), b'client mutation')\n"
+        "except OSError:\n"
+        "    print('stdin-read-only')\n"
+        "else:\n"
+        "    raise SystemExit('client could write its admitted stdin snapshot')\n"
         f"pathlib.Path({str(received)!r}).write_bytes(sys.stdin.buffer.read())\n"
         "print('done')\n"
     )
@@ -2078,11 +2085,13 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     process_stdout, process_stderr = process.communicate(timeout=10)
 
     assert process.returncode == 0, process_stdout + process_stderr
+    assert "stdin-read-only" in stdout.read_text()
     assert received.read_bytes() == original
     supervisor_receipt = json.loads(receipt.read_text())
     assert supervisor_receipt["input_digest"] == digest_bytes(original)
     assert supervisor_receipt["input_byte_count"] == len(original)
     assert supervisor_receipt["input_admitted"] is True
+    assert supervisor_receipt["input_descriptor_mode"] == "read-only"
     assert input_snapshot.read_bytes() == original
 
 

@@ -142,8 +142,8 @@ receives a retained, hashed `stream-json` stdin envelope and a required empty `-
 per-argument OS limits; its terminal event is structurally parsed and its raw bounded stream is
 retained. Codex receives the prompt as text stdin. No bare option or malformed terminal stream is
 mistaken for a successful invocation. Before launch, the supervisor stable-reads stdin, durably
-retains those admitted bytes, and also passes an anonymous snapshot descriptor to the client; its
-own retained receipt binds those presented bytes, exact captured stdout/stderr, and the live
+retains those admitted bytes, and also passes an unlinked read-only snapshot descriptor to the
+client; its own retained receipt binds those presented bytes, exact captured stdout/stderr, and the live
 truncation bit. On timeout or interruption the supervisor drains already-written pipe bytes within
 a fixed bound and marks incomplete drainage as truncation. Post-processing must match every
 retained artifact to that supervisor receipt rather than infer delivery or truncation.

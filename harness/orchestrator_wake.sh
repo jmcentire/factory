@@ -372,7 +372,7 @@ except (KeyError, TypeError, json.JSONDecodeError) as exc:
 if projected_harness.get("orchestrator_agent") != agent:
     raise SystemExit("bound orchestrator differs from projected harness metadata")
 body = {
-    "schema_version": "factory-orchestrator-wake-receipt/3",
+    "schema_version": "factory-orchestrator-wake-receipt/4",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "wake": wake,
     "agent": agent,
@@ -593,14 +593,14 @@ try:
 except json.JSONDecodeError as exc:
     raise SystemExit("malformed advisory supervisor receipt") from exc
 expected_supervisor_keys = {
-    "schema_version", "input_admitted", "stdin_mode", "input_digest",
+    "schema_version", "input_admitted", "stdin_mode", "input_descriptor_mode", "input_digest",
     "input_byte_count", "stdout_digest", "stdout_byte_count", "stderr_digest",
     "stderr_byte_count", "combined_output_truncated", "termination_reason",
     "client_returncode", "supervisor_exit_code",
 }
 if not isinstance(supervisor_receipt, dict) or set(supervisor_receipt) != expected_supervisor_keys:
     raise SystemExit("advisory supervisor receipt has unknown or missing fields")
-if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/2":
+if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/3":
     raise SystemExit("unsupported advisory supervisor receipt")
 digest_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
 for field in ("input_digest", "stdout_digest", "stderr_digest"):
@@ -615,6 +615,8 @@ for field in ("input_byte_count", "stdout_byte_count", "stderr_byte_count"):
 if (
     not isinstance(supervisor_receipt.get("input_admitted"), bool)
     or supervisor_receipt.get("stdin_mode") != "prompt"
+    or supervisor_receipt.get("input_descriptor_mode")
+    not in {"read-only", "not-presented"}
     or not isinstance(supervisor_receipt.get("combined_output_truncated"), bool)
     or not isinstance(supervisor_receipt.get("termination_reason"), str)
     or (
@@ -631,6 +633,16 @@ if isinstance(supervisor_code, bool) or not isinstance(supervisor_code, int):
     raise SystemExit("advisory supervisor receipt has invalid exit code")
 if supervisor_receipt.get("supervisor_exit_code") != returncode:
     raise SystemExit("advisory supervisor exit differs from its receipt")
+if (
+    supervisor_receipt.get("input_descriptor_mode") == "not-presented"
+    and supervisor_code != 70
+):
+    raise SystemExit("advisory supervisor omitted a live input descriptor")
+if (
+    supervisor_receipt.get("input_descriptor_mode") == "read-only"
+    and supervisor_receipt.get("input_admitted") is not True
+):
+    raise SystemExit("advisory supervisor presented input it did not admit")
 if (
     supervisor_receipt.get("stdout_digest")
     != "sha256:" + hashlib.sha256(stdout).hexdigest()
@@ -734,7 +746,7 @@ timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="sec
 append_jsonl(
     root / "wakes" / "receipts.jsonl",
     {
-        "schema_version": "factory-orchestrator-wake-receipt/3",
+        "schema_version": "factory-orchestrator-wake-receipt/4",
         "ts": timestamp,
         "wake": wake,
         "agent": agent,
@@ -749,6 +761,7 @@ append_jsonl(
         "client_input_transport": (
             "agy-stream-json-stdin" if output_mode == "agy-stream-json" else "codex-text-stdin"
         ),
+        "client_input_descriptor_mode": supervisor_receipt["input_descriptor_mode"],
         "client_input_digest": supervisor_receipt["input_digest"],
         "client_input_byte_count": supervisor_receipt["input_byte_count"],
         "client_input_bytes_retained": True,
