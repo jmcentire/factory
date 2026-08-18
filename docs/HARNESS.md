@@ -136,6 +136,9 @@ ceiling terminate the process tree before post-processing, and the dispatcher st
 in a dedicated process group so its outer deadline kills ordinary descendants rather than only
 the wrapper. This is an availability boundary for the supported clients, not a kernel proof
 against a deliberately detached process; that stronger claim belongs with qualified isolation.
+The adapter supplies the same receipted prompt bytes by the client's real interface: Agy receives
+one required `-p` argument with stdin closed; Codex receives stdin. No bare option is mistaken for
+a successful invocation.
 The wake receipt labels the advisory CLI sandbox `cli-declared-not-independently-qualified`:
 the dispatcher exposes no artifact-pull seam and launches from a fresh directory, but Factory
 does not yet claim a kernel-qualified projection-only confidentiality boundary or a

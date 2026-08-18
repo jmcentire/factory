@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -1531,6 +1532,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     assert result.returncode == 0, result.stdout + result.stderr
     invocation = log.read_text()
     assert "--sandbox --disable-slash-commands -p" in invocation
+    assert "STRUCTURED PROJECTION:" in invocation
     assert "--mode plan" not in invocation
     assert "dangerously-skip-permissions" not in invocation
     assert str(tmp_path) not in invocation.split("|", 1)[0]
@@ -1608,6 +1610,7 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
         + ("é" * 40_000)
         + "\n"
         + '{"event":"event-final"}\n'
+        + '{"event":"unterminated-fragment"'
     )
     (root / "minutes" / "validator.log").write_text(
         "".join(f"minute-{index}\n" for index in range(16_000)) + "minutes-final\n"
@@ -1641,6 +1644,7 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
     sections = {section["section_id"]: section["content"] for section in projection["sections"]}
     assert "receipt-final" in sections["receipt-tail"]
     assert "event-final" in sections["event-tail"]
+    assert "unterminated-fragment" not in sections["event-tail"]
     assert "omitted earlier, oversized, or invalid record" in sections["event-tail"]
     assert "minutes-final" in sections["minutes-tail"]
     assert all(len(sections[name].encode()) <= 65_536 for name in (
@@ -1689,6 +1693,104 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
 
     assert result.returncode == 74, result.stdout + result.stderr
     assert len(stdout.read_bytes()) + len(stderr.read_bytes()) <= 4096
+
+
+def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
+    tmp_path: Path,
+) -> None:
+    child_pid = tmp_path / "child.pid"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import os, pathlib, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid()))\n"
+        "while True: time.sleep(1)\n"
+    )
+    parent = tmp_path / "parent.py"
+    parent.write_text(
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, {str(child)!r}])\n"
+        "while True: time.sleep(1)\n"
+    )
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--wall-seconds",
+            "0.5",
+            "--max-output-bytes",
+            "4096",
+            "--",
+            sys.executable,
+            str(parent),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 124, result.stdout + result.stderr
+    pid = int(child_pid.read_text())
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        os.kill(pid, signal.SIGKILL)
+        raise AssertionError(f"TERM-tolerant advisory child {pid} survived supervisor")
+
+
+def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: Path) -> None:
+    reader = tmp_path / "reader.py"
+    reader.write_text("import sys\nprint(len(sys.stdin.buffer.read()))\n")
+    prompt = tmp_path / "prompt"
+    prompt.write_text("must not be duplicated on stdin")
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdin-mode",
+            "closed",
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--wall-seconds",
+            "5",
+            "--max-output-bytes",
+            "4096",
+            "--",
+            sys.executable,
+            str(reader),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert stdout.read_text() == "0\n"
+    assert stderr.read_bytes() == b""
 
 
 def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path) -> None:

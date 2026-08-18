@@ -196,6 +196,13 @@ def tail(path: pathlib.Path, count: int, *, limit: int = 65_536) -> bytes:
         if boundary < 0:
             return b"[orchestrator tail omitted oversized record]\n"
         confirmed = confirmed[boundary + 1 :]
+    # The pinned size can land while an append-only writer is between writes.
+    # A UTF-8 fragment is still not a complete record: exclude it rather than
+    # projecting prose/JSON that no writer has durably terminated yet.
+    if confirmed and not confirmed.endswith(b"\n"):
+        omitted = True
+        boundary = confirmed.rfind(b"\n")
+        confirmed = confirmed[: boundary + 1] if boundary >= 0 else b""
     selected: collections.deque[bytes] = collections.deque()
     used = 0
     for line in reversed(confirmed.splitlines()[-count:]):
@@ -403,9 +410,11 @@ PY
 # independent failure domain.
 case "$ORCH_AGENT" in
   agy)
-    ORCH_CMD=(agy --sandbox --disable-slash-commands -p) ;;
+    ORCH_CMD=(agy --sandbox --disable-slash-commands -p)
+    ORCH_STDIN_MODE=closed ;;
   codex)
-    ORCH_CMD=(codex exec --sandbox read-only --skip-git-repo-check) ;;
+    ORCH_CMD=(codex exec --sandbox read-only --skip-git-repo-check)
+    ORCH_STDIN_MODE=prompt ;;
   *) echo "unsupported ORCH_AGENT '$ORCH_AGENT' (agy|codex)" >&2; exit 64 ;;
 esac
 
@@ -426,16 +435,24 @@ descriptor = os.open(
     0o600,
 )
 with os.fdopen(descriptor, "wb") as stream:
-    stream.write(prefix + projection)
+    stream.write(prefix + projection.rstrip(b"\n"))
     stream.flush()
     os.fsync(stream.fileno())
 PY
+if [ "$ORCH_AGENT" = "agy" ]; then
+  # Agy's -p is an option that requires the prompt as its next argv element; unlike Codex exec,
+  # it does not accept a bare -p followed by prompt bytes on stdin. The assembler deliberately
+  # emits no trailing newline so Bash command substitution preserves the receipted bytes exactly.
+  ORCH_PROMPT_ARGUMENT="$(< "$ORCH_PROMPT_FILE")"
+  ORCH_CMD+=("$ORCH_PROMPT_ARGUMENT")
+fi
 set +e
 python3 "$D/supervise_advisory.py" \
   --cwd "$WAKE_CWD" \
   --stdin "$ORCH_PROMPT_FILE" \
   --stdout "$ORCH_OUT_FILE" \
   --stderr "$ORCH_ERR_FILE" \
+  --stdin-mode "$ORCH_STDIN_MODE" \
   --wall-seconds 540 \
   --max-output-bytes 65536 \
   -- "${ORCH_CMD[@]}"

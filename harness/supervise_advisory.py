@@ -19,6 +19,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--stdin", required=True)
+    parser.add_argument("--stdin-mode", choices=("prompt", "closed"), default="prompt")
     parser.add_argument("--stdout", required=True)
     parser.add_argument("--stderr", required=True)
     parser.add_argument("--wall-seconds", required=True, type=float)
@@ -53,8 +54,8 @@ def _write_once(path: Path, content: bytes) -> None:
         os.fsync(stream.fileno())
 
 
-def _descendants(pid: int) -> list[int]:
-    """Snapshot descendants deepest-first without adding a runtime dependency."""
+def _descendants(roots: list[int]) -> list[int]:
+    """Snapshot descendants of one or more roots deepest-first."""
 
     try:
         completed = subprocess.run(
@@ -77,7 +78,7 @@ def _descendants(pid: int) -> list[int]:
             continue
         children.setdefault(parent, []).append(child)
     ordered: list[int] = []
-    frontier = [pid]
+    frontier = list(roots)
     while frontier:
         parent = frontier.pop()
         direct = children.get(parent, [])
@@ -87,8 +88,8 @@ def _descendants(pid: int) -> list[int]:
     return ordered
 
 
-def _signal_tree(process: subprocess.Popen[bytes], signum: signal.Signals) -> None:
-    for pid in [*_descendants(process.pid), process.pid]:
+def _signal_pids(pids: list[int], signum: signal.Signals) -> None:
+    for pid in pids:
         try:
             os.kill(pid, signum)
         except ProcessLookupError:
@@ -98,12 +99,26 @@ def _signal_tree(process: subprocess.Popen[bytes], signum: signal.Signals) -> No
 def _stop_tree(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    _signal_tree(process, signal.SIGTERM)
+    # Capture ordinary descendants before TERM. A child can ignore TERM while its
+    # principal exits immediately and is then re-parented, so deciding whether to
+    # KILL from principal.wait() loses the only tree relationship we can inspect.
+    # Keep the captured PIDs through the grace period and kill surviving members
+    # regardless of whether the principal has already exited.
+    pids = [*_descendants([process.pid]), process.pid]
+    _signal_pids(pids, signal.SIGTERM)
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        time.sleep(min(0.05, deadline - time.monotonic()))
+
+    # A captured child could have created another ordinary descendant during the
+    # grace interval. Walk from every surviving anchor before the final signal.
+    expanded = set(pids)
+    expanded.update(_descendants(pids))
+    _signal_pids(sorted(expanded, reverse=True), signal.SIGKILL)
     try:
-        process.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        _signal_tree(process, signal.SIGKILL)
         process.wait(timeout=2)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("advisory principal survived SIGKILL") from exc
 
 
 def supervise(
@@ -113,6 +128,7 @@ def supervise(
     stdin_path: Path,
     stdout_path: Path,
     stderr_path: Path,
+    stdin_mode: str,
     wall_seconds: float,
     max_output_bytes: int,
 ) -> int:
@@ -127,7 +143,12 @@ def supervise(
     stderr = bytearray()
     termination_reason = ""
     started = time.monotonic()
-    with _open_regular_input(stdin_path) as prompt:
+    input_stream = (
+        _open_regular_input(stdin_path)
+        if stdin_mode == "prompt"
+        else open(os.devnull, "rb")
+    )
+    with input_stream as prompt:
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -202,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             stdin_path=Path(arguments.stdin),
             stdout_path=Path(arguments.stdout),
             stderr_path=Path(arguments.stderr),
+            stdin_mode=arguments.stdin_mode,
             wall_seconds=arguments.wall_seconds,
             max_output_bytes=arguments.max_output_bytes,
         )

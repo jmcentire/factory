@@ -83,6 +83,8 @@ fit, and minutes-file enumeration is code-bounded. The model process is live-sup
 code-owned wall and combined-output ceiling; the dispatcher owns an outer process-group kill
 boundary. This stops supported-client
 descendants, but is not a kernel proof against deliberate process detachment.
+Submit the exact receipted prompt through the selected client's actual interface: one Agy `-p`
+argument with stdin closed, or Codex stdin. A bare print flag is a dead wake, not a model attempt.
 The projection and its exact dependency capsule are retained. Do not inspect an ambient
 repository or request a path outside the projection; insufficient context becomes a
 blocking question, not permission to widen the read set. "What did the orchestrator know
