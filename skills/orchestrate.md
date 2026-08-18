@@ -88,9 +88,11 @@ Submit the exact receipted semantic prompt through the selected client's actual 
 retained and hashed Agy `stream-json` stdin envelope with a required empty `-p` value, or Codex
 text stdin. Parse Agy's unique terminal result and retain its bounded raw stream. A bare print
 flag or malformed terminal stream is a dead wake, not a successful audit. The live supervisor
-must stable-read client input into an anonymous snapshot, present that descriptor, and receipt its
-digest together with exact stdout/stderr and the truncation bit; post-processing re-verifies that
-receipt and may not infer these facts from already-bounded files.
+must stable-read and durably retain client input, present the same bytes through an anonymous
+snapshot descriptor, and receipt their digest together with exact stdout/stderr and the live
+truncation bit. Timeout and interruption paths must boundedly drain already-written pipe bytes and
+mark incomplete drainage as truncation. Post-processing re-verifies the supervisor receipt and may
+not infer these facts from already-bounded files.
 The projection and its exact dependency capsule are retained. Do not inspect an ambient
 repository or request a path outside the projection; insufficient context becomes a
 blocking question, not permission to widen the read set. "What did the orchestrator know

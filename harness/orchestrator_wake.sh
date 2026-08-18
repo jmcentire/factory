@@ -372,7 +372,7 @@ except (KeyError, TypeError, json.JSONDecodeError) as exc:
 if projected_harness.get("orchestrator_agent") != agent:
     raise SystemExit("bound orchestrator differs from projected harness metadata")
 body = {
-    "schema_version": "factory-orchestrator-wake-receipt/2",
+    "schema_version": "factory-orchestrator-wake-receipt/3",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "wake": wake,
     "agent": agent,
@@ -428,6 +428,7 @@ ORCH_INPUT_FILE="$ORCH_PROMPT_FILE"
 ORCH_OUT_FILE="$WAKE_CWD/orchestrator.out"
 ORCH_ERR_FILE="$WAKE_CWD/orchestrator.err"
 ORCH_SUPERVISOR_RECEIPT="$WAKE_CWD/supervisor-receipt.json"
+ORCH_PRESENTED_INPUT_FILE="$(cd "$ROOT/wakes" && pwd)/$WAKE_ID.presented-input"
 python3 - "$PROJ" "$ORCH_PROMPT_FILE" <<'PY'
 import os, pathlib, sys
 
@@ -484,6 +485,7 @@ python3 "$D/supervise_advisory.py" \
   --stdin "$ORCH_INPUT_FILE" \
   --stdout "$ORCH_OUT_FILE" \
   --stderr "$ORCH_ERR_FILE" \
+  --input-snapshot "$ORCH_PRESENTED_INPUT_FILE" \
   --receipt "$ORCH_SUPERVISOR_RECEIPT" \
   --stdin-mode prompt \
   --wall-seconds 540 \
@@ -509,7 +511,7 @@ set -e
 # as a secondary net for a command that exits 0 while refusing to work.
 mkdir -p "$ROOT/lanes"
 ORCH_STATUS="$(python3 - \
-  "$ORCH_OUT_FILE" "$ORCH_ERR_FILE" "$ORCH_PROMPT_FILE" "$ORCH_INPUT_FILE" \
+  "$ORCH_OUT_FILE" "$ORCH_ERR_FILE" "$ORCH_PROMPT_FILE" "$ORCH_PRESENTED_INPUT_FILE" \
   "$ORCH_SUPERVISOR_RECEIPT" "$ORCH_RC" "$ROOT" "$WAKE_ID" "$ORCH_AGENT" \
   "$ORCH_OUTPUT_MODE" <<'PY'
 import datetime
@@ -598,7 +600,7 @@ expected_supervisor_keys = {
 }
 if not isinstance(supervisor_receipt, dict) or set(supervisor_receipt) != expected_supervisor_keys:
     raise SystemExit("advisory supervisor receipt has unknown or missing fields")
-if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/1":
+if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/2":
     raise SystemExit("unsupported advisory supervisor receipt")
 digest_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
 for field in ("input_digest", "stdout_digest", "stderr_digest"):
@@ -670,7 +672,7 @@ elif (
     != "sha256:" + hashlib.sha256(input_bytes).hexdigest()
     or supervisor_receipt.get("input_byte_count") != len(input_bytes)
 ):
-    client_error = "retained client input differs from the exact supervisor snapshot"
+    raise SystemExit("retained client input differs from the exact supervisor snapshot")
 if output_mode == "agy-stream-json":
     try:
         wire = json.loads(input_bytes)
@@ -732,7 +734,7 @@ timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="sec
 append_jsonl(
     root / "wakes" / "receipts.jsonl",
     {
-        "schema_version": "factory-orchestrator-wake-receipt/2",
+        "schema_version": "factory-orchestrator-wake-receipt/3",
         "ts": timestamp,
         "wake": wake,
         "agent": agent,

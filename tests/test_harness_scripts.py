@@ -1504,6 +1504,9 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['FACTORY_TEST_AGY_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
         "pathlib.Path(os.environ['FACTORY_TEST_AGY_INPUT']).write_bytes(sys.stdin.buffer.read())\n"
+        "for path in pathlib.Path(os.environ['FACTORY_TEST_WAKE_ROOT']).glob("
+        "'*.agy-input.jsonl'):\n"
+        "    path.write_text('mutated after supervisor admission\\n')\n"
         "print(json.dumps({'event': 'init', 'init': {'tools': []}}))\n"
         "print(json.dumps({'event': 'result', 'result': {"
         "'status': 'SUCCESS', 'response': 'No process \\\"drift\\\" found.\\nSecond line.\\n'}}))\n"
@@ -1535,6 +1538,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
             "PATH": f"{binary}:/usr/bin:/bin",
             "FACTORY_TEST_AGY_LOG": str(log),
             "FACTORY_TEST_AGY_INPUT": str(input_log),
+            "FACTORY_TEST_WAKE_ROOT": str(root / "wakes"),
             "DIRECTIVE_LEDGER": str(directive_ledger),
         },
     )
@@ -1570,7 +1574,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[0]
     )
     assert wake_receipt["agent"] == "agy"
-    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/2"
+    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/3"
     assert wake_receipt["status"] == "projection-prepared"
     assert (
         wake_receipt["sandbox_enforcement"]
@@ -1580,7 +1584,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[1]
     )
     assert completed_receipt["status"] == "completed"
-    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/2"
+    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/3"
     assert completed_receipt["exit_code"] == 0
     assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
     assert (
@@ -1592,13 +1596,17 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     assert completed_receipt["prompt_digest"] == digest_bytes(prompts[0].read_bytes())
     assert completed_receipt["prompt_bytes_retained"] is True
     assert completed_receipt["prompt_byte_count"] > 131_072
-    client_inputs = list((root / "wakes").glob("*.agy-input.jsonl"))
+    client_inputs = list((root / "wakes").glob("*.presented-input"))
     assert len(client_inputs) == 1
     assert completed_receipt["client_input_id"] == client_inputs[0].name
     assert completed_receipt["client_input_transport"] == "agy-stream-json-stdin"
     assert completed_receipt["client_input_digest"] == digest_bytes(client_inputs[0].read_bytes())
     assert completed_receipt["client_input_byte_count"] == len(client_inputs[0].read_bytes())
     assert completed_receipt["client_input_bytes_retained"] is True
+    assert client_inputs[0].read_bytes() == input_log.read_bytes()
+    assert next((root / "wakes").glob("*.agy-input.jsonl")).read_text() == (
+        "mutated after supervisor admission\n"
+    )
     assert wire["message"]["content"].encode() == prompts[0].read_bytes()
     raw_outputs = list((root / "wakes").glob("*.client-output"))
     assert len(raw_outputs) == 1
@@ -1799,6 +1807,7 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
     receipt = tmp_path / "receipt"
 
     result = subprocess.run(
@@ -1813,6 +1822,8 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
             str(stdout),
             "--stderr",
             str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
             "--receipt",
             str(receipt),
             "--wall-seconds",
@@ -1833,6 +1844,65 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
     assert result.returncode == 74, result.stdout + result.stderr
     assert len(stdout.read_bytes()) + len(stderr.read_bytes()) <= 4096
     assert json.loads(receipt.read_text())["combined_output_truncated"] is True
+
+
+def test_advisory_supervisor_drains_bytes_written_before_signal_termination(
+    tmp_path: Path,
+) -> None:
+    payload = b"x" * 61_440
+    writer = tmp_path / "writer.py"
+    writer.write_text(
+        "import os, signal, sys, time\n"
+        f"payload = {payload!r}\n"
+        "written = 0\n"
+        "while written < len(payload):\n"
+        "    written += os.write(sys.stdout.fileno(), payload[written:])\n"
+        "os.kill(os.getppid(), signal.SIGTERM)\n"
+        "time.sleep(60)\n"
+    )
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
+    receipt = tmp_path / "receipt"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
+            "--receipt",
+            str(receipt),
+            "--wall-seconds",
+            "5",
+            "--max-input-bytes",
+            "1048576",
+            "--max-output-bytes",
+            "65536",
+            "--",
+            sys.executable,
+            str(writer),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 124, result.stdout + result.stderr
+    assert stdout.read_bytes() == payload
+    supervisor_receipt = json.loads(receipt.read_text())
+    assert supervisor_receipt["stdout_byte_count"] == len(payload)
+    assert supervisor_receipt["combined_output_truncated"] is False
 
 
 def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
@@ -1856,6 +1926,7 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
     receipt = tmp_path / "receipt"
 
     result = subprocess.run(
@@ -1870,6 +1941,8 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
             str(stdout),
             "--stderr",
             str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
             "--receipt",
             str(receipt),
             "--wall-seconds",
@@ -1905,6 +1978,7 @@ def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: P
     prompt.write_text("must not be duplicated on stdin")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
     receipt = tmp_path / "receipt"
 
     result = subprocess.run(
@@ -1921,6 +1995,8 @@ def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: P
             str(stdout),
             "--stderr",
             str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
             "--receipt",
             str(receipt),
             "--wall-seconds",
@@ -1961,6 +2037,7 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     prompt.write_bytes(original)
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
     receipt = tmp_path / "receipt"
     process = subprocess.Popen(
         [
@@ -1974,6 +2051,8 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
             str(stdout),
             "--stderr",
             str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
             "--receipt",
             str(receipt),
             "--wall-seconds",
@@ -2004,6 +2083,7 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     assert supervisor_receipt["input_digest"] == digest_bytes(original)
     assert supervisor_receipt["input_byte_count"] == len(original)
     assert supervisor_receipt["input_admitted"] is True
+    assert input_snapshot.read_bytes() == original
 
 
 def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path) -> None:
@@ -2045,6 +2125,7 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    input_snapshot = tmp_path / "input-snapshot"
     receipt = tmp_path / "receipt"
 
     result = subprocess.run(
@@ -2059,6 +2140,8 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
             str(stdout),
             "--stderr",
             str(stderr),
+            "--input-snapshot",
+            str(input_snapshot),
             "--receipt",
             str(receipt),
             "--wall-seconds",

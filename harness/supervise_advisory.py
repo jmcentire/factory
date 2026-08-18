@@ -27,6 +27,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stdin-mode", choices=("prompt", "closed"), default="prompt")
     parser.add_argument("--stdout", required=True)
     parser.add_argument("--stderr", required=True)
+    parser.add_argument("--input-snapshot", required=True)
     parser.add_argument("--receipt", required=True)
     parser.add_argument("--wall-seconds", required=True, type=float)
     parser.add_argument("--max-input-bytes", required=True, type=int)
@@ -82,6 +83,16 @@ def _write_once(path: Path, content: bytes) -> None:
         stream.write(content)
         stream.flush()
         os.fsync(stream.fileno())
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _write_json_once(path: Path, document: dict[str, object]) -> None:
@@ -125,6 +136,41 @@ def _stop_tree(process: subprocess.Popen[bytes]) -> None:
             raise RuntimeError("advisory principal survived SIGKILL") from exc
 
 
+def _drain_terminated_streams(
+    selector: selectors.BaseSelector,
+    stdout: bytearray,
+    stderr: bytearray,
+    max_output_bytes: int,
+) -> bool:
+    """Retain bytes already written before termination, or report incomplete capture."""
+    deadline = time.monotonic() + 0.5
+    truncated = False
+    while selector.get_map() and time.monotonic() < deadline:
+        events = selector.select(
+            timeout=max(0.0, min(0.05, deadline - time.monotonic()))
+        )
+        if not events:
+            continue
+        for key, _ in events:
+            stream = cast(BinaryIO, key.fileobj)
+            destination = key.data
+            try:
+                chunk = os.read(stream.fileno(), 8192)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                selector.unregister(stream)
+                stream.close()
+                continue
+            remaining = max_output_bytes - len(stdout) - len(stderr)
+            if remaining <= 0 or len(chunk) > remaining:
+                destination.extend(chunk[: max(0, remaining)])
+                truncated = True
+                return truncated
+            destination.extend(chunk)
+    return truncated or bool(selector.get_map())
+
+
 @contextlib.contextmanager
 def _capture_termination_signals(received: list[int]) -> Iterator[None]:
     def record_signal(signum: int, _frame: object) -> None:
@@ -146,6 +192,7 @@ def supervise(
     stdin_path: Path,
     stdout_path: Path,
     stderr_path: Path,
+    input_snapshot_path: Path,
     receipt_path: Path,
     stdin_mode: str,
     wall_seconds: float,
@@ -171,6 +218,7 @@ def supervise(
         if stdin_mode == "prompt"
         else b""
     )
+    _write_once(input_snapshot_path, input_bytes)
     input_stream: BinaryIO
     if stdin_mode == "prompt":
         input_stream = tempfile.TemporaryFile(mode="w+b")
@@ -237,6 +285,16 @@ def supervise(
             if process.poll() is None or _process_group_exists(process.pid):
                 _stop_tree(process)
             returncode = process.wait(timeout=2)
+            if termination_reason and termination_reason != "advisory output ceiling exceeded":
+                output_truncated = (
+                    _drain_terminated_streams(
+                        selector,
+                        stdout,
+                        stderr,
+                        max_output_bytes,
+                    )
+                    or output_truncated
+                )
         finally:
             selector.close()
             for stream, _ in streams:
@@ -247,6 +305,8 @@ def supervise(
         remaining = max_output_bytes - len(stdout) - len(stderr)
         if remaining > 0:
             stderr.extend(marker[:remaining])
+        if len(marker) > max(0, remaining):
+            output_truncated = True
     stdout_bytes = bytes(stdout)
     stderr_bytes = bytes(stderr)
     _write_once(stdout_path, stdout_bytes)
@@ -260,7 +320,7 @@ def supervise(
     _write_json_once(
         receipt_path,
         {
-            "schema_version": "factory-advisory-supervisor-receipt/1",
+            "schema_version": "factory-advisory-supervisor-receipt/2",
             "input_admitted": True,
             "stdin_mode": stdin_mode,
             "input_digest": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
@@ -290,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
             stdin_path=Path(arguments.stdin),
             stdout_path=Path(arguments.stdout),
             stderr_path=Path(arguments.stderr),
+            input_snapshot_path=Path(arguments.input_snapshot),
             receipt_path=Path(arguments.receipt),
             stdin_mode=arguments.stdin_mode,
             wall_seconds=arguments.wall_seconds,
@@ -299,6 +360,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         message = f"advisory supervisor refused: {exc}\n"
         try:
+            admitted_input = b""
+            input_admitted = False
+            if Path(arguments.input_snapshot).exists():
+                admitted_input = _read_stable_regular_input(
+                    Path(arguments.input_snapshot),
+                    arguments.max_input_bytes,
+                )
+                input_admitted = True
             if not Path(arguments.stdout).exists():
                 _write_once(Path(arguments.stdout), b"")
             if not Path(arguments.stderr).exists():
@@ -307,11 +376,11 @@ def main(argv: list[str] | None = None) -> int:
                 _write_json_once(
                     Path(arguments.receipt),
                     {
-                        "schema_version": "factory-advisory-supervisor-receipt/1",
-                        "input_admitted": False,
+                        "schema_version": "factory-advisory-supervisor-receipt/2",
+                        "input_admitted": input_admitted,
                         "stdin_mode": arguments.stdin_mode,
-                        "input_digest": "sha256:" + hashlib.sha256(b"").hexdigest(),
-                        "input_byte_count": 0,
+                        "input_digest": "sha256:" + hashlib.sha256(admitted_input).hexdigest(),
+                        "input_byte_count": len(admitted_input),
                         "stdout_digest": "sha256:" + hashlib.sha256(b"").hexdigest(),
                         "stdout_byte_count": 0,
                         "stderr_digest": "sha256:" + hashlib.sha256(message.encode()).hexdigest(),
