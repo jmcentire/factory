@@ -39,7 +39,7 @@ from factory_runtime.target_state import (
     normalize_subpath,
     verify_target_state,
 )
-from factory_runtime.tessera import TesseraCli
+from factory_runtime.tessera import TesseraCli, VerifiedEnvelope
 
 _PHASE_ACTIONS: Mapping[str, tuple[str, RunState]] = {
     "product-specification": (
@@ -451,6 +451,65 @@ class FactoryWorkflow:
             },
             approver_identity=receipt.signer_identity,
             policy=_segregation_policy(self.policy),
+        )
+
+    def record_repair_brief(
+        self,
+        run_id: str,
+        *,
+        expected_ledger_head: str,
+        brief_digest: str,
+        envelope: VerifiedEnvelope,
+        validator_identity: str,
+    ) -> RunProjection:
+        """Record a signed Validator diagnosis without changing phase authority.
+
+        A Repair Brief is derived operational guidance, never a new or amended
+        requirement.  It is therefore bound to the exact blocked ledger head
+        and the already-ratified phase artifact digests before it is retained.
+        """
+
+        current = self.store.load(run_id)
+        if current.state is not RunState.BLOCKED:
+            raise WorkflowError("repair brief requires a blocked run")
+        if current.ledger_head != expected_ledger_head:
+            raise WorkflowError("repair brief predecessor ledger head changed")
+        principal = self.policy.principal(validator_identity)
+        if principal is None or principal.kind != "agent":
+            raise WorkflowError("repair brief signer must be an enrolled Validator agent")
+        if envelope.public_key != principal.public_key:
+            raise WorkflowError("repair brief envelope signer does not own Validator identity")
+        if envelope.kind != "factory-repair-brief":
+            raise WorkflowError("repair brief envelope has the wrong kind")
+        if envelope.payload_digest != brief_digest:
+            raise WorkflowError("repair brief envelope binds a different document")
+        payload = envelope.payload
+        if payload.get("run_id") != run_id:
+            raise WorkflowError("repair brief belongs to a different run")
+        if payload.get("predecessor_ledger_head") != expected_ledger_head:
+            raise WorkflowError("repair brief does not bind the blocked ledger head")
+        if payload.get("phase_artifact_digests") != dict(current.phase_artifact_digests):
+            raise WorkflowError("repair brief changes or omits ratified phase authority")
+
+        directory = self.root / run_id / "evidence" / "repair-briefs"
+        stem = envelope.payload_digest.removeprefix("sha256:")
+        _write_once(directory / f"{stem}.tessera.json", envelope.path.read_bytes())
+        return self.store.transition(
+            run_id,
+            RunState.BLOCKED,
+            actor="repair-supervisor",
+            artifact_digests={
+                "repair-brief": brief_digest,
+                "repair-brief-envelope": envelope.envelope_digest,
+            },
+            payload={
+                "reason": "repair-brief-recorded",
+                "predecessor_ledger_head": expected_ledger_head,
+                "repair_brief_digest": brief_digest,
+                "repair_brief_envelope_digest": envelope.envelope_digest,
+                "repair_signal": "retry",
+            },
+            verifier_identity=validator_identity,
         )
 
     def ratify_phase(

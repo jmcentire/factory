@@ -29,6 +29,7 @@ SCHEMA_NAMES = frozenset(
         "orchestrator-projection",
         "pattern-catalog",
         "phase-artifact",
+        "repair-brief",
         "resource-record",
         "resume-checkpoint",
         "runner-manifest",
