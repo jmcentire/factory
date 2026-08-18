@@ -132,13 +132,16 @@ The executable sink is one-way: a bounded response is labeled `untrusted-advisor
 appended only as `validator-blocking-only` data; no parser converts its prose into a broker
 request, signature, ledger transition, or cleanup action.
 The advisory process is supervised while it runs: a code-owned wall ceiling and combined output
-ceiling terminate the process tree before post-processing, and the dispatcher starts each wake
-in a dedicated process group so its outer deadline kills ordinary descendants rather than only
-the wrapper. This is an availability boundary for the supported clients, not a kernel proof
-against a deliberately detached process; that stronger claim belongs with qualified isolation.
-The adapter supplies the same receipted prompt bytes by the client's real interface: Agy receives
-one required `-p` argument with stdin closed; Codex receives stdin. No bare option is mistaken for
-a successful invocation.
+ceiling terminate the client's dedicated process group before post-processing, even if its
+principal exited first. The dispatcher starts the wrapper in a separate process group, sends TERM
+so the supervisor can close the client group, then KILLs the wrapper group after a fixed grace.
+This is an availability boundary for the supported clients, not a kernel proof against a
+deliberately detached process; that stronger claim belongs with qualified isolation.
+The adapter supplies the same receipted semantic prompt through the client's real interface. Agy
+receives a retained, hashed `stream-json` stdin envelope and a required empty `-p` value, avoiding
+per-argument OS limits; its terminal event is structurally parsed and its raw bounded stream is
+retained. Codex receives the prompt as text stdin. No bare option or malformed terminal stream is
+mistaken for a successful invocation.
 The wake receipt labels the advisory CLI sandbox `cli-declared-not-independently-qualified`:
 the dispatcher exposes no artifact-pull seam and launches from a fresh directory, but Factory
 does not yet claim a kernel-qualified projection-only confidentiality boundary or a

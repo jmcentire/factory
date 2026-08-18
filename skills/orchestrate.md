@@ -79,12 +79,15 @@ closed bounded projection the dispatcher froze: trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata.
 Append-only inputs are admitted through stable bounded-suffix reads, so history growth does not
 disable a wake. Concurrent appends preserve the initial-size snapshot; only complete UTF-8 records
-fit, and minutes-file enumeration is code-bounded. The model process is live-supervised under a
-code-owned wall and combined-output ceiling; the dispatcher owns an outer process-group kill
-boundary. This stops supported-client
-descendants, but is not a kernel proof against deliberate process detachment.
-Submit the exact receipted prompt through the selected client's actual interface: one Agy `-p`
-argument with stdin closed, or Codex stdin. A bare print flag is a dead wake, not a model attempt.
+fit, and minutes-file enumeration is code-bounded. The model process is live-supervised in its own
+process group under a code-owned wall and combined-output ceiling, including when its principal
+exits first; the dispatcher gives the supervisor TERM grace before forcing its outer wrapper group.
+This stops supported-client descendants, but is not a kernel proof against deliberate process
+detachment.
+Submit the exact receipted semantic prompt through the selected client's actual interface: a
+retained and hashed Agy `stream-json` stdin envelope with a required empty `-p` value, or Codex
+text stdin. Parse Agy's unique terminal result and retain its bounded raw stream. A bare print
+flag or malformed terminal stream is a dead wake, not a successful audit.
 The projection and its exact dependency capsule are retained. Do not inspect an ambient
 repository or request a path outside the projection; insufficient context becomes a
 blocking question, not permission to widen the read set. "What did the orchestrator know

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import selectors
 import signal
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -54,71 +56,52 @@ def _write_once(path: Path, content: bytes) -> None:
         os.fsync(stream.fileno())
 
 
-def _descendants(roots: list[int]) -> list[int]:
-    """Snapshot descendants of one or more roots deepest-first."""
-
+def _process_group_exists(pgid: int) -> bool:
     try:
-        completed = subprocess.run(
-            ["/bin/ps", "-axo", "pid=,ppid="],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    children: dict[int, list[int]] = {}
-    for line in completed.stdout.splitlines():
-        fields = line.split()
-        if len(fields) != 2:
-            continue
-        try:
-            child, parent = map(int, fields)
-        except ValueError:
-            continue
-        children.setdefault(parent, []).append(child)
-    ordered: list[int] = []
-    frontier = list(roots)
-    while frontier:
-        parent = frontier.pop()
-        direct = children.get(parent, [])
-        frontier.extend(direct)
-        ordered.extend(direct)
-    ordered.reverse()
-    return ordered
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
-def _signal_pids(pids: list[int], signum: signal.Signals) -> None:
-    for pid in pids:
-        try:
-            os.kill(pid, signum)
-        except ProcessLookupError:
-            pass
+def _signal_group(pgid: int, signum: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, signum)
+    except ProcessLookupError:
+        pass
 
 
 def _stop_tree(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    # Capture ordinary descendants before TERM. A child can ignore TERM while its
-    # principal exits immediately and is then re-parented, so deciding whether to
-    # KILL from principal.wait() loses the only tree relationship we can inspect.
-    # Keep the captured PIDs through the grace period and kill surviving members
-    # regardless of whether the principal has already exited.
-    pids = [*_descendants([process.pid]), process.pid]
-    _signal_pids(pids, signal.SIGTERM)
+    # The client is a session/process-group leader. Its group survives when the
+    # principal exits, so pre-exited parents cannot hide TERM-tolerant children by
+    # re-parenting them before the ceiling fires.
+    _signal_group(process.pid, signal.SIGTERM)
     deadline = time.monotonic() + 0.5
-    while time.monotonic() < deadline:
+    while _process_group_exists(process.pid) and time.monotonic() < deadline:
         time.sleep(min(0.05, deadline - time.monotonic()))
+    process.poll()  # reap a terminated leader so an empty group is removed before KILL
+    _signal_group(process.pid, signal.SIGKILL)
+    if process.poll() is None:
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("advisory principal survived SIGKILL") from exc
 
-    # A captured child could have created another ordinary descendant during the
-    # grace interval. Walk from every surviving anchor before the final signal.
-    expanded = set(pids)
-    expanded.update(_descendants(pids))
-    _signal_pids(sorted(expanded, reverse=True), signal.SIGKILL)
+
+@contextlib.contextmanager
+def _capture_termination_signals(received: list[int]) -> Iterator[None]:
+    def record_signal(signum: int, _frame: object) -> None:
+        received.append(signum)
+
+    handled = (signal.SIGTERM, signal.SIGINT)
+    previous = {signum: signal.signal(signum, record_signal) for signum in handled}
     try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("advisory principal survived SIGKILL") from exc
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def supervise(
@@ -143,12 +126,14 @@ def supervise(
     stderr = bytearray()
     termination_reason = ""
     started = time.monotonic()
+    received_signal: list[int] = []
+
     input_stream = (
         _open_regular_input(stdin_path)
         if stdin_mode == "prompt"
         else open(os.devnull, "rb")
     )
-    with input_stream as prompt:
+    with _capture_termination_signals(received_signal), input_stream as prompt:
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -156,6 +141,7 @@ def supervise(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             close_fds=True,
+            start_new_session=True,
         )
         assert process.stdout is not None and process.stderr is not None
         selector = selectors.DefaultSelector()
@@ -164,11 +150,23 @@ def supervise(
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ, destination)
         try:
-            while selector.get_map():
+            while True:
+                process.poll()  # reap an exited leader before checking whether its group remains
+                group_exists = _process_group_exists(process.pid)
+                if not selector.get_map() and not group_exists:
+                    break
+                if received_signal:
+                    signal_name = signal.Signals(received_signal[0]).name
+                    termination_reason = f"advisory supervisor interrupted by {signal_name}"
+                    _stop_tree(process)
+                    break
                 if time.monotonic() - started >= wall_seconds:
                     termination_reason = "advisory wall-time ceiling exceeded"
                     _stop_tree(process)
                     break
+                if not selector.get_map():
+                    time.sleep(0.05)
+                    continue
                 for key, _ in selector.select(timeout=0.1):
                     stream = cast(BinaryIO, key.fileobj)
                     destination = key.data
@@ -189,7 +187,7 @@ def supervise(
                     destination.extend(chunk)
                 if termination_reason:
                     break
-            if process.poll() is None:
+            if process.poll() is None or _process_group_exists(process.pid):
                 _stop_tree(process)
             returncode = process.wait(timeout=2)
         finally:

@@ -87,6 +87,29 @@ def sh(cmd: list[str]) -> str:
         return ""
 
 
+def terminate_wake_group(proc: subprocess.Popen[bytes]) -> str:
+    """Give a responsive supervisor time to close its client group, then force the wrapper group."""
+
+    try:
+        pgid = proc.pid
+        os.killpg(pgid, signal.SIGTERM)
+    except (AttributeError, ProcessLookupError, PermissionError):
+        proc.kill()
+        proc.wait()
+        return "wrapper-only-fallback"
+    # Do not use the wrapper principal's exit as proof that its supervisor and
+    # client are gone. The supervisor owns a separate client group and handles
+    # TERM; preserve its cleanup grace even when the shell exits immediately.
+    time.sleep(1.0)
+    proc.poll()  # reap an exited wrapper leader before addressing the remaining group
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+    return "process-group-term-kill"
+
+
 def read_lines(path: pathlib.Path) -> list[str]:
     try:
         return [ln for ln in path.read_text().splitlines() if ln.strip()]
@@ -177,13 +200,7 @@ class Dispatcher:
                 return
             # past the deadline — the seat is hung, not working. Kill it, record
             # the death, and fall through to spawn a fresh wake.
-            kill_scope = "process-group"
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except (AttributeError, ProcessLookupError, PermissionError):
-                kill_scope = "wrapper-only-fallback"
-                proc.kill()
-            proc.wait()
+            kill_scope = terminate_wake_group(proc)
             kill_detail = (
                 f"orchestrator wake hung past {wake_timeout:.0f}s and was killed "
                 f"with scope={kill_scope}; no independent check is running"

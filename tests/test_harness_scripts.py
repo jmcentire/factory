@@ -1489,20 +1489,28 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     (root / "run.json").write_text(
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
-    (root / "TASK.md").write_text("task\n")
+    (root / "TASK.md").write_text("task-" + ("t" * 60_000) + "\n")
     (root / "harness.json").write_text(
         json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    (root / "events.jsonl").write_text(
+        json.dumps({"padding": "e" * 59_000}, separators=(",", ":")) + "\n"
     )
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
     agy.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf '%s|%s\\n' \"$PWD\" \"$*\" > \"$FACTORY_TEST_AGY_LOG\"\n"
-        "printf 'No process \\\"drift\\\" found.\\nSecond line.\\n'\n"
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['FACTORY_TEST_AGY_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
+        "pathlib.Path(os.environ['FACTORY_TEST_AGY_INPUT']).write_bytes(sys.stdin.buffer.read())\n"
+        "print(json.dumps({'event': 'init', 'init': {'tools': []}}))\n"
+        "print(json.dumps({'event': 'result', 'result': {"
+        "'status': 'SUCCESS', 'response': 'No process \\\"drift\\\" found.\\nSecond line.\\n'}}))\n"
     )
     agy.chmod(0o755)
     log = tmp_path / "agy.log"
+    input_log = tmp_path / "agy-input.jsonl"
     directive = dl(
         tmp_path,
         "append",
@@ -1515,7 +1523,8 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     directive_ledger = tmp_path / "DIRECTIVES" / "ledger.jsonl"
     (root / "minutes").mkdir()
     (root / "minutes" / "validator-2026-08-18.log").write_text(
-        "one\ntwo\n",
+        "one\ntwo\n"
+        + "".join(f"minute-{index}-{'m' * 1_450}\n" for index in range(38)),
         encoding="utf-8",
     )
 
@@ -1525,17 +1534,22 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         env_extra={
             "PATH": f"{binary}:/usr/bin:/bin",
             "FACTORY_TEST_AGY_LOG": str(log),
+            "FACTORY_TEST_AGY_INPUT": str(input_log),
             "DIRECTIVE_LEDGER": str(directive_ledger),
         },
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    invocation = log.read_text()
-    assert "--sandbox --disable-slash-commands -p" in invocation
-    assert "STRUCTURED PROJECTION:" in invocation
-    assert "--mode plan" not in invocation
+    invocation = json.loads(log.read_text())
+    assert invocation[:4] == ["--sandbox", "--disable-slash-commands", "-p", ""]
+    assert invocation[4:] == ["--input-format", "stream-json", "--output-format", "stream-json"]
+    assert "--mode" not in invocation
     assert "dangerously-skip-permissions" not in invocation
-    assert str(tmp_path) not in invocation.split("|", 1)[0]
+    assert max(map(len, invocation)) < 128
+    wire = json.loads(input_log.read_text())
+    assert wire["type"] == "user"
+    assert wire["message"]["role"] == "user"
+    assert "STRUCTURED PROJECTION:" in wire["message"]["content"]
     projections = list((root / "wakes").glob("*.projection.json"))
     capsules = list((root / "wakes").glob("*.state-capsule.json"))
     prompts = list((root / "wakes").glob("*.prompt.txt"))
@@ -1556,6 +1570,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[0]
     )
     assert wake_receipt["agent"] == "agy"
+    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/2"
     assert wake_receipt["status"] == "projection-prepared"
     assert (
         wake_receipt["sandbox_enforcement"]
@@ -1565,17 +1580,32 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         (root / "wakes" / "receipts.jsonl").read_text().splitlines()[1]
     )
     assert completed_receipt["status"] == "completed"
+    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/2"
     assert completed_receipt["exit_code"] == 0
     assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
     assert (
         completed_receipt["prompt_assembler_version"]
-        == "factory-orchestrator-prompt-assembler/1"
+        == "factory-orchestrator-prompt-assembler/2"
     )
     assert completed_receipt["prompt_id"] == prompts[0].name
     assert completed_receipt["prompt_byte_count"] == len(prompts[0].read_bytes())
     assert completed_receipt["prompt_digest"] == digest_bytes(prompts[0].read_bytes())
     assert completed_receipt["prompt_bytes_retained"] is True
-    assert len(list((root / "wakes").glob("*.response.md"))) == 1
+    assert completed_receipt["prompt_byte_count"] > 131_072
+    client_inputs = list((root / "wakes").glob("*.agy-input.jsonl"))
+    assert len(client_inputs) == 1
+    assert completed_receipt["client_input_id"] == client_inputs[0].name
+    assert completed_receipt["client_input_transport"] == "agy-stream-json-stdin"
+    assert completed_receipt["client_input_digest"] == digest_bytes(client_inputs[0].read_bytes())
+    assert completed_receipt["client_input_byte_count"] == len(client_inputs[0].read_bytes())
+    assert completed_receipt["client_input_bytes_retained"] is True
+    assert wire["message"]["content"].encode() == prompts[0].read_bytes()
+    raw_outputs = list((root / "wakes").glob("*.client-output"))
+    assert len(raw_outputs) == 1
+    assert completed_receipt["raw_output_digest"] == digest_bytes(raw_outputs[0].read_bytes())
+    responses = list((root / "wakes").glob("*.response.md"))
+    assert len(responses) == 1
+    assert completed_receipt["output_digest"] == digest_bytes(responses[0].read_bytes())
     assert not list((root / "wakes").glob("*.failure.md"))
     assert '"drift"' in list((root / "wakes").glob("*.response.md"))[0].read_text()
     blocking = read_chain(root / "lanes" / "validator.blocking")
@@ -1583,6 +1613,49 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     assert blocking[-1]["effect_route"] == "validator-blocking-only"
     for line in (root / "events.jsonl").read_text().splitlines():
         json.loads(line)
+
+
+def test_orchestrator_rejects_malformed_agy_terminal_stream(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+    )
+    (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    agy = binary / "agy"
+    agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n"
+        "print('plausible prose without a terminal result')\n"
+    )
+    agy.chmod(0o755)
+    directive = dl(tmp_path, "append", "--scope", "run", "--text", "audit the run")
+    assert directive.returncode == 0, directive.stderr
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipts = read_chain(root / "wakes" / "receipts.jsonl")
+    assert receipts[-1]["status"] == "did-not-run"
+    assert receipts[-1]["exit_code"] == 0
+    assert not list((root / "wakes").glob("*.response.md"))
+    failure = next((root / "wakes").glob("*.failure.md")).read_text()
+    assert "client output invalid" in failure
+    assert "plausible prose" in failure
 
 
 def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
@@ -1618,7 +1691,13 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
-    agy.write_text("#!/usr/bin/env bash\nprintf 'Run remains aligned.\\n'\n")
+    agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "json.loads(sys.stdin.buffer.read())\n"
+        "print(json.dumps({'event': 'result', 'result': {"
+        "'status': 'SUCCESS', 'response': 'Run remains aligned.\\n'}}))\n"
+    )
     agy.chmod(0o755)
     directive = dl(
         tmp_path,
@@ -1704,13 +1783,13 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
         "import os, pathlib, signal, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid()))\n"
+        "os.close(1); os.close(2)\n"
         "while True: time.sleep(1)\n"
     )
     parent = tmp_path / "parent.py"
     parent.write_text(
-        "import subprocess, sys, time\n"
+        "import subprocess, sys\n"
         f"subprocess.Popen([sys.executable, {str(child)!r}])\n"
-        "while True: time.sleep(1)\n"
     )
     prompt = tmp_path / "prompt"
     prompt.write_text("audit\n")
@@ -2558,6 +2637,36 @@ def test_dispatcher_kills_hung_wake_past_timeout(tmp_path: Path) -> None:
         "killing a hung wake must record orchestrator_dead, not report it healthy"
     )
     assert any("scope=wrapper-only-fallback" in str(e["detail"]) for e in events)
+
+
+def test_dispatcher_gives_supervisor_term_grace_before_group_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    delivered: list[tuple[int, signal.Signals]] = []
+    sleeps: list[float] = []
+
+    class _Proc:
+        pid = 4242
+        waited = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def wait(self) -> int:
+            self.waited = True
+            return -9
+
+    proc = _Proc()
+    monkeypatch.setattr(mod.os, "killpg", lambda pid, sig: delivered.append((pid, sig)))
+    monkeypatch.setattr(mod.time, "sleep", sleeps.append)
+
+    scope = mod.terminate_wake_group(proc)  # type: ignore[arg-type]
+
+    assert scope == "process-group-term-kill"
+    assert delivered == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert sleeps == [1.0]
+    assert proc.waited is True
 
 
 def test_dispatcher_distinguishes_unavailable_verifier_from_target_divergence(
