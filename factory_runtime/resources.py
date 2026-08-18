@@ -135,6 +135,7 @@ class ResourceLedger:
         *,
         path: Path | None = None,
         label: str = "resource guard",
+        require_existing_run: bool = False,
     ) -> Iterator[None]:
         """Serialize resource appends with terminal sealing.
 
@@ -144,7 +145,11 @@ class ResourceLedger:
         A surviving guard is treated as interrupted work and therefore blocks automatically.
         """
 
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        if require_existing_run:
+            if self.run_dir.is_symlink() or not self.run_dir.is_dir():
+                raise ResourceLedgerError(f"{label} requires an existing run directory")
+        else:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
         guard_path = path or self.guard_path
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -175,12 +180,13 @@ class ResourceLedger:
                 pass
 
     @contextmanager
-    def run_transition_guard(self) -> Iterator[None]:
+    def run_transition_guard(self, *, require_existing_run: bool = False) -> Iterator[None]:
         """Serialize resource sealing with lifecycle transitions for this run."""
 
         with self._exclusive_guard(
             path=self.transition_guard_path,
             label="run transition guard",
+            require_existing_run=require_existing_run,
         ):
             yield
 

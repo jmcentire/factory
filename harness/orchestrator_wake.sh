@@ -108,7 +108,7 @@ cleanup_sections() {
 trap cleanup_sections EXIT
 
 python3 - "$ROOT" "$H" "$TRIGGER" "$SECTIONS" <<'PY'
-import json, os, pathlib, stat, sys
+import collections, json, os, pathlib, stat, sys
 
 root, harness, trigger_raw, destination = (
     pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3], pathlib.Path(sys.argv[4])
@@ -151,9 +151,72 @@ def stable(path: pathlib.Path, *, required: bool = False) -> bytes:
         raise SystemExit(f"changing orchestrator input: {path.name}")
     return confirmed
 
-def tail(path: pathlib.Path, count: int) -> bytes:
-    raw = stable(path)
-    return b"\n".join(raw.splitlines()[-count:]) + (b"\n" if raw else b"")
+def tail(path: pathlib.Path, count: int, *, limit: int = 65_536) -> bytes:
+    """Read a stable bounded suffix, not a bounded whole append-only log."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return b""
+    except OSError as exc:
+        raise SystemExit(f"unsafe orchestrator input: {path.name}: {exc}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise SystemExit(f"unsafe orchestrator input: {path.name}")
+        start = max(0, before.st_size - limit)
+        snapshot_size = before.st_size - start
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            stream.seek(start)
+            raw = stream.read(snapshot_size)
+            stream.seek(start)
+            confirmed = stream.read(snapshot_size)
+            after = os.fstat(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode)
+    if (
+        raw != confirmed
+        or identity(before) != identity(after)
+        or after.st_size < before.st_size
+        or len(confirmed) != snapshot_size
+    ):
+        raise SystemExit(f"changing orchestrator input: {path.name}")
+    omitted = bool(start)
+    if start:
+        boundary = confirmed.find(b"\n")
+        if boundary < 0:
+            return b"[orchestrator tail omitted oversized record]\n"
+        confirmed = confirmed[boundary + 1 :]
+    selected: collections.deque[bytes] = collections.deque()
+    used = 0
+    for line in reversed(confirmed.splitlines()[-count:]):
+        try:
+            line.decode("utf-8")
+        except UnicodeDecodeError:
+            omitted = True
+            continue
+        record = line + b"\n"
+        if len(record) > limit or used + len(record) > limit:
+            omitted = True
+            continue
+        selected.appendleft(record)
+        used += len(record)
+    if omitted:
+        marker = b"[orchestrator tail omitted earlier, oversized, or invalid record]\n"
+        while selected and used + len(marker) > limit:
+            used -= len(selected.popleft())
+        if len(marker) <= limit:
+            selected.appendleft(marker)
+    return b"".join(selected)
 
 def write(name: str, raw: bytes) -> None:
     path = destination / name
@@ -181,19 +244,35 @@ write("task", stable(root / "TASK.md", required=True))
 write("receipt-tail", tail(harness / "receipts" / "chain.jsonl", 15))
 write("event-tail", tail(root / "events.jsonl", 25))
 
-minutes = []
+minutes: collections.deque[tuple[str, str]] = collections.deque(maxlen=40)
 minutes_root = root / "minutes"
 if minutes_root.exists():
     if minutes_root.is_symlink() or not minutes_root.is_dir():
         raise SystemExit("unsafe minutes directory")
-    for path in sorted(minutes_root.glob("*.log")):
-        if path.is_symlink() or not path.is_file():
-            raise SystemExit(f"unsafe minutes input: {path.name}")
-        minutes.extend(
-            f"[{path.name}] {line}"
-            for line in stable(path).decode("utf-8").splitlines()
-        )
-write("minutes-tail", ("\n".join(minutes[-40:]) + ("\n" if minutes else "")).encode())
+    minute_paths = []
+    with os.scandir(minutes_root) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".log"):
+                continue
+            if len(minute_paths) >= 64:
+                raise SystemExit("too many orchestrator minutes inputs")
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                raise SystemExit(f"unsafe minutes input: {entry.name}")
+            minute_paths.append(pathlib.Path(entry.path))
+    for path in sorted(minute_paths):
+        for line in tail(path, 40).decode("utf-8").splitlines():
+            minutes.append((path.name, line))
+minute_lines: collections.deque[bytes] = collections.deque()
+minute_bytes = 0
+for name, line in reversed(minutes):
+    encoded = f"[{name}] {line}\n".encode("utf-8")
+    if len(encoded) > 65_536:
+        continue
+    if minute_bytes + len(encoded) > 65_536:
+        break
+    minute_lines.appendleft(encoded)
+    minute_bytes += len(encoded)
+write("minutes-tail", b"".join(minute_lines))
 write("harness-metadata", stable(root / "harness.json", required=True))
 PY
 
@@ -352,8 +431,14 @@ with os.fdopen(descriptor, "wb") as stream:
     os.fsync(stream.fileno())
 PY
 set +e
-(cd "$WAKE_CWD" && "${ORCH_CMD[@]}" < "$ORCH_PROMPT_FILE") \
-  > "$ORCH_OUT_FILE" 2> "$ORCH_ERR_FILE"
+python3 "$D/supervise_advisory.py" \
+  --cwd "$WAKE_CWD" \
+  --stdin "$ORCH_PROMPT_FILE" \
+  --stdout "$ORCH_OUT_FILE" \
+  --stderr "$ORCH_ERR_FILE" \
+  --wall-seconds 540 \
+  --max-output-bytes 65536 \
+  -- "${ORCH_CMD[@]}"
 ORCH_RC=$?
 set -e
 

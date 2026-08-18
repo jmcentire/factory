@@ -567,23 +567,37 @@ def _write_json_once(path: str | Path, document: Mapping[str, Any]) -> None:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    directory = os.open(
+        destination.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _retain_state_admission_refusal(
     arguments: argparse.Namespace,
     error: StateAdmissionError,
-) -> None:
+) -> bool:
     """Retain a bounded refusal only for the pre-model run-model admission path."""
 
     if getattr(arguments, "command", "") != "run-model":
-        return
+        return False
     required = ("runs", "run_id", "receipt_id", "role")
     if any(not getattr(arguments, field, "") for field in required):
-        return
+        return False
+    projection = RunStore(arguments.runs).load(arguments.run_id)
     document = {
-        "schema_version": "factory-state-admission-refusal/1",
+        "schema_version": "factory-state-admission-refusal/2",
         "receipt_id": str(arguments.receipt_id),
         "run_id": str(arguments.run_id),
+        "generation": projection.generation,
+        "run_ledger_head": projection.ledger_head,
         "role": str(arguments.role),
         "purpose": "lane-dispatch",
         "refusal_code": error.code,
@@ -609,6 +623,20 @@ def _retain_state_admission_refusal(
             "state-admission refusal receipt identity is already retained; "
             "receipt ids are single-use"
         ) from exc
+    return True
+
+
+def _attempt_state_admission_refusal_retention(
+    arguments: argparse.Namespace,
+    error: StateAdmissionError,
+) -> None:
+    """Preserve the primary refusal even when its evidence store is unhealthy."""
+
+    error.receipt_attempted = True
+    try:
+        error.receipt_retained = _retain_state_admission_refusal(arguments, error)
+    except (OSError, ValueError) as receipt_error:
+        error.receipt_retention_error = str(receipt_error)
 
 
 def _execute_unleased(arguments: argparse.Namespace) -> None:
@@ -1546,10 +1574,16 @@ def _execute(arguments: argparse.Namespace) -> None:
             Path(arguments.runs) / arguments.run_id,
             arguments.run_id,
         )
-        with ledger.run_transition_guard():
+        with ledger.run_transition_guard(require_existing_run=True):
+            # Long-running commands may retain evidence only inside a real run namespace. The
+            # non-creating guard is acquired first, then the ledger/projection are proven while
+            # that namespace is leased. A mistyped future run id therefore leaves no directory
+            # whose pre-genesis refusals could later be mistaken for evidence from that run.
+            RunStore(arguments.runs).load(arguments.run_id)
             try:
                 _execute_unleased(arguments)
-            except StateAdmissionError:
+            except StateAdmissionError as exc:
+                _attempt_state_admission_refusal_retention(arguments, exc)
                 raise
             except RunnerError as exc:
                 if arguments.command != "run-model":
@@ -1559,20 +1593,30 @@ def _execute(arguments: argparse.Namespace) -> None:
                     int(getattr(arguments, "_model_attempts", 0)),
                 ) > 0:
                     raise
-                raise StateAdmissionError(
+                refusal = StateAdmissionError(
                     exc.refusal_code,
                     str(exc),
                     dependency_id=exc.dependency_id,
-                ) from exc
+                )
+                _attempt_state_admission_refusal_retention(
+                    arguments,
+                    refusal,
+                )
+                raise refusal from exc
             except (OSError, ValueError) as exc:
                 if (
                     arguments.command == "run-model"
                     and getattr(arguments, "_model_attempts", 0) == 0
                 ):
-                    raise StateAdmissionError(
+                    refusal = StateAdmissionError(
                         "PRE_MODEL_REFUSAL",
                         str(exc),
-                    ) from exc
+                    )
+                    _attempt_state_admission_refusal_retention(
+                        arguments,
+                        refusal,
+                    )
+                    raise refusal from exc
                 raise
         return
     _execute_unleased(arguments)
@@ -1586,15 +1630,14 @@ def main(argv: list[str] | None = None) -> int:
         arguments = _parser().parse_args(argv)
         _execute(arguments)
     except StateAdmissionError as exc:
-        if arguments is not None:
-            try:
-                _retain_state_admission_refusal(arguments, exc)
-            except (OSError, ValueError) as receipt_error:
-                print(
-                    "factory: warning: state-admission refusal receipt could not be "
-                    f"retained: {receipt_error}",
-                    file=sys.stderr,
-                )
+        if arguments is not None and not exc.receipt_attempted:
+            _attempt_state_admission_refusal_retention(arguments, exc)
+        if exc.receipt_retention_error:
+            print(
+                "factory: warning: state-admission refusal receipt could not be "
+                f"durably retained: {exc.receipt_retention_error}",
+                file=sys.stderr,
+            )
         print(f"factory: refused: {exc}", file=sys.stderr)
         return 2
     except (OSError, ValueError) as exc:

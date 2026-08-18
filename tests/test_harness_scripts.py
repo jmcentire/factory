@@ -16,6 +16,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1582,6 +1583,193 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         json.loads(line)
 
 
+def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    (root / "minutes").mkdir(parents=True)
+    receipts = tmp_path / ".factory" / "receipts"
+    receipts.mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+    )
+    (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    (receipts / "chain.jsonl").write_text(
+        "".join(f'{{"receipt":{index}}}\n' for index in range(12_000))
+        + '{"receipt":"receipt-final"}\n'
+    )
+    (root / "events.jsonl").write_text(
+        "".join(f'{{"event":{index}}}\n' for index in range(12_000))
+        + ("é" * 40_000)
+        + "\n"
+        + '{"event":"event-final"}\n'
+    )
+    (root / "minutes" / "validator.log").write_text(
+        "".join(f"minute-{index}\n" for index in range(16_000)) + "minutes-final\n"
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    agy = binary / "agy"
+    agy.write_text("#!/usr/bin/env bash\nprintf 'Run remains aligned.\\n'\n")
+    agy.chmod(0o755)
+    directive = dl(
+        tmp_path,
+        "append",
+        "--scope",
+        "run",
+        "--text",
+        "retain the bounded tail",
+    )
+    assert directive.returncode == 0, directive.stderr
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    projection = json.loads(next((root / "wakes").glob("*.projection.json")).read_text())
+    sections = {section["section_id"]: section["content"] for section in projection["sections"]}
+    assert "receipt-final" in sections["receipt-tail"]
+    assert "event-final" in sections["event-tail"]
+    assert "omitted earlier, oversized, or invalid record" in sections["event-tail"]
+    assert "minutes-final" in sections["minutes-tail"]
+    assert all(len(sections[name].encode()) <= 65_536 for name in (
+        "receipt-tail",
+        "event-tail",
+        "minutes-tail",
+    ))
+
+
+def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Path) -> None:
+    noisy = tmp_path / "noisy.py"
+    noisy.write_text(
+        "import os, sys\n"
+        "while True:\n"
+        "    os.write(sys.stdout.fileno(), b'x' * 8192)\n"
+    )
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--wall-seconds",
+            "5",
+            "--max-output-bytes",
+            "4096",
+            "--",
+            sys.executable,
+            str(noisy),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 74, result.stdout + result.stderr
+    assert len(stdout.read_bytes()) + len(stderr.read_bytes()) <= 4096
+
+
+def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    minutes = root / "minutes"
+    minutes.mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+    )
+    (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    for index in range(65):
+        (minutes / f"{index:02d}.log").write_text("minute\n")
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "too many orchestrator minutes inputs" in result.stderr
+    assert not list((root / "wakes").glob("*.projection.json"))
+
+
+def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -> None:
+    child_pid = tmp_path / "child.pid"
+    parent = tmp_path / "parent.py"
+    parent.write_text(
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+        "time.sleep(60)\n"
+    )
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--wall-seconds",
+            "0.3",
+            "--max-output-bytes",
+            "4096",
+            "--",
+            sys.executable,
+            str(parent),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 124, result.stdout + result.stderr
+    pid = int(child_pid.read_text())
+    for _ in range(20):
+        status = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not status or status.startswith("Z"):
+            break
+        time.sleep(0.05)
+    assert not status or status.startswith("Z")
+
+
 def test_orchestrator_refuses_ambient_agent_substitution(tmp_path: Path) -> None:
     root = tmp_path / ".factory" / "runs" / "r1"
     (root / "wakes").mkdir(parents=True)
@@ -2243,14 +2431,22 @@ def test_dispatcher_kills_hung_wake_past_timeout(tmp_path: Path) -> None:
         def communicate(self, input=None, timeout=None):
             return (b"", b"")
 
+    invocation: dict[str, object] = {}
     orig = mod.subprocess.Popen  # type: ignore[attr-defined]
-    mod.subprocess.Popen = lambda *a, **k: _FakeProc()  # type: ignore[assignment]
+
+    def fake_popen(*args: object, **kwargs: object) -> _FakeProc:
+        invocation["args"] = args
+        invocation["kwargs"] = kwargs
+        return _FakeProc()
+
+    mod.subprocess.Popen = fake_popen  # type: ignore[assignment]
     try:
         d.wake_orchestrator({"kind": "test"})  # type: ignore[attr-defined]
     finally:
         mod.subprocess.Popen = orig  # type: ignore[assignment]
         del os.environ["WAKE_TIMEOUT"]
     assert _Hung.killed, "a hung wake past its deadline must be killed"
+    assert invocation["kwargs"]["start_new_session"] is True  # type: ignore[index]
     events = [
         json.loads(line)
         for line in (root / "events.jsonl").read_text().splitlines()
@@ -2259,6 +2455,7 @@ def test_dispatcher_kills_hung_wake_past_timeout(tmp_path: Path) -> None:
     assert any(e["kind"] == "orchestrator_dead" for e in events), (
         "killing a hung wake must record orchestrator_dead, not report it healthy"
     )
+    assert any("scope=wrapper-only-fallback" in str(e["detail"]) for e in events)
 
 
 def test_dispatcher_distinguishes_unavailable_verifier_from_target_divergence(

@@ -224,7 +224,9 @@ configuration set, and structural qualification observations and report. The run
 those same in-memory bytes; it does not reopen caller paths. Missing,
 unknown, duplicate, oversized, stale-profile, trust-escalated, or byte-substituted dependencies
 refuse before a model call and produce a bounded refusal receipt with zero model attempts and zero
-broker effects. The capsule is provenance and integrity evidence, not an authority source.
+broker effects. That refusal is retained while the run-transition lease is still held and binds
+the exact run generation and ledger head; an unknown run id creates no pre-genesis namespace.
+The capsule is provenance and integrity evidence, not an authority source.
 
 State qualification compares deterministic dispositions, never model prose. Its code-owned
 executor invokes no model and produces no broker effect: cold, exact-resume, and
@@ -305,8 +307,10 @@ The implementation must prove at least:
 - the orchestrator sees only a retained closed nine-section projection and capsule, starts in a
   fresh working directory, and remains advisory with no grant, gate, state-transition, or cleanup
   authority; its response is retained only as `untrusted-advisory`,
-  `validator-blocking-only` data, while process-environment credential isolation remains
-  explicitly unqualified;
+  `validator-blocking-only` data; mature append-only logs are suffix-bounded before projection,
+  and live wall/output plus outer process-group ceilings stop noisy, hung, and ordinary descendant
+  processes. Deliberate process detachment, process-environment credential isolation, and
+  provider-only egress remain explicitly unqualified;
 - a model-supplied path, command, argv, script, unknown capability, wrong operation definition,
   wrong run-owned resource root, capability replay, or idempotency-key substitution denies;
 - every transition re-derives its code-selected obligation set/report; unknown trigger, missing

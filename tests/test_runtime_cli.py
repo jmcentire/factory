@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from argparse import Namespace
 from pathlib import Path
 
@@ -17,9 +19,21 @@ from factory_runtime.cli import (
 )
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.runner import RunnerError
+from factory_runtime.schema import DocumentValidationError, validate_document
+from factory_runtime.state import RunStore
 from factory_runtime.state_admission import StateAdmissionError
+from tests.conftest import create_intake_run
 
 DIGEST = "sha256:" + ("a" * 64)
+
+
+def _create_run(root: Path, run_id: str = "run-1") -> None:
+    create_intake_run(
+        RunStore(root),
+        run_id=run_id,
+        target_digest=digest_obj({"target": run_id}),
+        source_digest=digest_obj({"source": run_id}),
+    )
 
 
 def _artifact(path: Path) -> dict[str, object]:
@@ -114,7 +128,17 @@ def test_cli_inspects_the_target_operational_abi(
 
 def test_pre_model_state_refusal_is_retained_without_paths_or_content(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _create_run(tmp_path)
+    synced_modes: list[int] = []
+    real_fsync = os.fsync
+
+    def observed_fsync(descriptor: int) -> None:
+        synced_modes.append(os.fstat(descriptor).st_mode)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(runtime_cli.os, "fsync", observed_fsync)
     arguments = Namespace(
         command="run-model",
         runs=str(tmp_path),
@@ -141,9 +165,13 @@ def test_pre_model_state_refusal_is_retained_without_paths_or_content(
     document = json.loads(path.read_text())
     assert document["refusal_code"] == "MISSING_DEPENDENCY"
     assert document["dependency_id"] == "role-primer"
+    assert document["generation"] == 1
+    assert document["run_ledger_head"] == RunStore(tmp_path).load("run-1").ledger_head
     assert document["model_attempts"] == 0
     assert document["broker_effects"] == 0
     assert str(tmp_path) not in path.read_text()
+    assert any(stat.S_ISREG(mode) for mode in synced_modes)
+    assert any(stat.S_ISDIR(mode) for mode in synced_modes)
 
     with pytest.raises(ValueError, match="single-use"):
         _retain_state_admission_refusal(arguments, error)
@@ -180,6 +208,26 @@ def test_cli_materializes_structural_state_qualification_report(
     assert rendered["qualified"] is True
     assert retained == rendered
     assert retained["observations_digest"] == digest_obj(observations)
+
+
+def test_historical_state_admission_refusal_v1_schema_remains_addressable() -> None:
+    document = {
+        "schema_version": "factory-state-admission-refusal/1",
+        "receipt_id": "runner-legacy",
+        "run_id": "run-legacy",
+        "role": "coder",
+        "purpose": "lane-dispatch",
+        "refusal_code": "LEGACY_RUNNER_MANIFEST",
+        "dependency_id": "runner-manifest",
+        "state_profile_digest": digest_obj({"profile": "legacy"}),
+        "model_attempts": 0,
+        "broker_effects": 0,
+        "created_at": 1,
+    }
+
+    validate_document("state-admission-refusal-v1", document)
+    with pytest.raises(DocumentValidationError):
+        validate_document("state-admission-refusal", document)
 
 
 def test_checkpoint_recheck_uses_canonical_json_address_not_serialization() -> None:
@@ -220,6 +268,7 @@ def test_state_assembly_model_and_broker_commands_hold_execution_lease(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
+    _create_run(tmp_path)
     run_dir = tmp_path / "run-1"
     observed = False
 
@@ -252,6 +301,8 @@ def test_zero_attempt_runner_failure_is_typed_as_state_admission_refusal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _create_run(tmp_path)
+
     def refuse(_arguments: Namespace) -> None:
         raise RunnerError("runner executable is unavailable")
 
@@ -269,6 +320,8 @@ def test_specific_zero_attempt_runner_refusal_code_is_preserved(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _create_run(tmp_path)
+
     def refuse(_arguments: Namespace) -> None:
         raise RunnerError(
             "legacy runner manifest cannot dispatch",
@@ -284,10 +337,87 @@ def test_specific_zero_attempt_runner_refusal_code_is_preserved(
     assert error.value.code == "LEGACY_RUNNER_MANIFEST"
 
 
+def test_execute_retains_run_bound_refusal_before_releasing_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _create_run(tmp_path)
+
+    def refuse(_arguments: Namespace) -> None:
+        guard = tmp_path / "run-1" / "run-transition.guard"
+        assert guard.is_file()
+        raise StateAdmissionError("MISSING_DEPENDENCY", "missing", dependency_id="role-primer")
+
+    monkeypatch.setattr(runtime_cli, "_execute_unleased", refuse)
+    arguments = Namespace(
+        command="run-model",
+        runs=str(tmp_path),
+        run_id="run-1",
+        receipt_id="runner-1",
+        role="coder",
+    )
+
+    with pytest.raises(StateAdmissionError) as error:
+        runtime_cli._execute(arguments)
+
+    assert error.value.receipt_retained is True
+    receipt = json.loads(
+        (
+            tmp_path
+            / "run-1"
+            / "evidence"
+            / "state-admission"
+            / "refusals"
+            / "runner-1.json"
+        ).read_text()
+    )
+    projection = RunStore(tmp_path).load("run-1")
+    assert receipt["schema_version"] == "factory-state-admission-refusal/2"
+    assert receipt["generation"] == projection.generation
+    assert receipt["run_ledger_head"] == projection.ledger_head
+    assert not (tmp_path / "run-1" / "run-transition.guard").exists()
+
+
+def test_refusal_retention_failure_does_not_replace_primary_admission_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _create_run(tmp_path)
+
+    def refuse(_arguments: Namespace) -> None:
+        raise StateAdmissionError("POISONED_STATE", "primary admission refusal")
+
+    real_write = runtime_cli._write_json_once
+
+    def uncertain_write(path: str | Path, document: dict[str, object]) -> None:
+        real_write(path, document)
+        raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(runtime_cli, "_execute_unleased", refuse)
+    monkeypatch.setattr(runtime_cli, "_write_json_once", uncertain_write)
+    arguments = Namespace(
+        command="run-model",
+        runs=str(tmp_path),
+        run_id="run-1",
+        receipt_id="runner-uncertain",
+        role="coder",
+    )
+
+    with pytest.raises(StateAdmissionError) as error:
+        runtime_cli._execute(arguments)
+
+    assert error.value.code == "POISONED_STATE"
+    assert error.value.receipt_attempted is True
+    assert error.value.receipt_retained is False
+    assert error.value.receipt_retention_error == "directory fsync failed"
+
+
 def test_post_attempt_runner_failure_is_not_laundered_as_zero_attempt_refusal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _create_run(tmp_path)
+
     def refuse(_arguments: Namespace) -> None:
         raise RunnerError("model call failed", model_attempts=1)
 
@@ -305,6 +435,8 @@ def test_broker_runner_error_is_not_laundered_as_model_state_refusal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _create_run(tmp_path)
+
     def refuse(_arguments: Namespace) -> None:
         raise RunnerError("broker handoff failed")
 
@@ -317,3 +449,23 @@ def test_broker_runner_error_is_not_laundered_as_model_state_refusal(
 
     with pytest.raises(RunnerError, match="broker handoff failed"):
         runtime_cli._execute(arguments)
+
+
+def test_long_action_refuses_unknown_run_without_creating_a_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def should_not_run(_arguments: Namespace) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(runtime_cli, "_execute_unleased", should_not_run)
+    arguments = Namespace(command="run-model", runs=str(tmp_path), run_id="future-run")
+
+    with pytest.raises(ValueError, match="existing run"):
+        runtime_cli._execute(arguments)
+
+    assert called is False
+    assert not (tmp_path / "future-run").exists()

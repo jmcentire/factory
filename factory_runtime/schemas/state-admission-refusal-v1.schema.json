@@ -1,15 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/state-admission-refusal/2",
-  "title": "Factory pre-model state-admission refusal receipt",
+  "$id": "factory://schemas/state-admission-refusal/1",
+  "title": "Factory pre-model state-admission refusal receipt v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "receipt_id",
     "run_id",
-    "generation",
-    "run_ledger_head",
     "role",
     "purpose",
     "refusal_code",
@@ -20,11 +18,9 @@
     "created_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-state-admission-refusal/2"},
+    "schema_version": {"const": "factory-state-admission-refusal/1"},
     "receipt_id": {"$ref": "#/$defs/id"},
     "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
     "role": {"enum": ["coder", "tester", "validator"]},
     "purpose": {"const": "lane-dispatch"},
     "refusal_code": {"$ref": "#/$defs/id"},

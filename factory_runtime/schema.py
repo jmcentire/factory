@@ -37,6 +37,7 @@ SCHEMA_NAMES = frozenset(
         "runner-receipt",
         "state-dependency-capsule",
         "state-admission-refusal",
+        "state-admission-refusal-v1",
         "state-qualification-observations",
         "state-qualification-report",
         "target-resolution-request",

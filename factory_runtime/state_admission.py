@@ -133,6 +133,9 @@ class StateAdmissionError(ValueError):
         super().__init__(message)
         self.code = code
         self.dependency_id = dependency_id
+        self.receipt_retained = False
+        self.receipt_attempted = False
+        self.receipt_retention_error = ""
 
 
 def profile_document(purpose: str) -> dict[str, Any]:

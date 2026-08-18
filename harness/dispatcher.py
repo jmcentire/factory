@@ -22,6 +22,7 @@ import os
 import pathlib
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -176,11 +177,19 @@ class Dispatcher:
                 return
             # past the deadline — the seat is hung, not working. Kill it, record
             # the death, and fall through to spawn a fresh wake.
-            proc.kill()
+            kill_scope = "process-group"
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (AttributeError, ProcessLookupError, PermissionError):
+                kill_scope = "wrapper-only-fallback"
+                proc.kill()
             proc.wait()
+            kill_detail = (
+                f"orchestrator wake hung past {wake_timeout:.0f}s and was killed "
+                f"with scope={kill_scope}; no independent check is running"
+            )
             self.event("orchestrator_dead",
-                       f"orchestrator wake hung past {wake_timeout:.0f}s and was "
-                       f"killed; no independent check is running", wake=False)
+                       kill_detail, wake=False)
             # A dead orchestrator that is only silently recorded is the opposite of
             # the founder's "get the validator's attention" requirement. Banner it
             # (a non-executing display-message, like HALT/stall) and record the death
@@ -188,20 +197,20 @@ class Dispatcher:
             # write its own dead-wake record, so without this the labeled count in
             # status.sh misses the death the dispatcher itself caused.
             self._banner(
-                f"INCIDENT — orchestrator wake hung {wake_timeout:.0f}s and was "
-                f"killed; no independent check is running"
+                f"INCIDENT — {kill_detail}"
             )
             wd = self.root / "wakes"
             wd.mkdir(parents=True, exist_ok=True)
             with open(wd / "receipts.jsonl", "a") as wf:
                 wf.write(json.dumps(
                     {"ts": now(), "status": "ORCHESTRATOR_DID_NOT_RUN",
-                     "detail": f"dispatcher killed hung wake after {wake_timeout:.0f}s"},
+                     "detail": kill_detail},
                     sort_keys=True, separators=(",", ":")) + "\n")
             self._wake_proc = None
         self._wake_proc = subprocess.Popen(
             [str(wake), self.run, json.dumps(trigger)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
         self._wake_start = time.monotonic()
         self.coalesced_wakes = 0

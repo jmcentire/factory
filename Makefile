@@ -132,11 +132,13 @@ test-tessera: check-python ## run the real Tessera CLI integration proof
 	FACTORY_TESSERA_BIN="$(FACTORY_TESSERA_BIN)" \
 		$(PY) -m pytest tests/test_tessera_cli_integration.py
 
-lint: check-python ## ruff over factory_core / factory_runtime / scripts / tests
-	$(PY) -m ruff check factory_core factory_runtime scripts tests
+lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
+	$(PY) -m ruff check factory_core factory_runtime scripts tests \
+		harness/dispatcher.py harness/supervise_advisory.py
 
-typecheck: check-python ## mypy over factory_core / scripts
-	$(PY) -m mypy factory_core factory_runtime scripts
+typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
+	$(PY) -m mypy factory_core factory_runtime scripts \
+		harness/dispatcher.py harness/supervise_advisory.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py
@@ -152,7 +154,7 @@ check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's aut
 # drills) lives in tests/test_harness_scripts.py and runs under `test`.
 check-harness: check-python ## harness scripts parse/executable; local ledger chains verify
 	@bash -n harness/*.sh
-	@$(PY) -m py_compile harness/directive.py
+	@$(PY) -m py_compile harness/*.py
 	@for s in harness/*.sh; do test -x "$$s" || { echo "not executable: $$s" >&2; exit 1; }; done
 	@if [ -f DIRECTIVES/ledger.jsonl ] || [ -f DIRECTIVES/provisional.jsonl ]; then \
 		DIRECTIVE_LEDGER=DIRECTIVES/ledger.jsonl $(PY) harness/directive.py verify; fi

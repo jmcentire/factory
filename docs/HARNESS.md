@@ -111,7 +111,12 @@ triggers — judgment-shaped failure classes, a lane's blocking question, a huma
 under the lease discipline of control 6, and hands it a *projection*, not the transcript.
 The executable projection is a closed nine-section document (trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata), built
-from one stable-open confirmed read of each bounded input and bound by a state-dependency capsule.
+from one stable-open confirmed read of each bounded input and one stable bounded-suffix read of
+each append-only log, then bound by a state-dependency capsule. A mature log may grow without
+disabling the wake; only the admitted tail enters the projection. The snapshot is pinned to the
+initial size, so concurrent appends do not invalidate already-read bytes. Complete UTF-8 records
+are admitted without byte slicing, oversized records are marked as omitted, and minutes input
+enumeration has a code-owned file-count ceiling.
 The runtime itself derives the phase snapshot from the exact three ratified artifacts and the
 run projection from the verified ledger; the wake caller cannot supply either authoritative
 section. The agent
@@ -126,6 +131,11 @@ manifests, registries, and the ledger are human-signed files they read and canno
 The executable sink is one-way: a bounded response is labeled `untrusted-advisory` and
 appended only as `validator-blocking-only` data; no parser converts its prose into a broker
 request, signature, ledger transition, or cleanup action.
+The advisory process is supervised while it runs: a code-owned wall ceiling and combined output
+ceiling terminate the process tree before post-processing, and the dispatcher starts each wake
+in a dedicated process group so its outer deadline kills ordinary descendants rather than only
+the wrapper. This is an availability boundary for the supported clients, not a kernel proof
+against a deliberately detached process; that stronger claim belongs with qualified isolation.
 The wake receipt labels the advisory CLI sandbox `cli-declared-not-independently-qualified`:
 the dispatcher exposes no artifact-pull seam and launches from a fresh directory, but Factory
 does not yet claim a kernel-qualified projection-only confidentiality boundary or a
@@ -352,6 +362,8 @@ dependency-free (bash + python3 + git):
   qualified model runner and typed broker. Ambient gap flags cannot bypass either precondition.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
+  Append-only sources are read as stable bounded suffixes rather than rejected when their full
+  history grows; `supervise_advisory.py` enforces the live wall/output ceilings before retention.
   The agent choice is frozen in harness metadata; ambient substitution denies. Antigravity is the
   default and Codex is the supported fallback. The current Claude adapter is refused because it
   does not declare a filesystem sandbox. Agy/Codex CLI sandboxing remains explicitly unqualified

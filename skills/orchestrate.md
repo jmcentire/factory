@@ -77,6 +77,12 @@ a lane's blocking question, a judgment-shaped failure class, a human message, a 
 expiry, or a receipt that contradicts an earlier one. On each wake, consume only the
 closed bounded projection the dispatcher froze: trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata.
+Append-only inputs are admitted through stable bounded-suffix reads, so history growth does not
+disable a wake. Concurrent appends preserve the initial-size snapshot; only complete UTF-8 records
+fit, and minutes-file enumeration is code-bounded. The model process is live-supervised under a
+code-owned wall and combined-output ceiling; the dispatcher owns an outer process-group kill
+boundary. This stops supported-client
+descendants, but is not a kernel proof against deliberate process detachment.
 The projection and its exact dependency capsule are retained. Do not inspect an ambient
 repository or request a path outside the projection; insufficient context becomes a
 blocking question, not permission to widen the read set. "What did the orchestrator know
