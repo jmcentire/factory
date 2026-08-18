@@ -427,6 +427,7 @@ ORCH_PROMPT_FILE="$(cd "$ROOT/wakes" && pwd)/$WAKE_ID.prompt.txt"
 ORCH_INPUT_FILE="$ORCH_PROMPT_FILE"
 ORCH_OUT_FILE="$WAKE_CWD/orchestrator.out"
 ORCH_ERR_FILE="$WAKE_CWD/orchestrator.err"
+ORCH_SUPERVISOR_RECEIPT="$WAKE_CWD/supervisor-receipt.json"
 python3 - "$PROJ" "$ORCH_PROMPT_FILE" <<'PY'
 import os, pathlib, sys
 
@@ -483,8 +484,10 @@ python3 "$D/supervise_advisory.py" \
   --stdin "$ORCH_INPUT_FILE" \
   --stdout "$ORCH_OUT_FILE" \
   --stderr "$ORCH_ERR_FILE" \
+  --receipt "$ORCH_SUPERVISOR_RECEIPT" \
   --stdin-mode prompt \
   --wall-seconds 540 \
+  --max-input-bytes 8388608 \
   --max-output-bytes 65536 \
   -- "${ORCH_CMD[@]}"
 ORCH_RC=$?
@@ -507,7 +510,8 @@ set -e
 mkdir -p "$ROOT/lanes"
 ORCH_STATUS="$(python3 - \
   "$ORCH_OUT_FILE" "$ORCH_ERR_FILE" "$ORCH_PROMPT_FILE" "$ORCH_INPUT_FILE" \
-  "$ORCH_RC" "$ROOT" "$WAKE_ID" "$ORCH_AGENT" "$ORCH_OUTPUT_MODE" <<'PY'
+  "$ORCH_SUPERVISOR_RECEIPT" "$ORCH_RC" "$ROOT" "$WAKE_ID" "$ORCH_AGENT" \
+  "$ORCH_OUTPUT_MODE" <<'PY'
 import datetime
 import fcntl
 import hashlib
@@ -518,10 +522,12 @@ import re
 import stat
 import sys
 
-stdout_path, stderr_path, prompt_path, input_path = map(pathlib.Path, sys.argv[1:5])
-returncode = int(sys.argv[5])
-root = pathlib.Path(sys.argv[6])
-wake, agent, output_mode = sys.argv[7:10]
+stdout_path, stderr_path, prompt_path, input_path, supervisor_receipt_path = map(
+    pathlib.Path, sys.argv[1:6]
+)
+returncode = int(sys.argv[6])
+root = pathlib.Path(sys.argv[7])
+wake, agent, output_mode = sys.argv[8:11]
 limit = 65_536
 
 def read_bounded(path: pathlib.Path, max_bytes: int = limit) -> tuple[bytes, bool]:
@@ -577,6 +583,61 @@ def append_jsonl(path: pathlib.Path, body: dict[str, object]) -> None:
 
 stdout, stdout_oversized = read_bounded(stdout_path)
 stderr, stderr_oversized = read_bounded(stderr_path)
+supervisor_receipt_raw, supervisor_receipt_oversized = read_bounded(supervisor_receipt_path)
+if supervisor_receipt_oversized:
+    raise SystemExit("oversized advisory supervisor receipt")
+try:
+    supervisor_receipt = json.loads(supervisor_receipt_raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit("malformed advisory supervisor receipt") from exc
+expected_supervisor_keys = {
+    "schema_version", "input_admitted", "stdin_mode", "input_digest",
+    "input_byte_count", "stdout_digest", "stdout_byte_count", "stderr_digest",
+    "stderr_byte_count", "combined_output_truncated", "termination_reason",
+    "client_returncode", "supervisor_exit_code",
+}
+if not isinstance(supervisor_receipt, dict) or set(supervisor_receipt) != expected_supervisor_keys:
+    raise SystemExit("advisory supervisor receipt has unknown or missing fields")
+if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/1":
+    raise SystemExit("unsupported advisory supervisor receipt")
+digest_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
+for field in ("input_digest", "stdout_digest", "stderr_digest"):
+    if not isinstance(supervisor_receipt.get(field), str) or not digest_pattern.fullmatch(
+        supervisor_receipt[field]
+    ):
+        raise SystemExit(f"advisory supervisor receipt has invalid {field}")
+for field in ("input_byte_count", "stdout_byte_count", "stderr_byte_count"):
+    value = supervisor_receipt.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SystemExit(f"advisory supervisor receipt has invalid {field}")
+if (
+    not isinstance(supervisor_receipt.get("input_admitted"), bool)
+    or supervisor_receipt.get("stdin_mode") != "prompt"
+    or not isinstance(supervisor_receipt.get("combined_output_truncated"), bool)
+    or not isinstance(supervisor_receipt.get("termination_reason"), str)
+    or (
+        supervisor_receipt.get("client_returncode") is not None
+        and (
+            isinstance(supervisor_receipt.get("client_returncode"), bool)
+            or not isinstance(supervisor_receipt.get("client_returncode"), int)
+        )
+    )
+):
+    raise SystemExit("advisory supervisor receipt has invalid field types")
+supervisor_code = supervisor_receipt.get("supervisor_exit_code")
+if isinstance(supervisor_code, bool) or not isinstance(supervisor_code, int):
+    raise SystemExit("advisory supervisor receipt has invalid exit code")
+if supervisor_receipt.get("supervisor_exit_code") != returncode:
+    raise SystemExit("advisory supervisor exit differs from its receipt")
+if (
+    supervisor_receipt.get("stdout_digest")
+    != "sha256:" + hashlib.sha256(stdout).hexdigest()
+    or supervisor_receipt.get("stdout_byte_count") != len(stdout)
+    or supervisor_receipt.get("stderr_digest")
+    != "sha256:" + hashlib.sha256(stderr).hexdigest()
+    or supervisor_receipt.get("stderr_byte_count") != len(stderr)
+):
+    raise SystemExit("advisory supervisor output differs from its receipt")
 prompt_descriptor = os.open(
     prompt_path,
     os.O_RDONLY
@@ -602,6 +663,14 @@ if input_oversized:
 
 client_error = ""
 response = stdout
+if supervisor_receipt.get("input_admitted") is not True:
+    client_error = "advisory supervisor did not admit client input"
+elif (
+    supervisor_receipt.get("input_digest")
+    != "sha256:" + hashlib.sha256(input_bytes).hexdigest()
+    or supervisor_receipt.get("input_byte_count") != len(input_bytes)
+):
+    client_error = "retained client input differs from the exact supervisor snapshot"
 if output_mode == "agy-stream-json":
     try:
         wire = json.loads(input_bytes)
@@ -625,14 +694,15 @@ if output_mode == "agy-stream-json":
             raise ValueError("Agy terminal response is not text")
         response = value.encode("utf-8")
     except (IndexError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
-        client_error = str(exc)
+        client_error = client_error or str(exc)
         response = b""
 elif output_mode != "text" or input_bytes != prompt:
-    client_error = "Codex stdin does not exactly bind the retained prompt"
+    client_error = client_error or "Codex stdin does not exactly bind the retained prompt"
     response = b""
 
 combined = response + (b"\n[stderr]\n" + stderr if stderr else b"")
-oversized = stdout_oversized or stderr_oversized or len(combined) > limit
+supervisor_truncated = supervisor_receipt.get("combined_output_truncated") is True
+oversized = stdout_oversized or stderr_oversized or supervisor_truncated or len(combined) > limit
 refusal = re.search(
     rb"orchestrator invocation failed|clarify what|no surrounding command|"
     rb"didn't include the command|what would you like me to do|"
@@ -654,7 +724,9 @@ status = "did-not-run" if failed else "completed"
 suffix = "failure.md" if failed else "response.md"
 output = root / "wakes" / f"{wake}.{suffix}"
 raw_output = root / "wakes" / f"{wake}.client-output"
+retained_supervisor_receipt = root / "wakes" / f"{wake}.supervisor-receipt.json"
 write_once(raw_output, stdout)
+write_once(retained_supervisor_receipt, supervisor_receipt_raw)
 write_once(output, retained)
 timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 append_jsonl(
@@ -675,14 +747,18 @@ append_jsonl(
         "client_input_transport": (
             "agy-stream-json-stdin" if output_mode == "agy-stream-json" else "codex-text-stdin"
         ),
-        "client_input_digest": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
-        "client_input_byte_count": len(input_bytes),
+        "client_input_digest": supervisor_receipt["input_digest"],
+        "client_input_byte_count": supervisor_receipt["input_byte_count"],
         "client_input_bytes_retained": True,
         "exit_code": returncode,
+        "supervisor_receipt_id": retained_supervisor_receipt.name,
+        "supervisor_receipt_digest": (
+            "sha256:" + hashlib.sha256(supervisor_receipt_raw).hexdigest()
+        ),
         "raw_output_id": raw_output.name,
         "raw_output_digest": "sha256:" + hashlib.sha256(stdout).hexdigest(),
         "raw_output_byte_count": len(stdout),
-        "raw_output_truncated": stdout_oversized,
+        "raw_output_truncated": supervisor_truncated or stdout_oversized,
         "output_id": output.name,
         "output_digest": "sha256:" + hashlib.sha256(retained).hexdigest(),
         "output_byte_count": len(retained),

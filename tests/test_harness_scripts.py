@@ -1603,6 +1603,14 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     raw_outputs = list((root / "wakes").glob("*.client-output"))
     assert len(raw_outputs) == 1
     assert completed_receipt["raw_output_digest"] == digest_bytes(raw_outputs[0].read_bytes())
+    assert completed_receipt["raw_output_truncated"] is False
+    supervisor_receipts = list((root / "wakes").glob("*.supervisor-receipt.json"))
+    assert len(supervisor_receipts) == 1
+    supervisor_receipt = json.loads(supervisor_receipts[0].read_text())
+    assert supervisor_receipt["input_digest"] == completed_receipt["client_input_digest"]
+    assert completed_receipt["supervisor_receipt_digest"] == digest_bytes(
+        supervisor_receipts[0].read_bytes()
+    )
     responses = list((root / "wakes").glob("*.response.md"))
     assert len(responses) == 1
     assert completed_receipt["output_digest"] == digest_bytes(responses[0].read_bytes())
@@ -1656,6 +1664,53 @@ def test_orchestrator_rejects_malformed_agy_terminal_stream(tmp_path: Path) -> N
     failure = next((root / "wakes").glob("*.failure.md")).read_text()
     assert "client output invalid" in failure
     assert "plausible prose" in failure
+
+
+def test_orchestrator_receipts_live_supervisor_output_truncation(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+    )
+    (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    agy = binary / "agy"
+    agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "sys.stdin.buffer.read()\n"
+        "os.write(sys.stdout.fileno(), b'x' * 131072)\n"
+    )
+    agy.chmod(0o755)
+    directive = dl(tmp_path, "append", "--scope", "run", "--text", "audit the run")
+    assert directive.returncode == 0, directive.stderr
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = read_chain(root / "wakes" / "receipts.jsonl")[-1]
+    assert receipt["status"] == "did-not-run"
+    assert receipt["exit_code"] == 74
+    assert receipt["raw_output_truncated"] is True
+    supervisor_receipt = json.loads(
+        next((root / "wakes").glob("*.supervisor-receipt.json")).read_text()
+    )
+    assert supervisor_receipt["combined_output_truncated"] is True
+    assert receipt["supervisor_receipt_digest"] == digest_bytes(
+        next((root / "wakes").glob("*.supervisor-receipt.json")).read_bytes()
+    )
 
 
 def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
@@ -1744,6 +1799,7 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    receipt = tmp_path / "receipt"
 
     result = subprocess.run(
         [
@@ -1757,8 +1813,12 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
             str(stdout),
             "--stderr",
             str(stderr),
+            "--receipt",
+            str(receipt),
             "--wall-seconds",
             "5",
+            "--max-input-bytes",
+            "1048576",
             "--max-output-bytes",
             "4096",
             "--",
@@ -1772,6 +1832,7 @@ def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Pat
 
     assert result.returncode == 74, result.stdout + result.stderr
     assert len(stdout.read_bytes()) + len(stderr.read_bytes()) <= 4096
+    assert json.loads(receipt.read_text())["combined_output_truncated"] is True
 
 
 def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
@@ -1795,6 +1856,7 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    receipt = tmp_path / "receipt"
 
     result = subprocess.run(
         [
@@ -1808,8 +1870,12 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
             str(stdout),
             "--stderr",
             str(stderr),
+            "--receipt",
+            str(receipt),
             "--wall-seconds",
             "0.5",
+            "--max-input-bytes",
+            "1048576",
             "--max-output-bytes",
             "4096",
             "--",
@@ -1839,6 +1905,7 @@ def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: P
     prompt.write_text("must not be duplicated on stdin")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    receipt = tmp_path / "receipt"
 
     result = subprocess.run(
         [
@@ -1854,8 +1921,12 @@ def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: P
             str(stdout),
             "--stderr",
             str(stderr),
+            "--receipt",
+            str(receipt),
             "--wall-seconds",
             "5",
+            "--max-input-bytes",
+            "1048576",
             "--max-output-bytes",
             "4096",
             "--",
@@ -1870,6 +1941,69 @@ def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: P
     assert result.returncode == 0, result.stdout + result.stderr
     assert stdout.read_text() == "0\n"
     assert stderr.read_bytes() == b""
+
+
+def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "ready"
+    received = tmp_path / "received"
+    reader = tmp_path / "delayed_reader.py"
+    reader.write_text(
+        "import pathlib, sys, time\n"
+        f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
+        "time.sleep(0.3)\n"
+        f"pathlib.Path({str(received)!r}).write_bytes(sys.stdin.buffer.read())\n"
+        "print('done')\n"
+    )
+    original = b"the exact admitted input\n"
+    prompt = tmp_path / "prompt"
+    prompt.write_bytes(original)
+    stdout = tmp_path / "stdout"
+    stderr = tmp_path / "stderr"
+    receipt = tmp_path / "receipt"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(HARNESS / "supervise_advisory.py"),
+            "--cwd",
+            str(tmp_path),
+            "--stdin",
+            str(prompt),
+            "--stdout",
+            str(stdout),
+            "--stderr",
+            str(stderr),
+            "--receipt",
+            str(receipt),
+            "--wall-seconds",
+            "5",
+            "--max-input-bytes",
+            "1048576",
+            "--max-output-bytes",
+            "4096",
+            "--",
+            sys.executable,
+            str(reader),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    for _ in range(100):
+        if ready.exists():
+            break
+        time.sleep(0.01)
+    assert ready.exists(), "client did not start after the supervisor admitted stdin"
+    prompt.write_text("mutated after client launch\n")
+    process_stdout, process_stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 0, process_stdout + process_stderr
+    assert received.read_bytes() == original
+    supervisor_receipt = json.loads(receipt.read_text())
+    assert supervisor_receipt["input_digest"] == digest_bytes(original)
+    assert supervisor_receipt["input_byte_count"] == len(original)
+    assert supervisor_receipt["input_admitted"] is True
 
 
 def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path) -> None:
@@ -1911,6 +2045,7 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
     prompt.write_text("audit\n")
     stdout = tmp_path / "stdout"
     stderr = tmp_path / "stderr"
+    receipt = tmp_path / "receipt"
 
     result = subprocess.run(
         [
@@ -1924,8 +2059,12 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
             str(stdout),
             "--stderr",
             str(stderr),
+            "--receipt",
+            str(receipt),
             "--wall-seconds",
             "0.3",
+            "--max-input-bytes",
+            "1048576",
             "--max-output-bytes",
             "4096",
             "--",

@@ -141,7 +141,10 @@ The adapter supplies the same receipted semantic prompt through the client's rea
 receives a retained, hashed `stream-json` stdin envelope and a required empty `-p` value, avoiding
 per-argument OS limits; its terminal event is structurally parsed and its raw bounded stream is
 retained. Codex receives the prompt as text stdin. No bare option or malformed terminal stream is
-mistaken for a successful invocation.
+mistaken for a successful invocation. Before launch, the supervisor stable-reads stdin into an
+anonymous snapshot and passes that descriptor to the client; its own retained receipt binds those
+presented bytes, exact captured stdout/stderr, and the live truncation bit. Post-processing must
+match every retained artifact to that supervisor receipt rather than infer delivery or truncation.
 The wake receipt labels the advisory CLI sandbox `cli-declared-not-independently-qualified`:
 the dispatcher exposes no artifact-pull seam and launches from a fresh directory, but Factory
 does not yet claim a kernel-qualified projection-only confidentiality boundary or a
