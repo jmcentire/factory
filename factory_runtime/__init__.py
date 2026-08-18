@@ -8,6 +8,15 @@ The runtime is still generic. Targets enter as signed data and concrete adapters
 against the core's five seams; no target package is imported here.
 """
 
+from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
+from factory_runtime.repair import (
+    RepairBrief,
+    RepairCampaignBlocked,
+    RepairCampaignResult,
+    RepairPlan,
+    RepairPolicy,
+    RepairSupervisor,
+)
 from factory_runtime.state import (
     RunProjection,
     RunState,
@@ -20,4 +29,12 @@ __all__ = [
     "RunState",
     "RunStateError",
     "RunStore",
+    "FailureCapsule",
+    "classify_terminal_failure",
+    "RepairBrief",
+    "RepairCampaignBlocked",
+    "RepairCampaignResult",
+    "RepairPlan",
+    "RepairPolicy",
+    "RepairSupervisor",
 ]

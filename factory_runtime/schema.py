@@ -28,6 +28,7 @@ SCHEMA_NAMES = frozenset(
         "genesis",
         "pattern-catalog",
         "phase-artifact",
+        "repair-brief",
         "resource-record",
         "resume-checkpoint",
         "runner-manifest",

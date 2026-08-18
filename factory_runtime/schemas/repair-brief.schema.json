@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.local/schemas/repair-brief.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "failed_attempt_id",
+    "predecessor_ledger_head",
+    "phase_artifact_digests",
+    "candidate_digest",
+    "oracle_digest",
+    "summary",
+    "actions",
+    "requirement_ids",
+    "failure_signature"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-repair-brief/1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "failed_attempt_id": {"type": "string", "minLength": 1},
+    "predecessor_ledger_head": {"$ref": "#/$defs/digest"},
+    "phase_artifact_digests": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/digest"},
+      "required": ["product-specification", "architecture", "operational-maturity"]
+    },
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "oracle_digest": {"$ref": "#/$defs/digest"},
+    "summary": {"type": "string", "minLength": 1},
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "requirement_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "failure_signature": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
