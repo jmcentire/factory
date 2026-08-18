@@ -9,6 +9,8 @@ shift 2
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 BUDGET=""
 AUDIT_MIN="45"
+VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
+ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -20,6 +22,14 @@ while [ "$#" -gt 0 ]; do
     *) echo "factory: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
+case "$VALIDATOR_AGENT" in
+  codex|ollama|claude) ;;
+  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude)" >&2; exit 64 ;;
+esac
+case "$ORCHESTRATOR_AGENT" in
+  agy|codex) ;;
+  *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex)" >&2; exit 64 ;;
+esac
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
@@ -74,11 +84,13 @@ PY
 
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
-  "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY'
+  "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
+  "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, task_digest,
-    target_state_digest, manifest_digest, commit, checkout_id,
+    target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
+    orchestrator_agent,
 ) = sys.argv[1:]
 audit_value = int(audit)
 if audit_value < 1:
@@ -106,7 +118,7 @@ with os.fdopen(fd, "wb") as stream:
     os.fsync(stream.fileno())
 sync_parent(task_path)
 metadata = {
-    "schema_version": "factory-harness/1",
+    "schema_version": "factory-harness/2",
     "run_id": run,
     "status": "open",
     "task_digest": task_digest,
@@ -123,6 +135,9 @@ metadata = {
     "launcher_qualification": "QUALIFIED_PR2",
     "lane_isolation": "QUALIFIED_PR2",
     "interactive_validator_boundary": "operator-owned-tmux",
+    "validator_agent": validator_agent,
+    "orchestrator_agent": orchestrator_agent,
+    "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
 path = pathlib.Path(metadata_path)
@@ -161,9 +176,22 @@ resource_event '{}' planned
 
 printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q python3 %q --run %q --root %q' \
   "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$D/dispatcher.py" "$RUN" "$ROOT"
-VALIDATOR_PROMPT="/validate - the verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
-printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %q' \
-  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+VALIDATOR_PROMPT="Act as the Validator under docs/VALIDATION-DIRECTIVE.md and the /validate contract. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
+case "$VALIDATOR_AGENT" in
+  codex)
+    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write %q' \
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+    ;;
+  ollama)
+    VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-glm-5.2:cloud}"
+    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q ollama launch codex --model %q -- --sandbox workspace-write %q' \
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
+    ;;
+  claude)
+    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %q' \
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+    ;;
+esac
 
 if ! tmux new-session -d -s "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
@@ -189,3 +217,5 @@ echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
 echo "  model lanes  : QUALIFIED_PR2"
 echo "  validator    : operator-owned coordination"
+echo "  validator ai : $VALIDATOR_AGENT"
+echo "  orchestrator : $ORCHESTRATOR_AGENT (advisory)"

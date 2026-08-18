@@ -21,15 +21,48 @@ from typing import Any, Protocol
 import jsonschema
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.provenance import PhaseArtifact
 from factory_runtime.schema import DocumentValidationError, validate_document
+from factory_runtime.state_admission import (
+    StateAdmissionError,
+    profile_digest,
+    verify_state_capsule,
+)
 
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _MAX_SECRET_BYTES = 65_536
 _MAX_PROMPT_BYTES = 2_097_152
+_PROMPT_SCHEMA_VERSION = "factory-runner-prompt/2"
+_PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/1"
 
 
 class RunnerError(ValueError):
     """A model dispatch could not satisfy the hardened execution contract."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model_attempts: int = 0,
+        refusal_code: str = "PRE_MODEL_REFUSAL",
+        dependency_id: str = "",
+    ) -> None:
+        super().__init__(message)
+        if model_attempts < 0:
+            raise ValueError("model_attempts must be non-negative")
+        self.model_attempts = model_attempts
+        self.refusal_code = refusal_code
+        self.dependency_id = dependency_id
+
+    def after_attempt(self, attempt: int) -> RunnerError:
+        """Return the same refusal classified with its real model-call count."""
+
+        return RunnerError(
+            str(self),
+            model_attempts=max(self.model_attempts, attempt),
+            refusal_code=self.refusal_code,
+            dependency_id=self.dependency_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -122,6 +155,13 @@ class RunnerManifest:
 
     @classmethod
     def from_dict(cls, document: Mapping[str, Any]) -> RunnerManifest:
+        if document.get("schema_version") == "factory-runner-manifest/1":
+            raise RunnerError(
+                "legacy runner manifest cannot dispatch after state-capsule cutover; "
+                "explicitly abandon the legacy run and start a v2 run from a new verified "
+                "checkpoint",
+                refusal_code="LEGACY_RUNNER_MANIFEST",
+            )
         try:
             validate_document("runner-manifest", document)
         except DocumentValidationError as exc:
@@ -133,6 +173,8 @@ class RunnerManifest:
             raise RunnerError("direct Codex runner may not declare child executables")
         if document["adapter"] == "ollama-codex" and len(children) != 1:
             raise RunnerError("Ollama-to-Codex runner requires exactly one Codex child")
+        if document["state_profile_digest"] != profile_digest("lane-dispatch"):
+            raise RunnerError("runner manifest binds a stale state-admission profile")
         return cls(dict(document))
 
     @property
@@ -275,21 +317,16 @@ def _regular_executable(path: str | Path) -> Path:
     return resolved
 
 
-def _regular_bytes(path: str | Path, *, label: str) -> bytes:
-    source = Path(path)
-    if source.is_symlink() or not source.is_file():
-        raise RunnerError(f"{label} is missing, not regular, or a symlink")
-    return source.read_bytes()
-
-
 def _write_once(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.parent.is_dir() or path.parent.is_symlink():
+        raise RunnerError("runner evidence parent must be a regular directory")
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = -1
             handle.write(content)
@@ -359,22 +396,50 @@ class HardenedModelRunner:
         run_id: str,
         generation: int,
         receipt_id: str,
-        manifest_document: Mapping[str, Any],
-        projection_path: str | Path,
-        output_schema_path: str | Path,
-        task: str,
+        manifest_bytes: bytes,
+        projection_bytes: bytes,
+        output_schema_bytes: bytes,
+        task_bytes: bytes,
+        state_capsule_document: Mapping[str, Any],
+        state_dependencies: Mapping[str, bytes],
+        target_state_digest: str,
+        run_ledger_head: str,
+        resume_checkpoint_digest: str,
+        broker_registry_source_digest: str,
         workspace_root: str | Path,
         forbidden_paths: Sequence[str | Path],
+        attempt_observer: Callable[[int], None] | None = None,
     ) -> tuple[Mapping[str, Any], RunnerReceipt]:
+        try:
+            state_capsule_snapshot = json.loads(
+                json.dumps(
+                    state_capsule_document,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        except (TypeError, ValueError, RecursionError, json.JSONDecodeError) as exc:
+            raise RunnerError("runner state capsule is not canonical JSON") from exc
+        if not isinstance(state_capsule_snapshot, Mapping):
+            raise RunnerError("runner state capsule must be a JSON object")
+        state_dependencies_snapshot: dict[str, bytes] = {}
+        for dependency_id, raw in state_dependencies.items():
+            if not isinstance(dependency_id, str) or not isinstance(raw, bytes):
+                raise RunnerError("runner state dependencies must map strings to bytes")
+            state_dependencies_snapshot[dependency_id] = bytes(raw)
+        try:
+            manifest_document = json.loads(manifest_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RunnerError("runner manifest is not valid UTF-8 JSON") from exc
+        if not isinstance(manifest_document, Mapping):
+            raise RunnerError("runner manifest must be a JSON object")
         manifest = RunnerManifest.from_dict(manifest_document)
         limits = manifest.limits
         if limits.max_attempts < 3:
             raise RunnerError("runner requires two canaries plus one task attempt")
-        output_schema_bytes = _regular_bytes(output_schema_path, label="runner output schema")
         if digest_bytes(output_schema_bytes) != manifest.document["output_schema_digest"]:
             raise RunnerError("runner output schema differs from the manifest")
         output_schema_document = _closed_output_schema(output_schema_bytes)
-        projection_bytes = _regular_bytes(projection_path, label="runner projection")
         projection_digest = digest_bytes(projection_bytes)
         try:
             projection_document = json.loads(projection_bytes)
@@ -382,6 +447,89 @@ class HardenedModelRunner:
             raise RunnerError("runner projection is not JSON") from exc
         if not isinstance(projection_document, Mapping):
             raise RunnerError("runner projection must be a JSON object")
+        try:
+            task = task_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RunnerError("runner task must be UTF-8") from exc
+        task_digest = digest_bytes(task_bytes)
+        state_capsule_digest = digest_obj(state_capsule_snapshot)
+        try:
+            verify_state_capsule(
+                state_capsule_snapshot,
+                expected_purpose="lane-dispatch",
+                expected_run_id=run_id,
+                expected_generation=generation,
+                expected_role=str(manifest.document["role"]),
+                expected_target_state_digest=target_state_digest,
+                expected_run_ledger_head=run_ledger_head,
+                expected_resume_checkpoint_digest=resume_checkpoint_digest,
+                expected_dependencies=state_dependencies_snapshot,
+            )
+        except StateAdmissionError as exc:
+            raise RunnerError(
+                f"runner state capsule is invalid: {exc}",
+                refusal_code=exc.code,
+                dependency_id=exc.dependency_id,
+            ) from exc
+        if state_capsule_snapshot["profile_digest"] != manifest.document[
+            "state_profile_digest"
+        ]:
+            raise RunnerError("runner manifest and state capsule bind different profiles")
+        dependency_map = {
+            str(item["dependency_id"]): str(item["content_digest"])
+            for item in state_capsule_snapshot["dependencies"]
+        }
+        expected_dependency_digests = {
+            "runner-manifest": digest_bytes(manifest_bytes),
+            "runner-projection": projection_digest,
+            "runner-output-schema": digest_bytes(output_schema_bytes),
+            "frozen-task": task_digest,
+            "broker-registry": broker_registry_source_digest,
+        }
+        for dependency_id, expected_digest in expected_dependency_digests.items():
+            if dependency_map.get(dependency_id) != expected_digest:
+                raise RunnerError(
+                    f"runner state capsule binds different {dependency_id} bytes"
+                )
+        try:
+            phase_digest_document = json.loads(
+                state_dependencies_snapshot["phase-artifact-digests"]
+            )
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RunnerError("ratified phase digest set is not valid JSON") from exc
+        if not isinstance(phase_digest_document, Mapping):
+            raise RunnerError("ratified phase digest set must be an object")
+        required_phases = {
+            "product-specification",
+            "architecture",
+            "operational-maturity",
+        }
+        if set(phase_digest_document) != required_phases:
+            raise RunnerError("runner requires the exact three ratified phase artifacts")
+        phase_artifacts: dict[str, Mapping[str, Any]] = {}
+        for phase in sorted(required_phases):
+            dependency_id = f"phase-artifact-{phase}"
+            try:
+                document = json.loads(state_dependencies_snapshot[dependency_id])
+            except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RunnerError(f"ratified {phase} artifact is not valid JSON") from exc
+            if not isinstance(document, Mapping):
+                raise RunnerError(f"ratified {phase} artifact must be an object")
+            try:
+                validate_document("phase-artifact", document)
+            except DocumentValidationError as exc:
+                raise RunnerError(str(exc)) from exc
+            artifact = PhaseArtifact.from_dict(document)
+            if (
+                artifact.phase != phase
+                or artifact.content_digest != phase_digest_document[phase]
+            ):
+                raise RunnerError(f"ratified {phase} artifact differs from its authority digest")
+            phase_artifacts[phase] = dict(document)
+        try:
+            role_primer = state_dependencies_snapshot["role-primer"].decode("utf-8")
+        except (KeyError, UnicodeDecodeError) as exc:
+            raise RunnerError("role-scoped primer must be admitted UTF-8 context") from exc
         projection_payload = json.dumps(
             projection_document,
             sort_keys=True,
@@ -398,12 +546,27 @@ class HardenedModelRunner:
         output_root = workspace / "output"
         home = workspace / "home"
         temporary = workspace / "tmp"
+        workspace.mkdir(mode=0o700, parents=True, exist_ok=False)
+        workspace.chmod(0o700)
         for directory in (input_root, output_root, home, temporary):
-            directory.mkdir(parents=True, exist_ok=False)
+            directory.mkdir(mode=0o700, exist_ok=False)
+            directory.chmod(0o700)
         projection = input_root / "projection.json"
         output_schema = input_root / "output-schema.json"
-        projection.write_bytes(projection_bytes)
-        output_schema.write_bytes(output_schema_bytes)
+        state_capsule = input_root / "state-capsule.json"
+        _write_once(projection, projection_bytes)
+        _write_once(output_schema, output_schema_bytes)
+        _write_once(
+            state_capsule,
+            (
+                json.dumps(
+                    state_capsule_snapshot,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
 
         secrets = self.secret_store.resolve(tuple(manifest.document["secret_names"]))
         path_entries = {str(executable.parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
@@ -416,6 +579,7 @@ class HardenedModelRunner:
             "PATH": ":".join(sorted(path_entries)),
             "FACTORY_ROLE": str(manifest.document["role"]),
             "FACTORY_PROJECTION_DIGEST": projection_digest,
+            "FACTORY_STATE_CAPSULE_DIGEST": state_capsule_digest,
             **secrets,
         }
         qualification = self.backend.qualify(
@@ -440,13 +604,37 @@ class HardenedModelRunner:
         session_id = ""
         continuity_nonce = secure_random.token_hex(32)
         prompts = (
-            self._canary_prompt(manifest, projection_digest, 1, continuity_nonce),
-            self._canary_prompt(manifest, projection_digest, 2, ""),
-            self._task_prompt(manifest, projection_digest, projection_payload, task),
+            self._canary_prompt(
+                manifest, projection_digest, state_capsule_digest, 1, continuity_nonce
+            ),
+            self._canary_prompt(manifest, projection_digest, state_capsule_digest, 2, ""),
+            self._task_prompt(
+                manifest,
+                projection_digest,
+                state_capsule_digest,
+                projection_payload,
+                phase_artifacts,
+                role_primer,
+                task,
+            ),
         )
-        for index, prompt in enumerate(prompts, start=1):
-            if len(prompt.encode("utf-8")) > _MAX_PROMPT_BYTES:
-                raise RunnerError("runner prompt exceeds the bounded input size")
+        prompt_kinds = ("qualification", "qualification", "task")
+        prompt_bytes = tuple(prompt.encode("utf-8") for prompt in prompts)
+        if any(len(raw) > _MAX_PROMPT_BYTES for raw in prompt_bytes):
+            raise RunnerError("runner prompt exceeds the bounded input size")
+        prompt_sequence = [
+            {
+                "attempt": index,
+                "kind": kind,
+                "byte_count": len(raw),
+                "content_digest": digest_bytes(raw),
+            }
+            for index, (kind, raw) in enumerate(
+                zip(prompt_kinds, prompt_bytes, strict=True), start=1
+            )
+        ]
+        for index, raw_prompt in enumerate(prompt_bytes, start=1):
+            _write_once(input_root / f"prompt-{index}.json", raw_prompt)
             elapsed = self._monotonic() - objective_started
             remaining_wall = limits.wall_seconds - int(elapsed)
             if remaining_wall <= 0:
@@ -462,33 +650,49 @@ class HardenedModelRunner:
             )
             output = output_root / f"attempt-{index}.json"
             command = adapter.command(output=output, session_id=session_id if index > 1 else "")
-            result = self.backend.run(
-                command,
-                cwd=workspace,
-                readable_paths=(output_schema, executable, *child_executables),
-                writable_paths=(output_root, home, temporary),
-                environment=environment,
-                stdin=prompt.encode("utf-8"),
-                limits=attempt_limits,
-            )
-            self._require_process_success(result, limits)
-            self._require_no_secret_leak(result, tuple(secrets.values()))
-            if index == 1:
-                session_id = result.session_id
-                if not session_id:
-                    raise RunnerError("runner canary produced no resumable session id")
-            elif result.session_id != session_id:
-                raise RunnerError("runner did not resume the exact canary session")
-            self._require_output(
-                result.structured_output,
-                manifest=manifest,
-                projection_digest=projection_digest,
-                sequence=index,
-                continuity_nonce=continuity_nonce,
-                output_schema=output_schema_document,
-            )
-            results.append(result)
-            self._enforce_meter(manifest, results)
+            try:
+                result = self.backend.run(
+                    command,
+                    cwd=workspace,
+                    readable_paths=(output_schema, executable, *child_executables),
+                    writable_paths=(output_root, home, temporary),
+                    environment=environment,
+                    stdin=raw_prompt,
+                    limits=attempt_limits,
+                )
+            except RunnerError as exc:
+                attempts = (index - 1) + min(exc.model_attempts, 1)
+                if attempt_observer is not None and attempts:
+                    attempt_observer(attempts)
+                raise RunnerError(str(exc), model_attempts=attempts) from exc
+            except (OSError, ValueError) as exc:
+                if attempt_observer is not None:
+                    attempt_observer(index)
+                raise RunnerError(str(exc), model_attempts=index) from exc
+            if attempt_observer is not None:
+                attempt_observer(index)
+            try:
+                self._require_process_success(result, limits)
+                self._require_no_secret_leak(result, tuple(secrets.values()))
+                if index == 1:
+                    session_id = result.session_id
+                    if not session_id:
+                        raise RunnerError("runner canary produced no resumable session id")
+                elif result.session_id != session_id:
+                    raise RunnerError("runner did not resume the exact canary session")
+                self._require_output(
+                    result.structured_output,
+                    manifest=manifest,
+                    projection_digest=projection_digest,
+                    state_capsule_digest=state_capsule_digest,
+                    sequence=index,
+                    continuity_nonce=continuity_nonce,
+                    output_schema=output_schema_document,
+                )
+                results.append(result)
+                self._enforce_meter(manifest, results)
+            except RunnerError as exc:
+                raise exc.after_attempt(index) from exc
 
         handoff = dict(results[-1].structured_output)
         handoff_bytes = json.dumps(
@@ -501,12 +705,13 @@ class HardenedModelRunner:
         output_tokens = sum(result.output_tokens for result in results)
         cost = _cost(manifest, input_tokens, output_tokens)
         document = {
-            "schema_version": "factory-runner-receipt/1",
+            "schema_version": "factory-runner-receipt/2",
             "receipt_id": receipt_id,
             "run_id": run_id,
             "generation": generation,
             "role": manifest.document["role"],
             "runner_manifest_digest": manifest.content_digest,
+            "runner_manifest_source_digest": digest_bytes(manifest_bytes),
             "runner_id": manifest.document["runner_id"],
             "adapter": manifest.document["adapter"],
             "executable_digest": digest_bytes(executable.read_bytes()),
@@ -514,8 +719,22 @@ class HardenedModelRunner:
             "model": manifest.document["model"],
             "model_version": manifest.document["model_version"],
             "configuration_digest": manifest.document["configuration_digest"],
+            "state_profile_digest": manifest.document["state_profile_digest"],
+            "state_qualification_digest": manifest.document[
+                "state_qualification_digest"
+            ],
+            "state_capsule_digest": state_capsule_digest,
+            "projection_digest": projection_digest,
+            "task_digest": task_digest,
+            "prompt_schema_version": _PROMPT_SCHEMA_VERSION,
+            "prompt_assembler_version": _PROMPT_ASSEMBLER_VERSION,
+            "prompt_sequence": prompt_sequence,
+            "prompt_bytes_retained": True,
+            "resume_checkpoint_digest": resume_checkpoint_digest,
+            "broker_registry_source_digest": broker_registry_source_digest,
             "billing_key_name": manifest.document["billing_key_name"],
             "secret_names": list(manifest.document["secret_names"]),
+            "network_mode": manifest.document["network_mode"],
             "qualification_digest": qualification.content_digest,
             "canary_session_id": session_id,
             "resumed_session_id": results[-1].session_id,
@@ -551,18 +770,20 @@ class HardenedModelRunner:
     def _canary_prompt(
         manifest: RunnerManifest,
         projection_digest: str,
+        state_capsule_digest: str,
         sequence: int,
         continuity_nonce: str,
     ) -> str:
         return json.dumps(
             {
-                "schema_version": "factory-runner-prompt/1",
+                "schema_version": _PROMPT_SCHEMA_VERSION,
                 "kind": "qualification",
                 "control": {
                     "response": "configured-json-only",
                     "expected_kind": "canary",
                     "role": manifest.document["role"],
                     "projection_digest": projection_digest,
+                    "state_capsule_digest": state_capsule_digest,
                     "sequence": sequence,
                     "continuity": (
                         {"store_and_echo": continuity_nonce}
@@ -580,18 +801,22 @@ class HardenedModelRunner:
     def _task_prompt(
         manifest: RunnerManifest,
         projection_digest: str,
+        state_capsule_digest: str,
         projection_payload: str,
+        phase_artifacts: Mapping[str, Mapping[str, Any]],
+        role_primer: str,
         task: str,
     ) -> str:
         return json.dumps(
             {
-                "schema_version": "factory-runner-prompt/1",
+                "schema_version": _PROMPT_SCHEMA_VERSION,
                 "kind": "task",
                 "control": {
                     "response": "configured-json-only",
                     "expected_kind": "handoff",
                     "role": manifest.document["role"],
                     "projection_digest": projection_digest,
+                    "state_capsule_digest": state_capsule_digest,
                     "sequence": 3,
                     "continuity": {"recall_and_echo_from_first_turn": True},
                     "effect_boundary": "typed-broker-requests-only",
@@ -599,6 +824,11 @@ class HardenedModelRunner:
                 },
                 "data": {
                     "projection": json.loads(projection_payload),
+                    "ratified_phase_artifacts": {
+                        phase: dict(artifact)
+                        for phase, artifact in sorted(phase_artifacts.items())
+                    },
+                    "role_primer": role_primer,
                     "task": task,
                 },
             },
@@ -638,6 +868,7 @@ class HardenedModelRunner:
         *,
         manifest: RunnerManifest,
         projection_digest: str,
+        state_capsule_digest: str,
         sequence: int,
         continuity_nonce: str,
         output_schema: Mapping[str, Any],
@@ -646,6 +877,7 @@ class HardenedModelRunner:
             "kind": "handoff" if sequence == 3 else "canary",
             "role": manifest.document["role"],
             "projection_digest": projection_digest,
+            "state_capsule_digest": state_capsule_digest,
             "sequence": sequence,
         }
         for field, value in expected.items():

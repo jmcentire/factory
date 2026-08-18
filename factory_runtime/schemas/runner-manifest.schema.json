@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/runner-manifest/1",
+  "$id": "factory://schemas/runner-manifest/2",
   "title": "Factory hardened model runner manifest",
   "type": "object",
   "additionalProperties": false,
@@ -15,6 +15,8 @@
     "model",
     "model_version",
     "configuration_digest",
+    "state_profile_digest",
+    "state_qualification_digest",
     "billing_key_name",
     "secret_names",
     "output_schema_digest",
@@ -24,7 +26,7 @@
     "created_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-runner-manifest/1"},
+    "schema_version": {"const": "factory-runner-manifest/2"},
     "runner_id": {"$ref": "#/$defs/id"},
     "role": {"enum": ["coder", "tester", "validator"]},
     "adapter": {"enum": ["codex", "ollama-codex"]},
@@ -38,6 +40,8 @@
     "model": {"type": "string", "minLength": 1},
     "model_version": {"type": "string", "minLength": 1},
     "configuration_digest": {"$ref": "#/$defs/digest"},
+    "state_profile_digest": {"$ref": "#/$defs/digest"},
+    "state_qualification_digest": {"$ref": "#/$defs/digest"},
     "billing_key_name": {"$ref": "#/$defs/env_name"},
     "secret_names": {
       "type": "array",
@@ -46,7 +50,7 @@
       "items": {"$ref": "#/$defs/env_name"}
     },
     "output_schema_digest": {"$ref": "#/$defs/digest"},
-    "network_mode": {"const": "model-api-only"},
+    "network_mode": {"const": "unrestricted-outbound"},
     "limits": {
       "type": "object",
       "additionalProperties": false,

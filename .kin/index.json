@@ -1,0 +1,3016 @@
+{
+  "domains": [
+    "code",
+    "python",
+    "sh",
+    "shell"
+  ],
+  "node_count": 273,
+  "nodes": [
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-019ac3103c11",
+      "title": "factory_runtime/state.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-027262aab7be",
+      "title": "factory_runtime/broker.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-14963ebb6ea9",
+      "title": "factory_runtime/runner.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-166e947c3549",
+      "title": "factory_core/tool_policy.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-182d349e7923",
+      "title": "factory_core/comprehensiveness.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-19eb87240797",
+      "title": "harness/flake.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-1a90c03ee79e",
+      "title": "factory_runtime/test_change_authority.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-1b6b4b051078",
+      "title": "factory_runtime/projection_bundle.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-1caeff4d2b30",
+      "title": "factory_runtime/schema.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-204b628db7b3",
+      "title": "factory_core/registry.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-265620d144a9",
+      "title": "harness/dispatch_lane.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-26b16f3f2d57",
+      "title": "harness/dispatcher.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-282fc81954fb",
+      "title": "factory_core/roles.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-2a4a3751c8a1",
+      "title": "factory_runtime/runner_isolation.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-2a6d749e6fbf",
+      "title": "factory_core/target.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-2ab6a8730e9e",
+      "title": "factory_core/evidence.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-2c36e2a1c197",
+      "title": "factory_runtime/acceptance_obligations.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "shell"
+      ],
+      "id": "code-mod-factory-2fc505e6b5d6",
+      "title": "harness/lane_env.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-35cc98d8fc5f",
+      "title": "factory_runtime/state_qualification.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-3b598345a6a0",
+      "title": "factory_runtime/schemas/__init__.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-3c2c58ee81ac",
+      "title": "factory_core/independence.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-3c5ab158a339",
+      "title": "harness/phase1_gate.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-3cd77c9cf997",
+      "title": "factory_core/checklist.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-3ebeb60d6a57",
+      "title": "harness/receipt.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-3f83e47bfe81",
+      "title": "factory_runtime/resources.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-44c5cf1abe29",
+      "title": "scripts/check_doctrine_sync.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-45d20994b001",
+      "title": "factory_core/criticality.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-471d2988af70",
+      "title": "factory_core/promotion.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-4ab37e5b2ed9",
+      "title": "harness/ground.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "shell"
+      ],
+      "id": "code-mod-factory-4bcfbaaef739",
+      "title": "harness/tripwire.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-4dd1e93302df",
+      "title": "factory_runtime/target_state.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-4f3d2a3e1dbc",
+      "title": "factory_core/adapters.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-51dc938b0fc5",
+      "title": "factory_core/provenance.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-55dd622b07c1",
+      "title": "scripts/check_core_purity.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-5627e9147903",
+      "title": "factory_core/monitors.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-5bc1f8d3c98e",
+      "title": "harness/proof.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-5db33601fa6e",
+      "title": "harness/mutate.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-63a83ed4f938",
+      "title": "factory_core/contract.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-651a566c5dd8",
+      "title": "factory_core/test_disposition.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-677d82d97f90",
+      "title": "factory_runtime/generation.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-67ece7d97095",
+      "title": "scripts/check_denial_probes.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-6a3392a59bc0",
+      "title": "harness/status.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-702e13dbe9ca",
+      "title": "harness/promote.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-712f96decdca",
+      "title": "harness/orchestrator_wake.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-8cc319a825e1",
+      "title": "harness/directive.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-8e565db67704",
+      "title": "factory_runtime/workflow.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-9010ffbaf808",
+      "title": "factory_runtime/cli.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-93ddb2f3d15f",
+      "title": "factory_runtime/snapshot.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-99df0ac53847",
+      "title": "factory_runtime/orchestrator_projection.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-9d2d2815ab99",
+      "title": "factory_runtime/orchestrator.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-9f6414c02b53",
+      "title": "factory_runtime/promotion_gate.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-a29ad567d0d2",
+      "title": "harness/run_context.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-a56f28976648",
+      "title": "harness/factory.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "shell"
+      ],
+      "id": "code-mod-factory-aac8ef3f4c70",
+      "title": "harness/sched_audit.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-ab1e4e32104d",
+      "title": "scripts/check_forbidden_authority.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-b3c667548052",
+      "title": "factory_core/invariant_kernel.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-b4a482e2c9ad",
+      "title": "factory_runtime/isolation.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c2401493ebd7",
+      "title": "harness/postmortem.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c53fada17629",
+      "title": "factory_core/completeness.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c5529a316523",
+      "title": "factory_core/manifest.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c7d6aec08444",
+      "title": "factory_runtime/evidence_plane.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c813abd27a33",
+      "title": "factory_runtime/transition_obligations.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-c8ce2ccf9b64",
+      "title": "factory_runtime/authority.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-ca2984e7d86b",
+      "title": "factory_core/correction.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-cc0555a8a8fb",
+      "title": "factory_runtime/resume.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-cdaff0d3f8cd",
+      "title": "factory_core/triage.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-cfdc28167d2c",
+      "title": "harness/denial_probe.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-d0543d4916bb",
+      "title": "factory_runtime/state_admission.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-d13444b8d9c2",
+      "title": "harness/abandon_legacy.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "shell"
+      ],
+      "id": "code-mod-factory-d3146ff94c42",
+      "title": "harness/inject.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-d65d1a64c285",
+      "title": "factory_core/__init__.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-d9fd1ff97321",
+      "title": "harness/consume_block.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-e25f89e5a97b",
+      "title": "factory_runtime/lanes.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-e36427814d74",
+      "title": "factory_core/build_plan.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-e37b4f762333",
+      "title": "harness/projection_receipt.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-e517cb77de80",
+      "title": "factory_runtime/tessera.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-e813f41c6da1",
+      "title": "harness/endgame.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "sh"
+      ],
+      "id": "code-mod-factory-eee56c6f27ab",
+      "title": "harness/projection.sh",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-mod-factory-ff543508afaa",
+      "title": "factory_runtime/__init__.py",
+      "type": "artifact",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-01c710f9e2d1",
+      "title": "LedgerFlow",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0479e1738823",
+      "title": "ComprehensivenessResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-05186bd85ed0",
+      "title": "ResourceLedger",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-05b4b78b8077",
+      "title": "TesseraCli",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-07a8a62c147f",
+      "title": "Ledger",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-07c9c77cf795",
+      "title": "KnowledgeAdapter",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-083a09505944",
+      "title": "Inventory",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-08dff3c73139",
+      "title": "MacOSNetworkedRunner",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-09c1b9bfe847",
+      "title": "ResolvedSurface",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0a3785531e94",
+      "title": "RunStateError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0c3f35addff4",
+      "title": "IndependenceRecord",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0d6dfd019017",
+      "title": "CriticalityError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0e4fe5307806",
+      "title": "GenerationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0e5bcbfb4027",
+      "title": "PromotionDecision",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0e9b2d2f4062",
+      "title": "BrokerError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0ec5b8a7fb6d",
+      "title": "SurfaceDecision",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0f84c4866b79",
+      "title": "ReverseReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-0f95269b73f2",
+      "title": "ValidationExecution",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-137d56a9a825",
+      "title": "NetworkedRunnerBackend",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-151ac2a5543e",
+      "title": "RoleModelError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-17eefbb4c947",
+      "title": "StructuralModeRecord",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-18851cd12aee",
+      "title": "RunnerProcessResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-18e18d6440cb",
+      "title": "FrozenBlob",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1a7873ebbe65",
+      "title": "RunnerManifest",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1b7802124dc2",
+      "title": "MacOSSandbox",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1e1690d6d31b",
+      "title": "Capability",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1e8efac9578c",
+      "title": "SubstanceRequirement",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1e93bdc34b9b",
+      "title": "IntentBackreference",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-1ef5dd36165f",
+      "title": "Finding",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2179e99d1656",
+      "title": "HardenedModelRunner",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2192dbe9723f",
+      "title": "VerifiedEnvelope",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2511e0a0ce59",
+      "title": "CapabilityFlow",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2782b7067451",
+      "title": "LaneRole",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-29708589fbdc",
+      "title": "PatternCatalog",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2aee216a839e",
+      "title": "FidelityResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2c116d5ef107",
+      "title": "SegregationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2c1253fc30c4",
+      "title": "SubstanceSpec",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2cc6de5e52bb",
+      "title": "BuildPlan",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2e0123584d65",
+      "title": "PatternDefinition",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-2edb0114b743",
+      "title": "PromotionGateError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-33e2b8dc57fd",
+      "title": "ResumeVerificationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-34d1b104ec05",
+      "title": "BuildOutcome",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-39e626c286e4",
+      "title": "TriageRequest",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3a8e4378e126",
+      "title": "DependencyRule",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3ad4f9832b13",
+      "title": "LaneError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3b081298e87e",
+      "title": "TriageDecision",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3c72cfbeb3ad",
+      "title": "ExistingTestDisposition",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3cb7626f6461",
+      "title": "AdapterResolutionError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3ced6c0b806a",
+      "title": "TestSelection",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3eb783eb0a22",
+      "title": "Dispatcher",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-3fe1fc4ab580",
+      "title": "SurfaceControl",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-409d4d72683d",
+      "title": "EvidenceIntegrity",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-43c3c4a932c6",
+      "title": "AlertAssessment",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-449f5b0dbe42",
+      "title": "RunnerReceipt",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-45c01660ec9b",
+      "title": "RunnerLimits",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-48d6f6a9bae6",
+      "title": "ToolPolicyBundle",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-48fa99b65001",
+      "title": "ResumeVerification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-49802c39af6b",
+      "title": "ToolRule",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-4a6504d1d09f",
+      "title": "CapabilityCatalog",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-50442f8a9650",
+      "title": "SurfaceObservation",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-50a60942978a",
+      "title": "Finding",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-511d5ce1f9d0",
+      "title": "TargetManifest",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-51377b9e76ea",
+      "title": "ToolInvocationDecision",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-531c379e9d6a",
+      "title": "AdapterRegistry",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5322c4b949ca",
+      "title": "LaunchReadiness",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-532fdefe4d2a",
+      "title": "CorrectionReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5369ab76bf5b",
+      "title": "FrozenTree",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-54050f66ac6a",
+      "title": "ConditionalSpec",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-540b9ecd5f2d",
+      "title": "Quarantine",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-54e01edf541b",
+      "title": "LaneExecution",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5687dc0dad79",
+      "title": "ProjectionBundleError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-599c9527fd02",
+      "title": "OrchestrationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5abe0b189eaa",
+      "title": "CodexRunnerAdapter",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5bf5f6b72368",
+      "title": "ExcuseRule",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5c36105bb2a2",
+      "title": "AcceptanceObligationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5ea5b038f354",
+      "title": "GenerationPreparer",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-5f8beae7a2f1",
+      "title": "StateAdmissionError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-64a56176bbdc",
+      "title": "ForwardReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-65c1abc0b141",
+      "title": "SurfaceEvidence",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-66108abf2bea",
+      "title": "FidelityMismatch",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-66f6b13d0dd5",
+      "title": "CriticalityProfile",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-67c67e0cadfc",
+      "title": "TesseraVerificationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-6ea3b8c2140f",
+      "title": "BrokerEffect",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-6eab313766b9",
+      "title": "LedgerEntry",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-6fefa9d613ba",
+      "title": "ComprehensivenessGate",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-701b7dd443f8",
+      "title": "TargetResolutionError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-70b6d759a6b6",
+      "title": "SegregationPolicy",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7104767ac7b0",
+      "title": "RunnerQualification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-74fd3a0ab562",
+      "title": "TargetResolver",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-781ce8d5661d",
+      "title": "CriticalityResolution",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7908d98923b0",
+      "title": "ChecklistItemResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-79f35e844cec",
+      "title": "ReachabilityAnalyzer",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7bb1ada172ff",
+      "title": "IsolationQualification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7cbf30833445",
+      "title": "RunProjection",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7ceed957cb75",
+      "title": "MonitorSetReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7d7acbfd6bc9",
+      "title": "ToolPolicyReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7e5e7a289cc9",
+      "title": "ProvenanceReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-7f12ce9aad80",
+      "title": "ExcuseClassifier",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-81f1e15ba4a4",
+      "title": "NotificationDecision",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-859c5b354755",
+      "title": "BuildPlanReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-86f22e8d5f96",
+      "title": "Violation",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-87a4e37dcf2c",
+      "title": "ControlClassification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-88997ef81618",
+      "title": "AgentIdentity",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-89f2313e16af",
+      "title": "Endpoint",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-8c9dc4c1b221",
+      "title": "ProvenanceBundle",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-8d357b0cb1de",
+      "title": "DenialProbe",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-8e0a8f9cb2d3",
+      "title": "BrokerRegistry",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-8f3a6cf121d2",
+      "title": "RunState",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-90a86736d257",
+      "title": "ReachabilityInvariant",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-90a9fd3e0a85",
+      "title": "BrokerOperation",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-91339c311e87",
+      "title": "IdpAdapter",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-91639cd7ea45",
+      "title": "TypedOperationBroker",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-935fb7c45c73",
+      "title": "IntentItem",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-94c9036c04f1",
+      "title": "TraceStep",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-95f999d35560",
+      "title": "BuildPlanBundle",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-96fe52460f41",
+      "title": "Principal",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9768cc4ca4b2",
+      "title": "CapabilityDelta",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-97db82fb1c52",
+      "title": "StoredRatification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-99b497bcb2ba",
+      "title": "ResolvedClaim",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-99caec4df4d9",
+      "title": "AuthorityVerificationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9add575183c8",
+      "title": "CallEdge",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9c1790b3b5d9",
+      "title": "AcceptanceObligationCatalog",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9ca31403e913",
+      "title": "ChecklistJournal",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9d07f23a9251",
+      "title": "VerifiedReceipt",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9d2a8145e2dd",
+      "title": "IsolatedBuildLoop",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9ef9f9609398",
+      "title": "StateQualificationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9f43a401d3c0",
+      "title": "CapabilityLedger",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-9fc501366aff",
+      "title": "ComposedModel",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a07766133b20",
+      "title": "PromotionRequest",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a196308a2b54",
+      "title": "EvidenceBundleReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a1c04f19e5d5",
+      "title": "LedgerIntegrityError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a6ceb0c75e67",
+      "title": "CorrectionRecord",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a7359f5dd294",
+      "title": "AnalysisResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a8f805b623a9",
+      "title": "PreparedGeneration",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a90796e89d99",
+      "title": "InventoryRow",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-a98208b9beae",
+      "title": "OrchestratorProjectionError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ab8699f7a7ee",
+      "title": "IsolationBackend",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ae4893e28a68",
+      "title": "Analyzer",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-aec71003b176",
+      "title": "Monitor",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-af2d982dc23a",
+      "title": "OracleLink",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-afcf7aa0b88a",
+      "title": "AuthorityPolicy",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b041b2d0ac0b",
+      "title": "TestChangeAuthorityError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b0c46b615991",
+      "title": "FactoryWorkflow",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b6c7e93a1252",
+      "title": "ContractReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b769d21cc1d2",
+      "title": "DeterminismRecord",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b77c697b8dd1",
+      "title": "SpecialistReview",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b894ed176393",
+      "title": "DocumentValidationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-b966e9310884",
+      "title": "NamedSecretStore",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-bae479e7ac87",
+      "title": "Unsupported",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-bbfe4c8ab064",
+      "title": "TestChangeAuthorization",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-bcfceeb6ef24",
+      "title": "BrokerCapabilityHandle",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-bf0bc8aaf9a5",
+      "title": "ToolAuthorization",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-bf83ecd395c3",
+      "title": "SourceFlowFact",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c03de800f81c",
+      "title": "ComplianceAdapter",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c47c4f0688f7",
+      "title": "StoredTestChangeAuthorization",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c51c932d42eb",
+      "title": "FieldGap",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c67f0ca0d740",
+      "title": "MonitorChangeRatification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c9511f18b23e",
+      "title": "ProvenanceClaim",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c9a59d8306a7",
+      "title": "EvidencePlaneError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-c9b0ce7fd558",
+      "title": "PhaseArtifact",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ca4614798c3e",
+      "title": "SnapshotError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-cd037049e01f",
+      "title": "StoredAcceptanceCatalog",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-cd6d6a8701a4",
+      "title": "ExistingTestFailure",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-d402b28f1b3a",
+      "title": "ComprehensivenessError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-d630448859bc",
+      "title": "PromotionError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-d7571379af2b",
+      "title": "RunnerError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-d9df770b3827",
+      "title": "Role",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-db699b9109d5",
+      "title": "ChecklistReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-dbc000598600",
+      "title": "InvariantKernel",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ddc707952cae",
+      "title": "ToolPolicy",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-de1bdd84f5b5",
+      "title": "TestAssertionBinding",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-de4e8aed2622",
+      "title": "RiskAcceptance",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-dfa5efd07d16",
+      "title": "ResourceLedgerError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-e0089beda6aa",
+      "title": "Grant",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-e15de2547d19",
+      "title": "EvidenceBundleAssembler",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-e6a2a1de5a99",
+      "title": "IndependenceReport",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-e76deee6e5c0",
+      "title": "RoleModel",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-e8a7f89067f0",
+      "title": "Classification",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ea6f39b66410",
+      "title": "RunStore",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-eb5aa33352d6",
+      "title": "SourceFacts",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ecba9bb8c821",
+      "title": "NamedEvidence",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-edb51f06b5d8",
+      "title": "TransitionObligationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ee1da564e2de",
+      "title": "ReproductionRecord",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ee6b650a3019",
+      "title": "RepoAdapter",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ee99e572933a",
+      "title": "ControlObservation",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-f489d8310705",
+      "title": "IsolationError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-f626a35c563b",
+      "title": "TargetManifestError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-f853cff9cc88",
+      "title": "ArtifactSink",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-f9290aedef5e",
+      "title": "BuildStep",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-f9fb6920a978",
+      "title": "GraphNode",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-fb43efda2d74",
+      "title": "FactoryOrchestrator",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:02:46",
+      "weight": 0.5
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-fc153a5a04f8",
+      "title": "DimensionSummary",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-fcec299e1a2f",
+      "title": "IsolatedProcessResult",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    },
+    {
+      "domains": [
+        "code",
+        "python"
+      ],
+      "id": "code-sym-factory-ff2c84420863",
+      "title": "WorkflowError",
+      "type": "concept",
+      "updated_at": "2026-08-18T15:56:07",
+      "weight": 0.01
+    }
+  ],
+  "repo": "factory",
+  "version": 1
+}

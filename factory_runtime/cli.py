@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import stat
+import re
 import sys
 import time
 from collections.abc import Mapping
@@ -13,22 +13,44 @@ from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest_bytes
 from factory_runtime.authority import load_genesis
 from factory_runtime.broker import TypedOperationBroker, load_broker_registry
 from factory_runtime.isolation import MacOSSandbox
+from factory_runtime.orchestrator_projection import build_orchestrator_projection
 from factory_runtime.projection_bundle import bundle_runner_projection
 from factory_runtime.resources import ResourceLedger
 from factory_runtime.resume import derive_resume_checkpoint, verify_resume_checkpoint
-from factory_runtime.runner import HardenedModelRunner, NamedSecretStore
+from factory_runtime.runner import (
+    HardenedModelRunner,
+    NamedSecretStore,
+    RunnerError,
+    RunnerManifest,
+)
 from factory_runtime.runner_isolation import MacOSNetworkedRunner
 from factory_runtime.schema import SCHEMA_NAMES, validate_document
 from factory_runtime.state import RunStore
+from factory_runtime.state_admission import (
+    StateAdmissionError,
+    dependency_rule,
+    derive_state_capsule,
+    profile_digest,
+    read_stable_regular_bytes,
+    verify_state_capsule,
+)
+from factory_runtime.state_qualification import (
+    execute_state_qualification_observations,
+    qualify_state_observations,
+    verify_state_qualification_report,
+)
 from factory_runtime.target_state import verify_target_state
 from factory_runtime.tessera import TesseraCli
 from factory_runtime.workflow import FactoryWorkflow
 
 _MAX_INLINE_JSON_BYTES = 65_536
+_MAX_BOUNDARY_FILE_BYTES = 5_242_880
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _tessera(path: str) -> TesseraCli:
@@ -222,6 +244,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_authority_arguments(verify_resume)
 
+    qualify_state = commands.add_parser(
+        "qualify-state",
+        help="execute and retain the code-owned state-admission qualification matrix",
+    )
+    qualify_state.add_argument("--runner-configuration-digest", required=True)
+    qualify_state.add_argument("--qualification-id", required=True)
+    qualify_state.add_argument("--observations-output", required=True)
+    qualify_state.add_argument("--output", required=True)
+
     bundle_projection = commands.add_parser(
         "bundle-runner-projection",
         help="freeze one asymmetric lane tree into a bounded path-free model projection",
@@ -232,6 +263,27 @@ def _parser() -> argparse.ArgumentParser:
     bundle_projection.add_argument("--projection-root", required=True)
     bundle_projection.add_argument("--projection-receipt", required=True)
     bundle_projection.add_argument("--output", required=True)
+
+    bundle_orchestrator = commands.add_parser(
+        "bundle-orchestrator-projection",
+        help="freeze one advisory wake into a bounded path-free structured projection",
+    )
+    bundle_orchestrator.add_argument("--runs", required=True)
+    bundle_orchestrator.add_argument("--run-id", required=True)
+    bundle_orchestrator.add_argument("--checkpoint", required=True)
+    bundle_orchestrator.add_argument("--checkpoint-digest", required=True)
+    bundle_orchestrator.add_argument(
+        "--section", action="append", default=[], metavar="NAME=PATH"
+    )
+    bundle_orchestrator.add_argument("--output", required=True)
+    bundle_orchestrator.add_argument("--capsule-output", required=True)
+    bundle_orchestrator.add_argument(
+        "--config-source", action="append", default=[], metavar="NAME=PATH"
+    )
+    bundle_orchestrator.add_argument(
+        "--accepted-previous-checkpoint-digest", action="append", default=[]
+    )
+    _add_authority_arguments(bundle_orchestrator)
 
     run_model = commands.add_parser(
         "run-model",
@@ -252,6 +304,16 @@ def _parser() -> argparse.ArgumentParser:
     run_model.add_argument("--output-schema-config-source-name", required=True)
     run_model.add_argument("--task-file", required=True)
     run_model.add_argument("--task-digest", required=True)
+    run_model.add_argument("--role-primer", required=True)
+    run_model.add_argument("--broker-registry", required=True)
+    run_model.add_argument("--broker-registry-digest", required=True)
+    run_model.add_argument("--broker-registry-config-source-name", required=True)
+    run_model.add_argument("--state-qualification-observations", required=True)
+    run_model.add_argument(
+        "--state-qualification-observations-config-source-name", required=True
+    )
+    run_model.add_argument("--state-qualification-report", required=True)
+    run_model.add_argument("--state-qualification-config-source-name", required=True)
     run_model.add_argument("--workspace", required=True)
     run_model.add_argument("--secret-root", required=True)
     run_model.add_argument("--checkpoint", required=True)
@@ -276,6 +338,7 @@ def _parser() -> argparse.ArgumentParser:
     execute_broker.add_argument("--receipt-id", required=True)
     execute_broker.add_argument("--runner-receipt", required=True)
     execute_broker.add_argument("--handoff", required=True)
+    execute_broker.add_argument("--state-capsule", required=True)
     execute_broker.add_argument("--registry", required=True)
     execute_broker.add_argument("--registry-digest", required=True)
     execute_broker.add_argument("--registry-config-source-name", required=True)
@@ -354,34 +417,99 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _read_regular_bytes(path: str | Path, *, label: str) -> bytes:
-    source = Path(path)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    return read_stable_regular_bytes(
+        path,
+        label=label,
+        max_bytes=_MAX_BOUNDARY_FILE_BYTES,
+    )
+
+
+def _object_from_bytes(raw: bytes, *, label: str) -> dict[str, Any]:
     try:
-        descriptor = os.open(source, flags)
-    except OSError as exc:
-        raise ValueError(f"{label} could not be opened safely: {source}: {exc}") from exc
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ValueError(f"{label} must be a regular file: {source}")
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            return handle.read()
-    except OSError as exc:
-        raise ValueError(f"{label} is unreadable: {source}: {exc}") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+        document = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return document
+
+
+def _require_semantic_json_digest(
+    raw: bytes,
+    *,
+    expected_digest: str,
+    label: str,
+) -> dict[str, Any]:
+    """Verify a canonical JSON address while retaining the exact source bytes separately."""
+
+    document = _object_from_bytes(raw, label=label)
+    if digest_obj(document) != expected_digest:
+        raise ValueError(f"{label} changed after external verification")
+    return document
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _require_run_projection_unchanged(
+    runs: str | Path,
+    run_id: str,
+    expected: Any,
+) -> None:
+    current = RunStore(runs).load(run_id)
+    if current.to_dict() != expected.to_dict():
+        raise ValueError("run projection changed while state dependencies were assembled")
+
+
+def _ratified_phase_artifacts(
+    runs: str | Path,
+    run_id: str,
+    projection_state: Any,
+) -> tuple[dict[str, bytes], dict[str, Mapping[str, Any]]]:
+    """Load the exact canonical phase artifacts bound by the checked run projection."""
+
+    required_phases = {
+        "product-specification",
+        "architecture",
+        "operational-maturity",
+    }
+    if set(projection_state.phase_artifact_digests) != required_phases:
+        raise ValueError("dispatch requires the exact three ratified phase digests")
+    phase_bytes: dict[str, bytes] = {}
+    phase_documents: dict[str, Mapping[str, Any]] = {}
+    for phase in sorted(required_phases):
+        expected_digest = str(projection_state.phase_artifact_digests[phase])
+        if not _DIGEST.fullmatch(expected_digest):
+            raise ValueError(f"ratified {phase} artifact digest is not canonical")
+        artifact_path = (
+            Path(runs)
+            / run_id
+            / "evidence"
+            / phase
+            / expected_digest.removeprefix("sha256:")
+            / "artifact.json"
+        )
+        raw = _read_regular_bytes(
+            artifact_path,
+            label=f"ratified {phase} artifact",
+        )
+        document = _object_from_bytes(raw, label=f"ratified {phase} artifact")
+        validate_document("phase-artifact", document)
+        artifact = PhaseArtifact.from_dict(document)
+        if artifact.phase != phase or artifact.content_digest != expected_digest:
+            raise ValueError(f"ratified {phase} artifact differs from the run ledger")
+        phase_bytes[phase] = raw
+        phase_documents[phase] = document
+    return phase_bytes, phase_documents
 
 
 def _read_object(path: str) -> dict[str, Any]:
     source = Path(path)
-    try:
-        raw = json.loads(_read_regular_bytes(source, label="JSON payload"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"JSON payload is unreadable: {source}: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise ValueError(f"JSON payload must be an object: {path}")
-    return raw
+    return _object_from_bytes(
+        _read_regular_bytes(source, label="JSON payload"),
+        label=f"JSON payload {source}",
+    )
 
 
 def _emit(value: Any) -> None:
@@ -419,7 +547,13 @@ def _parse_named_paths(values: list[str], *, label: str) -> dict[str, Path]:
 def _write_json_once(path: str | Path, document: Mapping[str, Any]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     descriptor = os.open(destination, flags, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -435,7 +569,49 @@ def _write_json_once(path: str | Path, document: Mapping[str, Any]) -> None:
             os.close(descriptor)
 
 
-def _execute(arguments: argparse.Namespace) -> None:
+def _retain_state_admission_refusal(
+    arguments: argparse.Namespace,
+    error: StateAdmissionError,
+) -> None:
+    """Retain a bounded refusal only for the pre-model run-model admission path."""
+
+    if getattr(arguments, "command", "") != "run-model":
+        return
+    required = ("runs", "run_id", "receipt_id", "role")
+    if any(not getattr(arguments, field, "") for field in required):
+        return
+    document = {
+        "schema_version": "factory-state-admission-refusal/1",
+        "receipt_id": str(arguments.receipt_id),
+        "run_id": str(arguments.run_id),
+        "role": str(arguments.role),
+        "purpose": "lane-dispatch",
+        "refusal_code": error.code,
+        "dependency_id": error.dependency_id,
+        "state_profile_digest": profile_digest("lane-dispatch"),
+        "model_attempts": 0,
+        "broker_effects": 0,
+        "created_at": int(time.time()),
+    }
+    validate_document("state-admission-refusal", document)
+    path = (
+        Path(arguments.runs)
+        / arguments.run_id
+        / "evidence"
+        / "state-admission"
+        / "refusals"
+        / f"{arguments.receipt_id}.json"
+    )
+    try:
+        _write_json_once(path, document)
+    except FileExistsError as exc:
+        raise ValueError(
+            "state-admission refusal receipt identity is already retained; "
+            "receipt ids are single-use"
+        ) from exc
+
+
+def _execute_unleased(arguments: argparse.Namespace) -> None:
     if arguments.command == "validate-document":
         document = _read_object(arguments.input)
         validate_document(arguments.schema, document)
@@ -554,7 +730,7 @@ def _execute(arguments: argparse.Namespace) -> None:
                 arguments.accepted_previous_checkpoint_digest
             ),
         )
-        _emit(resume_verification.__dict__)
+        _emit(resume_verification.to_dict())
         return
     if arguments.command == "bundle-runner-projection":
         projection = RunStore(arguments.runs).load(arguments.run_id)
@@ -582,7 +758,25 @@ def _execute(arguments: argparse.Namespace) -> None:
             }
         )
         return
-    if arguments.command == "run-model":
+    if arguments.command == "qualify-state":
+        observations = execute_state_qualification_observations(
+            arguments.runner_configuration_digest
+        )
+        report = qualify_state_observations(
+            observations,
+            qualification_id=arguments.qualification_id,
+        )
+        _write_json_once(arguments.observations_output, observations)
+        _write_json_once(arguments.output, report)
+        _emit(report)
+        if not report["qualified"]:
+            raise ValueError("state-admission configuration is not qualified")
+        return
+    if arguments.command == "bundle-orchestrator-projection":
+        configuration_sources = _parse_named_paths(
+            arguments.config_source,
+            label="configuration source",
+        )
         resume = verify_resume_checkpoint(
             arguments.checkpoint,
             expected_checkpoint_digest=arguments.checkpoint_digest,
@@ -591,20 +785,104 @@ def _execute(arguments: argparse.Namespace) -> None:
             genesis_path=arguments.genesis,
             trusted_root_public_key=arguments.root_public_key,
             tessera=_tessera(arguments.tessera_bin),
-            configuration_sources=_parse_named_paths(
-                arguments.config_source,
-                label="configuration source",
-            ),
+            configuration_sources=configuration_sources,
             accepted_previous_checkpoint_digests=(
                 arguments.accepted_previous_checkpoint_digest
             ),
         )
         projection_state = RunStore(arguments.runs).load(arguments.run_id)
+        if projection_state.ledger_head != resume.current_run_ledger_head:
+            raise ValueError("run ledger changed after external resume verification")
+        section_paths = _parse_named_paths(
+            arguments.section,
+            label="orchestrator section",
+        )
+        runtime_owned_sections = {"phase-artifacts", "run-projection"}
+        supplied_runtime_sections = runtime_owned_sections & set(section_paths)
+        if supplied_runtime_sections:
+            raise ValueError(
+                "orchestrator section is derived by the runtime, not supplied by a caller: "
+                + ", ".join(sorted(supplied_runtime_sections))
+            )
+        sections: dict[str, bytes] = {}
+        for section_id, path in section_paths.items():
+            rule = dependency_rule("orchestrator-wake", section_id)
+            sections[section_id] = read_stable_regular_bytes(
+                path,
+                label=f"orchestrator section {section_id}",
+                max_bytes=rule.max_bytes,
+            )
+        _, phase_documents = _ratified_phase_artifacts(
+            arguments.runs,
+            arguments.run_id,
+            projection_state,
+        )
+        sections["phase-artifacts"] = _canonical_bytes(
+            {
+                phase: dict(document)
+                for phase, document in sorted(phase_documents.items())
+            }
+        )
+        sections["run-projection"] = _canonical_bytes(projection_state.to_dict())
+        _require_run_projection_unchanged(
+            arguments.runs,
+            arguments.run_id,
+            projection_state,
+        )
+        capsule = derive_state_capsule(
+            purpose="orchestrator-wake",
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            role="orchestrator",
+            target_state_digest=projection_state.target_state_digest,
+            run_ledger_head=projection_state.ledger_head,
+            resume_checkpoint_digest=resume.checkpoint_digest,
+            dependencies=sections,
+        )
+        document = build_orchestrator_projection(sections, state_capsule=capsule)
+        _write_json_once(arguments.capsule_output, capsule)
+        _write_json_once(arguments.output, document)
+        _emit(
+            {
+                "run_id": arguments.run_id,
+                "generation": projection_state.generation,
+                "projection_digest": digest_obj(document),
+                "state_capsule_digest": digest_obj(capsule),
+                "output": str(Path(arguments.output)),
+                "capsule_output": str(Path(arguments.capsule_output)),
+            }
+        )
+        return
+    if arguments.command == "run-model":
+        configuration_sources = _parse_named_paths(
+            arguments.config_source,
+            label="configuration source",
+        )
+        resume = verify_resume_checkpoint(
+            arguments.checkpoint,
+            expected_checkpoint_digest=arguments.checkpoint_digest,
+            runs_root=arguments.runs,
+            run_id=arguments.run_id,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=_tessera(arguments.tessera_bin),
+            configuration_sources=configuration_sources,
+            accepted_previous_checkpoint_digests=(
+                arguments.accepted_previous_checkpoint_digest
+            ),
+        )
+        projection_state = RunStore(arguments.runs).load(arguments.run_id)
+        if projection_state.ledger_head != resume.current_run_ledger_head:
+            raise ValueError("run ledger changed after external resume verification")
         runner_manifest_bytes = _read_regular_bytes(
             arguments.runner_manifest,
             label="runner manifest",
         )
-        runner_manifest = _read_object(arguments.runner_manifest)
+        runner_manifest = _object_from_bytes(
+            runner_manifest_bytes,
+            label="runner manifest",
+        )
+        parsed_manifest = RunnerManifest.from_dict(runner_manifest)
         if resume.configuration_digests.get(arguments.runner_config_source_name) != digest_bytes(
             runner_manifest_bytes
         ):
@@ -613,7 +891,14 @@ def _execute(arguments: argparse.Namespace) -> None:
             raise ValueError("runner manifest differs from its externally expected digest")
         if runner_manifest.get("role") != arguments.role:
             raise ValueError("runner manifest belongs to another role")
-        model_projection = _read_object(arguments.projection)
+        projection_bytes = _read_regular_bytes(
+            arguments.projection,
+            label="runner projection",
+        )
+        model_projection = _object_from_bytes(
+            projection_bytes,
+            label="runner projection",
+        )
         validate_document("runner-projection", model_projection)
         expected_projection = {
             "run_id": arguments.run_id,
@@ -642,10 +927,137 @@ def _execute(arguments: argparse.Namespace) -> None:
         task_bytes = _read_regular_bytes(arguments.task_file, label="runner task")
         if digest_bytes(task_bytes) != arguments.task_digest:
             raise ValueError("runner task differs from its expected digest")
-        try:
-            task = task_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("runner task must be UTF-8") from exc
+        role_primer_bytes = _read_regular_bytes(
+            arguments.role_primer,
+            label="role-scoped Kindex primer",
+        )
+        broker_registry_bytes = _read_regular_bytes(
+            arguments.broker_registry,
+            label="broker registry",
+        )
+        broker_registry = _object_from_bytes(
+            broker_registry_bytes,
+            label="broker registry",
+        )
+        if digest_obj(broker_registry) != arguments.broker_registry_digest:
+            raise ValueError("broker registry differs from its externally expected digest")
+        if resume.configuration_digests.get(
+            arguments.broker_registry_config_source_name
+        ) != digest_bytes(broker_registry_bytes):
+            raise ValueError("broker registry is not bound by the external resume checkpoint")
+        qualification_observations_bytes = _read_regular_bytes(
+            arguments.state_qualification_observations,
+            label="state qualification observations",
+        )
+        qualification_observations = _object_from_bytes(
+            qualification_observations_bytes,
+            label="state qualification observations",
+        )
+        if resume.configuration_digests.get(
+            arguments.state_qualification_observations_config_source_name
+        ) != digest_bytes(qualification_observations_bytes):
+            raise ValueError(
+                "state qualification observations are not bound by the external resume checkpoint"
+            )
+        qualification_bytes = _read_regular_bytes(
+            arguments.state_qualification_report,
+            label="state qualification report",
+        )
+        qualification_report = _object_from_bytes(
+            qualification_bytes,
+            label="state qualification report",
+        )
+        if resume.configuration_digests.get(
+            arguments.state_qualification_config_source_name
+        ) != digest_bytes(qualification_bytes):
+            raise ValueError(
+                "state qualification report is not bound by the external resume checkpoint"
+            )
+        if parsed_manifest.document["state_qualification_digest"] != digest_bytes(
+            qualification_bytes
+        ):
+            raise ValueError("runner manifest binds a different state qualification report")
+        verify_state_qualification_report(
+            qualification_report,
+            observations=qualification_observations,
+            expected_profile_digest=str(parsed_manifest.document["state_profile_digest"]),
+            expected_runner_configuration_digest=str(
+                parsed_manifest.document["configuration_digest"]
+            ),
+        )
+        checkpoint_bytes = _read_regular_bytes(
+            arguments.checkpoint,
+            label="resume checkpoint",
+        )
+        _require_semantic_json_digest(
+            checkpoint_bytes,
+            expected_digest=resume.checkpoint_digest,
+            label="resume checkpoint",
+        )
+        if digest_bytes(checkpoint_bytes) != resume.checkpoint_source_digest:
+            raise ValueError("resume checkpoint source bytes changed after external verification")
+        target_state_path = (
+            Path(arguments.runs)
+            / arguments.run_id
+            / "evidence"
+            / "target-resolution"
+            / "target-state.json"
+        )
+        target_state_bytes = _read_regular_bytes(
+            target_state_path,
+            label="retained target-state",
+        )
+        retained_target_state = _object_from_bytes(
+            target_state_bytes,
+            label="retained target-state",
+        )
+        verify_target_state(
+            retained_target_state,
+            expected_digest=projection_state.target_state_digest,
+        )
+        phase_artifact_bytes, _ = _ratified_phase_artifacts(
+            arguments.runs,
+            arguments.run_id,
+            projection_state,
+        )
+        resume_verification_document = resume.state_admission_dict()
+        state_dependencies = {
+            "target-state": target_state_bytes,
+            "run-ledger-head": projection_state.ledger_head.encode("ascii"),
+            "phase-artifact-digests": _canonical_bytes(
+                dict(projection_state.phase_artifact_digests)
+            ),
+            **{
+                f"phase-artifact-{phase}": raw
+                for phase, raw in phase_artifact_bytes.items()
+            },
+            "frozen-task": task_bytes,
+            "runner-projection": projection_bytes,
+            "role-primer": role_primer_bytes,
+            "runner-manifest": runner_manifest_bytes,
+            "runner-output-schema": output_schema_bytes,
+            "broker-registry": broker_registry_bytes,
+            "resume-checkpoint": checkpoint_bytes,
+            "resume-verification": _canonical_bytes(resume_verification_document),
+            "configuration-set": _canonical_bytes(dict(resume.configuration_digests)),
+            "state-qualification-observations": qualification_observations_bytes,
+            "state-qualification-report": qualification_bytes,
+        }
+        _require_run_projection_unchanged(
+            arguments.runs,
+            arguments.run_id,
+            projection_state,
+        )
+        state_capsule = derive_state_capsule(
+            purpose="lane-dispatch",
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            role=arguments.role,
+            target_state_digest=projection_state.target_state_digest,
+            run_ledger_head=projection_state.ledger_head,
+            resume_checkpoint_digest=resume.checkpoint_digest,
+            dependencies=state_dependencies,
+        )
         forbidden: list[Path] = []
         for field in ("control_root", "source_root", "workdir", "object_store"):
             value = projection_state.target_state.get(field)
@@ -657,25 +1069,42 @@ def _execute(arguments: argparse.Namespace) -> None:
         workspace = Path(arguments.workspace)
         if not workspace.is_absolute():
             raise ValueError("runner workspace must be an absolute host-owned path")
-        handoff, runner_receipt = HardenedModelRunner(
-            backend=MacOSNetworkedRunner(),
-            secret_store=NamedSecretStore(arguments.secret_root),
-        ).dispatch(
-            run_id=arguments.run_id,
-            generation=projection_state.generation,
-            receipt_id=arguments.receipt_id,
-            manifest_document=runner_manifest,
-            projection_path=arguments.projection,
-            output_schema_path=arguments.output_schema,
-            task=task,
-            workspace_root=workspace,
-            forbidden_paths=forbidden,
-        )
+        arguments._model_attempts = 0
+        try:
+            handoff, runner_receipt = HardenedModelRunner(
+                backend=MacOSNetworkedRunner(),
+                secret_store=NamedSecretStore(arguments.secret_root),
+            ).dispatch(
+                run_id=arguments.run_id,
+                generation=projection_state.generation,
+                receipt_id=arguments.receipt_id,
+                manifest_bytes=runner_manifest_bytes,
+                projection_bytes=projection_bytes,
+                output_schema_bytes=output_schema_bytes,
+                task_bytes=task_bytes,
+                state_capsule_document=state_capsule,
+                state_dependencies=state_dependencies,
+                target_state_digest=projection_state.target_state_digest,
+                run_ledger_head=projection_state.ledger_head,
+                resume_checkpoint_digest=resume.checkpoint_digest,
+                broker_registry_source_digest=digest_bytes(broker_registry_bytes),
+                workspace_root=workspace,
+                forbidden_paths=forbidden,
+                attempt_observer=lambda count: setattr(
+                    arguments,
+                    "_model_attempts",
+                    count,
+                ),
+            )
+        except RunnerError as exc:
+            arguments._model_attempts = exc.model_attempts
+            raise
         _emit(
             {
                 "run_id": arguments.run_id,
                 "role": arguments.role,
                 "resume_checkpoint_digest": resume.checkpoint_digest,
+                "state_capsule_digest": digest_obj(state_capsule),
                 "handoff": handoff,
                 "runner_receipt": dict(runner_receipt.document),
                 "workspace": str(workspace),
@@ -704,7 +1133,15 @@ def _execute(arguments: argparse.Namespace) -> None:
         projection_state = RunStore(arguments.runs).load(arguments.run_id)
         if not projection_state.target_state or not projection_state.target_state_digest:
             raise ValueError("run has no checked target-state for broker execution")
+        if projection_state.ledger_head != resume.current_run_ledger_head:
+            raise ValueError("run ledger changed after external resume verification")
         retained_runner_receipt = _read_object(arguments.runner_receipt)
+        if retained_runner_receipt.get("schema_version") == "factory-runner-receipt/1":
+            raise ValueError(
+                "legacy runner receipt cannot execute after state-capsule cutover; "
+                "explicitly abandon the legacy run and start a v2 run from a new verified "
+                "checkpoint"
+            )
         validate_document("runner-receipt", retained_runner_receipt)
         expected_receipt = {
             "receipt_id": arguments.receipt_id,
@@ -715,6 +1152,26 @@ def _execute(arguments: argparse.Namespace) -> None:
         for field, expected in expected_receipt.items():
             if retained_runner_receipt.get(field) != expected:
                 raise ValueError(f"runner receipt has wrong {field}")
+        state_capsule = _read_object(arguments.state_capsule)
+        verify_state_capsule(
+            state_capsule,
+            expected_purpose="lane-dispatch",
+            expected_run_id=arguments.run_id,
+            expected_generation=projection_state.generation,
+            expected_role=arguments.role,
+            expected_target_state_digest=projection_state.target_state_digest,
+            expected_run_ledger_head=projection_state.ledger_head,
+            expected_resume_checkpoint_digest=resume.checkpoint_digest,
+        )
+        state_capsule_digest = digest_obj(state_capsule)
+        receipt_capsule_fields = {
+            "state_capsule_digest": state_capsule_digest,
+            "state_profile_digest": state_capsule["profile_digest"],
+            "resume_checkpoint_digest": resume.checkpoint_digest,
+        }
+        for field, expected in receipt_capsule_fields.items():
+            if retained_runner_receipt.get(field) != expected:
+                raise ValueError(f"runner receipt has wrong {field}")
         handoff = _read_object(arguments.handoff)
         validate_document("runner-output", handoff)
         if len(handoff["broker_requests"]) > 64:
@@ -723,6 +1180,8 @@ def _execute(arguments: argparse.Namespace) -> None:
             "kind": "handoff",
             "role": arguments.role,
             "sequence": 3,
+            "state_capsule_digest": state_capsule_digest,
+            "projection_digest": retained_runner_receipt["projection_digest"],
         }
         for field, expected in expected_handoff.items():
             if handoff.get(field) != expected:
@@ -734,7 +1193,7 @@ def _execute(arguments: argparse.Namespace) -> None:
         ):
             raise ValueError("runner handoff does not carry the qualified session continuity")
         registry_bytes = _read_regular_bytes(arguments.registry, label="broker registry")
-        registry_document = _read_object(arguments.registry)
+        registry_document = _object_from_bytes(registry_bytes, label="broker registry")
         registry_digest = digest_obj(registry_document)
         if registry_digest != arguments.registry_digest:
             raise ValueError("broker registry differs from its externally expected digest")
@@ -742,6 +1201,16 @@ def _execute(arguments: argparse.Namespace) -> None:
             arguments.registry_config_source_name
         ) != digest_bytes(registry_bytes):
             raise ValueError("broker registry is not bound by the external resume checkpoint")
+        if retained_runner_receipt["broker_registry_source_digest"] != digest_bytes(
+            registry_bytes
+        ):
+            raise ValueError("broker registry differs from the qualified runner receipt")
+        capsule_dependencies = {
+            str(item["dependency_id"]): str(item["content_digest"])
+            for item in state_capsule["dependencies"]
+        }
+        if capsule_dependencies.get("broker-registry") != digest_bytes(registry_bytes):
+            raise ValueError("broker registry differs from the admitted state capsule")
         resource_ledger = ResourceLedger(
             Path(arguments.runs) / arguments.run_id,
             arguments.run_id,
@@ -777,6 +1246,11 @@ def _execute(arguments: argparse.Namespace) -> None:
             tessera=tessera,
             isolation=MacOSSandbox(),
         )
+        _require_run_projection_unchanged(
+            arguments.runs,
+            arguments.run_id,
+            projection_state,
+        )
         effects = []
         for request in handoff["broker_requests"]:
             capability_digest = str(request["capability_digest"])
@@ -798,6 +1272,7 @@ def _execute(arguments: argparse.Namespace) -> None:
             "resume_checkpoint_digest": resume.checkpoint_digest,
             "runner_receipt_digest": digest_obj(retained_runner_receipt),
             "handoff_digest": digest_obj(handoff),
+            "state_capsule_digest": state_capsule_digest,
             "registry_digest": registry.configuration_digest,
             "effect_digests": [digest_obj(effect) for effect in effects],
             "verified": True,
@@ -1059,12 +1534,69 @@ def _execute(arguments: argparse.Namespace) -> None:
     raise ValueError(f"unsupported command: {arguments.command}")
 
 
+def _execute(arguments: argparse.Namespace) -> None:
+    """Hold the lifecycle/resource lease across every long-running model or broker action."""
+
+    if arguments.command in {
+        "bundle-orchestrator-projection",
+        "run-model",
+        "execute-broker-handoff",
+    }:
+        ledger = ResourceLedger(
+            Path(arguments.runs) / arguments.run_id,
+            arguments.run_id,
+        )
+        with ledger.run_transition_guard():
+            try:
+                _execute_unleased(arguments)
+            except StateAdmissionError:
+                raise
+            except RunnerError as exc:
+                if arguments.command != "run-model":
+                    raise
+                if max(
+                    exc.model_attempts,
+                    int(getattr(arguments, "_model_attempts", 0)),
+                ) > 0:
+                    raise
+                raise StateAdmissionError(
+                    exc.refusal_code,
+                    str(exc),
+                    dependency_id=exc.dependency_id,
+                ) from exc
+            except (OSError, ValueError) as exc:
+                if (
+                    arguments.command == "run-model"
+                    and getattr(arguments, "_model_attempts", 0) == 0
+                ):
+                    raise StateAdmissionError(
+                        "PRE_MODEL_REFUSAL",
+                        str(exc),
+                    ) from exc
+                raise
+        return
+    _execute_unleased(arguments)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run one command; all refused controls exit non-zero with no traceback laundering."""
 
+    arguments: argparse.Namespace | None = None
     try:
         arguments = _parser().parse_args(argv)
         _execute(arguments)
+    except StateAdmissionError as exc:
+        if arguments is not None:
+            try:
+                _retain_state_admission_refusal(arguments, exc)
+            except (OSError, ValueError) as receipt_error:
+                print(
+                    "factory: warning: state-admission refusal receipt could not be "
+                    f"retained: {receipt_error}",
+                    file=sys.stderr,
+                )
+        print(f"factory: refused: {exc}", file=sys.stderr)
+        return 2
     except (OSError, ValueError) as exc:
         print(f"factory: refused: {exc}", file=sys.stderr)
         return 2

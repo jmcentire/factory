@@ -56,7 +56,7 @@ finally:
     if fd >= 0:
         os.close(fd)
 expected = {
-    "schema_version": "factory-harness/1", "run_id": run,
+    "schema_version": "factory-harness/2", "run_id": run,
     "target_state_digest": target_state, "resolved_commit": commit,
     "checkout_id": checkout,
 }
@@ -66,7 +66,8 @@ base_fields = {
     "schema_version", "run_id", "status", "task_digest", "target_state_digest",
     "target_manifest_digest", "resolved_commit", "checkout_id", "budget_usd",
     "budget_enforcement", "audit_interval_min", "promise_window_min",
-    "launcher_qualification", "lane_isolation", "created_at",
+    "launcher_qualification", "lane_isolation", "interactive_validator_boundary",
+    "validator_agent", "orchestrator_agent", "validator_contract", "created_at",
 }
 close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
 if set(doc) not in (base_fields, base_fields | close_fields):

@@ -80,6 +80,74 @@ def note(value):
 if verb == "verify-resume-checkpoint":
     print(json.dumps({"verified": True, "test_fixture": True}))
     raise SystemExit(0)
+if verb == "bundle-orchestrator-projection":
+    output = pathlib.Path(argument("--output"))
+    capsule_output = pathlib.Path(argument("--capsule-output"))
+    section_specs = [
+        sys.argv[index + 1]
+        for index, value in enumerate(sys.argv[:-1])
+        if value == "--section"
+    ]
+    expected_caller_sections = {
+        "trigger",
+        "task",
+        "receipt-tail",
+        "event-tail",
+        "minutes-tail",
+        "active-directives",
+        "harness-metadata",
+    }
+    caller_sections = {spec.split("=", 1)[0] for spec in section_specs}
+    if caller_sections != expected_caller_sections:
+        raise SystemExit(
+            "unexpected caller-owned orchestrator sections: "
+            + repr(sorted(caller_sections))
+        )
+    sections = []
+    for spec in section_specs:
+        section_id, path = spec.split("=", 1)
+        raw = pathlib.Path(path).read_bytes()
+        sections.append({
+            "section_id": section_id,
+            "content": raw.decode("utf-8"),
+            "content_digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "byte_count": len(raw),
+            "trust_class": "context",
+        })
+    for section_id, content, trust_class in (
+        ("phase-artifacts", "{}", "context"),
+        ("run-projection", "{}", "verified-state"),
+    ):
+        raw = content.encode("utf-8")
+        sections.append({
+            "section_id": section_id,
+            "content": content,
+            "content_digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "byte_count": len(raw),
+            "trust_class": trust_class,
+        })
+    capsule = {
+        "schema_version": "factory-state-dependency-capsule/1",
+        "test_fixture": True,
+    }
+    projection = {
+        "schema_version": "factory-orchestrator-projection/1",
+        "test_fixture": True,
+        "sections": sections,
+        "state_capsule_digest": "sha256:" + hashlib.sha256(
+            json.dumps(capsule, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    capsule_output.write_text(
+        json.dumps(capsule, sort_keys=True, separators=(",", ":")) + "\\n",
+        encoding="utf-8",
+    )
+    output.write_text(
+        json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\\n",
+        encoding="utf-8",
+    )
+    print(json.dumps({"projection_digest": projection["state_capsule_digest"]}))
+    raise SystemExit(0)
 if verb == "run-model":
     note("run-model")
     if os.environ.get("FACTORY_TEST_RUN_MODEL_FAIL") == "1":
@@ -93,21 +161,37 @@ if verb == "run-model":
     projection_raw = pathlib.Path(argument("--projection")).read_bytes()
     projection_digest = "sha256:" + hashlib.sha256(projection_raw).hexdigest()
     continuity_nonce = "a" * 64
+    capsule = {"test_fixture": True, "run_id": run_id, "role": role}
+    capsule_bytes = json.dumps(capsule, sort_keys=True, separators=(",", ":")).encode()
+    capsule_digest = "sha256:" + hashlib.sha256(capsule_bytes).hexdigest()
+    input_root = workspace / "input"
+    input_root.mkdir(parents=True)
+    (input_root / "state-capsule.json").write_bytes(capsule_bytes + b"\\n")
     handoff = {
         "kind": "handoff", "role": role, "projection_digest": projection_digest,
+        "state_capsule_digest": capsule_digest,
         "sequence": 3, "status": "complete", "summary": "fixture handoff",
         "questions": [], "broker_requests": [], "continuity_nonce": continuity_nonce,
     }
     handoff_bytes = json.dumps(handoff, sort_keys=True, separators=(",", ":")).encode()
     (output / "handoff.json").write_bytes(handoff_bytes + b"\\n")
     receipt = {
-        "schema_version": "factory-runner-receipt/1", "receipt_id": receipt_id,
+        "schema_version": "factory-runner-receipt/2", "receipt_id": receipt_id,
         "run_id": run_id, "generation": 1, "role": role,
         "runner_manifest_digest": "sha256:" + "1" * 64, "runner_id": "fixture",
+        "runner_manifest_source_digest": "sha256:" + "1" * 64,
         "adapter": "codex", "executable_digest": "sha256:" + "2" * 64,
         "runner_version": "fixture", "model": "fixture", "model_version": "fixture",
         "configuration_digest": "sha256:" + "3" * 64,
+        "state_profile_digest": "sha256:" + "3" * 64,
+        "state_qualification_digest": "sha256:" + "3" * 64,
+        "state_capsule_digest": capsule_digest,
+        "projection_digest": projection_digest,
+        "task_digest": "sha256:" + "3" * 64,
+        "resume_checkpoint_digest": "sha256:" + "0" * 64,
+        "broker_registry_source_digest": "sha256:" + "3" * 64,
         "billing_key_name": "TEST_TOKEN", "secret_names": ["TEST_TOKEN"],
+        "network_mode": "unrestricted-outbound",
         "qualification_digest": "sha256:" + "4" * 64,
         "canary_session_id": "fixture-session", "resumed_session_id": "fixture-session",
         "continuity_nonce_digest": "sha256:" + hashlib.sha256(
@@ -722,7 +806,7 @@ def execution_truth_fixture(
         (root / "harness.json").write_text(
             json.dumps(
                 {
-                    "schema_version": "factory-harness/1",
+                    "schema_version": "factory-harness/2",
                     "run_id": run_id,
                     "status": harness_status,
                     "task_digest": source_digest,
@@ -734,6 +818,10 @@ def execution_truth_fixture(
                     "budget_enforcement": "UNQUALIFIED_PR2",
                     "audit_interval_min": 45,
                     "promise_window_min": 10,
+                    "validator_agent": "codex",
+                    "orchestrator_agent": "agy",
+                    "interactive_validator_boundary": "operator-owned-tmux",
+                    "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
                     "launcher_qualification": "UNQUALIFIED_PR2",
                     "lane_isolation": "UNQUALIFIED_PR2",
                     "created_at": "2026-08-15T00:00:00+00:00",
@@ -943,6 +1031,8 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     runtime = json.loads((root / "run.json").read_text())
     assert harness["target_state_digest"] == runtime["target_state_digest"]
     assert harness["resolved_commit"] == target["resolved_commit"]
+    assert harness["validator_agent"] == "codex"
+    assert harness["orchestrator_agent"] == "agy"
     assert (root / "TASK.md").read_text() == task
     assert "repo" not in harness and "base_sha" not in harness
     assert str(target["workdir"]) in tmux_log.read_text()
@@ -1189,14 +1279,14 @@ def test_phase1_gate_refuses_missing_oracle_contract(tmp_path: Path) -> None:
     assert "oracle-contract.md" in r.stdout
 
 
-def test_phase1_gate_override_is_receipted_not_silent(tmp_path: Path) -> None:
-    """An override nobody can see becomes the habit that turns a gate into theater."""
+def test_phase1_gate_ignores_ambient_gap_override_and_still_refuses(tmp_path: Path) -> None:
+    """An environment variable cannot convert an inadequate phase into authority."""
     tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False)
     r = p1(tmp, PHASE1_ALLOW_GAPS="1")
-    assert r.returncode == 0
+    assert r.returncode == 71
     events = tmp / ".factory" / "runs" / "r1" / "events.jsonl"
-    rec = read_chain(events)[-1]
-    assert rec["gate"] == "phase1" and rec["override"] is True and rec["failures"] == 1
+    assert not events.exists()
+    assert "Fix and re-ratify" in r.stdout
 
 
 # --------------------------------------------------------------------------
@@ -1370,17 +1460,160 @@ def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "codex"})
+    )
     # PATH without any agent binary: the invocation cannot succeed.
     r = run(
         ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
         cwd=tmp_path,
-        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "claude"},
+        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "codex"},
     )
     receipts = (root / "wakes" / "receipts.jsonl").read_text()
-    assert "ORCHESTRATOR_DID_NOT_RUN" in receipts, (
+    assert '"status":"did-not-run"' in receipts, (
         "a failed invocation must be recorded as a dead wake, not written out as an audit"
     )
+    assert not list((root / "wakes").glob("*.response.md"))
+    assert len(list((root / "wakes").glob("*.failure.md"))) == 1
     assert "ORCHESTRATOR DID NOT RUN" in r.stderr
+
+
+def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "artifacts").mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+    )
+    (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    agy = binary / "agy"
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s|%s\\n' \"$PWD\" \"$*\" > \"$FACTORY_TEST_AGY_LOG\"\n"
+        "printf 'No process \\\"drift\\\" found.\\nSecond line.\\n'\n"
+    )
+    agy.chmod(0o755)
+    log = tmp_path / "agy.log"
+    directive = dl(
+        tmp_path,
+        "append",
+        "--scope",
+        "run",
+        "--text",
+        "project this exact directive",
+    )
+    assert directive.returncode == 0, directive.stderr
+    directive_ledger = tmp_path / "DIRECTIVES" / "ledger.jsonl"
+    (root / "minutes").mkdir()
+    (root / "minutes" / "validator-2026-08-18.log").write_text(
+        "one\ntwo\n",
+        encoding="utf-8",
+    )
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "FACTORY_TEST_AGY_LOG": str(log),
+            "DIRECTIVE_LEDGER": str(directive_ledger),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocation = log.read_text()
+    assert "--sandbox --disable-slash-commands -p" in invocation
+    assert "--mode plan" not in invocation
+    assert "dangerously-skip-permissions" not in invocation
+    assert str(tmp_path) not in invocation.split("|", 1)[0]
+    projections = list((root / "wakes").glob("*.projection.json"))
+    capsules = list((root / "wakes").glob("*.state-capsule.json"))
+    prompts = list((root / "wakes").glob("*.prompt.txt"))
+    assert len(projections) == 1 and len(capsules) == 1 and len(prompts) == 1
+    assert "/Users/" not in projections[0].read_text()
+    projected = json.loads(projections[0].read_text())
+    active_directives = next(
+        section for section in projected["sections"]
+        if section["section_id"] == "active-directives"
+    )
+    assert "project this exact directive" in active_directives["content"]
+    minutes = next(
+        section for section in projected["sections"]
+        if section["section_id"] == "minutes-tail"
+    )
+    assert "[validator-2026-08-18.log] one" in minutes["content"]
+    wake_receipt = json.loads(
+        (root / "wakes" / "receipts.jsonl").read_text().splitlines()[0]
+    )
+    assert wake_receipt["agent"] == "agy"
+    assert wake_receipt["status"] == "projection-prepared"
+    assert (
+        wake_receipt["sandbox_enforcement"]
+        == "cli-declared-not-independently-qualified"
+    )
+    completed_receipt = json.loads(
+        (root / "wakes" / "receipts.jsonl").read_text().splitlines()[1]
+    )
+    assert completed_receipt["status"] == "completed"
+    assert completed_receipt["exit_code"] == 0
+    assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
+    assert (
+        completed_receipt["prompt_assembler_version"]
+        == "factory-orchestrator-prompt-assembler/1"
+    )
+    assert completed_receipt["prompt_id"] == prompts[0].name
+    assert completed_receipt["prompt_byte_count"] == len(prompts[0].read_bytes())
+    assert completed_receipt["prompt_digest"] == digest_bytes(prompts[0].read_bytes())
+    assert completed_receipt["prompt_bytes_retained"] is True
+    assert len(list((root / "wakes").glob("*.response.md"))) == 1
+    assert not list((root / "wakes").glob("*.failure.md"))
+    assert '"drift"' in list((root / "wakes").glob("*.response.md"))[0].read_text()
+    blocking = read_chain(root / "lanes" / "validator.blocking")
+    assert blocking[-1]["trust_class"] == "untrusted-advisory"
+    assert blocking[-1]["effect_route"] == "validator-blocking-only"
+    for line in (root / "events.jsonl").read_text().splitlines():
+        json.loads(line)
+
+
+def test_orchestrator_refuses_ambient_agent_substitution(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    (root / "wakes").mkdir(parents=True)
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "agy"})
+    )
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={"ORCH_AGENT": "claude"},
+    )
+
+    assert result.returncode == 72
+    assert "differs from bound metadata" in result.stderr
+
+
+def test_orchestrator_refuses_unsandboxed_claude_adapter(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "claude"})
+    )
+
+    result = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={"ORCH_AGENT": "claude"},
+    )
+
+    assert result.returncode == 72
+    assert "no valid bound orchestrator" in result.stderr
 
 
 def test_mutate_reports_no_op_patch_not_survival(tmp_path: Path) -> None:
@@ -1943,10 +2176,13 @@ def test_dead_auditor_writes_blocking_event_not_injection(tmp_path: Path) -> Non
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "codex"})
+    )
     r = run(
         ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
         cwd=tmp_path,
-        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "claude"},
+        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "codex"},
     )
     blocking = root / "lanes" / "validator.blocking"
     assert blocking.exists(), "a dead wake must write a blocking event for attention"
@@ -2193,7 +2429,8 @@ def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
     manifests = runner_config / "manifests"
     registries = runner_config / "registries"
     secrets = runner_config / "secrets"
-    for directory in (manifests, registries, secrets):
+    qualifications = runner_config / "qualifications"
+    for directory in (manifests, registries, secrets, qualifications):
         directory.mkdir(parents=True, exist_ok=True)
     for role in ("coder", "tester"):
         (manifests / f"{role}.json").write_text(
@@ -2209,6 +2446,14 @@ def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
         )
         (registries / f"{role}.json").write_text(
             json.dumps({"role": role, "operations": [], "capabilities": []}) + "\n",
+            encoding="utf-8",
+        )
+        (qualifications / f"{role}.json").write_text(
+            json.dumps({"qualified": True, "test_fixture": True}) + "\n",
+            encoding="utf-8",
+        )
+        (qualifications / f"{role}.observations.json").write_text(
+            json.dumps({"observations": [], "test_fixture": True}) + "\n",
             encoding="utf-8",
         )
     output_schema = runner_config / "runner-output.schema.json"
@@ -2232,6 +2477,7 @@ def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
         "FACTORY_RUNNER_SECRET_ROOT": str(secrets),
         "FACTORY_RUNNER_WORKSPACE_ROOT": str(fixture_root / "runner-workspaces"),
         "FACTORY_BROKER_REGISTRY_DIR": str(registries),
+        "FACTORY_STATE_QUALIFICATION_DIR": str(qualifications),
         "FACTORY_TEST_BOUNDARY_LOG": str(fixture_root / "boundary.log"),
     }
 
@@ -2249,6 +2495,175 @@ def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
     )
     assert r.returncode == 70, r.stdout + r.stderr
     assert "no kindex primer" in r.stderr and "Gate C" in r.stderr
+
+
+def test_legacy_harness_requires_explicit_unqualified_abandonment(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = "factory-harness/1"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    environment = _dispatch_env(stub, root)
+
+    refused = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert refused.returncode == 70
+    assert "harness metadata is stale or unbound" in refused.stderr
+
+    format_control = run(
+        [
+            "bash",
+            str(HARNESS / "abandon_legacy.sh"),
+            "r1",
+            "--actor",
+            "human:operator",
+            "--reason",
+            "misleading \u202etxt.exe",
+            "--acknowledge-unqualified-restart",
+            "--runs",
+            str(root.parent),
+        ],
+        cwd,
+        environment,
+    )
+    assert format_control.returncode != 0
+    assert "control-free" in format_control.stderr
+    assert not (root / "legacy-harness-abandonment.json").exists()
+
+    abandoned = run(
+        [
+            "bash",
+            str(HARNESS / "abandon_legacy.sh"),
+            "r1",
+            "--actor",
+            "human:operator",
+            "--reason",
+            "restart under the qualified v2 boundary",
+            "--acknowledge-unqualified-restart",
+            "--runs",
+            str(root.parent),
+        ],
+        cwd,
+        environment,
+    )
+    assert abandoned.returncode == 0, abandoned.stdout + abandoned.stderr
+    receipt = json.loads((root / "legacy-harness-abandonment.json").read_text())
+    assert receipt["disposition"] == "abandoned-unqualified"
+    assert receipt["replacement_schema_version"] == "factory-harness/2"
+
+    bidi_receipt = root / "bidi-abandonment.json"
+    bidi_document = dict(receipt)
+    bidi_document["reason"] = "misleading \u202etxt.exe"
+    bidi_receipt.write_text(json.dumps(bidi_document), encoding="utf-8")
+    bidi_verification = run(
+        [
+            sys.executable,
+            str(HARNESS / "legacy_abandonment.py"),
+            "--harness",
+            str(metadata_path),
+            "--receipt",
+            str(bidi_receipt),
+            "--run",
+            "r1",
+        ],
+        cwd,
+        environment,
+    )
+    assert bidi_verification.returncode != 0
+    assert "invalid reason" in bidi_verification.stderr
+
+    mod = load_dispatcher()
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.wake_orchestrator = lambda _: None
+    dispatcher.run_loop()
+    assert read_chain(root / "events.jsonl")[-1]["detail"] == (
+        "verified legacy harness abandonment"
+    )
+
+
+def test_dispatcher_refuses_unverified_legacy_abandonment_marker(tmp_path: Path) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".factory" / "runs" / "r1"
+    root.mkdir(parents=True)
+    target_digest = "sha256:" + "a" * 64
+    (root / "run.json").write_text(
+        json.dumps({"target_state": {}}),
+        encoding="utf-8",
+    )
+    (root / "harness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "factory-harness/1",
+                "run_id": "r1",
+                "target_state_digest": target_digest,
+                "status": "open",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "legacy-harness-abandonment.json").write_text("{}", encoding="utf-8")
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.wake_orchestrator = lambda _: None
+
+    dispatcher.run_loop()
+
+    blocking = read_chain(root / "lanes" / "validator.blocking")
+    assert blocking[0]["class"] == "invalid_legacy_abandonment"
+    events = read_chain(root / "events.jsonl")
+    assert events[-1]["detail"] == "invalid legacy abandonment marker refused"
+
+
+@pytest.mark.parametrize("schema_version", [None, "factory-harness/1"])
+def test_dispatcher_refuses_legacy_harness_before_monitoring(
+    tmp_path: Path,
+    schema_version: str | None,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".factory" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(
+        json.dumps({"target_state": {}}),
+        encoding="utf-8",
+    )
+    metadata: dict[str, object] = {"status": "open"}
+    if schema_version is not None:
+        metadata["schema_version"] = schema_version
+    (root / "harness.json").write_text(json.dumps(metadata), encoding="utf-8")
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.wake_orchestrator = lambda _: None
+
+    dispatcher.run_loop()
+
+    blocking = read_chain(root / "lanes" / "validator.blocking")
+    assert blocking[0]["class"] == "legacy_harness"
+    events = read_chain(root / "events.jsonl")
+    assert events[-1]["kind"] == "dispatcher_stop"
+    assert "legacy or unversioned" in events[-1]["detail"]
+
+
+def test_current_harness_cannot_use_legacy_abandonment(tmp_path: Path) -> None:
+    cwd, root, _, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "abandon_legacy.sh"),
+            "r1",
+            "--actor",
+            "human:operator",
+            "--reason",
+            "not applicable",
+            "--acknowledge-unqualified-restart",
+            "--runs",
+            str(root.parent),
+        ],
+        cwd,
+        _dispatch_env(stub, root),
+    )
+    assert result.returncode != 0
+    assert "only factory-harness/1" in result.stderr
 
 
 def test_dispatch_refuses_a_target_manifest_changed_after_ignition(tmp_path: Path) -> None:
@@ -2315,10 +2730,8 @@ def test_dispatch_primer_is_role_specific_not_shared(tmp_path: Path) -> None:
     assert r.returncode == 70 and "no kindex primer" in r.stderr
 
 
-def test_dispatch_breakglass_primer_gap_is_receipted(tmp_path: Path) -> None:
-    """Break-glass (plan §Advocate operational requirements): a missing primer under
-    GATE_BC_ALLOW_GAP=1 proceeds with a RECEIPTED gap written to events.jsonl,
-    never silently. The break-glass is a receipt, not a backdoor."""
+def test_dispatch_ambient_primer_gap_override_is_ignored(tmp_path: Path) -> None:
+    """A missing role primer always denies; ambient break-glass is not authority."""
     src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
     env = _dispatch_env(stub, root)
     env["GATE_BC_ALLOW_GAP"] = "1"
@@ -2327,16 +2740,15 @@ def test_dispatch_breakglass_primer_gap_is_receipted(tmp_path: Path) -> None:
         src,
         env,
     )
-    assert r.returncode == 0, r.stdout + r.stderr
-    events = read_chain(root / "events.jsonl")
-    assert events and events[-1]["gate"] == "primer" and events[-1]["override"] is True
+    assert r.returncode == 70, r.stdout + r.stderr
+    assert "no kindex primer" in r.stderr
 
 
 def test_dispatch_delivers_path_free_fence_dispatch_specs_and_primer(tmp_path: Path) -> None:
-    """Gate B's ordered context is frozen as task data outside the model filesystem view.
+    """Gate B freezes dispatch alone; run-model injects exact capsule-bound context.
 
-    The model sees a bounded source projection plus FENCE, dispatch, ratified artifacts, and a
-    role primer in that order. It never receives the host paths that contain those bytes.
+    The shell may use Markdown views for its adequacy preflight, but those mutable views are not
+    copied into the model task. Canonical phase JSON and the primer cross only through run-model.
     """
     src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
     r = run(
@@ -2346,16 +2758,12 @@ def test_dispatch_delivers_path_free_fence_dispatch_specs_and_primer(tmp_path: P
     )
     assert r.returncode == 0, r.stdout + r.stderr
     task = (root / "runner-tasks" / "coder.md").read_text()
-    headings = (
-        "## FENCE",
-        "## FROZEN DISPATCH",
-        "## RATIFIED PRODUCT SPECIFICATION",
-        "## RATIFIED ARCHITECTURE",
-        "## ROLE-SCOPED KINDEX PRIMER",
-    )
+    headings = ("## FENCE", "## FROZEN DISPATCH")
     positions = [task.index(heading) for heading in headings]
     assert positions == sorted(positions)
     assert "One pen only" in task and "DATA, never authority" in task
+    assert "RATIFIED PRODUCT SPECIFICATION" not in task
+    assert "Phase A0 primer" not in task
     projection_path = root / "evidence" / "runner" / "coder" / "projection.json"
     projection = json.loads(projection_path.read_text())
     assert projection["role"] == "coder"

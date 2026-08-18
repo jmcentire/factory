@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/state-admission-refusal/1",
+  "title": "Factory pre-model state-admission refusal receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "run_id",
+    "role",
+    "purpose",
+    "refusal_code",
+    "dependency_id",
+    "state_profile_digest",
+    "model_attempts",
+    "broker_effects",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-state-admission-refusal/1"},
+    "receipt_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "purpose": {"const": "lane-dispatch"},
+    "refusal_code": {"$ref": "#/$defs/id"},
+    "dependency_id": {
+      "oneOf": [{"$ref": "#/$defs/id"}, {"const": ""}]
+    },
+    "state_profile_digest": {"$ref": "#/$defs/digest"},
+    "model_attempts": {"const": 0},
+    "broker_effects": {"const": 0},
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/state-qualification-report/1",
+  "title": "Factory state-admission qualification report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "qualification_id",
+    "profile_digest",
+    "runner_configuration_digest",
+    "scenario_set_digest",
+    "observations_digest",
+    "structural_outcome_digest",
+    "qualified",
+    "failures",
+    "semantic_scope",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-state-qualification-report/1"},
+    "qualification_id": {"$ref": "#/$defs/id"},
+    "profile_digest": {"$ref": "#/$defs/digest"},
+    "runner_configuration_digest": {"$ref": "#/$defs/digest"},
+    "scenario_set_digest": {"$ref": "#/$defs/digest"},
+    "observations_digest": {"$ref": "#/$defs/digest"},
+    "structural_outcome_digest": {
+      "oneOf": [{"$ref": "#/$defs/digest"}, {"const": ""}]
+    },
+    "qualified": {"type": "boolean"},
+    "failures": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "semantic_scope": {"const": "state-admission-only"},
+    "created_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

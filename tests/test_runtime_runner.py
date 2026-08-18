@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import stat
 import sys
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,7 @@ from factory_runtime.runner import (
     RunnerQualification,
 )
 from factory_runtime.runner_isolation import MacOSNetworkedRunner
+from factory_runtime.state_admission import derive_state_capsule, profile_digest
 
 
 class FakeBackend:
@@ -44,6 +47,7 @@ class FakeBackend:
         self.stderr = ["", "", ""]
         self.continuity_nonce = ""
         self.continuity_overrides = ["", "", ""]
+        self.state_capsule_overrides = ["", "", ""]
 
     def qualify(
         self,
@@ -72,6 +76,7 @@ class FakeBackend:
     ) -> RunnerProcessResult:
         index = len(self.calls)
         projection_digest = str(environment["FACTORY_PROJECTION_DIGEST"])
+        state_capsule_digest = str(environment["FACTORY_STATE_CAPSULE_DIGEST"])
         prompt = json.loads(stdin)
         if index == 0:
             self.continuity_nonce = str(
@@ -81,6 +86,8 @@ class FakeBackend:
             "kind": self.kinds[index],
             "role": environment["FACTORY_ROLE"],
             "projection_digest": projection_digest,
+            "state_capsule_digest": self.state_capsule_overrides[index]
+            or state_capsule_digest,
             "sequence": index + 1,
             "continuity_nonce": self.continuity_overrides[index] or self.continuity_nonce,
             "status": "complete" if index == 2 else "qualified",
@@ -111,6 +118,21 @@ class FakeBackend:
         )
 
 
+class RefusingBackend(FakeBackend):
+    def __init__(self, *, fail_at: int, reported_attempts: int) -> None:
+        super().__init__()
+        self.fail_at = fail_at
+        self.reported_attempts = reported_attempts
+
+    def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+        if len(self.calls) == self.fail_at:
+            raise RunnerError(
+                "backend refused",
+                model_attempts=self.reported_attempts,
+            )
+        return super().run(*args, **kwargs)
+
+
 def _schema(tmp_path: Path) -> Path:
     path = tmp_path / "handoff.schema.json"
     path.write_text(
@@ -123,6 +145,7 @@ def _schema(tmp_path: Path) -> Path:
                     "kind",
                     "role",
                     "projection_digest",
+                    "state_capsule_digest",
                     "sequence",
                     "continuity_nonce",
                     "status",
@@ -132,6 +155,7 @@ def _schema(tmp_path: Path) -> Path:
                     "kind": {"enum": ["canary", "handoff"]},
                     "role": {"enum": ["coder", "tester", "validator"]},
                     "projection_digest": {"pattern": "^sha256:[0-9a-f]{64}$"},
+                    "state_capsule_digest": {"pattern": "^sha256:[0-9a-f]{64}$"},
                     "sequence": {"type": "integer", "minimum": 1, "maximum": 3},
                     "continuity_nonce": {"pattern": "^[0-9a-f]{64}$"},
                     "status": {"enum": ["qualified", "complete", "blocked"]},
@@ -165,7 +189,7 @@ def _fixture(
     schema = _schema(tmp_path)
     child_executables = [] if adapter == "codex" else ["/bin/echo"]
     manifest = {
-        "schema_version": "factory-runner-manifest/1",
+        "schema_version": "factory-runner-manifest/2",
         "runner_id": "runner-fixture",
         "role": "coder",
         "adapter": adapter,
@@ -175,10 +199,12 @@ def _fixture(
         "model": "fixture-model",
         "model_version": "fixture-model-1",
         "configuration_digest": digest_obj({"configuration": "fixture"}),
+        "state_profile_digest": profile_digest("lane-dispatch"),
+        "state_qualification_digest": digest_obj({"qualification": "fixture"}),
         "billing_key_name": "FACTORY_TEST_API_KEY",
         "secret_names": ["FACTORY_TEST_API_KEY"],
         "output_schema_digest": digest_bytes(schema.read_bytes()),
-        "network_mode": "model-api-only",
+        "network_mode": "unrestricted-outbound",
         "limits": {
             "wall_seconds": 60,
             "idle_seconds": 10,
@@ -206,18 +232,98 @@ def _fixture(
     return runner, backend, manifest, projection, schema, workspace, forbidden
 
 
-def _dispatch(fixture: tuple[Any, ...], *, task: str = "Implement the signed criterion") -> Any:
+def _dispatch(
+    fixture: tuple[Any, ...],
+    *,
+    task: str = "Implement the signed criterion",
+    capsule_mutation: Callable[[dict[str, Any]], None] | None = None,
+    attempt_observer: Callable[[int], None] | None = None,
+) -> Any:
     runner, _, manifest, projection, schema, workspace, forbidden = fixture
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    projection_bytes = projection.read_bytes()
+    schema_bytes = schema.read_bytes()
+    task_bytes = task.encode()
+    broker_registry = b'{"operations":[]}'
+    resume_digest = digest_obj({"resume": "fixture"})
+    phase_documents = {
+        phase: {
+            "artifact_id": f"{phase}-fixture",
+            "phase": phase,
+            "version": "1",
+            "source_digest": "sha256:" + "a" * 64,
+            "human_ratifier": "human:fixture",
+            "validator_ratifier": "agent:fixture",
+            "items": [
+                {
+                    "item_id": f"{phase}:1",
+                    "canonical_statement": f"Ratified {phase} behavior.",
+                    "supersedes": [],
+                }
+            ],
+        }
+        for phase in (
+            "product-specification",
+            "architecture",
+            "operational-maturity",
+        )
+    }
+    phase_digests = {
+        phase: digest_obj(document) for phase, document in phase_documents.items()
+    }
+    dependencies = {
+        "target-state": b'{"target":"fixture"}',
+        "run-ledger-head": ("sha256:" + "1" * 64).encode(),
+        "phase-artifact-digests": json.dumps(
+            phase_digests, sort_keys=True, separators=(",", ":")
+        ).encode(),
+        **{
+            f"phase-artifact-{phase}": json.dumps(
+                document, sort_keys=True, separators=(",", ":")
+            ).encode()
+            for phase, document in phase_documents.items()
+        },
+        "frozen-task": task_bytes,
+        "runner-projection": projection_bytes,
+        "role-primer": b"context only",
+        "runner-manifest": manifest_bytes,
+        "runner-output-schema": schema_bytes,
+        "broker-registry": broker_registry,
+        "resume-checkpoint": b'{"checkpoint":"fixture"}',
+        "resume-verification": b'{"verified":true}',
+        "configuration-set": b'{"runner":"fixture"}',
+        "state-qualification-observations": b'{"observations":[]}',
+        "state-qualification-report": b'{"qualified":true}',
+    }
+    capsule = derive_state_capsule(
+        purpose="lane-dispatch",
+        run_id="run-1",
+        generation=1,
+        role="coder",
+        target_state_digest=digest_obj({"target": "fixture"}),
+        run_ledger_head="sha256:" + "1" * 64,
+        resume_checkpoint_digest=resume_digest,
+        dependencies=dependencies,
+    )
+    if capsule_mutation is not None:
+        capsule_mutation(capsule)
     return runner.dispatch(
         run_id="run-1",
         generation=1,
         receipt_id="runner-receipt-1",
-        manifest_document=manifest,
-        projection_path=projection,
-        output_schema_path=schema,
-        task=task,
+        manifest_bytes=manifest_bytes,
+        projection_bytes=projection_bytes,
+        output_schema_bytes=schema_bytes,
+        task_bytes=task_bytes,
+        state_capsule_document=capsule,
+        state_dependencies=dependencies,
+        target_state_digest=digest_obj({"target": "fixture"}),
+        run_ledger_head="sha256:" + "1" * 64,
+        resume_checkpoint_digest=resume_digest,
+        broker_registry_source_digest=digest_bytes(broker_registry),
         workspace_root=workspace,
         forbidden_paths=(forbidden,),
+        attempt_observer=attempt_observer,
     )
 
 
@@ -245,8 +351,80 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     encoded_receipt = json.dumps(receipt.document, sort_keys=True)
     assert "named-secret-value" not in encoded_receipt
     assert receipt.document["secret_names"] == ["FACTORY_TEST_API_KEY"]
+    assert receipt.document["network_mode"] == "unrestricted-outbound"
     assert receipt.document["meter_semantics"] == "observed-post-call"
     assert (workspace / "output" / "runner-receipt.json").is_file()
+    assert receipt.document["prompt_schema_version"] == "factory-runner-prompt/2"
+    assert (
+        receipt.document["prompt_assembler_version"]
+        == "factory-runner-prompt-assembler/1"
+    )
+    assert receipt.document["prompt_bytes_retained"] is True
+    for private_directory in (
+        workspace,
+        workspace / "input",
+        workspace / "output",
+        workspace / "home",
+        workspace / "tmp",
+    ):
+        assert stat.S_IMODE(private_directory.stat().st_mode) == 0o700
+    for private_input in (
+        workspace / "input" / "projection.json",
+        workspace / "input" / "output-schema.json",
+        workspace / "input" / "state-capsule.json",
+    ):
+        assert stat.S_IMODE(private_input.stat().st_mode) == 0o600
+    assert [item["kind"] for item in receipt.document["prompt_sequence"]] == [
+        "qualification",
+        "qualification",
+        "task",
+    ]
+    for index, call in enumerate(backend.calls, start=1):
+        retained = workspace / "input" / f"prompt-{index}.json"
+        assert retained.read_bytes() == call["stdin"]
+        prompt_receipt = receipt.document["prompt_sequence"][index - 1]
+        assert prompt_receipt["attempt"] == index
+        assert prompt_receipt["byte_count"] == len(call["stdin"])
+        assert prompt_receipt["content_digest"] == digest_bytes(call["stdin"])
+    task_prompt = json.loads(third["stdin"])
+    assert "state_capsule" not in task_prompt["data"]
+    assert set(task_prompt["data"]["ratified_phase_artifacts"]) == {
+        "product-specification",
+        "architecture",
+        "operational-maturity",
+    }
+    assert task_prompt["data"]["role_primer"] == "context only"
+
+
+def test_runner_freezes_caller_owned_capsule_before_backend_activity(
+    tmp_path: Path,
+) -> None:
+    holder: dict[str, dict[str, Any]] = {}
+
+    class MutatingQualificationBackend(FakeBackend):
+        def qualify(
+            self,
+            root: str | Path,
+            *,
+            allowed_executables: Sequence[str | Path],
+            forbidden_paths: Sequence[str | Path],
+        ) -> RunnerQualification:
+            holder["capsule"]["role"] = "tester"
+            return super().qualify(
+                root,
+                allowed_executables=allowed_executables,
+                forbidden_paths=forbidden_paths,
+            )
+
+    fixture = _fixture(tmp_path, backend=MutatingQualificationBackend())
+    handoff, receipt = _dispatch(
+        fixture,
+        capsule_mutation=lambda capsule: holder.__setitem__("capsule", capsule),
+    )
+
+    assert holder["capsule"]["role"] == "tester"
+    assert handoff["role"] == "coder"
+    assert receipt.document["role"] == "coder"
 
 
 def test_task_is_stdin_data_and_cannot_enter_runner_argv(tmp_path: Path) -> None:
@@ -260,6 +438,25 @@ def test_task_is_stdin_data_and_cannot_enter_runner_argv(tmp_path: Path) -> None
     assert attack not in command
     assert all("touch /tmp/owned" not in part for part in command)
     assert attack.encode() in backend.calls[-1]["stdin"]
+
+
+def test_oversized_assembled_task_prompt_refuses_before_any_model_attempt(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    observed: list[int] = []
+
+    with pytest.raises(RunnerError, match="prompt exceeds") as refused:
+        _dispatch(
+            fixture,
+            task="x" * 2_097_000,
+            attempt_observer=observed.append,
+        )
+
+    assert refused.value.model_attempts == 0
+    assert fixture[1].calls == []
+    assert observed == []
+    assert not list(fixture[5].glob("input/prompt-*.json"))
 
 
 def test_ollama_adapter_launches_codex_not_opencode(tmp_path: Path) -> None:
@@ -298,6 +495,79 @@ def test_failed_qualification_stops_before_any_model_attempt(tmp_path: Path) -> 
     assert backend.calls == []
 
 
+def test_invalid_state_capsule_stops_before_qualification_or_model_attempt(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    with pytest.raises(RunnerError, match="state capsule is invalid"):
+        _dispatch(
+            fixture,
+            capsule_mutation=lambda capsule: capsule.__setitem__(
+                "resume_checkpoint_digest", "sha256:" + "f" * 64
+            ),
+        )
+
+    assert fixture[1].calls == []
+    assert not hasattr(fixture[1], "qualification_call")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target_state_digest", "sha256:" + "e" * 64),
+        ("run_ledger_head", "sha256:" + "d" * 64),
+    ],
+)
+def test_runner_rechecks_capsule_target_and_ledger_scope_before_model(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    with pytest.raises(RunnerError, match="state capsule is invalid"):
+        _dispatch(
+            fixture,
+            capsule_mutation=lambda capsule: capsule.__setitem__(field, value),
+        )
+
+    assert fixture[1].calls == []
+
+
+def test_runner_manifest_cannot_claim_unenforced_provider_only_egress(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[2]["network_mode"] = "model-api-only"
+
+    with pytest.raises(RunnerError, match="network_mode"):
+        _dispatch(fixture)
+
+    assert fixture[1].calls == []
+
+
+def test_legacy_runner_manifest_requires_clean_restart(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[2]["schema_version"] = "factory-runner-manifest/1"
+
+    with pytest.raises(RunnerError, match="explicitly abandon the legacy run") as error:
+        _dispatch(fixture)
+
+    assert error.value.refusal_code == "LEGACY_RUNNER_MANIFEST"
+    assert fixture[1].calls == []
+
+
+def test_canary_must_echo_exact_state_capsule_digest(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].state_capsule_overrides[0] = "sha256:" + "f" * 64
+
+    with pytest.raises(RunnerError, match="state_capsule_digest"):
+        _dispatch(fixture)
+
+    assert len(fixture[1].calls) == 1
+
+
 @pytest.mark.parametrize(
     ("mutation", "message", "expected_calls"),
     [
@@ -321,10 +591,42 @@ def test_canary_or_process_failure_prevents_task_dispatch(
     backend = fixture[1]
     mutation(backend)
 
-    with pytest.raises(RunnerError, match=message):
+    with pytest.raises(RunnerError, match=message) as error:
         _dispatch(fixture)
 
     assert len(backend.calls) == expected_calls
+    assert error.value.model_attempts == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("fail_at", "reported_attempts", "expected_attempts", "expected_observations"),
+    [
+        (0, 0, 0, []),
+        (0, 1, 1, [1]),
+        (1, 1, 2, [1, 2]),
+    ],
+)
+def test_attempt_observer_distinguishes_prelaunch_refusal_from_started_process(
+    tmp_path: Path,
+    fail_at: int,
+    reported_attempts: int,
+    expected_attempts: int,
+    expected_observations: list[int],
+) -> None:
+    backend = RefusingBackend(
+        fail_at=fail_at,
+        reported_attempts=reported_attempts,
+    )
+    observations: list[int] = []
+
+    with pytest.raises(RunnerError, match="backend refused") as error:
+        _dispatch(
+            _fixture(tmp_path, backend=backend),
+            attempt_observer=observations.append,
+        )
+
+    assert error.value.model_attempts == expected_attempts
+    assert observations == expected_observations
 
 
 def test_secret_exfiltration_in_any_model_output_fails_closed(tmp_path: Path) -> None:
@@ -488,3 +790,40 @@ def test_networked_backend_runs_only_qualified_exec_and_reopens_structured_artif
     assert result.structured_output == {"kind": "canary"}
     assert result.session_id == "session-real"
     assert (result.input_tokens, result.output_tokens) == (3, 2)
+
+
+@pytest.mark.isolation_integration
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
+def test_networked_backend_wall_limit_covers_a_child_that_never_reads_stdin(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    interpreter = (
+        Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    ).resolve(strict=True)
+    helper = workspace / "never-read.py"
+    helper.write_text("import time\ntime.sleep(20)\n", encoding="utf-8")
+    backend = MacOSNetworkedRunner()
+    started = time.monotonic()
+
+    result = backend._supervised(
+        (str(interpreter), str(helper)),
+        cwd=workspace,
+        readable_paths=(interpreter, helper),
+        writable_paths=(workspace,),
+        environment={
+            "HOME": str(workspace),
+            "TMPDIR": str(workspace),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        },
+        stdin=b"x" * 2_097_152,
+        limits=RunnerLimits(1, 10, 4, 3, 65_536, 100, 0),
+        allowed_executables=(interpreter,),
+        counts_as_model_attempt=True,
+    )
+
+    assert time.monotonic() - started < 5
+    assert result.termination_reason == "wall-limit"

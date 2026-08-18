@@ -369,6 +369,7 @@ print(json.dumps(result, sort_keys=True))
             stdin=stdin,
             limits=limits,
             allowed_executables=self._allowed_executables,
+            counts_as_model_attempt=True,
         )
         if process.returncode != 0 or process.termination_reason != "completed":
             return process
@@ -416,6 +417,7 @@ print(json.dumps(result, sort_keys=True))
         stdin: bytes,
         limits: RunnerLimits,
         allowed_executables: Sequence[Path],
+        counts_as_model_attempt: bool = False,
     ) -> RunnerProcessResult:
         if len(stdin) > _MAX_STDIN_BYTES:
             raise RunnerError("runner stdin exceeds its bounded input size")
@@ -455,16 +457,16 @@ print(json.dumps(result, sort_keys=True))
                 stderr=subprocess.PIPE,
                 start_new_session=True,
             )
-            if process.stdin is not None:
-                try:
-                    process.stdin.write(stdin)
-                    process.stdin.close()
-                except BrokenPipeError:
-                    pass
-            if process.stdout is None or process.stderr is None:
+            if process.stdin is None or process.stdout is None or process.stderr is None:
                 raise RunnerError("runner process pipes were not created")
+            pending_stdin = memoryview(stdin)
+            os.set_blocking(process.stdin.fileno(), False)
             os.set_blocking(process.stdout.fileno(), False)
             os.set_blocking(process.stderr.fileno(), False)
+            if pending_stdin:
+                selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+            else:
+                process.stdin.close()
             selector.register(process.stdout, selectors.EVENT_READ, stdout)
             selector.register(process.stderr, selectors.EVENT_READ, stderr)
             while True:
@@ -482,6 +484,20 @@ print(json.dumps(result, sort_keys=True))
                     _kill_group(process.pid)
                 events = selector.select(_POLL_SECONDS)
                 for selector_key, _ in events:
+                    if selector_key.data == "stdin":
+                        try:
+                            written = os.write(selector_key.fd, pending_stdin)
+                        except BrokenPipeError:
+                            written = 0
+                        except BlockingIOError:
+                            continue
+                        if written > 0:
+                            pending_stdin = pending_stdin[written:]
+                            last_activity = time.monotonic()
+                        if written <= 0 or not pending_stdin:
+                            selector.unregister(selector_key.fileobj)
+                            process.stdin.close()
+                        continue
                     try:
                         chunk = os.read(selector_key.fd, 65_536)
                     except BlockingIOError:
@@ -502,12 +518,18 @@ print(json.dumps(result, sort_keys=True))
                 _kill_group(process.pid)
             if returncode != 0 and reason == "completed":
                 reason = "exit-nonzero"
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError, RunnerError) as exc:
             if process is not None:
                 _kill_group(process.pid)
-            raise RunnerError(f"networked runner process failed: {exc}") from exc
+            attempts = 1 if counts_as_model_attempt and process is not None else 0
+            raise RunnerError(
+                f"networked runner process failed: {exc}",
+                model_attempts=max(attempts, getattr(exc, "model_attempts", 0)),
+            ) from exc
         finally:
             selector.close()
+            if process is not None and process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
             try:
                 profile_path.unlink()
             except FileNotFoundError:

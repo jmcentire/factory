@@ -1,10 +1,16 @@
 # The Harness
 
 > Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
-> implemented in `harness/lane_env.sh`, but live dispatch does not yet route through it or
-> Seatbelt and is explicitly `UNQUALIFIED_PR2`. Execution-truth PR1 (2026-08-15) wires Stage R/E
-> authority, exact run-owned target-state, control/source-root separation, and run-resource
-> accounting into the runtime and tmux consumers. Build-time gates remain in the `make ship`
+> remain available in `harness/lane_env.sh` as compatibility controls. Live Coder/Tester
+> dispatch instead routes through the executable runner boundary: externally anchored resume is
+> re-verified, every admitted context dependency is captured in a closed content-addressed
+> capsule, a current structural state-qualification report is required, and macOS Seatbelt
+> constrains files and process exec. Execution-truth PR1 (2026-08-15) wires Stage R/E authority,
+> exact run-owned target-state, control/source-root separation, and run-resource accounting into
+> the runtime and tmux consumers. Provider-only egress is still not enforced: the Seatbelt
+> profile permits general outbound network, so manifests and receipts record
+> `unrestricted-outbound`; a provider-only value is refused until a provider egress boundary
+> exists. Build-time gates remain in the `make ship`
 > order (purity → doctrine → authority → harness → denial-probes → lint → typecheck → test).
 > `endgame.sh` invokes Gate L only after deterministic gates, live proof, exact target
 > re-verification, and a terminal run-resource seal. Gate L closes `harness.json`; it does not
@@ -89,7 +95,7 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Capability (what is reachable) | `lane_env` + sandbox + egress allowlist | The environment *is* the grant: `env -i` construction from a manifest, secrets injected by name per-command, never a sourced profile. Seatbelt/containers for filesystem and network. Absence beats instruction. |
 | Cadence (when anything runs) | Runner timers + schedule registry | Agents request schedules; humans grant them; `sched_audit` treats an unregistered timer as hostile and a kill order as immediate. |
 | Evidence (what happened) | Receipt chain | A claim is a receipt id or it does not exist: exit code, log digest, tree SHA, dirty-state digest, chained. Absence claims carry a paired positive-control receipt. |
-| Memory (what is remembered) | **kindex** — context, never authority | Provenance-tagged writes; reads are correction-aware (act on a node only with its tail acknowledged); search-before-build enforced as a receipt, not a nag. Resume consults the ledger on disk, never a summary. |
+| Memory (what is remembered) | **kindex** — context, never authority | Provenance-tagged writes; reads are correction-aware (act on a node only with its tail acknowledged); search-before-build enforced as a receipt, not a nag. A role primer is an admitted, hashed context dependency. Resume consults the ledger on disk, never a summary. |
 | Projection (who sees what) | **Cryptogram** | Per-lane sections encrypted to lane keys, orchestrator routes blind. Coder/Tester separation stops being a policy about where Pact's `decompose` output goes and becomes a decryption impossibility. |
 | Budget | Runner objective ledger | Spend accounted per objective against evidence produced and uncertainty removed — "what did the last $100 buy" answerable at any time. Per-turn budgets are forbidden; they reward fragmentation. |
 | Qualification | **Benchie** as configuration CI | `qualification_id = hash(model + prompts + runner + tool schemas + policy + projection + verifier + environment)`; any change requalifies. The session-start canary is a smoke test for gross configuration failure, never certification of the next trajectory. |
@@ -102,13 +108,29 @@ enforces budgets and leases. It reasons about nothing — most of what flows thr
 is local commands and their output, and no model should be paying to watch that. The
 **orchestrator-agent** is invoked, not resident: the dispatcher wakes it on defined
 triggers — judgment-shaped failure classes, a lane's blocking question, a human message —
-under the lease discipline of control 6, and hands it a *projection*, not the transcript:
-the triggering event, the receipt-chain tail, the governing directives. It pulls specific
-artifacts by receipt id when the projection isn't enough. Context cost then scales with
-the exceptions rather than the run — the exact inverse of the 96-cold-loads bill. The
-projection is itself recorded (which receipt ids the agent saw), so "what did the
-orchestrator know when it decided" is replayable. Both seats hold zero grant authority:
+under the lease discipline of control 6, and hands it a *projection*, not the transcript.
+The executable projection is a closed nine-section document (trigger, task, phase snapshot,
+receipt/event/minutes tails, active directives, run projection, and harness metadata), built
+from one stable-open confirmed read of each bounded input and bound by a state-dependency capsule.
+The runtime itself derives the phase snapshot from the exact three ratified artifacts and the
+run projection from the verified ledger; the wake caller cannot supply either authoritative
+section. The agent
+starts in a fresh empty working directory and cannot extend that admitted set by asking the
+dispatcher to inspect another path; missing context becomes a blocking question for the human.
+Context cost then scales with exceptions rather than the run — the inverse of the
+96-cold-loads bill. The projection, capsule, and exact final prompt bytes are retained; the
+outcome receipt binds the prompt schema/assembler plus its byte count and SHA-256. This proves
+what the agent received without claiming deterministic output or opaque provider-session replay.
+Both seats hold zero grant authority:
 manifests, registries, and the ledger are human-signed files they read and cannot write.
+The executable sink is one-way: a bounded response is labeled `untrusted-advisory` and
+appended only as `validator-blocking-only` data; no parser converts its prose into a broker
+request, signature, ledger transition, or cleanup action.
+The wake receipt labels the advisory CLI sandbox `cli-declared-not-independently-qualified`:
+the dispatcher exposes no artifact-pull seam and launches from a fresh directory, but Factory
+does not yet claim a kernel-qualified projection-only confidentiality boundary or a
+named-secret-only process environment for Agy/Codex. Until that launcher is routed through a
+qualified clean environment, ambient non-Factory credentials are outside this proof.
 An orchestrator that can edit a manifest is the meta-agent-with-authorization trap rebuilt
 with better vocabulary — and an agent seat that watches everything is the cost trap
 rebuilt with better intentions.
@@ -310,8 +332,8 @@ dependency-free (bash + python3 + git):
   (`--sigs` requires signature-clean git history), `provisional`/`ratify` for the
   live-ruling bridge (control 1a), `active` listing both chains.
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
-  a fresh grounding marker. It is a built control, but live dispatch routing through it and
-  Seatbelt remains the explicit PR2 qualification boundary.
+  a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
+  owned by `factory_runtime.runner_isolation`, not this script.
 - `harness/receipt.sh` — wraps any command; exit code, log digest, tree SHA, dirty-state
   digest, flock-serialized per-worktree chain.
 - `harness/tripwire.sh` — credential-shaped content (incl. GCP service-account JSON)
@@ -321,9 +343,19 @@ dependency-free (bash + python3 + git):
   tripwire, channel list, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
 - `harness/factory.sh` — ignition only after Stage E; verifies exact task bytes and target-state,
   writes separate coordination metadata, records tmux intent, then opens the coordination surface.
+  An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
+  unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
+  evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
 - `harness/dispatch_lane.sh` — re-derives target-state, freezes dispatch bytes, mints the declared
-  asymmetric projection, verifies/appends the dispatch chain, and records exact workspace/window
-  resources before launch. It records launcher/isolation as `UNQUALIFIED_PR2`.
+  asymmetric projection, verifies/appends the dispatch chain, requires a role-specific Kindex
+  primer and externally checkpoint-bound structural qualification report, then invokes the
+  qualified model runner and typed broker. Ambient gap flags cannot bypass either precondition.
+- `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
+  projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
+  The agent choice is frozen in harness metadata; ambient substitution denies. Antigravity is the
+  default and Codex is the supported fallback. The current Claude adapter is refused because it
+  does not declare a filesystem sandbox. Agy/Codex CLI sandboxing remains explicitly unqualified
+  as a kernel-enforced read boundary.
 - `harness/endgame.sh` — accepts only an exact candidate SHA in a named run-owned resource,
   archives it into a recorded endgame worktree, runs ship/isolation/live proof, verifies exact
   target and terminal resource dispositions, and never inspects or cleans ambient user state.

@@ -24,6 +24,7 @@ from factory_runtime.authority import (
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunState, RunStateError, RunStore
+from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
 from factory_runtime.target_state import TargetResolutionError, verify_target_state
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 
@@ -41,6 +42,7 @@ class ResumeVerification:
 
     run_id: str
     checkpoint_digest: str
+    checkpoint_source_digest: str
     checkpoint_id: str
     anchored_run_ledger_head: str
     anchored_run_ledger_length: int
@@ -50,6 +52,41 @@ class ResumeVerification:
     current_resource_ledger_length: int
     acceptance_obligation_catalog_digest: str
     configuration_digests: Mapping[str, str]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the stable, security-relevant resume evidence surface."""
+
+        return {
+            "run_id": self.run_id,
+            "checkpoint_digest": self.checkpoint_digest,
+            "checkpoint_source_digest": self.checkpoint_source_digest,
+            "checkpoint_id": self.checkpoint_id,
+            "anchored_run_ledger_head": self.anchored_run_ledger_head,
+            "anchored_run_ledger_length": self.anchored_run_ledger_length,
+            "current_run_ledger_head": self.current_run_ledger_head,
+            "current_run_ledger_length": self.current_run_ledger_length,
+            "current_resource_ledger_head": self.current_resource_ledger_head,
+            "current_resource_ledger_length": self.current_resource_ledger_length,
+            "acceptance_obligation_catalog_digest": (
+                self.acceptance_obligation_catalog_digest
+            ),
+            "configuration_digests": dict(self.configuration_digests),
+        }
+
+    def state_admission_dict(self) -> dict[str, Any]:
+        """Return only resume facts that condition the model's admitted state.
+
+        Resource-ledger state is deliberately absent. Dispatch creates and dispositions
+        run-owned resources after the model capsule is frozen, while the broker independently
+        re-derives the current resource ledger before resolving any operation. Including that
+        moving operational ledger in model context would make every normal dispatch stale without
+        adding authority or confinement.
+        """
+
+        document = self.to_dict()
+        del document["current_resource_ledger_head"]
+        del document["current_resource_ledger_length"]
+        return document
 
 
 @dataclass(frozen=True)
@@ -69,12 +106,14 @@ class _BoundState:
 
 
 def _read_object(path: str | Path, *, label: str) -> tuple[dict[str, Any], bytes]:
-    source = Path(path)
-    if source.is_symlink() or not source.is_file():
-        raise ResumeVerificationError(f"{label} is missing, not regular, or a symlink")
-    raw = source.read_bytes()
-    if len(raw) > _MAX_DOCUMENT_BYTES:
-        raise ResumeVerificationError(f"{label} exceeds {_MAX_DOCUMENT_BYTES} bytes")
+    try:
+        raw = read_stable_regular_bytes(
+            path,
+            label=label,
+            max_bytes=_MAX_DOCUMENT_BYTES,
+        )
+    except StateAdmissionError as exc:
+        raise ResumeVerificationError(str(exc)) from exc
     try:
         document = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -93,12 +132,15 @@ def _configuration_digests(sources: Mapping[str, str | Path]) -> dict[str, str]:
     for name, raw_path in sorted(sources.items()):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name):
             raise ResumeVerificationError(f"invalid configuration source name: {name!r}")
-        path = Path(raw_path)
-        if path.is_symlink() or not path.is_file():
-            raise ResumeVerificationError(
-                f"configuration source {name!r} is missing, not regular, or a symlink"
+        try:
+            raw = read_stable_regular_bytes(
+                raw_path,
+                label=f"configuration source {name!r}",
+                max_bytes=_MAX_DOCUMENT_BYTES,
             )
-        result[name] = digest_bytes(path.read_bytes())
+        except StateAdmissionError as exc:
+            raise ResumeVerificationError(str(exc)) from exc
+        result[name] = digest_bytes(raw)
     return result
 
 
@@ -379,7 +421,7 @@ def verify_resume_checkpoint(
     """Verify an independently pinned checkpoint before admitting mutable-root state."""
 
     # Ordering is intentional: freeze and validate the external subject before opening runs_root.
-    checkpoint, _ = _read_object(checkpoint_path, label="resume checkpoint")
+    checkpoint, checkpoint_bytes = _read_object(checkpoint_path, label="resume checkpoint")
     if not _DIGEST.fullmatch(expected_checkpoint_digest):
         raise ResumeVerificationError("expected checkpoint digest is not canonical")
     checkpoint_digest = digest_obj(checkpoint)
@@ -455,6 +497,7 @@ def verify_resume_checkpoint(
     return ResumeVerification(
         run_id=run_id,
         checkpoint_digest=checkpoint_digest,
+        checkpoint_source_digest=digest_bytes(checkpoint_bytes),
         checkpoint_id=str(checkpoint["checkpoint_id"]),
         anchored_run_ledger_head=str(checkpoint["run_ledger_head"]),
         anchored_run_ledger_length=run_length,

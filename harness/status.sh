@@ -29,10 +29,25 @@ say "  tree          : $FACTORY_BASE_TREE"
 say "  source_root   : $FACTORY_SOURCE_ROOT"
 say "  workdir       : $FACTORY_WORKDIR"
 if [ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ]; then
-  python3 - "$ROOT/harness.json" <<'PY'
+  abandonment_state="absent"
+  if [ -e "$ROOT/legacy-harness-abandonment.json" ] || \
+     [ -L "$ROOT/legacy-harness-abandonment.json" ]; then
+    if python3 "$D/legacy_abandonment.py" --harness "$ROOT/harness.json" \
+      --receipt "$ROOT/legacy-harness-abandonment.json" --run "$RUN" >/dev/null 2>&1; then
+      abandonment_state="verified"
+    else
+      abandonment_state="invalid"
+    fi
+  fi
+  python3 - "$ROOT/harness.json" "$abandonment_state" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1], encoding="utf-8"))
-print(f"  harness state : {doc.get('status', 'UNKNOWN')}")
+abandonment = sys.argv[2]
+state = {
+    "verified": "abandoned-legacy",
+    "invalid": "INVALID (unverified legacy abandonment marker)",
+}.get(abandonment, doc.get("status", "UNKNOWN"))
+print(f"  harness state : {state}")
 print(f"  launcher      : {doc.get('launcher_qualification', 'UNQUALIFIED')}")
 print(f"  isolation     : {doc.get('lane_isolation', 'UNQUALIFIED')}")
 print(f"  budget        : {doc.get('budget_usd')} ({doc.get('budget_enforcement', 'UNQUALIFIED')})")

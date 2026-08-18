@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/state-qualification-observations/1",
+  "title": "Factory state-admission qualification observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_digest",
+    "runner_configuration_digest",
+    "scenario_set_digest",
+    "executor_digest",
+    "observations"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-state-qualification-observations/1"},
+    "profile_digest": {"$ref": "#/$defs/digest"},
+    "runner_configuration_digest": {"$ref": "#/$defs/digest"},
+    "scenario_set_digest": {"$ref": "#/$defs/digest"},
+    "executor_digest": {"$ref": "#/$defs/digest"},
+    "observations": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {"$ref": "#/$defs/observation"}
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario",
+        "disposition",
+        "refusal_code",
+        "subject_digest",
+        "structural_outcome_digest",
+        "evidence_digest",
+        "downstream_probe_reached",
+        "model_attempts",
+        "broker_effects"
+      ],
+      "properties": {
+        "scenario": {
+          "enum": [
+            "cold",
+            "exact-resume",
+            "compaction-boundary",
+            "stale",
+            "structural-contradiction",
+            "poisoned",
+            "missing",
+            "oversized-input"
+          ]
+        },
+        "disposition": {"enum": ["admitted", "refused-before-model", "refused-after-model"]},
+        "refusal_code": {
+          "oneOf": [{"$ref": "#/$defs/id"}, {"const": ""}]
+        },
+        "subject_digest": {"$ref": "#/$defs/digest"},
+        "structural_outcome_digest": {"$ref": "#/$defs/digest"},
+        "evidence_digest": {"$ref": "#/$defs/digest"},
+        "downstream_probe_reached": {"type": "boolean"},
+        "model_attempts": {"type": "integer", "minimum": 0},
+        "broker_effects": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

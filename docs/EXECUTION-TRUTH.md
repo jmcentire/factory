@@ -213,13 +213,45 @@ pass and the second must resume the first session before the task is sent. Proce
 idle, output, token, attempt, and monetary ceilings fail closed; monetary evidence is labeled
 `observed-post-call` unless the provider supplies a hard limit.
 
+Before backend qualification or any model attempt, the CLI opens each context dependency once,
+confirms two bounded reads through that descriptor agree, and rejects symlinks or an
+identity/size/time change during
+the read, verifies its external resume/configuration binding, and derives a closed
+`factory-state-dependency-capsule/1`. The capsule covers the exact target state, ledger head,
+phase references and the exact three canonical phase artifacts, frozen task, lane projection,
+role-specific Kindex primer, runner manifest, output schema, broker registry, resume evidence,
+configuration set, and structural qualification observations and report. The runner receives
+those same in-memory bytes; it does not reopen caller paths. Missing,
+unknown, duplicate, oversized, stale-profile, trust-escalated, or byte-substituted dependencies
+refuse before a model call and produce a bounded refusal receipt with zero model attempts and zero
+broker effects. The capsule is provenance and integrity evidence, not an authority source.
+
+State qualification compares deterministic dispositions, never model prose. Its code-owned
+executor invokes no model and produces no broker effect: cold, exact-resume, and
+compaction-boundary fixtures must reach one equivalent downstream probe, while stale,
+contradictory, poisoned, missing, and oversized-input fixtures must stop at admission. Both the
+observations and materialized report are bound to the exact runner configuration and admitted
+through the external resume configuration set. This qualifies only the state-admission boundary;
+live runner isolation, product behavior, oracle adequacy, and the next stochastic trajectory
+remain separate gates. Pre-capsule sessions restart as new attempts/generations rather than
+receiving a compatibility bypass.
+
 The model cannot name a path, command, argv, script, or working directory. It may emit only a
 closed typed broker request carrying an opaque signed capability digest and kind-specific data.
 The host resolves that handle through an externally checkpoint-bound registry, requires file
 roots to equal active run-owned resource-ledger identifiers, or uses fixed host-owned verifier
 argv, and verifies effects by content rehash, durable reopen/rehash, or two identical no-network
 runs. A failed canary reaches no broker operation. The interactive human/Validator tmux window is
-operator-owned coordination and is not represented as a qualified model lane.
+operator-owned coordination and is not represented as a qualified model lane. When an operator
+explicitly selects Claude for that window, the process is operator-equivalent and unsandboxed;
+it supplies no lane-isolation evidence. Codex is the default and Ollama-launched Codex is the
+supported alternate.
+
+Seatbelt currently permits outbound network generally so the model client can reach its provider.
+It does **not** yet enforce provider-only destination egress. Manifests and receipts therefore
+must say `network_mode=unrestricted-outbound`; the schema refuses `model-api-only` until a provider
+allowlist/proxy (including DNS and resolved-address controls) is enforced and independently tested.
+File/process containment remains enforced; provider-only egress does not.
 
 The runtime proves that a valid enrolled-human signature covers the canonical Stage-E request; it
 does not prove that a particular UI made the human meaningfully inspect it. A production signing
@@ -265,6 +297,16 @@ The implementation must prove at least:
 - ambient credentials never enter the runner; wrong executable/model/config/output schema denies;
   failed canary, failed same-session resume, no-artifact stall, cost/token/process/output ceilings,
   and process-tree escape stop without a broker effect;
+- the exact closed state-dependency membership is required; missing, unknown, duplicate,
+  oversized, stale, trust-escalated, or changed bytes refuse before the model and write a bounded
+  zero-attempt/zero-effect refusal receipt;
+- cold, exact-resume, and compaction-boundary qualification observations agree structurally while
+  stale, contradictory, poisoned, missing, and oversized fixtures refuse before model/effect;
+- the orchestrator sees only a retained closed nine-section projection and capsule, starts in a
+  fresh working directory, and remains advisory with no grant, gate, state-transition, or cleanup
+  authority; its response is retained only as `untrusted-advisory`,
+  `validator-blocking-only` data, while process-environment credential isolation remains
+  explicitly unqualified;
 - a model-supplied path, command, argv, script, unknown capability, wrong operation definition,
   wrong run-owned resource root, capability replay, or idempotency-key substitution denies;
 - every transition re-derives its code-selected obligation set/report; unknown trigger, missing

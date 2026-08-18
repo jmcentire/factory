@@ -99,6 +99,16 @@ def test_terminal_seal_is_idempotent_and_refuses_every_later_event(tmp_path: Pat
         )
 
 
+def test_execution_lease_blocks_resource_mutation(tmp_path: Path) -> None:
+    ledger = ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100)
+
+    with ledger.run_transition_guard():
+        with pytest.raises(ResourceLedgerError, match="run transition guard already exists"):
+            _append(ledger, "source", status="planned")
+
+    _append(ledger, "source", status="planned")
+
+
 def test_tampered_or_symlinked_terminal_seal_is_refused(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-1"
     ledger = ResourceLedger(run_dir, "run-1", clock=lambda: 100)

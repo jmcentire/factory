@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/runner-output/1",
+  "$id": "factory://schemas/runner-output/2",
   "title": "Factory outer-runner structured canary or broker handoff",
   "type": "object",
   "additionalProperties": false,
@@ -8,6 +8,7 @@
     "kind",
     "role",
     "projection_digest",
+    "state_capsule_digest",
     "sequence",
     "continuity_nonce",
     "status",
@@ -17,6 +18,7 @@
     "kind": {"enum": ["canary", "handoff"]},
     "role": {"enum": ["coder", "tester", "validator"]},
     "projection_digest": {"$ref": "#/$defs/digest"},
+    "state_capsule_digest": {"$ref": "#/$defs/digest"},
     "sequence": {"type": "integer", "minimum": 1, "maximum": 3},
     "continuity_nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "status": {"enum": ["qualified", "complete", "blocked"]},

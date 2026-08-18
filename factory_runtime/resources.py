@@ -332,6 +332,7 @@ class ResourceLedger:
         status: str,
         evidence_digests: Mapping[str, str] | None = None,
         actor: str,
+        transition_guarded: bool = False,
     ) -> str:
         """Append and durably fsync one resource event.
 
@@ -340,6 +341,22 @@ class ResourceLedger:
         invoked without outrunning its ``planned`` record.
         """
 
+        if not transition_guarded:
+            with self.run_transition_guard():
+                return self.append(
+                    generation=generation,
+                    resource_id=resource_id,
+                    resource_type=resource_type,
+                    identifier=identifier,
+                    creator_action=creator_action,
+                    ownership=ownership,
+                    baseline=baseline,
+                    disposition=disposition,
+                    status=status,
+                    evidence_digests=evidence_digests,
+                    actor=actor,
+                    transition_guarded=True,
+                )
         if not _RESOURCE_ID.fullmatch(resource_id):
             raise ResourceLedgerError("resource_id is not a canonical Factory identifier")
         if generation < 1:

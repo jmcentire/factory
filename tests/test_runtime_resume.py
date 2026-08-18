@@ -214,6 +214,11 @@ def test_checkpoint_reverifies_authority_and_allows_only_append_only_extension(
         workflow, tessera, genesis_path, config, checkpoint_path, checkpoint_digest
     )
     assert result.current_run_ledger_length == result.anchored_run_ledger_length
+    admitted = result.state_admission_dict()
+    assert admitted["current_run_ledger_head"] == result.current_run_ledger_head
+    assert admitted["checkpoint_source_digest"].startswith("sha256:")
+    assert "current_resource_ledger_head" not in admitted
+    assert "current_resource_ledger_length" not in admitted
 
     workflow.store.transition(
         "run-1",

@@ -26,6 +26,14 @@ import subprocess
 import sys
 import time
 
+_HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
+if _HARNESS_MODULE_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_MODULE_ROOT)
+from legacy_abandonment import (  # noqa: E402 - load the adjacent harness module
+    LegacyAbandonmentError,
+    verify_legacy_abandonment,
+)
+
 TRIGGER_PATTERNS: dict[str, str] = {
     "blocking_question": r"BLOCKING QUESTION|blocked on|awaiting (?:the )?Validator",
     "failure_class": (
@@ -434,7 +442,37 @@ class Dispatcher:
         while True:
             cfg = self.root / "harness.json"
             try:
-                if json.loads(cfg.read_text()).get("status") == "closed":
+                abandonment = self.root / "legacy-harness-abandonment.json"
+                if abandonment.exists() or abandonment.is_symlink():
+                    try:
+                        verify_legacy_abandonment(cfg, abandonment, run_id=self.run)
+                    except LegacyAbandonmentError as exc:
+                        self._block(
+                            "validator",
+                            "invalid_legacy_abandonment",
+                            f"legacy abandonment marker refused: {exc}",
+                        )
+                        self.event(
+                            "dispatcher_stop",
+                            "invalid legacy abandonment marker refused",
+                        )
+                        return
+                    self.event("dispatcher_stop", "verified legacy harness abandonment")
+                    return
+                metadata = json.loads(cfg.read_text())
+                if metadata.get("schema_version") != "factory-harness/2":
+                    self._block(
+                        "validator",
+                        "legacy_harness",
+                        "dispatcher requires factory-harness/2; use the explicit "
+                        "human abandonment ceremony before a clean restart",
+                    )
+                    self.event(
+                        "dispatcher_stop",
+                        "legacy or unversioned harness refused before monitoring",
+                    )
+                    return
+                if metadata.get("status") == "closed":
                     self.event("dispatcher_stop", "run closed")
                     return
             except (OSError, json.JSONDecodeError):

@@ -14,7 +14,8 @@
 # fail-closed: a run that cannot pass it should not launch lanes.
 #
 #   usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]
-#   override: PHASE1_ALLOW_GAPS=1 (receipted, countable, and visible in the verdict)
+# There is deliberately no ambient override. A human may amend and re-ratify the artifacts;
+# an environment variable may not convert an inadequate phase into authority.
 set -uo pipefail
 RUN="${1:?usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]}"; shift || true
 ROOT="${HARNESS_RUN_ROOT:-}"
@@ -146,16 +147,8 @@ echo "post-ratification amendments so far: ${AMEND:-0}   (v8 baseline: 6, all au
 
 if [ "$FAILURES" -gt 0 ]; then
   echo
-  if [ "${PHASE1_ALLOW_GAPS:-0}" = "1" ]; then
-    printf '{"ts":"%s","kind":"phase1_gap_override","run":"%s","gate":"phase1","failures":%s,"override":true}\n' \
-      "$(date -u +%FT%TZ)" "$RUN" "$FAILURES" >> "$ROOT/events.jsonl" 2>/dev/null || true
-    echo "PHASE1_ALLOW_GAPS=1 — $FAILURES gap(s) overridden and RECEIPTED."
-    echo "State them in the verdict; an override nobody can see becomes the habit"
-    echo "that turns this gate into theater."
-    exit 0
-  fi
   echo "phase1 gate: $FAILURES failure(s). Lanes must not launch."
-  echo "Fix the artifacts, or set PHASE1_ALLOW_GAPS=1 to proceed with a receipted gap."
+  echo "Fix and re-ratify the artifacts before dispatch."
   exit 71
 fi
 echo
