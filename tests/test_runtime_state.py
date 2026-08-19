@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy
+from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy, digest_obj
 from factory_runtime.state import RunState, RunStateError, RunStore
 from tests.conftest import (
     acceptance_catalog_artifacts,
@@ -167,10 +167,28 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
             seed=seed,
             activate_catalog=first_activation,
         ),
+        implementer_identity="coder",
+        verifier_identity="validator",
     )
 
 
-def _authorize_repair(store: RunStore, *, attempt: int) -> None:
+def _block_attempt(store: RunStore) -> None:
+    store.transition(
+        "run-1",
+        RunState.BLOCKED,
+        actor="validator",
+        payload={"reason": "attempt-failed", "tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator",
+    )
+
+
+def _authorize_repair(
+    store: RunStore,
+    *,
+    attempt: int,
+    validator_identity: str = "validator",
+) -> None:
     current = store.load("run-1")
     attempt_id = f"attempt-{attempt}-attempt-{attempt}"
     brief = "sha256:" + hashlib.sha256(f"brief:{attempt}".encode()).hexdigest()
@@ -190,7 +208,7 @@ def _authorize_repair(store: RunStore, *, attempt: int) -> None:
             "failure_signature": f"failure-{attempt - 1}",
             "authority_receipt_nonces": [],
         },
-        verifier_identity="validator",
+        verifier_identity=validator_identity,
     )
 
 
@@ -472,9 +490,8 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
     _create_intake(store)
     _ratify_all(store)
     _start_build(store, attempt=1, limit=2)
-    first = store.transition(
-        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
-    )
+    _block_attempt(store)
+    first = store.load("run-1")
     assert first.build_attempt_count == 1
     assert first.build_attempt_limit == 2
 
@@ -483,9 +500,8 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
         _start_build(store, attempt=2, limit=3)
 
     _start_build(store, attempt=2, limit=2)
-    second = store.transition(
-        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
-    )
+    _block_attempt(store)
+    second = store.load("run-1")
     assert second.build_attempt_count == 2
     assert second.build_attempt_limit == 2
 
@@ -501,9 +517,7 @@ def test_blocked_retry_requires_the_immediately_preceding_repair_bytes(
     _create_intake(store)
     _ratify_all(store)
     _start_build(store, attempt=1, limit=2)
-    store.transition(
-        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
-    )
+    _block_attempt(store)
     _authorize_repair(store, attempt=2)
     artifacts = generation_artifacts("attempt-2", include_acceptance_catalog=False)
     retained = store.current_artifact_digests("run-1")
@@ -526,6 +540,8 @@ def test_blocked_retry_requires_the_immediately_preceding_repair_bytes(
                 seed="attempt-2",
                 activate_catalog=False,
             ),
+            implementer_identity="coder",
+            verifier_identity="validator",
         )
 
 
@@ -534,13 +550,82 @@ def test_one_failed_attempt_cannot_authorize_multiple_repair_briefs(tmp_path: Pa
     _create_intake(store)
     _ratify_all(store)
     _start_build(store, attempt=1, limit=2)
-    store.transition(
-        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
-    )
+    _block_attempt(store)
     _authorize_repair(store, attempt=2)
 
     with pytest.raises(RunStateError, match="only one repair brief"):
         _authorize_repair(store, attempt=3)
+
+
+def test_repair_brief_must_use_the_causal_failed_attempt_validator(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    _block_attempt(store)
+
+    with pytest.raises(RunStateError, match="Validator of the causal failed attempt"):
+        _authorize_repair(store, attempt=2, validator_identity="coder")
+
+
+def test_blocked_retry_cannot_swap_the_validator_after_signed_authorization(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    _block_attempt(store)
+    _authorize_repair(store, attempt=2)
+    retained = store.current_artifact_digests("run-1")
+    artifacts = generation_artifacts("attempt-2", include_acceptance_catalog=False)
+    artifacts.update(
+        {
+            "repair-brief": retained["repair-brief"],
+            "repair-brief-envelope": retained["repair-brief-envelope"],
+        }
+    )
+
+    with pytest.raises(RunStateError, match="differs from the signed repair authorization"):
+        store.transition(
+            "run-1",
+            RunState.BUILDING,
+            actor="validator",
+            artifact_digests=artifacts,
+            payload=build_payload(
+                attempt_number=2,
+                attempt_limit=2,
+                seed="attempt-2",
+                activate_catalog=False,
+            ),
+            implementer_identity="coder",
+            verifier_identity="another-validator",
+        )
+
+
+def test_replay_rejects_a_rehashed_repair_event_with_a_swapped_validator(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    _block_attempt(store)
+    _authorize_repair(store, attempt=2)
+    ledger_path = tmp_path / "run-1" / "ledger.jsonl"
+    records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    repair_event = records[-1]
+    repair_event["verifier_identity"] = "coder"
+    repair_event["entry_hash"] = digest_obj(
+        {key: value for key, value in repair_event.items() if key != "entry_hash"}
+    )
+    ledger_path.write_text(
+        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunStateError, match="Validator of the causal failed attempt"):
+        store.rebuild_projection("run-1")
 
 
 def test_ratified_state_requires_the_corresponding_artifact(tmp_path: Path) -> None:

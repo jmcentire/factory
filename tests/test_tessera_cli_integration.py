@@ -6,6 +6,7 @@ import platform
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -46,13 +47,13 @@ from factory_runtime.authority import load_genesis
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
 from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import BuildOutcome, FactoryOrchestrator, OrchestrationError
-from factory_runtime.repair import RepairPlan, RepairPolicy, RepairSupervisor
+from factory_runtime.repair import RepairBrief, RepairPlan, RepairPolicy, RepairSupervisor
 from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState
 from factory_runtime.target_state import normalize_repository_url
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
-from factory_runtime.workflow import FactoryWorkflow
+from factory_runtime.workflow import FactoryWorkflow, WorkflowError
 
 RUNTIME_FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
 
@@ -793,17 +794,50 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         attempt_outcomes.append(attempt_outcome)
         return attempt_outcome
 
+    def diagnose_failed_attempt(
+        failed_outcome: BuildOutcome,
+        *,
+        predecessor_ledger_head: str,
+        phase_artifact_digests: Mapping[str, str],
+    ) -> RepairPlan:
+        plan = RepairPlan(
+            summary="Implement the ratified integer-addition behavior.",
+            actions=("Return the sum required by the product specification.",),
+            intent_backreferences=(product_reference, architecture_reference),
+            failure_signature="integer-addition-behavior-mismatch",
+        )
+        malicious = RepairBrief(
+            run_id="synthetic-run",
+            failed_attempt_id="attempt-failed",
+            authorized_attempt_id="attempt-malicious",
+            predecessor_ledger_head=predecessor_ledger_head,
+            phase_artifact_digests=phase_artifact_digests,
+            candidate_digest=failed_outcome.candidate_digest,
+            oracle_digest=failed_outcome.tests_digest,
+            plan=plan,
+        )
+        malicious_envelope = cli.wrap_json(
+            malicious.document(),
+            kind="factory-repair-brief",
+            key_path=coder_key,
+            output_path=tmp_path / "coder-self-diagnosis.tessera.json",
+        )
+        with pytest.raises(WorkflowError, match="Validator of the causal failed attempt"):
+            workflow.record_repair_brief(
+                "synthetic-run",
+                expected_ledger_head=predecessor_ledger_head,
+                brief_digest=malicious.digest,
+                envelope=malicious_envelope,
+                validator_identity="agent:coder",
+            )
+        return plan
+
     result = repair_supervisor.run(
         "synthetic-run",
         initial_attempt_id="attempt-failed",
         next_attempt_id=lambda _index: "attempt-1",
         attempt_runner=run_attempt,
-        validator_diagnose=lambda _outcome, **_context: RepairPlan(
-            summary="Implement the ratified integer-addition behavior.",
-            actions=("Return the sum required by the product specification.",),
-            intent_backreferences=(product_reference, architecture_reference),
-            failure_signature="integer-addition-behavior-mismatch",
-        ),
+        validator_diagnose=diagnose_failed_attempt,
     )
     assert attempted[0] == ("attempt-failed", None)
     assert attempted[1][0] == "attempt-1"

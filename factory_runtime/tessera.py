@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -37,6 +38,93 @@ class VerifiedEnvelope:
     public_key: str
     envelope_digest: str
     path: Path
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise TesseraVerificationError(f"Tessera output parent is not a directory: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _durably_sync_linked_envelope(
+    path: Path,
+    *,
+    installed_identity: tuple[int, int],
+    expected_digest: str,
+) -> None:
+    """Fsync the exact verified inode and its directory before authority can cite it."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or (before.st_dev, before.st_ino) != installed_identity:
+            raise TesseraVerificationError("installed Tessera envelope is not the linked inode")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65_536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        stable = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) == (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if not stable or digest_bytes(b"".join(chunks)) != expected_digest:
+            raise TesseraVerificationError("installed Tessera envelope changed before fsync")
+        os.fsync(descriptor)
+        retained = os.lstat(path)
+        if (
+            stat.S_ISLNK(retained.st_mode)
+            or (
+                retained.st_dev,
+                retained.st_ino,
+            )
+            != installed_identity
+        ):
+            raise TesseraVerificationError("installed Tessera envelope path changed during fsync")
+    except OSError as exc:
+        raise TesseraVerificationError(f"could not durably retain Tessera envelope: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    _fsync_directory(path.parent)
+
+
+def _remove_installed_link(path: Path, installed_identity: tuple[int, int]) -> None:
+    """Best-effort removal of only the output inode installed by this invocation."""
+
+    try:
+        current = os.lstat(path)
+        if (current.st_dev, current.st_ino) != installed_identity:
+            return
+        os.unlink(path)
+        _fsync_directory(path.parent)
+    except (OSError, TesseraVerificationError):
+        return
 
 
 class TesseraCli:
@@ -120,10 +208,27 @@ class TesseraCli:
                 expected_payload_digest=payload_digest,
             )
             try:
-                os.link(envelope_temporary, output)
+                os.link(envelope_temporary, output, follow_symlinks=False)
             except FileExistsError as exc:
                 raise TesseraVerificationError(
                     f"refusing to replace envelope created concurrently: {output}"
+                ) from exc
+            installed_identity: tuple[int, int] | None = None
+            try:
+                installed = os.lstat(output)
+                installed_identity = (installed.st_dev, installed.st_ino)
+                _durably_sync_linked_envelope(
+                    output,
+                    installed_identity=installed_identity,
+                    expected_digest=verified.envelope_digest,
+                )
+            except (OSError, TesseraVerificationError) as exc:
+                if installed_identity is not None:
+                    _remove_installed_link(output, installed_identity)
+                if isinstance(exc, TesseraVerificationError):
+                    raise
+                raise TesseraVerificationError(
+                    f"could not inspect installed Tessera envelope: {exc}"
                 ) from exc
             return VerifiedEnvelope(
                 kind=verified.kind,

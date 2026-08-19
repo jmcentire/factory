@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import stat
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
+import factory_runtime.acceptance_obligations as obligations_module
 from factory_core.manifest import digest_obj
 from factory_runtime.acceptance_obligations import (
     AcceptanceObligationCatalog,
@@ -25,6 +29,31 @@ PHASES = {
     "operational-maturity": "sha256:" + ("3" * 64),
 }
 ASSERTION = digest_obj({"test_id": "acceptance-1", "expected": "works"})
+
+
+def test_identical_acceptance_evidence_is_fsynced_before_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "acceptance-obligations" / ("a" * 64) / "catalog.json"
+    path.parent.mkdir(parents=True)
+    content = b'{"catalog":"exact"}\n'
+    path.write_bytes(content)
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(obligations_module.os, "fsync", track_fsync)
+
+    obligations_module._write_once_or_identical(path, content)
+
+    assert ("file", path.stat().st_ino) in synced
+    assert ("directory", path.parent.stat().st_ino) in synced
+    assert ("directory", path.parent.parent.stat().st_ino) in synced
 
 
 def _catalog_document() -> dict[str, object]:

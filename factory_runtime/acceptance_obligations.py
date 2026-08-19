@@ -150,8 +150,31 @@ def _read_canonical_object(path: str | Path, *, label: str) -> dict[str, Any]:
     return document
 
 
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise AcceptanceObligationError(f"acceptance evidence path is not a directory: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _sync_evidence_directories(path: Path) -> None:
+    _sync_directory(path.parent)
+    _sync_directory(path.parent.parent)
+
+
 def _existing_file_is_identical(path: Path, content: bytes) -> bool:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         descriptor = os.open(path, flags, 0o600)
     except OSError as exc:
@@ -164,21 +187,46 @@ def _existing_file_is_identical(path: Path, content: bytes) -> bool:
             raise AcceptanceObligationError(
                 "acceptance-obligation evidence destination is not regular"
             )
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = -1
-            existing = stream.read()
-        after = path.stat(follow_symlinks=False)
-        if stat.S_ISLNK(after.st_mode) or (before.st_dev, before.st_ino) != (
+        chunks: list[bytes] = []
+        remaining = len(content) + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        stable = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) == (
             after.st_dev,
             after.st_ino,
-        ):
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if not stable:
             raise AcceptanceObligationError(
                 "acceptance-obligation evidence changed during comparison"
             )
-        return existing == content
+        if b"".join(chunks) != content:
+            return False
+        os.fsync(descriptor)
+        installed = os.lstat(path)
+        if stat.S_ISLNK(installed.st_mode) or (
+            installed.st_dev,
+            installed.st_ino,
+        ) != (after.st_dev, after.st_ino):
+            raise AcceptanceObligationError("acceptance-obligation evidence changed during fsync")
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    _sync_evidence_directories(path)
+    return True
 
 
 def _write_once_or_identical(path: Path, content: bytes) -> None:
@@ -200,11 +248,7 @@ def _write_once_or_identical(path: Path, content: bytes) -> None:
                     "acceptance-obligation evidence address contains different bytes"
                 ) from exc
             return
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _sync_evidence_directories(path)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -836,9 +880,7 @@ def verify_retained_acceptance_obligation_report(
         / catalog_digest.removeprefix("sha256:")
         / f"{report_digest.removeprefix('sha256:')}.json"
     )
-    report = _read_canonical_object(
-        report_path, label="retained acceptance-obligation report"
-    )
+    report = _read_canonical_object(report_path, label="retained acceptance-obligation report")
     if digest_obj(report) != report_digest:
         raise AcceptanceObligationError(
             "retained acceptance-obligation report differs from its content address"

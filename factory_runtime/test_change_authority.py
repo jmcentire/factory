@@ -136,11 +136,24 @@ def _write_new_file(path: Path, content: bytes) -> None:
 
 
 def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
     try:
-        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        opened = os.fstat(descriptor)
+        if not stat.S_ISDIR(opened.st_mode):
             raise TestChangeAuthorityError(f"authority path is not a directory: {path}")
         os.fsync(descriptor)
+        installed = os.lstat(path)
+        if stat.S_ISLNK(installed.st_mode) or (
+            installed.st_dev,
+            installed.st_ino,
+        ) != (opened.st_dev, opened.st_ino):
+            raise TestChangeAuthorityError(f"authority directory changed during fsync: {path}")
     finally:
         os.close(descriptor)
 
@@ -153,7 +166,63 @@ def _require_private_directory(path: Path, *, label: str) -> None:
     os.chmod(path, 0o700)
 
 
-def _bundle_is_identical(directory: Path, files: Mapping[str, bytes]) -> bool:
+def _sync_identical_file(path: Path, content: bytes) -> bool:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != len(content):
+            return False
+        chunks: list[bytes] = []
+        remaining = len(content) + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        stable = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) == (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if not stable or b"".join(chunks) != content:
+            return False
+        os.fsync(descriptor)
+        installed = os.lstat(path)
+        if stat.S_ISLNK(installed.st_mode) or (
+            installed.st_dev,
+            installed.st_ino,
+        ) != (after.st_dev, after.st_ino):
+            raise TestChangeAuthorityError(
+                "retained test-change authority file changed during fsync"
+            )
+    except OSError as exc:
+        raise TestChangeAuthorityError(
+            f"retained test-change authority became unreadable: {exc}"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return True
+
+
+def _sync_identical_bundle(directory: Path, files: Mapping[str, bytes]) -> bool:
     try:
         metadata = directory.lstat()
     except FileNotFoundError:
@@ -163,10 +232,20 @@ def _bundle_is_identical(directory: Path, files: Mapping[str, bytes]) -> bool:
     actual_names = {entry.name for entry in directory.iterdir()}
     if actual_names != set(files):
         return False
-    return all(
-        _read_regular_bytes(directory / name, label="retained test-change authority") == content
-        for name, content in files.items()
-    )
+    if not all(_sync_identical_file(directory / name, content) for name, content in files.items()):
+        return False
+    current = directory.lstat()
+    if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+        raise TestChangeAuthorityError(
+            "retained test-change authority directory changed during comparison"
+        )
+    if {entry.name for entry in directory.iterdir()} != set(files):
+        raise TestChangeAuthorityError(
+            "retained test-change authority membership changed during comparison"
+        )
+    _sync_directory(directory)
+    _sync_directory(directory.parent)
+    return True
 
 
 def _remove_pending_bundle(directory: Path, names: Sequence[str]) -> None:
@@ -193,7 +272,7 @@ def _retain_bundle_atomically(
 
     parent = final_directory.parent
     _require_private_directory(parent, label="test-change authority parent")
-    if _bundle_is_identical(final_directory, files):
+    if _sync_identical_bundle(final_directory, files):
         return
     if final_directory.exists() or final_directory.is_symlink():
         raise TestChangeAuthorityError(
@@ -216,7 +295,7 @@ def _retain_bundle_atomically(
             os.rename(pending, final_directory)
             installed = True
         except OSError as exc:
-            if _bundle_is_identical(final_directory, files):
+            if _sync_identical_bundle(final_directory, files):
                 return
             raise TestChangeAuthorityError(
                 "could not atomically install test-change authority bundle"
@@ -270,12 +349,16 @@ def _reserved_nonces(parent: Path, *, exclude_address: str) -> frozenset[str]:
         )
         raw_nonces = document.get("nonces")
         raw_receipt_digests = document.get("receipt_digests")
-        if set(document) != {
-            "schema_version",
-            "authorization_digest",
-            "receipt_digests",
-            "nonces",
-        } or document.get("schema_version") != "factory-authority-nonce-reservation/1":
+        if (
+            set(document)
+            != {
+                "schema_version",
+                "authorization_digest",
+                "receipt_digests",
+                "nonces",
+            }
+            or document.get("schema_version") != "factory-authority-nonce-reservation/1"
+        ):
             raise TestChangeAuthorityError("retained test-change nonce reservation is malformed")
         if document.get("authorization_digest") != f"sha256:{directory.name}":
             raise TestChangeAuthorityError("retained test-change nonce reservation is misaddressed")

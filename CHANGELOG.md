@@ -26,10 +26,15 @@ public API is still pre-1.0.
   paths drain already-written output within a fixed bound and report incomplete capture.
 - `BLOCKED` retries now require an immediately preceding typed repair event. The subsequent
   `BUILDING` transition must consume its exact payload/envelope digests and unique authorized
-  attempt id; a failed attempt cannot issue multiple briefs before retry.
+  attempt id; a failed attempt cannot issue multiple briefs before retry. The signing identity
+  must be the Validator recorded on that causal failed attempt, remain distinct from its Coder
+  and Tester, and remain the Validator on the authorized retry.
 - Repair outcomes must belong to the same run and current ledger head. Candidate and acceptance
   test digests are re-derived from the blocked ledger, and every intent backreference resolves
   against the retained ratified phase artifacts.
+- Signed Tessera envelopes and idempotently reused obligation/authority evidence are stable-read
+  and fsynced as exact regular inodes with their final directory entries before a durable ledger
+  transition may cite them. Concurrent identical writers cannot outrun evidence durability.
 
 ### Explicit boundaries
 

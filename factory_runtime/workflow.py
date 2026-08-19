@@ -98,6 +98,74 @@ def _read_json_object(path: str | Path) -> tuple[dict[str, Any], bytes]:
     return dict(document), raw
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _sync_identical_evidence(path: Path, content: bytes) -> bool:
+    """Verify and durably retain one already-installed exact evidence file."""
+
+    if path.is_symlink():
+        return False
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != len(content):
+            return False
+        chunks: list[bytes] = []
+        remaining = len(content) + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        if b"".join(chunks) != content or identity != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            return False
+        os.fsync(descriptor)
+        installed = os.lstat(path)
+        if stat.S_ISLNK(installed.st_mode) or (
+            installed.st_dev,
+            installed.st_ino,
+        ) != (after.st_dev, after.st_ino):
+            return False
+    except OSError as exc:
+        raise WorkflowError(f"could not durably verify existing evidence {path}: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    _fsync_directory(path.parent)
+    return True
+
+
 def _write_once(path: Path, content: bytes) -> None:
     """Atomically create immutable evidence, accepting only an identical prior write.
 
@@ -108,7 +176,7 @@ def _write_once(path: Path, content: bytes) -> None:
     if path.is_symlink():
         raise WorkflowError(f"refusing symlink evidence path: {path}")
     if path.exists():
-        if path.is_file() and path.read_bytes() == content:
+        if _sync_identical_evidence(path, content):
             return
         raise WorkflowError(f"refusing to replace non-identical evidence: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,13 +188,9 @@ def _write_once(path: Path, content: bytes) -> None:
             os.fsync(handle.fileno())
         try:
             os.link(temporary, path)
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            _fsync_directory(path.parent)
         except FileExistsError:
-            if not path.is_symlink() and path.is_file() and path.read_bytes() == content:
+            if _sync_identical_evidence(path, content):
                 return
             raise WorkflowError(f"refusing to replace non-identical evidence: {path}") from None
     finally:
@@ -135,9 +199,7 @@ def _write_once(path: Path, content: bytes) -> None:
 
 
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-    )
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
 def _verified_envelope_bytes(receipt: VerifiedReceipt) -> bytes:
@@ -204,16 +266,36 @@ def _latest_build_attempt_id(entries: tuple[Mapping[str, Any], ...]) -> str:
     return ""
 
 
+def _causal_validator_identity(entry: Mapping[str, Any], *, context: str) -> str:
+    """Return the failed attempt's Validator only when all three lane identities are proven."""
+
+    payload = entry.get("payload")
+    if (
+        entry.get("to_state") != RunState.BLOCKED
+        or entry.get("from_state") not in {RunState.BUILDING, RunState.VALIDATING}
+        or not isinstance(payload, Mapping)
+        or payload.get("reason") == "repair-brief-recorded"
+    ):
+        raise WorkflowError(f"{context} is not a causal failed build attempt")
+    identities = {
+        "Coder": str(entry.get("implementer_identity", "")).strip(),
+        "Tester": str(payload.get("tester_identity", "")).strip(),
+        "Validator": str(entry.get("verifier_identity", "")).strip(),
+    }
+    missing = [role for role, identity in identities.items() if not identity]
+    if missing:
+        raise WorkflowError(f"{context} omits causal identity role(s): " + ", ".join(missing))
+    if len(set(identities.values())) != 3:
+        raise WorkflowError(f"{context} Coder, Tester, and Validator are not distinct")
+    return identities["Validator"]
+
+
 def _segregation_policy(policy: AuthorityPolicy) -> SegregationPolicy:
     humans = frozenset(
-        principal.identity
-        for principal in policy.principals.values()
-        if principal.kind == "human"
+        principal.identity for principal in policy.principals.values() if principal.kind == "human"
     )
     excluded = frozenset(
-        principal.identity
-        for principal in policy.principals.values()
-        if principal.kind != "human"
+        principal.identity for principal in policy.principals.values() if principal.kind != "human"
     )
     return SegregationPolicy(
         human_ids=humans,
@@ -310,9 +392,7 @@ class FactoryWorkflow:
         if self.policy.bootstrap_enabled and (
             "authorize-target-resolution" not in self.policy.bootstrap_scope
         ):
-            raise AuthorityVerificationError(
-                "bootstrap policy does not permit target resolution"
-            )
+            raise AuthorityVerificationError("bootstrap policy does not permit target resolution")
 
         evidence_dir = self.root / run_id / "evidence" / "target-resolution"
         manifest_bytes = Path(manifest_path).read_bytes()
@@ -535,6 +615,17 @@ class FactoryWorkflow:
             raise WorkflowError("repair brief requires a blocked run")
         if current.ledger_head != expected_ledger_head:
             raise WorkflowError("repair brief predecessor ledger head changed")
+        entries = self.store.verified_ledger_entries(run_id)
+        if not entries or entries[-1].get("entry_hash") != expected_ledger_head:
+            raise WorkflowError("repair brief predecessor ledger head is not current")
+        causal_validator = _causal_validator_identity(
+            entries[-1],
+            context="repair brief predecessor",
+        )
+        if validator_identity != causal_validator:
+            raise WorkflowError(
+                "repair brief signer must be the Validator of the causal failed attempt"
+            )
         principal = self.policy.principal(validator_identity)
         if principal is None or principal.kind != "agent":
             raise WorkflowError("repair brief signer must be an enrolled Validator agent")
@@ -571,7 +662,6 @@ class FactoryWorkflow:
                 raise WorkflowError(
                     f"repair brief {payload_key} differs from the blocked attempt ledger"
                 )
-        entries = self.store.verified_ledger_entries(run_id)
         if payload.get("failed_attempt_id") != _latest_build_attempt_id(entries):
             raise WorkflowError("repair brief does not name the causal build attempt")
         raw_references = payload.get("intent_backreferences")
@@ -679,6 +769,14 @@ class FactoryWorkflow:
             raise WorkflowError("recorded repair event is structurally incomplete")
         if not isinstance(predecessor_artifacts, Mapping):
             raise WorkflowError("recorded repair predecessor has no artifact bindings")
+        causal_validator = _causal_validator_identity(
+            predecessor,
+            context="recorded repair predecessor",
+        )
+        if validator_identity != causal_validator:
+            raise WorkflowError(
+                "repair brief verifier must be the Validator of the causal failed attempt"
+            )
         if (
             event.get("from_state") != RunState.BLOCKED
             or event.get("to_state") != RunState.BLOCKED
@@ -687,6 +785,8 @@ class FactoryWorkflow:
             raise WorkflowError("latest ledger event is not a repair-brief authorization")
         if event_payload.get("predecessor_ledger_head") != predecessor.get("entry_hash"):
             raise WorkflowError("recorded repair event does not bind its causal predecessor")
+        if event.get("verifier_identity") != causal_validator:
+            raise WorkflowError("recorded repair event names a different Validator")
         if event_artifacts.get("repair-brief") != envelope.payload_digest:
             raise WorkflowError("recorded repair event binds a different brief payload")
         if event_artifacts.get("repair-brief-envelope") != envelope.envelope_digest:
@@ -823,9 +923,7 @@ class FactoryWorkflow:
             artifact_digests={
                 artifact.phase: artifact_digest,
                 f"{artifact.phase}:human-receipt": human_receipt.envelope.envelope_digest,
-                f"{artifact.phase}:validator-receipt": (
-                    validator_receipt.envelope.envelope_digest
-                ),
+                f"{artifact.phase}:validator-receipt": (validator_receipt.envelope.envelope_digest),
             },
             payload={
                 "artifact_id": artifact.artifact_id,

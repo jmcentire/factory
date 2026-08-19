@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +13,7 @@ import pytest
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest
+from factory_runtime import workflow as workflow_module
 from factory_runtime.authority import (
     AuthorityPolicy,
     AuthorityVerificationError,
@@ -161,6 +164,30 @@ def _object_source(tmp_path: Path) -> Path:
         check=True,
     )
     return source
+
+
+def test_write_once_fsyncs_an_identical_preinstalled_file_and_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "evidence" / "repair.tessera.json"
+    evidence.parent.mkdir()
+    content = b'{"signed":"brief"}\n'
+    evidence.write_bytes(content)
+    real_fsync = os.fsync
+    synced_types: list[str] = []
+
+    def track_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        synced_types.append("file" if stat.S_ISREG(mode) else "directory")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(workflow_module.os, "fsync", track_fsync)
+
+    workflow_module._write_once(evidence, content)
+
+    assert evidence.read_bytes() == content
+    assert synced_types == ["file", "directory"]
 
 
 def _resolution_request(tmp_path: Path) -> tuple[Path, dict[str, Any]]:

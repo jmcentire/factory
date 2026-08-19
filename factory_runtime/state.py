@@ -328,6 +328,10 @@ def _require_repair_brief_event(
     payload: Mapping[str, Any],
     predecessor_ledger_head: str,
     verifier_identity: str,
+    causal_from_state: str,
+    causal_verifier_identity: str,
+    causal_implementer_identity: str,
+    causal_tester_identity: str,
     prior_attempt_ids: Collection[str],
     context: str,
 ) -> str:
@@ -335,9 +339,7 @@ def _require_repair_brief_event(
 
     required_artifacts = {"repair-brief", "repair-brief-envelope"}
     if set(supplied) != required_artifacts:
-        raise RunStateError(
-            f"{context} requires exactly the signed repair brief artifact pair"
-        )
+        raise RunStateError(f"{context} requires exactly the signed repair brief artifact pair")
     _require_digest_keys(supplied, tuple(sorted(required_artifacts)), context=context)
     if payload.get("reason") != "repair-brief-recorded":
         raise RunStateError(f"{context} requires reason 'repair-brief-recorded'")
@@ -348,20 +350,30 @@ def _require_repair_brief_event(
     if payload.get("repair_brief_digest") != supplied["repair-brief"]:
         raise RunStateError(f"{context} repair brief digest differs from its artifact binding")
     if payload.get("repair_brief_envelope_digest") != supplied["repair-brief-envelope"]:
+        raise RunStateError(f"{context} repair brief envelope differs from its artifact binding")
+    if causal_from_state not in {RunState.BUILDING, RunState.VALIDATING}:
+        raise RunStateError(f"{context} predecessor is not a failed build attempt")
+    causal_identities = {
+        "Validator": causal_verifier_identity.strip(),
+        "Coder": causal_implementer_identity.strip(),
+        "Tester": causal_tester_identity.strip(),
+    }
+    missing_identities = [role for role, identity in causal_identities.items() if not identity]
+    if missing_identities:
         raise RunStateError(
-            f"{context} repair brief envelope differs from its artifact binding"
+            f"{context} causal failure omits identity role(s): " + ", ".join(missing_identities)
         )
-    if not verifier_identity.strip():
-        raise RunStateError(f"{context} requires a Validator verifier identity")
+    if len(set(causal_identities.values())) != 3:
+        raise RunStateError(f"{context} causal Coder, Tester, and Validator must be distinct")
+    if verifier_identity.strip() != causal_identities["Validator"]:
+        raise RunStateError(f"{context} signer must be the Validator of the causal failed attempt")
     authorized_attempt_id = payload.get("authorized_attempt_id")
     if not isinstance(authorized_attempt_id, str) or not _ATTEMPT_ID.fullmatch(
         authorized_attempt_id
     ):
         raise RunStateError(f"{context} requires a canonical authorized_attempt_id")
     if authorized_attempt_id in prior_attempt_ids:
-        raise RunStateError(
-            f"{context} reuses prior build attempt id {authorized_attempt_id!r}"
-        )
+        raise RunStateError(f"{context} reuses prior build attempt id {authorized_attempt_id!r}")
     failure_signature = payload.get("failure_signature")
     if not isinstance(failure_signature, str) or not failure_signature.strip():
         raise RunStateError(f"{context} requires a nonempty failure signature")
@@ -989,6 +1001,14 @@ class RunStore:
                 payload=transition_payload,
                 predecessor_ledger_head=current.ledger_head,
                 verifier_identity=verifier_identity,
+                causal_from_state=str(predecessor.get("from_state", "")),
+                causal_verifier_identity=str(predecessor.get("verifier_identity", "")),
+                causal_implementer_identity=str(predecessor.get("implementer_identity", "")),
+                causal_tester_identity=(
+                    str(predecessor_payload.get("tester_identity", ""))
+                    if isinstance(predecessor_payload, Mapping)
+                    else ""
+                ),
                 prior_attempt_ids=prior_attempt_ids,
                 context="blocked repair-brief event",
             )
@@ -1009,8 +1029,10 @@ class RunStore:
             if transition_payload.get("attempt_id") != predecessor_payload.get(
                 "authorized_attempt_id"
             ):
+                raise RunStateError("blocked retry attempt_id differs from the signed repair brief")
+            if verifier_identity != str(predecessor.get("verifier_identity", "")):
                 raise RunStateError(
-                    "blocked retry attempt_id differs from the signed repair brief"
+                    "blocked retry Validator differs from the signed repair authorization"
                 )
             for key in ("repair-brief", "repair-brief-envelope"):
                 if supplied.get(key) != predecessor_artifacts.get(key):
@@ -1472,13 +1494,21 @@ class RunStore:
                 pending_repair_attempt_id = _require_repair_brief_event(
                     supplied={
                         "repair-brief": str(digests.get("repair-brief", "")),
-                        "repair-brief-envelope": str(
-                            digests.get("repair-brief-envelope", "")
-                        ),
+                        "repair-brief-envelope": str(digests.get("repair-brief-envelope", "")),
                     },
                     payload=payload_raw,
                     predecessor_ledger_head=str(record.get("prev_hash", "")),
                     verifier_identity=str(record.get("verifier_identity", "")),
+                    causal_from_state=str(entries[index - 1].get("from_state", "")),
+                    causal_verifier_identity=str(entries[index - 1].get("verifier_identity", "")),
+                    causal_implementer_identity=str(
+                        entries[index - 1].get("implementer_identity", "")
+                    ),
+                    causal_tester_identity=(
+                        str(entries[index - 1]["payload"].get("tester_identity", ""))
+                        if isinstance(entries[index - 1].get("payload"), Mapping)
+                        else ""
+                    ),
                     prior_attempt_ids=build_attempt_ids,
                     context=f"ledger entry {index} blocked repair-brief event",
                 )
@@ -1490,6 +1520,12 @@ class RunStore:
                 if payload_raw.get("attempt_id") != pending_repair_attempt_id:
                     raise RunStateError(
                         f"ledger entry {index} attempt_id differs from the signed repair brief"
+                    )
+                if str(record.get("verifier_identity", "")) != str(
+                    entries[index - 1].get("verifier_identity", "")
+                ):
+                    raise RunStateError(
+                        f"ledger entry {index} retry Validator differs from repair authorization"
                     )
                 prior_digests = entries[index - 1].get("artifact_digests")
                 if not isinstance(prior_digests, Mapping):

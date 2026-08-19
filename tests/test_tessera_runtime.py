@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import factory_runtime.tessera as tessera_module
 from factory_core.manifest import digest_obj
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 
@@ -140,3 +143,81 @@ def test_wrap_refuses_a_dangling_symlink_output(tmp_path: Path) -> None:
             key_path=tmp_path / "unused-key",
             output_path=output,
         )
+
+
+def test_wrap_fsyncs_the_installed_envelope_and_parent_before_returning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "evidence.tessera.json"
+    cli = TesseraCli(("tessera-test",))
+
+    def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "create":
+            schema = json.loads(Path(arguments[1]).read_text(encoding="utf-8"))
+            payload = json.loads(schema["fields"]["payload"]["default"])
+            kind = schema["fields"]["kind"]["default"]
+            destination = Path(arguments[arguments.index("--output") + 1])
+            _write_envelope(destination, payload, kind=kind)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(cli, "_run", run)
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(tessera_module.os, "fsync", track_fsync)
+
+    cli.wrap_json(
+        {"answer": 42},
+        kind="test-kind",
+        key_path=tmp_path / "unused-key",
+        output_path=output,
+    )
+
+    assert ("file", output.stat().st_ino) in synced
+    assert ("directory", output.parent.stat().st_ino) in synced
+
+
+def test_wrap_removes_its_output_when_envelope_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "evidence.tessera.json"
+    cli = TesseraCli(("tessera-test",))
+    envelope_inode = 0
+
+    def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal envelope_inode
+        if arguments[0] == "create":
+            schema = json.loads(Path(arguments[1]).read_text(encoding="utf-8"))
+            payload = json.loads(schema["fields"]["payload"]["default"])
+            kind = schema["fields"]["kind"]["default"]
+            destination = Path(arguments[arguments.index("--output") + 1])
+            _write_envelope(destination, payload, kind=kind)
+            envelope_inode = destination.stat().st_ino
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(cli, "_run", run)
+    real_fsync = os.fsync
+
+    def fail_envelope_fsync(descriptor: int) -> None:
+        if os.fstat(descriptor).st_ino == envelope_inode:
+            raise OSError("injected envelope fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(tessera_module.os, "fsync", fail_envelope_fsync)
+
+    with pytest.raises(TesseraVerificationError, match="durably retain"):
+        cli.wrap_json(
+            {"answer": 42},
+            kind="test-kind",
+            key_path=tmp_path / "unused-key",
+            output_path=output,
+        )
+
+    assert not output.exists()

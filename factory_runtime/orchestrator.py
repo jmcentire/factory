@@ -524,6 +524,7 @@ class FactoryOrchestrator:
                 exc=exc,
                 tester_identity=tester_identity,
                 implementer_identity=(implementer_identity if candidate_digest else ""),
+                verifier_identity=(verifier_identity if candidate_digest else ""),
                 candidate_digest=candidate_digest,
                 tests_digest=tests_digest,
             )

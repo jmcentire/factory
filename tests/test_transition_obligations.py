@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 
+import factory_runtime.transition_obligations as obligations_module
 from factory_core.manifest import LedgerEntry, digest_obj
 from factory_runtime.state import ALLOWED_TRANSITIONS, RunState, RunStateError, RunStore
 from factory_runtime.transition_obligations import (
@@ -29,6 +32,31 @@ PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
 CANDIDATE = "sha256:" + ("a" * 64)
+
+
+def test_identical_evidence_is_fsynced_with_final_directory_and_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "transition-obligations" / ("a" * 64) / "set.json"
+    path.parent.mkdir(parents=True)
+    content = b'{"set":"exact"}\n'
+    path.write_bytes(content)
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(obligations_module.os, "fsync", track_fsync)
+
+    obligations_module._write_once_or_identical(path, content)
+
+    assert ("file", path.stat().st_ino) in synced
+    assert ("directory", path.parent.stat().st_ino) in synced
+    assert ("directory", path.parent.parent.stat().st_ino) in synced
 
 
 class _Clock:

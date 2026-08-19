@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -468,3 +470,32 @@ def test_bundle_publish_is_all_or_nothing(tmp_path: Path, monkeypatch: pytest.Mo
     assert not final.exists()
     staging = tmp_path / "run-1" / ".staging" / "test-change-authority"
     assert list(staging.iterdir()) == []
+
+
+def test_identical_authority_bundle_is_fsynced_before_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final = tmp_path / "evidence" / "test-change-authorizations" / ("a" * 64)
+    final.mkdir(parents=True)
+    files = {"authorization.json": b'{"ruling":"exact"}\n'}
+    (final / "authorization.json").write_bytes(files["authorization.json"])
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(authority_module.os, "fsync", track_fsync)
+
+    authority_module._retain_bundle_atomically(
+        run_dir=tmp_path,
+        final_directory=final,
+        files=files,
+    )
+
+    assert ("file", (final / "authorization.json").stat().st_ino) in synced
+    assert ("directory", final.stat().st_ino) in synced
+    assert ("directory", final.parent.stat().st_ino) in synced
