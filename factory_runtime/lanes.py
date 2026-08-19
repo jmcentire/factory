@@ -22,7 +22,6 @@ from factory_runtime.acceptance_obligations import (
     capture_validator_execution,
 )
 from factory_runtime.adversarial_review import canonical_document_bytes
-from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationQualification,
@@ -154,13 +153,18 @@ def freeze_validator_execution(
                 os.fchmod(descriptor, item.mode)
             finally:
                 os.close(descriptor)
-        tree = freeze_tree(staging, destination / "trees")
+        tree = freeze_tree(
+            staging,
+            destination / "trees",
+            durable_through=destination.parent,
+        )
         expected_tree_digest = str(capture.document["snapshot_tree_digest"])
         if tree.digest != expected_tree_digest:
             raise LaneError("Validator execution snapshot differs from its captured identity")
         manifest_bytes = _canonical_json(dict(capture.document))
         manifest = freeze_blob(
             destination / "manifests",
+            durable_through=destination.parent,
             label="validator-execution-manifest",
             data=manifest_bytes,
         )
@@ -222,11 +226,6 @@ def freeze_validator_execution(
         source_bytes,
     )
     _verify_frozen_validator_execution(frozen)
-    try:
-        fsync_directory_chain(tree.directory, through=destination.parent)
-        fsync_directory_chain(manifest.directory, through=destination.parent)
-    except DurabilityError as exc:
-        raise LaneError(str(exc)) from exc
     return frozen
 
 
@@ -312,6 +311,7 @@ class IsolatedBuildLoop:
         pattern_catalog_path: str | Path | None = None,
         acceptance_catalog_path: str | Path | None = None,
         review_snapshot_store: str | Path | None = None,
+        review_snapshot_durable_through: str | Path | None = None,
         repair_brief_bytes: bytes | None = None,
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
@@ -320,6 +320,16 @@ class IsolatedBuildLoop:
     ) -> ValidationExecution:
         """Execute one clean-context attempt; lane internals never cross the boundary."""
 
+        if review_snapshot_store is None:
+            snapshot_store = self.root / "review-snapshots"
+            snapshot_boundary = Path(review_snapshot_durable_through or self.root)
+        else:
+            snapshot_store = Path(review_snapshot_store)
+            if review_snapshot_durable_through is None:
+                raise LaneError(
+                    "an external review snapshot store requires an explicit durability root"
+                )
+            snapshot_boundary = Path(review_snapshot_durable_through)
         if self.root.exists():
             raise LaneError(f"refusing to reuse build-loop directory: {self.root}")
         try:
@@ -415,9 +425,16 @@ class IsolatedBuildLoop:
             )
             return ValidationExecution(coder_result, tester_result, validator, qualification)
 
-        snapshot_store = Path(review_snapshot_store or (self.root / "review-snapshots"))
-        coder_snapshot = freeze_tree(coder_result.output_directory, snapshot_store)
-        tester_snapshot = freeze_tree(tester_result.output_directory, snapshot_store)
+        coder_snapshot = freeze_tree(
+            coder_result.output_directory,
+            snapshot_store,
+            durable_through=snapshot_boundary,
+        )
+        tester_snapshot = freeze_tree(
+            tester_result.output_directory,
+            snapshot_store,
+            durable_through=snapshot_boundary,
+        )
         review_subject: Mapping[str, object] | None = None
         if before_validation is not None:
             review_subject = before_validation(

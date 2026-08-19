@@ -56,6 +56,49 @@ def _artifact(path: Path) -> dict[str, object]:
     return document
 
 
+def test_replay_cli_store_requires_both_external_authority_anchors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unanchored = Namespace(
+        runs=str(tmp_path),
+        genesis="",
+        root_public_key="",
+        tessera_bin="tessera",
+    )
+    store = runtime_cli._load_replay_store(unanchored)
+    assert isinstance(store, RunStore)
+    assert store._preview_evidence_verifier is None
+
+    with pytest.raises(ValueError, match="--root-public-key is required"):
+        runtime_cli._load_replay_store(
+            Namespace(
+                runs=str(tmp_path),
+                genesis=str(tmp_path / "genesis.tessera.json"),
+                root_public_key="",
+                tessera_bin="tessera",
+            )
+        )
+
+    authenticated = object()
+    monkeypatch.setattr(
+        runtime_cli,
+        "_load_workflow",
+        lambda _arguments: Namespace(store=authenticated),
+    )
+    assert (
+        runtime_cli._load_replay_store(
+            Namespace(
+                runs=str(tmp_path),
+                genesis=str(tmp_path / "genesis.tessera.json"),
+                root_public_key="f" * 64,
+                tessera_bin="tessera",
+            )
+        )
+        is authenticated
+    )
+
+
 def test_cli_validates_and_content_addresses_runtime_documents(
     tmp_path: Path,
     capsys: CaptureFixture[str],

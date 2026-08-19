@@ -33,6 +33,7 @@ from tests.conftest import (
     build_payload,
     ci_artifacts,
     create_intake_run,
+    fixture_preview_evidence_verifier,
     preview_artifacts,
     ratification_receipts,
     retained_generation_artifacts,
@@ -61,7 +62,11 @@ class _Clock:
 
 def _run_at_preview(tmp_path: Path) -> RunStore:
     """Drive a run to `preview`, which is as far as the machinery reached before slice 5."""
-    store = RunStore(tmp_path, clock=_Clock())
+    store = RunStore(
+        tmp_path,
+        clock=_Clock(),
+        preview_evidence_verifier=fixture_preview_evidence_verifier(),
+    )
     create_intake_run(
         store,
         run_id="run-1",
@@ -98,12 +103,15 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     store.transition(
         "run-1",
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
     )
     return store
@@ -195,7 +203,11 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
     )
 
     assert projection.state == RunState.PROMOTED
-    reloaded = RunStore(tmp_path, clock=_Clock()).load("run-1")
+    reloaded = RunStore(
+        tmp_path,
+        clock=_Clock(),
+        preview_evidence_verifier=fixture_preview_evidence_verifier(),
+    ).load("run-1")
     assert reloaded.state == RunState.PROMOTED
     assert reloaded.approved_candidate_digest == CANDIDATE
     latest = store.current_artifact_digests("run-1")
@@ -280,7 +292,14 @@ def test_specification_defect_invalidates_prior_candidate_approval(tmp_path: Pat
     )
 
     assert projection.approved_candidate_digest == ""
-    assert RunStore(tmp_path, clock=_Clock()).load("run-1").approved_candidate_digest == ""
+    assert (
+        RunStore(
+            tmp_path,
+            clock=_Clock(),
+            preview_evidence_verifier=fixture_preview_evidence_verifier(),
+        ).load("run-1").approved_candidate_digest
+        == ""
+    )
 
 
 def test_human_approval_without_an_implementer_identity_is_refused(tmp_path: Path) -> None:

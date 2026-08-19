@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import re
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from factory_core.checklist import (
     ChecklistItemResult,
@@ -38,11 +41,13 @@ from factory_core.provenance import (
     ProvenanceClaim,
     ProvenanceReport,
 )
+from factory_runtime.authority import AuthorityPolicy
 from factory_runtime.generation import GenerationError, verify_prepared_generation
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.snapshot import SnapshotError, tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState, RunStore
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
+from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 
 
 class EvidencePlaneError(ValueError):
@@ -51,8 +56,149 @@ class EvidencePlaneError(ValueError):
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_PUBLIC_KEY = re.compile(r"^[0-9a-f]{64}$")
-_SIGNATURE = re.compile(r"^[0-9a-f]{128}$")
+EVIDENCE_VERIFICATION_RECEIPT_VERSION = "factory-evidence-verification-receipt/1"
+TESSERA_EVIDENCE_VERIFIER_ID = "factory-tessera-evidence-verifier/1"
+
+
+@dataclass(frozen=True)
+class EvidenceVerificationReceipt:
+    """Deterministic audit record of one externally authenticated evidence envelope.
+
+    The receipt is deliberately not an authority token.  ``RunStore`` persists it so a replay can
+    require the configured verifier to reproduce the same result from the exact retained bytes.
+    A caller-supplied or ledger-only receipt is never sufficient.
+    """
+
+    schema_version: str
+    verifier_id: str
+    authority_genesis_digest: str
+    signer_identity: str
+    signer_public_key: str
+    envelope_digest: str
+    payload_digest: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "schema_version": self.schema_version,
+            "verifier_id": self.verifier_id,
+            "authority_genesis_digest": self.authority_genesis_digest,
+            "signer_identity": self.signer_identity,
+            "signer_public_key": self.signer_public_key,
+            "envelope_digest": self.envelope_digest,
+            "payload_digest": self.payload_digest,
+        }
+
+
+@dataclass(frozen=True)
+class VerifiedEvidenceEnvelope:
+    """Exact payload plus the receipt produced by an authenticated verifier."""
+
+    payload: Mapping[str, Any]
+    receipt: EvidenceVerificationReceipt
+
+
+class EvidenceEnvelopeVerifier(Protocol):
+    """Host-supplied cryptographic boundary required for PREVIEW admission and replay."""
+
+    def verify(
+        self,
+        envelope_path: Path,
+        *,
+        expected_kind: str,
+        expected_payload_digest: str,
+        expected_envelope_digest: str,
+        expected_signer_identity: str,
+        expected_authority_genesis_digest: str,
+    ) -> VerifiedEvidenceEnvelope: ...
+
+
+class TesseraEvidenceEnvelopeVerifier:
+    """Bind real Tessera validation to the signer enrolled by the active authority genesis."""
+
+    def __init__(self, *, tessera: TesseraCli, authority_policy: AuthorityPolicy) -> None:
+        self._tessera = tessera
+        self._policy = authority_policy
+
+    def verify(
+        self,
+        envelope_path: Path,
+        *,
+        expected_kind: str,
+        expected_payload_digest: str,
+        expected_envelope_digest: str,
+        expected_signer_identity: str,
+        expected_authority_genesis_digest: str,
+    ) -> VerifiedEvidenceEnvelope:
+        if not expected_signer_identity.strip():
+            raise EvidencePlaneError("evidence envelope has no Validator signer identity")
+        if not hmac.compare_digest(
+            self._policy.genesis_digest,
+            expected_authority_genesis_digest,
+        ):
+            raise EvidencePlaneError(
+                "evidence verifier authority policy differs from the run authority genesis"
+            )
+        principal = self._policy.principal(expected_signer_identity)
+        if principal is None or principal.kind != "agent":
+            raise EvidencePlaneError(
+                "evidence envelope signer is not an enrolled Validator agent"
+            )
+        verification_copy = ""
+        try:
+            retained = read_stable_regular_bytes(
+                envelope_path,
+                label="retained signed evidence bundle",
+                max_bytes=16 * 1024 * 1024,
+            )
+            retained_digest = digest_bytes(retained)
+            if not hmac.compare_digest(retained_digest, expected_envelope_digest):
+                raise EvidencePlaneError(
+                    "retained evidence envelope differs from its ledger address"
+                )
+            descriptor, verification_copy = tempfile.mkstemp(
+                prefix=".factory-evidence-verification-",
+                suffix=".tessera.json",
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(retained)
+                handle.flush()
+                os.fsync(handle.fileno())
+            verified = self._tessera.verify_json(
+                verification_copy,
+                trusted_public_keys=(principal.public_key,),
+                expected_kind=expected_kind,
+                expected_payload_digest=expected_payload_digest,
+            )
+            retained_after = read_stable_regular_bytes(
+                envelope_path,
+                label="retained signed evidence bundle",
+                max_bytes=16 * 1024 * 1024,
+            )
+        except (OSError, TesseraVerificationError, StateAdmissionError) as exc:
+            raise EvidencePlaneError(f"Tessera refused retained evidence: {exc}") from exc
+        finally:
+            if verification_copy and os.path.exists(verification_copy):
+                os.unlink(verification_copy)
+        if not hmac.compare_digest(verified.envelope_digest, expected_envelope_digest):
+            raise EvidencePlaneError("retained evidence envelope differs from its ledger address")
+        if not hmac.compare_digest(digest_bytes(retained_after), verified.envelope_digest):
+            raise EvidencePlaneError("retained evidence envelope changed during verification")
+        if not hmac.compare_digest(verified.public_key, principal.public_key):
+            raise EvidencePlaneError(
+                "evidence envelope signer identity does not own the Tessera signing key"
+            )
+        return VerifiedEvidenceEnvelope(
+            payload=dict(verified.payload),
+            receipt=EvidenceVerificationReceipt(
+                schema_version=EVIDENCE_VERIFICATION_RECEIPT_VERSION,
+                verifier_id=TESSERA_EVIDENCE_VERIFIER_ID,
+                authority_genesis_digest=self._policy.genesis_digest,
+                signer_identity=expected_signer_identity,
+                signer_public_key=verified.public_key,
+                envelope_digest=verified.envelope_digest,
+                payload_digest=verified.payload_digest,
+            ),
+        )
 
 
 def verify_retained_evidence_bundle(
@@ -72,12 +218,16 @@ def verify_retained_evidence_bundle(
     attempt_number: int,
     attempt_limit: int,
     validating_ledger_head: str,
-) -> Mapping[str, Any]:
+    verifier_identity: str,
+    authority_genesis_digest: str,
+    verifier: EvidenceEnvelopeVerifier,
+) -> VerifiedEvidenceEnvelope:
     """Reopen the exact signed bundle and rederive its authoritative subject bindings.
 
-    Tessera cryptography is verified before admission by the orchestrator.  Replay pins and
-    reopens those same signed envelope bytes, rederives the embedded payload address, and refuses
-    any absent, replaced, malformed, or differently-bound object.
+    Both admission and replay invoke the same explicit verifier.  The verifier authenticates the
+    exact retained bytes and binds their public key to the named Validator under the run's
+    externally verified authority genesis; this function then rederives the complete semantic
+    subject.  A shaped signature or a prior orchestration-side check is never sufficient.
     """
 
     if not _ATTEMPT_ID.fullmatch(attempt_id):
@@ -91,37 +241,16 @@ def verify_retained_evidence_bundle(
     path = Path(run_dir) / "evidence" / "build-attempts" / attempt_id / (
         "evidence-bundle.tessera.json"
     )
-    try:
-        raw_bytes = read_stable_regular_bytes(
-            path,
-            label="retained signed evidence bundle",
-            max_bytes=16 * 1024 * 1024,
-        )
-        envelope = json.loads(raw_bytes.decode("utf-8"))
-    except (StateAdmissionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidencePlaneError(f"retained signed evidence bundle is invalid: {exc}") from exc
-    if digest_bytes(raw_bytes) != envelope_digest:
-        raise EvidencePlaneError("retained evidence envelope differs from its ledger address")
-    if not isinstance(envelope, Mapping):
-        raise EvidencePlaneError("retained evidence envelope must be an object")
-    if not _PUBLIC_KEY.fullmatch(str(envelope.get("pubkey", ""))) or not _SIGNATURE.fullmatch(
-        str(envelope.get("signature", ""))
-    ):
-        raise EvidencePlaneError("retained evidence envelope has no canonical Tessera signature")
-    state = envelope.get("state")
-    if not isinstance(state, Mapping) or state.get("kind") != "factory-evidence-bundle":
-        raise EvidencePlaneError("retained evidence envelope has the wrong Tessera kind")
-    encoded_payload = state.get("payload")
-    if not isinstance(encoded_payload, str):
-        raise EvidencePlaneError("retained evidence envelope has no encoded payload")
-    try:
-        payload = json.loads(encoded_payload)
-    except json.JSONDecodeError as exc:
-        raise EvidencePlaneError("retained evidence bundle payload is invalid JSON") from exc
-    if not isinstance(payload, Mapping):
-        raise EvidencePlaneError("retained evidence bundle payload must be an object")
-    payload = dict(payload)
-    if state.get("payload_digest") != payload_digest or digest_obj(payload) != payload_digest:
+    verified = verifier.verify(
+        path,
+        expected_kind="factory-evidence-bundle",
+        expected_payload_digest=payload_digest,
+        expected_envelope_digest=envelope_digest,
+        expected_signer_identity=verifier_identity,
+        expected_authority_genesis_digest=authority_genesis_digest,
+    )
+    payload = dict(verified.payload)
+    if digest_obj(payload) != payload_digest:
         raise EvidencePlaneError("retained evidence bundle payload does not rederive its address")
     try:
         validate_document("evidence-bundle", payload)
@@ -146,7 +275,7 @@ def verify_retained_evidence_bundle(
             raise EvidencePlaneError(
                 f"retained evidence bundle has stale or substituted {field}"
             )
-    return payload
+    return VerifiedEvidenceEnvelope(payload=payload, receipt=verified.receipt)
 
 
 @dataclass(frozen=True)

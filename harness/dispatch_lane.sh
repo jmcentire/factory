@@ -27,7 +27,7 @@ FACTORY_CLI="${FACTORY_CLI:-factory}"
 fail() { echo "no oracle yet — $1" >&2; exit 70; }
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG" || fail "run is not a checked Stage-E-authorized v4 run"
+factory_load_context "$RUN" "$RUNS_ARG" || fail "run is not a checked Stage-E-authorized v5 run"
 ROOT="$FACTORY_CONTROL_ROOT"
 ART="$ROOT/artifacts"
 

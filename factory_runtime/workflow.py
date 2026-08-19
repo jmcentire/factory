@@ -32,6 +32,7 @@ from factory_runtime.authority import (
     verify_receipt,
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
+from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
 from factory_runtime.target_state import (
@@ -337,7 +338,14 @@ class FactoryWorkflow:
         self.root = Path(root)
         self.policy = authority_policy
         self.tessera = tessera
-        self.store = RunStore(self.root, clock=clock)
+        self.store = RunStore(
+            self.root,
+            clock=clock,
+            preview_evidence_verifier=TesseraEvidenceEnvelopeVerifier(
+                tessera=tessera,
+                authority_policy=authority_policy,
+            ),
+        )
         self._clock = clock
 
     def authorize_target_resolution(

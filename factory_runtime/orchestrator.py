@@ -536,6 +536,7 @@ class FactoryOrchestrator:
                 },
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
+                verifier_identity=verifier_identity,
             )
             try:
                 base_source_snapshot, candidate_change_set = build_candidate_review_context(
@@ -636,6 +637,7 @@ class FactoryOrchestrator:
                 review_snapshot_store=(
                     self.workflow.root / run_id / "evidence" / "review-snapshots"
                 ),
+                review_snapshot_durable_through=self.workflow.root / run_id,
                 repair_brief_bytes=repair_brief_bytes,
                 before_validation=enter_validation,
             )

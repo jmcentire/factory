@@ -224,6 +224,33 @@ _CATALOG_BODY = {
 }
 CATALOG_DIGEST = digest_obj(_CATALOG_BODY)
 
+# ``factory-run/4`` was released in v0.3.0 with the catalog below.  Keep its digest
+# pinned: replay may use current implementation code, but it must never reinterpret old
+# retained obligation bytes through a later catalog.  The only v5 catalog addition is the
+# leading PREVIEW adversarial-review obligation; the digest assertion makes any future drift
+# in the shared v4 definitions fail closed instead of silently changing the replay profile.
+RELEASED_V4_CATALOG_DIGEST = (
+    "sha256:6064f2a7aff8bd1ab80e3495a7bd81d51cd114d5771f0ba087eeef0cc380508c"
+)
+_RELEASED_V4_DESTINATION_OBLIGATIONS = {
+    **_DESTINATION_OBLIGATIONS,
+    "preview": _DESTINATION_OBLIGATIONS["preview"][1:],
+}
+_RELEASED_V4_CATALOG_BODY = {
+    "schema_version": "factory-transition-obligation-catalog/1",
+    "triggers": [
+        {"from_state": source, "to_state": destination}
+        for source, destination in sorted(_ALLOWED_TRIGGER_PAIRS)
+    ],
+    "base_obligations": [list(item) for item in _BASE],
+    "destination_obligations": {
+        key: [list(item) for item in value]
+        for key, value in sorted(_RELEASED_V4_DESTINATION_OBLIGATIONS.items())
+    },
+}
+if digest_obj(_RELEASED_V4_CATALOG_BODY) != RELEASED_V4_CATALOG_DIGEST:
+    raise RuntimeError("released factory-run/4 transition-obligation catalog drift")
+
 _DIGEST_PREFIX = "sha256:"
 _PHASE_BY_DESTINATION = {
     "product-specification-ratified": "product-specification",
@@ -263,6 +290,20 @@ def _definitions(source: str, destination: str) -> tuple[tuple[str, str, str], .
             f"unknown state-triggered obligation selector: {source} -> {destination}"
         )
     selected = (*_BASE, *_DESTINATION_OBLIGATIONS[destination])
+    ids = [item[0] for item in selected]
+    if len(ids) != len(set(ids)):
+        raise TransitionObligationError("selected obligation set contains duplicate ids")
+    return selected
+
+
+def _released_v4_definitions(
+    source: str, destination: str
+) -> tuple[tuple[str, str, str], ...]:
+    if (source, destination) not in _ALLOWED_TRIGGER_PAIRS:
+        raise TransitionObligationError(
+            f"unknown state-triggered obligation selector: {source} -> {destination}"
+        )
+    selected = (*_BASE, *_RELEASED_V4_DESTINATION_OBLIGATIONS[destination])
     ids = [item[0] for item in selected]
     if len(ids) != len(set(ids)):
         raise TransitionObligationError("selected obligation set contains duplicate ids")
@@ -337,6 +378,63 @@ def require_transition_inputs(
         raise TransitionObligationError("blocked transition requires a typed reason")
 
 
+def _require_released_v4_transition_inputs(
+    destination: str,
+    supplied: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    """Replay the exact input gate shipped for ``factory-run/4`` in v0.3.0."""
+
+    required: tuple[str, ...] = ()
+    if destination == "building":
+        required = ("resume-checkpoint", "generation-readiness")
+    elif destination == "validating":
+        required = (
+            "candidate",
+            "acceptance-tests",
+            "coder-output-snapshot",
+            "tester-output-snapshot",
+        )
+    elif destination == "preview":
+        required = (
+            "candidate",
+            "acceptance-tests",
+            "acceptance-obligation-report",
+            "evidence-bundle",
+            "evidence-envelope",
+        )
+    elif destination == "ci":
+        required = ("ci-evidence",)
+    missing = [key for key in required if not supplied.get(key)]
+    if missing:
+        raise TransitionObligationError(
+            f"{destination} obligation(s) require artifact digest(s): {', '.join(missing)}"
+        )
+    changed_tests = payload.get("changed_existing_tests", [])
+    if not isinstance(changed_tests, list):
+        raise TransitionObligationError("changed_existing_tests must be an exact array")
+    if changed_tests:
+        required_test_change_authority = (
+            "test-change-authorization",
+            "test-change-authorization:human-receipt",
+            "test-change-authorization:validator-receipt",
+        )
+        missing_test_change_authority = [
+            key for key in required_test_change_authority if not supplied.get(key)
+        ]
+        if missing_test_change_authority:
+            raise TransitionObligationError(
+                "existing test changes require exact test-change authority artifact and "
+                "receipt digest(s): " + ", ".join(missing_test_change_authority)
+            )
+        if any(not isinstance(item, str) or not item.strip() for item in changed_tests):
+            raise TransitionObligationError("changed_existing_tests contains an invalid test id")
+        if len(changed_tests) != len(set(changed_tests)):
+            raise TransitionObligationError("changed_existing_tests contains duplicates")
+    if destination == "blocked" and not str(payload.get("reason", "")).strip():
+        raise TransitionObligationError("blocked transition requires a typed reason")
+
+
 def _is_digest(value: Any) -> bool:
     text = str(value)
     return (
@@ -365,6 +463,7 @@ def _verify_obligation(
     approved_candidate_digest: str,
     implementer_identity: str,
     approver_identity: str,
+    snapshot_membership_keys: Sequence[str],
 ) -> None:
     """Execute the closed verifier named by the selected catalog entry.
 
@@ -451,19 +550,7 @@ def _verify_obligation(
             )
         )
     elif verifier_id == "snapshot-membership-check":
-        passed = _require_digests(
-            supplied,
-            (
-                "candidate",
-                "acceptance-tests",
-                "coder-output-snapshot",
-                "tester-output-snapshot",
-                "validator-execution-manifest",
-                "validator-execution-configuration",
-                "validator-execution-environment",
-                "validator-execution-snapshot",
-            ),
-        )
+        passed = _require_digests(supplied, snapshot_membership_keys)
     elif verifier_id == "lane-identity-check":
         tester_identity = str(payload.get("tester_identity", ""))
         passed = bool(tester_identity and implementer_identity) and (
@@ -588,15 +675,41 @@ def derive_transition_obligations(
     implementer_identity: str = "",
     verifier_identity: str = "",
     approver_identity: str = "",
+    _released_v4_profile: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Select, verify, and render the exact obligations for one transition attempt."""
 
-    definitions = _definitions(source, destination)
-    require_transition_inputs(destination, supplied_artifact_digests, payload)
+    snapshot_membership_keys: Sequence[str]
+    if _released_v4_profile:
+        definitions = _released_v4_definitions(source, destination)
+        _require_released_v4_transition_inputs(
+            destination, supplied_artifact_digests, payload
+        )
+        catalog_digest = RELEASED_V4_CATALOG_DIGEST
+        snapshot_membership_keys = (
+            "candidate",
+            "acceptance-tests",
+            "coder-output-snapshot",
+            "tester-output-snapshot",
+        )
+    else:
+        definitions = _definitions(source, destination)
+        require_transition_inputs(destination, supplied_artifact_digests, payload)
+        catalog_digest = CATALOG_DIGEST
+        snapshot_membership_keys = (
+            "candidate",
+            "acceptance-tests",
+            "coder-output-snapshot",
+            "tester-output-snapshot",
+            "validator-execution-manifest",
+            "validator-execution-configuration",
+            "validator-execution-environment",
+            "validator-execution-snapshot",
+        )
     selector_id = f"{source}--{destination}"
     set_document = {
         "schema_version": "factory-transition-obligation-set/1",
-        "catalog_digest": CATALOG_DIGEST,
+        "catalog_digest": catalog_digest,
         "selector_id": selector_id,
         "run_id": run_id,
         "generation": generation,
@@ -642,6 +755,7 @@ def derive_transition_obligations(
             approved_candidate_digest=approved_candidate_digest,
             implementer_identity=implementer_identity,
             approver_identity=approver_identity,
+            snapshot_membership_keys=snapshot_membership_keys,
         )
         observations = {
             "prior_ledger_head": prior_ledger_head,
@@ -689,6 +803,48 @@ def derive_transition_obligations(
     except DocumentValidationError as exc:
         raise TransitionObligationError(str(exc)) from exc
     return set_document, report_document
+
+
+def derive_released_v4_transition_obligations(
+    *,
+    run_id: str,
+    generation: int,
+    source: str,
+    destination: str,
+    prior_ledger_head: str,
+    target_state_digest: str,
+    target_state: Mapping[str, Any],
+    phase_artifact_digests: Mapping[str, str],
+    supplied_artifact_digests: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    approved_candidate_digest: str,
+    recorded_at: int,
+    acceptance_obligation_catalog_digest: str = "",
+    implementer_identity: str = "",
+    verifier_identity: str = "",
+    approver_identity: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-derive the exact transition obligation bytes released with v0.3.0 run/4."""
+
+    return derive_transition_obligations(
+        run_id=run_id,
+        generation=generation,
+        source=source,
+        destination=destination,
+        prior_ledger_head=prior_ledger_head,
+        target_state_digest=target_state_digest,
+        target_state=target_state,
+        phase_artifact_digests=phase_artifact_digests,
+        supplied_artifact_digests=supplied_artifact_digests,
+        payload=payload,
+        approved_candidate_digest=approved_candidate_digest,
+        recorded_at=recorded_at,
+        acceptance_obligation_catalog_digest=acceptance_obligation_catalog_digest,
+        implementer_identity=implementer_identity,
+        verifier_identity=verifier_identity,
+        approver_identity=approver_identity,
+        _released_v4_profile=True,
+    )
 
 
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
@@ -890,10 +1046,12 @@ def verify_retained_transition_obligations(
 
 __all__ = [
     "CATALOG_DIGEST",
+    "RELEASED_V4_CATALOG_DIGEST",
     "REPORT_KEY",
     "SET_KEY",
     "TransitionObligationError",
     "assert_catalog_covers",
+    "derive_released_v4_transition_obligations",
     "derive_transition_obligations",
     "require_transition_inputs",
     "retain_transition_obligations",

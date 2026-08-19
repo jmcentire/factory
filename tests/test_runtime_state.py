@@ -13,6 +13,7 @@ from tests.conftest import (
     acceptance_catalog_artifacts,
     build_payload,
     ci_artifacts,
+    fixture_preview_evidence_verifier,
     generation_artifacts,
     preview_artifacts,
     ratification_receipts,
@@ -42,7 +43,11 @@ class _Clock:
 
 
 def _store(tmp_path: Path) -> RunStore:
-    return RunStore(tmp_path, clock=_Clock())
+    return RunStore(
+        tmp_path,
+        clock=_Clock(),
+        preview_evidence_verifier=fixture_preview_evidence_verifier(),
+    )
 
 
 def _target_state(store: RunStore) -> dict[str, object]:
@@ -188,6 +193,7 @@ def _enter_preview(store: RunStore) -> dict[str, str]:
         artifact_digests=validation,
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     artifacts = preview_artifacts(store, candidate=CANDIDATE)
     store.transition(
@@ -195,7 +201,15 @@ def _enter_preview(store: RunStore) -> dict[str, str]:
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=artifacts,
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
+    )
+    preview_entry = store.verified_ledger_entries("run-1")[-1]
+    preview_payload = preview_entry["payload"]
+    assert isinstance(preview_payload, dict)
+    assert preview_payload["evidence_verification_receipt"]["schema_version"] == (
+        "factory-evidence-verification-receipt/1"
     )
     return {**validation, **artifacts}
 
@@ -352,12 +366,15 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     store.transition(
         "run-1",
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
     )
 
@@ -381,7 +398,13 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         artifact_digests={"promoted-artifact": CANDIDATE},
     )
 
-    loaded = RunStore(tmp_path, clock=_Clock()).load("run-1")
+    with pytest.raises(RunStateError, match="explicit cryptographic evidence verifier"):
+        RunStore(tmp_path, clock=_Clock()).load("run-1")
+    loaded = RunStore(
+        tmp_path,
+        clock=_Clock(),
+        preview_evidence_verifier=fixture_preview_evidence_verifier(),
+    ).load("run-1")
     assert loaded.state == RunState.PROMOTED
     assert loaded.approved_candidate_digest == CANDIDATE
     assert loaded.phase_artifact_digests == {
@@ -389,6 +412,174 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         "architecture": ARCHITECTURE,
         "operational-maturity": OPERATIONS,
     }
+
+
+def test_preview_admission_requires_an_explicit_cryptographic_verifier(
+    tmp_path: Path,
+) -> None:
+    configured = _store(tmp_path)
+    _create_intake(configured)
+    _ratify_all(configured)
+    _start_build(configured)
+    configured.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(configured, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator",
+    )
+    artifacts = preview_artifacts(configured, candidate=CANDIDATE)
+
+    with pytest.raises(RunStateError, match="explicit cryptographic evidence verifier"):
+        RunStore(tmp_path, clock=_Clock()).transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="validator",
+            artifact_digests=artifacts,
+            payload={"tester_identity": "tester"},
+            implementer_identity="coder",
+            verifier_identity="validator",
+        )
+
+    assert configured.load("run-1").state == RunState.VALIDATING
+
+
+def test_preview_rejects_signature_shaped_but_unauthenticated_evidence(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator",
+    )
+    artifacts = preview_artifacts(store, candidate=CANDIDATE)
+    attempt = [
+        entry
+        for entry in store.verified_ledger_entries("run-1")
+        if entry.get("to_state") == RunState.BUILDING
+    ][-1]
+    attempt_payload = attempt["payload"]
+    assert isinstance(attempt_payload, dict)
+    envelope_path = (
+        tmp_path
+        / "run-1"
+        / "evidence"
+        / "build-attempts"
+        / str(attempt_payload["attempt_id"])
+        / "evidence-bundle.tessera.json"
+    )
+    shaped = {
+        "pubkey": "1" * 64,
+        "signature": "2" * 128,
+        "state": {
+            "kind": "factory-evidence-bundle",
+            "payload": "{}",
+            "payload_digest": artifacts["evidence-bundle"],
+        },
+    }
+    shaped_bytes = json.dumps(shaped, sort_keys=True, separators=(",", ":")).encode()
+    envelope_path.write_bytes(shaped_bytes)
+    artifacts["evidence-envelope"] = "sha256:" + hashlib.sha256(shaped_bytes).hexdigest()
+
+    with pytest.raises(RunStateError, match="fixture evidence MAC is invalid"):
+        store.transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="validator",
+            artifact_digests=artifacts,
+            payload={"tester_identity": "tester"},
+            implementer_identity="coder",
+            verifier_identity="validator",
+        )
+
+
+def test_preview_rejects_a_validator_swap_after_validation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator-a",
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator-a",
+    )
+    artifacts = preview_artifacts(
+        store,
+        candidate=CANDIDATE,
+        reviewer_identity="validator-b",
+    )
+
+    with pytest.raises(RunStateError, match="Validator differs from causal VALIDATING identity"):
+        store.transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="validator-b",
+            artifact_digests=artifacts,
+            payload={"tester_identity": "tester"},
+            implementer_identity="coder",
+            verifier_identity="validator-b",
+        )
+
+    assert store.load("run-1").state == RunState.VALIDATING
+
+
+def test_replay_rejects_a_rehashed_validator_swap_after_validation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    _enter_preview(store)
+    ledger_path = tmp_path / "run-1" / "ledger.jsonl"
+    rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    rows[-1]["verifier_identity"] = "other-validator"
+    body = {key: value for key, value in rows[-1].items() if key != "entry_hash"}
+    rows[-1]["entry_hash"] = digest_obj(body)
+    ledger_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunStateError, match="Validator differs from causal VALIDATING identity"):
+        store.rebuild_projection("run-1")
+
+
+def test_replay_rejects_a_rehashed_fabricated_evidence_verification_receipt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    _enter_preview(store)
+    ledger_path = tmp_path / "run-1" / "ledger.jsonl"
+    rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    receipt = rows[-1]["payload"]["evidence_verification_receipt"]
+    receipt["signer_public_key"] = "f" * 64
+    body = {key: value for key, value in rows[-1].items() if key != "entry_hash"}
+    rows[-1]["entry_hash"] = digest_obj(body)
+    ledger_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunStateError, match="receipt does not reproduce"):
+        store.rebuild_projection("run-1")
 
 
 def test_preview_refuses_missing_retained_adversarial_review(tmp_path: Path) -> None:
@@ -403,6 +594,7 @@ def test_preview_refuses_missing_retained_adversarial_review(tmp_path: Path) -> 
         artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     artifacts = preview_artifacts(store, candidate=CANDIDATE)
     retained_report = (
@@ -421,6 +613,8 @@ def test_preview_refuses_missing_retained_adversarial_review(tmp_path: Path) -> 
             RunState.PREVIEW,
             actor="validator",
             artifact_digests=artifacts,
+            payload={"tester_identity": "tester"},
+            implementer_identity="coder",
             verifier_identity="validator",
         )
 
@@ -439,6 +633,7 @@ def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> 
         artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     artifacts = preview_artifacts(store, candidate=CANDIDATE)
     store.transition(
@@ -446,6 +641,8 @@ def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> 
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=artifacts,
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
     )
     retained_subject = (
@@ -459,7 +656,11 @@ def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> 
     retained_subject.write_bytes(b"{}\n")
 
     with pytest.raises(RunStateError, match="adversarial review is invalid"):
-        RunStore(tmp_path, clock=_Clock()).load("run-1")
+        RunStore(
+            tmp_path,
+            clock=_Clock(),
+            preview_evidence_verifier=fixture_preview_evidence_verifier(),
+        ).load("run-1")
 
 
 @pytest.mark.parametrize("missing", ["validator-execution", "evidence-envelope"])
@@ -512,7 +713,11 @@ def test_replay_refuses_missing_preview_dependency_bytes(
         expected = "signed evidence bundle is invalid"
 
     with pytest.raises(RunStateError, match=expected):
-        RunStore(tmp_path, clock=_Clock()).load("run-1")
+        RunStore(
+            tmp_path,
+            clock=_Clock(),
+            preview_evidence_verifier=fixture_preview_evidence_verifier(),
+        ).load("run-1")
 
 
 @pytest.mark.parametrize("mutated", ["cited-implementation", "review-observations"])
@@ -549,7 +754,11 @@ def test_replay_refuses_mutated_preview_dependency_bytes(
     path.write_bytes(b"mutated after preview\n")
 
     with pytest.raises(RunStateError, match="adversarial review is invalid"):
-        RunStore(tmp_path, clock=_Clock()).load("run-1")
+        RunStore(
+            tmp_path,
+            clock=_Clock(),
+            preview_evidence_verifier=fixture_preview_evidence_verifier(),
+        ).load("run-1")
 
 
 def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> None:
@@ -566,12 +775,15 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
         artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     store.transition(
         "run-1",
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
     )
     store.transition(
@@ -624,13 +836,20 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
         artifact_digests=validation_artifacts(store, "stale", candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     stale = store.load("run-1")
-    RunStore(tmp_path, clock=_Clock()).transition(
+    RunStore(
+        tmp_path,
+        clock=_Clock(),
+        preview_evidence_verifier=fixture_preview_evidence_verifier(),
+    ).transition(
         "run-1",
         RunState.PREVIEW,
         actor="other-validator",
         artifact_digests=preview_artifacts(store, "stale", candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
         verifier_identity="validator",
     )
     monkeypatch.setattr(store, "load", lambda _run_id: stale)
@@ -649,7 +868,14 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
             ),
         )
 
-    assert RunStore(tmp_path, clock=_Clock()).load("run-1").state == RunState.PREVIEW
+    assert (
+        RunStore(
+            tmp_path,
+            clock=_Clock(),
+            preview_evidence_verifier=fixture_preview_evidence_verifier(),
+        ).load("run-1").state
+        == RunState.PREVIEW
+    )
 
 
 def test_skipping_a_phase_is_refused(tmp_path: Path) -> None:

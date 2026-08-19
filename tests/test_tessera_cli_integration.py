@@ -44,17 +44,32 @@ from factory_runtime.acceptance_obligations import (
     AcceptanceObligationCatalog,
     validator_execution_digests,
 )
-from factory_runtime.authority import load_genesis
-from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
+from factory_runtime.authority import AuthorityPolicy, Principal, load_genesis
+from factory_runtime.evidence_plane import (
+    DeterminismRecord,
+    EvidencePlaneError,
+    SurfaceEvidence,
+    TesseraEvidenceEnvelopeVerifier,
+)
 from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import BuildOutcome, FactoryOrchestrator, OrchestrationError
 from factory_runtime.repair import RepairBrief, RepairPlan, RepairPolicy, RepairSupervisor
 from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
-from factory_runtime.state import RunState
+from factory_runtime.state import RunState, RunStateError, RunStore
 from factory_runtime.target_state import normalize_repository_url
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
 from factory_runtime.workflow import FactoryWorkflow, WorkflowError
+from tests.conftest import (
+    acceptance_catalog_artifacts,
+    build_payload,
+    create_intake_run,
+    preview_artifacts,
+    ratification_receipts,
+    retained_generation_artifacts,
+    synthetic_candidate_digest,
+    validation_artifacts,
+)
 
 RUNTIME_FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
 
@@ -125,6 +140,195 @@ def test_real_tessera_signs_validates_and_detects_tampering(tmp_path: Path) -> N
     tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(TesseraVerificationError, match="Tessera refused"):
         cli.verify_json(tampered_path)
+
+
+@pytest.mark.tessera_integration
+def test_real_tessera_authenticates_preview_admission_and_replay(tmp_path: Path) -> None:
+    binary = _binary()
+    validator_key = tmp_path / "validator.hex"
+    validator_public_key = _keypair(binary, validator_key)
+    cli = TesseraCli((str(binary),))
+    runs = tmp_path / "runs"
+    staging_store = RunStore(runs, clock=lambda: 100)
+    target_digest = "sha256:" + ("1" * 64)
+    source_digest = "sha256:" + ("2" * 64)
+    create_intake_run(
+        staging_store,
+        run_id="run-1",
+        target_digest=target_digest,
+        source_digest=source_digest,
+    )
+    for state, phase, digest in (
+        (RunState.PRODUCT_SPECIFICATION_RATIFIED, "product-specification", "3"),
+        (RunState.ARCHITECTURE_RATIFIED, "architecture", "4"),
+        (RunState.OPERATIONAL_MATURITY_RATIFIED, "operational-maturity", "5"),
+    ):
+        staging_store.transition(
+            "run-1",
+            state,
+            actor="agent:validator",
+            artifact_digests={
+                phase: "sha256:" + (digest * 64),
+                **ratification_receipts(phase),
+            },
+        )
+    staging_store.transition(
+        "run-1",
+        RunState.BUILDING,
+        actor="agent:validator",
+        artifact_digests={
+            **retained_generation_artifacts(
+                staging_store,
+                include_acceptance_catalog=False,
+            ),
+            **acceptance_catalog_artifacts(staging_store),
+        },
+        payload=build_payload(),
+    )
+    candidate_digest = synthetic_candidate_digest()
+    staging_store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="agent:validator",
+        artifact_digests=validation_artifacts(
+            staging_store,
+            candidate=candidate_digest,
+        ),
+        payload={"tester_identity": "agent:tester"},
+        implementer_identity="agent:coder",
+        verifier_identity="agent:validator",
+    )
+    artifacts = preview_artifacts(
+        staging_store,
+        candidate=candidate_digest,
+        reviewer_identity="agent:validator",
+    )
+    building = [
+        entry
+        for entry in staging_store.verified_ledger_entries("run-1")
+        if entry.get("to_state") == RunState.BUILDING
+    ][-1]
+    building_payload = building["payload"]
+    assert isinstance(building_payload, Mapping)
+    envelope_path = (
+        runs
+        / "run-1"
+        / "evidence"
+        / "build-attempts"
+        / str(building_payload["attempt_id"])
+        / "evidence-bundle.tessera.json"
+    )
+    fixture_document = json.loads(envelope_path.read_text(encoding="utf-8"))
+    payload = fixture_document["payload"]
+    assert isinstance(payload, dict)
+    envelope_path.unlink()
+    real_envelope = cli.wrap_json(
+        payload,
+        kind="factory-evidence-bundle",
+        key_path=validator_key,
+        output_path=envelope_path,
+    )
+    artifacts["evidence-envelope"] = real_envelope.envelope_digest
+    genesis_artifacts = staging_store.verified_ledger_entries("run-1")[0][
+        "artifact_digests"
+    ]
+    assert isinstance(genesis_artifacts, Mapping)
+    policy = AuthorityPolicy(
+        repository_id="fixture",
+        policy_id="fixture-policy/1",
+        root_public_key="f" * 64,
+        principals={
+            "agent:validator": Principal(
+                identity="agent:validator",
+                kind="agent",
+                public_key=validator_public_key,
+                capabilities=frozenset(),
+            )
+        },
+        bootstrap_enabled=False,
+        bootstrap_scope=frozenset(),
+        genesis_digest=str(genesis_artifacts["authority-genesis"]),
+    )
+    authenticated_store = RunStore(
+        runs,
+        clock=lambda: 100,
+        preview_evidence_verifier=TesseraEvidenceEnvelopeVerifier(
+            tessera=cli,
+            authority_policy=policy,
+        ),
+    )
+
+    projection = authenticated_store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="agent:validator",
+        artifact_digests=artifacts,
+        payload={"tester_identity": "agent:tester"},
+        implementer_identity="agent:coder",
+        verifier_identity="agent:validator",
+    )
+
+    assert projection.state == RunState.PREVIEW
+    receipt = authenticated_store.verified_ledger_entries("run-1")[-1]["payload"]
+    assert isinstance(receipt, Mapping)
+    verification = receipt["evidence_verification_receipt"]
+    assert isinstance(verification, Mapping)
+    assert verification["verifier_id"] == "factory-tessera-evidence-verifier/1"
+    assert verification["signer_identity"] == "agent:validator"
+    assert verification["signer_public_key"] == validator_public_key
+    assert authenticated_store.rebuild_projection("run-1") == projection
+    with pytest.raises(RunStateError, match="explicit cryptographic evidence verifier"):
+        RunStore(runs, clock=lambda: 100).load("run-1")
+
+
+@pytest.mark.tessera_integration
+def test_real_tessera_preview_verifier_rejects_another_signing_identity(
+    tmp_path: Path,
+) -> None:
+    binary = _binary()
+    expected_key = tmp_path / "expected.hex"
+    wrong_key = tmp_path / "wrong.hex"
+    expected_public_key = _keypair(binary, expected_key)
+    _keypair(binary, wrong_key)
+    cli = TesseraCli((str(binary),))
+    payload = {"schema_version": "fixture/1", "subject": "wrong-signer"}
+    envelope_path = tmp_path / "wrong-signer.tessera.json"
+    envelope = cli.wrap_json(
+        payload,
+        kind="factory-evidence-bundle",
+        key_path=wrong_key,
+        output_path=envelope_path,
+    )
+    genesis_digest = "sha256:" + ("a" * 64)
+    verifier = TesseraEvidenceEnvelopeVerifier(
+        tessera=cli,
+        authority_policy=AuthorityPolicy(
+            repository_id="fixture",
+            policy_id="fixture-policy/1",
+            root_public_key="f" * 64,
+            principals={
+                "agent:validator": Principal(
+                    identity="agent:validator",
+                    kind="agent",
+                    public_key=expected_public_key,
+                    capabilities=frozenset(),
+                )
+            },
+            bootstrap_enabled=False,
+            bootstrap_scope=frozenset(),
+            genesis_digest=genesis_digest,
+        ),
+    )
+
+    with pytest.raises(EvidencePlaneError, match="trusted key set"):
+        verifier.verify(
+            envelope_path,
+            expected_kind="factory-evidence-bundle",
+            expected_payload_digest=envelope.payload_digest,
+            expected_envelope_digest=envelope.envelope_digest,
+            expected_signer_identity="agent:validator",
+            expected_authority_genesis_digest=genesis_digest,
+        )
 
 
 @pytest.mark.tessera_integration

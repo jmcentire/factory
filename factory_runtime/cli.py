@@ -79,6 +79,22 @@ def _add_authority_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tessera-bin", default="tessera", help="Tessera executable path")
 
 
+def _add_replay_verifier_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional external anchors required once a ledger contains PREVIEW."""
+
+    parser.add_argument(
+        "--genesis",
+        default="",
+        help="signed Tessera genesis envelope (required to authenticate PREVIEW evidence)",
+    )
+    parser.add_argument(
+        "--root-public-key",
+        default=os.environ.get("FACTORY_ROOT_PUBLIC_KEY", ""),
+        help="externally pinned founder Ed25519 public key",
+    )
+    parser.add_argument("--tessera-bin", default="tessera", help="Tessera executable path")
+
+
 def _load_workflow(arguments: argparse.Namespace) -> FactoryWorkflow:
     tessera = _tessera(arguments.tessera_bin)
     policy = load_genesis(
@@ -91,6 +107,16 @@ def _load_workflow(arguments: argparse.Namespace) -> FactoryWorkflow:
         authority_policy=policy,
         tessera=tessera,
     )
+
+
+def _load_replay_store(arguments: argparse.Namespace) -> RunStore:
+    """Construct an explicitly anchored replay store or a pre-PREVIEW structural reader."""
+
+    if not arguments.genesis:
+        return RunStore(arguments.runs)
+    if not arguments.root_public_key:
+        raise ValueError("--root-public-key is required when --genesis is supplied")
+    return _load_workflow(arguments).store
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -122,6 +148,7 @@ def _parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="verify and print an authoritative run projection")
     status.add_argument("--runs", required=True)
     status.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(status)
 
     rebuild = commands.add_parser(
         "rebuild-projection",
@@ -129,6 +156,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     rebuild.add_argument("--runs", required=True)
     rebuild.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(rebuild)
 
     verify_genesis = commands.add_parser(
         "verify-genesis",
@@ -792,10 +820,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         )
         return
     if arguments.command == "status":
-        _emit(RunStore(arguments.runs).load(arguments.run_id))
+        _emit(_load_replay_store(arguments).load(arguments.run_id))
         return
     if arguments.command == "rebuild-projection":
-        _emit(RunStore(arguments.runs).rebuild_projection(arguments.run_id))
+        _emit(_load_replay_store(arguments).rebuild_projection(arguments.run_id))
         return
     if arguments.command == "prepare-lane-dispatch":
         ledger_bytes = _read_regular_bytes(

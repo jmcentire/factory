@@ -107,6 +107,21 @@ def note(value):
 if verb == "verify-resume-checkpoint":
     print(json.dumps({"verified": True, "test_fixture": True}))
     raise SystemExit(0)
+if verb == "status":
+    expected = {
+        "--genesis": os.environ["FACTORY_GENESIS"],
+        "--root-public-key": os.environ["FACTORY_ROOT_PUBLIC_KEY"],
+        "--tessera-bin": os.environ.get("FACTORY_TESSERA_BIN", "tessera"),
+    }
+    for option, value in expected.items():
+        if argument(option) != value:
+            raise SystemExit(f"status replay anchor mismatch for {option}")
+    passthrough = list(sys.argv[1:])
+    for option in expected:
+        index = passthrough.index(option)
+        del passthrough[index : index + 2]
+    command = shlex.split(os.environ["FACTORY_TEST_REAL_CLI"])
+    os.execvpe(command[0], [*command, *passthrough], os.environ)
 if verb == "bundle-orchestrator-projection":
     output = pathlib.Path(argument("--output"))
     capsule_output = pathlib.Path(argument("--capsule-output"))

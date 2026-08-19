@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import factory_runtime.snapshot as snapshot_module
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.acceptance_obligations import validator_execution_digests
 from factory_runtime.adversarial_review import (
@@ -422,6 +423,80 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     )
     assert frozen_manifest.is_relative_to(root / "validator-execution")
     assert digest_bytes(frozen_manifest.read_bytes()) == execution_digests[0]
+
+
+def test_review_callback_runs_only_after_both_snapshots_are_durably_published(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator_command = (sys.executable, str(FIXTURES / "validator.py"))
+    validator_trusted_paths = (FIXTURES / "validator.py",)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command,
+        trusted_paths=validator_trusted_paths,
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+    run_root = tmp_path / "run-1"
+    run_root.mkdir()
+    review_store = run_root / "evidence" / "review-snapshots"
+    real_sync = snapshot_module.fsync_directory_chain
+    synced: list[tuple[Path, Path]] = []
+
+    def track_sync(start: str | Path, *, through: str | Path) -> None:
+        synced.append((Path(start), Path(through)))
+        real_sync(start, through=through)
+
+    monkeypatch.setattr(snapshot_module, "fsync_directory_chain", track_sync)
+
+    def review_subject(_coder, _tester, coder_snapshot, tester_snapshot):
+        assert (coder_snapshot.directory, run_root) in synced
+        assert (tester_snapshot.directory, run_root) in synced
+        return {"validator_execution": expected_execution}
+
+    result = IsolatedBuildLoop(root, sandbox=_RecordingQualifiedBackend()).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+        tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=acceptance_catalog_path,
+        coder_trusted_paths=(FIXTURES / "coder.py",),
+        tester_trusted_paths=(FIXTURES / "tester.py",),
+        validator_trusted_paths=validator_trusted_paths,
+        review_snapshot_store=review_store,
+        review_snapshot_durable_through=run_root,
+        before_validation=review_subject,
+    )
+
+    assert result.passed is True
+
+
+def test_external_review_snapshot_store_requires_explicit_durability_root(
+    tmp_path: Path,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+
+    with pytest.raises(LaneError, match="requires an explicit durability root"):
+        IsolatedBuildLoop(root, sandbox=_RecordingQualifiedBackend()).execute(
+            build_input_path=tmp_path / "not-read.json",
+            coder_command=("not-run",),
+            tester_command=("not-run",),
+            validator_command=("not-run",),
+            review_snapshot_store=tmp_path / "external-snapshots",
+        )
+
+    assert not root.exists()
 
 
 def test_frozen_validator_launch_has_the_declared_standalone_stdin_abi(

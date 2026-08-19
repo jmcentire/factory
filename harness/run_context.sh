@@ -105,6 +105,9 @@ factory_load_context() {
   local runs_in="${2:?runs root required}"
   local cli="${FACTORY_CLI:-factory}"
   local runs root status
+  local genesis="${FACTORY_GENESIS:-}"
+  local root_key="${FACTORY_ROOT_PUBLIC_KEY:-}"
+  local tessera="${FACTORY_TESSERA_BIN:-tessera}"
 
   [[ "$run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
     echo "Invalid Factory run id: $run" >&2
@@ -115,7 +118,11 @@ factory_load_context() {
   root="$runs/$run"
   [ -d "$root" ] || { echo "Factory run does not exist: $root" >&2; return 64; }
   factory_verify_resume_anchor "$run" "$runs" || return $?
-  status="$($cli status --runs "$runs" --run-id "$run")" || return $?
+  # The resume gate has already verified these externally supplied anchors.  Pass the exact same
+  # tuple into replay so a PREVIEW-or-later ledger is authenticated rather than becoming
+  # unreadable (or being reopened structurally) at the shell boundary.
+  status="$($cli status --runs "$runs" --run-id "$run" \
+    --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera")" || return $?
 
   local values=()
   mapfile -t values < <(
@@ -123,7 +130,7 @@ factory_load_context() {
 import json, pathlib, sys
 expected_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 doc = json.load(sys.stdin)
-if doc.get("schema_version") != "factory-run/4":
+if doc.get("schema_version") != "factory-run/5":
     raise SystemExit("legacy run schemas cannot dispatch")
 allowed = {
     "intake", "product-specification-ratified", "architecture-ratified",

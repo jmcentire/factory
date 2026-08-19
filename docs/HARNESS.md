@@ -324,6 +324,22 @@ blocking, or found stops
 `VALIDATING -> PREVIEW`. `CLEAN_QUALIFIED` is evidence only and cannot authorize merge, release,
 deployment, or promotion.
 
+PREVIEW is also a cryptographic boundary, not merely a structurally valid envelope. Admission and
+every replay require a host-supplied Tessera verifier, the active founder-anchored genesis, and the
+exact Validator identity recorded by the validating transition. The state store verifies the
+retained envelope against that Validator's enrolled key and reproduces its code-owned verification
+receipt. A signature-shaped document, a different enrolled signer, a caller-supplied receipt, or a
+reader without those external anchors refuses. Accordingly, `factory status` and
+`rebuild-projection` require `--genesis`, the pinned `--root-public-key`, and `--tessera-bin` for a
+run whose ledger has reached PREVIEW.
+
+These requirements are versioned as `factory-run/5`. Released v0.3 `factory-run/4` ledgers remain
+read-only and replay against their frozen historical validation and transition-obligation profile;
+if they reached PREVIEW, replay still requires current cryptographic verification of their exact
+retained envelope. Factory never fabricates the later review/verification records for a historical
+run and never silently upgrades it. Continued authoring begins as a newly authorized `/5` run with
+explicit lineage to the old run and ledger head.
+
 The result is judged by agreed behavior and evidence, not generated-code aesthetics. `regenerate`
 keeps a complete rewrite ordinary; `brownfield` supports a deliberately scoped correction. The
 target ABI and plan both bound authoring attempts, and the ledger will not raise the ceiling after

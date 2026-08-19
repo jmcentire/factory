@@ -16,7 +16,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from factory_core.manifest import (
     Ledger,
@@ -30,21 +30,43 @@ from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.transition_obligations import (
     REPORT_KEY as TRANSITION_OBLIGATION_REPORT_KEY,
 )
+
+if TYPE_CHECKING:
+    from factory_runtime.evidence_plane import EvidenceEnvelopeVerifier
 from factory_runtime.transition_obligations import (
     SET_KEY as TRANSITION_OBLIGATION_SET_KEY,
 )
 from factory_runtime.transition_obligations import (
     TransitionObligationError,
     assert_catalog_covers,
+    derive_released_v4_transition_obligations,
     derive_transition_obligations,
     retain_transition_obligations,
     verify_retained_transition_obligations,
 )
 
-RUN_SCHEMA_VERSION = "factory-run/4"
-LEGACY_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/1", "factory-run/2", "factory-run/3"})
-TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/3", RUN_SCHEMA_VERSION})
-GENERATION_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/2", "factory-run/3", RUN_SCHEMA_VERSION})
+RUN_SCHEMA_VERSION = "factory-run/5"
+RELEASED_V4_RUN_SCHEMA_VERSION = "factory-run/4"
+LEGACY_RUN_SCHEMA_VERSIONS = frozenset(
+    {"factory-run/1", "factory-run/2", "factory-run/3", RELEASED_V4_RUN_SCHEMA_VERSION}
+)
+TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset(
+    {"factory-run/3", "factory-run/4", RUN_SCHEMA_VERSION}
+)
+GENERATION_RUN_SCHEMA_VERSIONS = frozenset(
+    {"factory-run/2", "factory-run/3", "factory-run/4", RUN_SCHEMA_VERSION}
+)
+# v5 is the first schema that binds the immutable Validator execution/review tuple and a
+# replayable cryptographic evidence-verification receipt. Released v4 has a separate frozen,
+# read-only replay contract; it must not be interpreted with v5 semantics.
+IMMUTABLE_REVIEW_RUN_SCHEMA_VERSIONS = frozenset({RUN_SCHEMA_VERSION})
+EVIDENCE_VERIFICATION_RECEIPT_RUN_SCHEMA_VERSIONS = frozenset({RUN_SCHEMA_VERSION})
+# v4 and v5 both own acceptance catalogs, strict receipt accounting, immutable validation
+# subjects, and retained transition-obligation evidence.  Their review/execution contracts
+# differ, so those shared replay controls must not be coupled to the v5-only set above.
+OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS = frozenset(
+    {RELEASED_V4_RUN_SCHEMA_VERSION, RUN_SCHEMA_VERSION}
+)
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -69,6 +91,7 @@ VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
     "validator-execution-environment",
     "validator-execution-snapshot",
 )
+PREVIEW_EVIDENCE_VERIFICATION_KEY = "evidence_verification_receipt"
 
 
 class RunState(StrEnum):
@@ -630,6 +653,57 @@ def _required_phase_keys(
     return frozenset(_PHASE_ORDER)
 
 
+def _require_preview_identity_continuity(
+    predecessor: Mapping[str, Any],
+    *,
+    implementer_identity: str,
+    tester_identity: str,
+    verifier_identity: str,
+    require_causal_verifier: bool,
+    context: str,
+) -> None:
+    """Bind PREVIEW to the three identities on its causal VALIDATING entry.
+
+    This is a v5 admission rule: all three identities are recorded on VALIDATING and PREVIEW.
+    Released v4 replay deliberately does not add this later continuity rule; it authenticates
+    the signer named on the historical PREVIEW entry without narrowing v0.3's accepted set.
+    """
+
+    predecessor_payload = predecessor.get("payload")
+    if predecessor.get("to_state") != RunState.VALIDATING or not isinstance(
+        predecessor_payload, Mapping
+    ):
+        raise RunStateError(f"{context} has no causal VALIDATING identity record")
+    causal = {
+        "Coder": str(predecessor.get("implementer_identity", "")).strip(),
+        "Tester": str(predecessor_payload.get("tester_identity", "")).strip(),
+        "Validator": str(predecessor.get("verifier_identity", "")).strip(),
+    }
+    current = {
+        "Coder": implementer_identity.strip(),
+        "Tester": tester_identity.strip(),
+        "Validator": verifier_identity.strip(),
+    }
+    required_causal = ("Coder", "Tester", "Validator") if require_causal_verifier else (
+        "Coder",
+        "Tester",
+    )
+    missing = [role for role in required_causal if not causal[role]]
+    missing.extend(role for role, identity in current.items() if not identity)
+    if missing:
+        raise RunStateError(
+            f"{context} omits causal identity role(s): " + ", ".join(sorted(set(missing)))
+        )
+    for role in ("Coder", "Tester"):
+        if current[role] != causal[role]:
+            raise RunStateError(f"{context} {role} differs from causal VALIDATING identity")
+    if causal["Validator"] and current["Validator"] != causal["Validator"]:
+        raise RunStateError(f"{context} Validator differs from causal VALIDATING identity")
+    identities = {causal["Coder"], causal["Tester"], current["Validator"]}
+    if len(identities) != 3:
+        raise RunStateError(f"{context} Coder, Tester, and Validator are not distinct")
+
+
 class RunStore:
     """Filesystem-backed run store whose ledger, not projection, is authoritative."""
 
@@ -638,9 +712,11 @@ class RunStore:
         root: str | Path,
         *,
         clock: Callable[[], int] | None = None,
+        preview_evidence_verifier: EvidenceEnvelopeVerifier | None = None,
     ) -> None:
         self.root = Path(root)
         self._clock = clock or (lambda: int(time.time()))
+        self._preview_evidence_verifier = preview_evidence_verifier
 
     def _run_dir(self, run_id: str) -> Path:
         if not _RUN_ID.fullmatch(run_id):
@@ -676,7 +752,7 @@ class RunStore:
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
     ) -> RunProjection:
-        """Create a v4 run at the authorized target-resolution boundary.
+        """Create a v5 run at the authorized target-resolution boundary.
 
         Ordinary intake is deliberately impossible here. The exact target state must first be
         recorded, then a second execution receipt must establish the verbatim source digest.
@@ -1005,6 +1081,11 @@ class RunStore:
         phases = dict(current.phase_artifact_digests)
         next_acceptance_catalog_digest = current.acceptance_obligation_catalog_digest
         transition_payload = dict(payload or {})
+        if PREVIEW_EVIDENCE_VERIFICATION_KEY in transition_payload:
+            raise RunStateError(
+                "evidence verification receipts are derived by the configured verifier, "
+                "not supplied by callers"
+            )
         if source is RunState.BLOCKED and destination is RunState.BLOCKED:
             predecessor = verified_entries[-1]
             predecessor_payload = predecessor.get("payload")
@@ -1257,6 +1338,16 @@ class RunStore:
                 ) from exc
 
         if destination is RunState.PREVIEW:
+            _require_preview_identity_continuity(
+                verified_entries[-1],
+                implementer_identity=implementer_identity,
+                tester_identity=str(transition_payload.get("tester_identity", "")),
+                verifier_identity=verifier_identity,
+                require_causal_verifier=(
+                    current.schema_version in EVIDENCE_VERIFICATION_RECEIPT_RUN_SCHEMA_VERSIONS
+                ),
+                context="preview admission",
+            )
             _require_digest_keys(
                 supplied,
                 (
@@ -1311,6 +1402,15 @@ class RunStore:
                     )
                 },
             }
+            if self._preview_evidence_verifier is None:
+                raise RunStateError(
+                    "preview admission requires an explicit cryptographic evidence verifier"
+                )
+            genesis_artifacts = verified_entries[0].get("artifact_digests")
+            if not isinstance(genesis_artifacts, Mapping):
+                raise RunStateError("run genesis has no artifact digest map")
+            authority_genesis_digest = str(genesis_artifacts.get("authority-genesis", ""))
+            _require_digest(authority_genesis_digest, "authority-genesis digest")
             try:
                 from factory_runtime.acceptance_obligations import (
                     AcceptanceObligationError,
@@ -1378,7 +1478,7 @@ class RunStore:
                 )
 
                 active_attempt_id = _latest_build_attempt_id(verified_entries)
-                verify_retained_evidence_bundle(
+                verified_evidence = verify_retained_evidence_bundle(
                     self._run_dir(run_id),
                     attempt_id=active_attempt_id,
                     payload_digest=supplied["evidence-bundle"],
@@ -1394,7 +1494,14 @@ class RunStore:
                     attempt_number=current.build_attempt_count,
                     attempt_limit=current.build_attempt_limit,
                     validating_ledger_head=current.ledger_head,
+                    verifier_identity=verifier_identity,
+                    authority_genesis_digest=authority_genesis_digest,
+                    verifier=self._preview_evidence_verifier,
                 )
+                if current.schema_version in EVIDENCE_VERIFICATION_RECEIPT_RUN_SCHEMA_VERSIONS:
+                    transition_payload[PREVIEW_EVIDENCE_VERIFICATION_KEY] = (
+                        verified_evidence.receipt.to_dict()
+                    )
             except AcceptanceObligationError as exc:
                 raise RunStateError(
                     f"{destination} acceptance-obligation report is invalid: {exc}"
@@ -1812,7 +1919,7 @@ class RunStore:
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
             derived_catalog_activation = (
-                schema_version == RUN_SCHEMA_VERSION
+                schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS
                 and destination is RunState.BUILDING
                 and not acceptance_obligation_catalog_digest
             )
@@ -1895,7 +2002,7 @@ class RunStore:
 
             if destination is RunState.SPECIFICATION_DEFECT:
                 acceptance_obligation_catalog_digest = ""
-            if schema_version == RUN_SCHEMA_VERSION:
+            if schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS:
                 declared_acceptance_catalog = str(
                     digests.get(ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY, "")
                 )
@@ -2022,7 +2129,7 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} contains an empty authority nonce")
             if len(entry_nonces) != len(set(entry_nonces)):
                 raise RunStateError(f"ledger entry {index} repeats an authority nonce")
-            if schema_version == RUN_SCHEMA_VERSION:
+            if schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS:
                 expected_entry_nonces = (
                     (
                         1
@@ -2081,7 +2188,119 @@ class RunStore:
                 _require_digest(value, f"phase_artifacts[{key!r}]")
             phase_artifacts = candidate_phases
 
-            if schema_version == RUN_SCHEMA_VERSION:
+            if schema_version == RELEASED_V4_RUN_SCHEMA_VERSION:
+                v4_validation_keys = (
+                    "candidate",
+                    "acceptance-tests",
+                    "coder-output-snapshot",
+                    "tester-output-snapshot",
+                )
+                if destination is RunState.BUILDING:
+                    validation_evidence = {}
+                elif destination is RunState.VALIDATING:
+                    _require_digest_keys(
+                        digests,
+                        v4_validation_keys,
+                        context=f"ledger entry {index} validating",
+                    )
+                    validation_evidence = {
+                        key: str(digests[key]) for key in v4_validation_keys
+                    }
+                elif destination is RunState.PREVIEW:
+                    _require_digest_keys(
+                        digests,
+                        (
+                            "candidate",
+                            "acceptance-tests",
+                            ACCEPTANCE_OBLIGATION_REPORT_KEY,
+                            "evidence-bundle",
+                            "evidence-envelope",
+                        ),
+                        context=f"ledger entry {index} preview",
+                    )
+                    if not validation_evidence:
+                        raise RunStateError(
+                            f"ledger entry {index} preview has no immutable validation subject"
+                        )
+                    for key in ("candidate", "acceptance-tests"):
+                        if digests[key] != validation_evidence[key]:
+                            raise RunStateError(
+                                f"ledger entry {index} preview changes {key} after validation"
+                            )
+                    if self._preview_evidence_verifier is None:
+                        raise RunStateError(
+                            f"ledger entry {index} preview requires an explicit cryptographic "
+                            "evidence verifier"
+                        )
+                    if PREVIEW_EVIDENCE_VERIFICATION_KEY in payload_raw:
+                        raise RunStateError(
+                            f"ledger entry {index} legacy preview unexpectedly contains an "
+                            "evidence verification receipt"
+                        )
+                    try:
+                        from factory_runtime.acceptance_obligations import (
+                            AcceptanceObligationError,
+                            verify_retained_acceptance_obligation_report,
+                        )
+
+                        verify_retained_acceptance_obligation_report(
+                            self._run_dir(run_id),
+                            catalog_digest=acceptance_obligation_catalog_digest,
+                            report_digest=str(digests[ACCEPTANCE_OBLIGATION_REPORT_KEY]),
+                            run_id=run_id,
+                            generation=generation,
+                            source=source_raw,
+                            destination=str(destination),
+                            target_state_digest=target_state_digest,
+                            resolved_commit=str(target_state.get("resolved_commit", "")),
+                            resolved_tree=str(target_state.get("resolved_tree", "")),
+                            phase_artifact_digests=phase_artifacts,
+                            candidate_digest=str(digests["candidate"]),
+                            acceptance_tests_digest=str(digests["acceptance-tests"]),
+                            trusted_evidence_digests=validation_evidence,
+                        )
+                        from factory_runtime.evidence_plane import (
+                            EvidencePlaneError,
+                            verify_retained_evidence_bundle,
+                        )
+
+                        verify_retained_evidence_bundle(
+                            self._run_dir(run_id),
+                            attempt_id=active_attempt_id,
+                            payload_digest=str(digests["evidence-bundle"]),
+                            envelope_digest=str(digests["evidence-envelope"]),
+                            run_id=run_id,
+                            target_digest=target_digest,
+                            source_digest=source_digest,
+                            candidate_digest=str(digests["candidate"]),
+                            acceptance_tests_digest=str(digests["acceptance-tests"]),
+                            generation_artifacts=generation_artifacts,
+                            coder_snapshot_digest=validation_evidence[
+                                "coder-output-snapshot"
+                            ],
+                            tester_snapshot_digest=validation_evidence[
+                                "tester-output-snapshot"
+                            ],
+                            attempt_number=build_attempt_count,
+                            attempt_limit=build_attempt_limit,
+                            validating_ledger_head=str(record.get("prev_hash", "")),
+                            verifier_identity=str(record.get("verifier_identity", "")),
+                            authority_genesis_digest=authority_genesis_digest,
+                            verifier=self._preview_evidence_verifier,
+                        )
+                    except AcceptanceObligationError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} preview acceptance-obligation report is "
+                            f"invalid: {exc}"
+                        ) from exc
+                    except EvidencePlaneError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} preview signed evidence bundle is invalid: "
+                            f"{exc}"
+                        ) from exc
+                elif destination is RunState.SPECIFICATION_DEFECT:
+                    validation_evidence = {}
+            elif schema_version in IMMUTABLE_REVIEW_RUN_SCHEMA_VERSIONS:
                 validation_keys = (
                     "candidate",
                     "acceptance-tests",
@@ -2125,6 +2344,14 @@ class RunStore:
                             f"ledger entry {index} validating Validator execution is invalid: {exc}"
                         ) from exc
                 elif destination is RunState.PREVIEW:
+                    _require_preview_identity_continuity(
+                        entries[index - 1],
+                        implementer_identity=str(record.get("implementer_identity", "")),
+                        tester_identity=str(payload_raw.get("tester_identity", "")),
+                        verifier_identity=str(record.get("verifier_identity", "")),
+                        require_causal_verifier=(schema_version == RUN_SCHEMA_VERSION),
+                        context=f"ledger entry {index} preview",
+                    )
                     _require_digest_keys(
                         digests,
                         (
@@ -2167,6 +2394,23 @@ class RunStore:
                             )
                         },
                     }
+                    if self._preview_evidence_verifier is None:
+                        raise RunStateError(
+                            f"ledger entry {index} preview requires an explicit cryptographic "
+                            "evidence verifier"
+                        )
+                    recorded_verification = payload_raw.get(PREVIEW_EVIDENCE_VERIFICATION_KEY)
+                    if schema_version in EVIDENCE_VERIFICATION_RECEIPT_RUN_SCHEMA_VERSIONS:
+                        if not isinstance(recorded_verification, Mapping):
+                            raise RunStateError(
+                                f"ledger entry {index} preview has no versioned evidence "
+                                "verification receipt"
+                            )
+                    elif recorded_verification is not None:
+                        raise RunStateError(
+                            f"ledger entry {index} legacy preview unexpectedly contains an "
+                            "evidence verification receipt"
+                        )
                     try:
                         from factory_runtime.acceptance_obligations import (
                             AcceptanceObligationError,
@@ -2240,7 +2484,7 @@ class RunStore:
                             verify_retained_evidence_bundle,
                         )
 
-                        verify_retained_evidence_bundle(
+                        verified_evidence = verify_retained_evidence_bundle(
                             self._run_dir(run_id),
                             attempt_id=active_attempt_id,
                             payload_digest=str(digests["evidence-bundle"]),
@@ -2260,7 +2504,19 @@ class RunStore:
                             attempt_number=build_attempt_count,
                             attempt_limit=build_attempt_limit,
                             validating_ledger_head=str(record.get("prev_hash", "")),
+                            verifier_identity=str(record.get("verifier_identity", "")),
+                            authority_genesis_digest=authority_genesis_digest,
+                            verifier=self._preview_evidence_verifier,
                         )
+                        if schema_version in EVIDENCE_VERIFICATION_RECEIPT_RUN_SCHEMA_VERSIONS:
+                            if not isinstance(recorded_verification, Mapping):
+                                raise EvidencePlaneError(
+                                    "retained evidence verification receipt is malformed"
+                                )
+                            if dict(recorded_verification) != verified_evidence.receipt.to_dict():
+                                raise EvidencePlaneError(
+                                    "retained evidence verification receipt does not reproduce"
+                                )
                     except AcceptanceObligationError as exc:
                         raise RunStateError(
                             f"ledger entry {index} preview acceptance-obligation report is "
@@ -2278,7 +2534,7 @@ class RunStore:
                 elif destination is RunState.SPECIFICATION_DEFECT:
                     validation_evidence = {}
 
-            if schema_version == RUN_SCHEMA_VERSION and index > 0:
+            if schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS and index > 0:
                 structural = {
                     "target",
                     "target-state",
@@ -2297,7 +2553,12 @@ class RunStore:
                 if destination is RunState.INTAKE:
                     transition_supplied["source"] = str(digests["source"])
                 try:
-                    expected_set, expected_report = derive_transition_obligations(
+                    obligation_deriver = (
+                        derive_released_v4_transition_obligations
+                        if schema_version == RELEASED_V4_RUN_SCHEMA_VERSION
+                        else derive_transition_obligations
+                    )
+                    expected_set, expected_report = obligation_deriver(
                         run_id=run_id,
                         generation=generation,
                         source=source_raw,

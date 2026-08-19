@@ -215,24 +215,29 @@ class GenerationPreparer:
         unique_issues = tuple(dict.fromkeys(issues))
         report = replace(report, ready=not unique_issues, issues=unique_issues)
 
-        generation_root = self.runs_root / run_id / "evidence" / "generation"
+        run_root = self.runs_root / run_id
+        generation_root = run_root / "evidence" / "generation"
         target_snapshot = freeze_blob(
             generation_root,
+            durable_through=run_root,
             label="target-manifest",
             data=target_bytes,
         )
         catalog_snapshot = freeze_blob(
             generation_root,
+            durable_through=run_root,
             label="pattern-catalog",
             data=catalog_bytes,
         )
         plan_snapshot = freeze_blob(
             generation_root,
+            durable_through=run_root,
             label="build-plan",
             data=plan_bytes,
         )
         input_snapshot = freeze_blob(
             generation_root,
+            durable_through=run_root,
             label="build-input",
             data=build_input_bytes,
         )
@@ -252,6 +257,7 @@ class GenerationPreparer:
         }
         readiness_snapshot = freeze_blob(
             generation_root,
+            durable_through=run_root,
             label="generation-readiness",
             data=_canonical_bytes(readiness_document),
         )

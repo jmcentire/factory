@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.durability import (
+    DurabilityError,
+    fsync_directory,
+    fsync_directory_chain,
+)
 
 _LABEL = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -52,8 +57,68 @@ def _write_once(path: Path, data: bytes, mode: int = 0o444) -> None:
     with path.open("xb") as handle:
         handle.write(data)
         handle.flush()
+        os.fchmod(handle.fileno(), mode)
         os.fsync(handle.fileno())
-    path.chmod(mode)
+
+
+def _durability_boundary(
+    store_root: str | Path,
+    *,
+    durable_through: str | Path,
+) -> tuple[Path, Path]:
+    """Validate a caller-owned durability boundary before creating snapshot paths."""
+
+    root = Path(os.path.abspath(os.fspath(store_root)))
+    boundary = Path(os.path.abspath(os.fspath(durable_through)))
+    if boundary.parent == boundary:
+        raise SnapshotError("snapshot durability boundary may not be a filesystem root")
+    if boundary.is_symlink() or not boundary.is_dir():
+        raise SnapshotError(
+            f"snapshot durability boundary is not an existing real directory: {boundary}"
+        )
+    try:
+        within_boundary = os.path.commonpath((root, boundary)) == os.fspath(boundary)
+    except ValueError as exc:
+        raise SnapshotError(
+            "snapshot store and durability boundary cross filesystem roots"
+        ) from exc
+    if not within_boundary:
+        raise SnapshotError(
+            f"snapshot store {root} is outside declared durability root {boundary}"
+        )
+    current = boundary
+    for component in root.relative_to(boundary).parts:
+        current /= component
+        if current.is_symlink():
+            raise SnapshotError(f"snapshot store contains a forbidden symlink: {current}")
+        if current.exists() and not current.is_dir():
+            raise SnapshotError(f"snapshot store component is not a directory: {current}")
+    return root, boundary
+
+
+def _sync_snapshot_publication(
+    directory: Path,
+    *,
+    durable_through: Path,
+    internal_directories: tuple[Path, ...] = (),
+) -> None:
+    """Commit retained directory entries before a ledger may cite the snapshot.
+
+    Exact file bytes and modes are fsynced before publication. Tree snapshots additionally
+    contain newly created directory entries below the published address, so those directories
+    are committed deepest-first before the public address and its ancestor chain.
+    """
+
+    try:
+        for internal in sorted(
+            internal_directories,
+            key=lambda path: len(path.parts),
+            reverse=True,
+        ):
+            fsync_directory(internal)
+        fsync_directory_chain(directory, through=durable_through)
+    except DurabilityError as exc:
+        raise SnapshotError(str(exc)) from exc
 
 
 def _read_regular(path: Path) -> tuple[bytes, int]:
@@ -146,16 +211,37 @@ def tree_digest(root: str | Path, *, allow_empty: bool = False) -> str:
     return _digest_rows(rows)
 
 
-def freeze_blob(store_root: str | Path, *, label: str, data: bytes) -> FrozenBlob:
-    """Persist one exact byte string once under its SHA-256 address."""
+def freeze_blob(
+    store_root: str | Path,
+    *,
+    durable_through: str | Path,
+    label: str,
+    data: bytes,
+) -> FrozenBlob:
+    """Persist one exact byte string durably under its SHA-256 address.
+
+    ``durable_through`` is an already-existing run/attempt boundary owned by the caller. The
+    function never infers or widens that boundary, and an identical retry re-syncs the retained
+    publication before returning.
+    """
 
     if not _LABEL.fullmatch(label):
         raise SnapshotError(f"invalid snapshot label: {label!r}")
     digest = digest_bytes(data)
-    root = Path(store_root) / label
+    store, boundary = _durability_boundary(
+        store_root,
+        durable_through=durable_through,
+    )
+    root = store / label
+    if root.is_symlink():
+        raise SnapshotError(f"snapshot store contains a forbidden symlink: {root}")
+    if root.exists() and not root.is_dir():
+        raise SnapshotError(f"snapshot store component is not a directory: {root}")
     destination = root / digest.removeprefix("sha256:")
-    if destination.exists():
-        return verify_frozen_blob(destination, expected_digest=digest, label=label)
+    if destination.exists() or destination.is_symlink():
+        frozen = verify_frozen_blob(destination, expected_digest=digest, label=label)
+        _sync_snapshot_publication(frozen.directory, durable_through=boundary)
+        return frozen
     root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".blob-", dir=root))
     try:
@@ -182,7 +268,9 @@ def freeze_blob(store_root: str | Path, *, label: str, data: bytes) -> FrozenBlo
             # its final address. Payloads are already read-only, and the verifier below
             # refuses any concurrent disturbance or a directory that remained writable.
             destination.chmod(0o555)
-        return verify_frozen_blob(destination, expected_digest=digest, label=label)
+        frozen = verify_frozen_blob(destination, expected_digest=digest, label=label)
+        _sync_snapshot_publication(frozen.directory, durable_through=boundary)
+        return frozen
     finally:
         if temporary.exists():
             temporary.chmod(0o755)
@@ -229,16 +317,27 @@ def freeze_tree(
     source: str | Path,
     store_root: str | Path,
     *,
+    durable_through: str | Path,
     allow_empty: bool = False,
 ) -> FrozenTree:
-    """Persist exact tree bytes in a content-addressed read-only directory."""
+    """Persist exact tree bytes in a durably published content-addressed directory."""
 
     rows, content = _capture_tree(Path(source), allow_empty=allow_empty)
     digest = _digest_rows(rows)
-    root = Path(store_root)
+    root, boundary = _durability_boundary(
+        store_root,
+        durable_through=durable_through,
+    )
     destination = root / digest.removeprefix("sha256:")
-    if destination.exists():
-        return verify_frozen_tree(destination, expected_digest=digest)
+    if destination.exists() or destination.is_symlink():
+        frozen = verify_frozen_tree(destination, expected_digest=digest)
+        internal = tuple(path for path in frozen.files_directory.rglob("*") if path.is_dir())
+        _sync_snapshot_publication(
+            frozen.directory,
+            durable_through=boundary,
+            internal_directories=(*internal, frozen.files_directory),
+        )
+        return frozen
     root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".tree-", dir=root))
     try:
@@ -273,7 +372,14 @@ def freeze_tree(
             # root. All descendants are already read-only; seal the published root and
             # re-derive the complete snapshot before returning it.
             destination.chmod(0o555)
-        return verify_frozen_tree(destination, expected_digest=digest)
+        frozen = verify_frozen_tree(destination, expected_digest=digest)
+        internal = tuple(path for path in frozen.files_directory.rglob("*") if path.is_dir())
+        _sync_snapshot_publication(
+            frozen.directory,
+            durable_through=boundary,
+            internal_directories=(*internal, frozen.files_directory),
+        )
+        return frozen
     finally:
         if temporary.exists():
             _make_tree_writable(temporary)

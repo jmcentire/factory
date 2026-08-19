@@ -8,6 +8,7 @@ runs from a bare checkout.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -24,6 +25,79 @@ SYNTHETIC_TARGET = FIXTURES / "synthetic_target" / "target.toml"
 EMPTY_GIT_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SYNTHETIC_CANDIDATE_BYTES = b"fixture candidate\n"
 SYNTHETIC_TEST_BYTES = b"def test_fixture_acceptance():\n    assert True\n"
+_FIXTURE_EVIDENCE_KEY = b"factory-state-fixture-evidence-verifier-v1"
+
+
+def _fixture_signer_public_key(identity: str) -> str:
+    return hashlib.sha256(f"fixture-evidence-signer:{identity}".encode()).hexdigest()
+
+
+class FixtureEvidenceEnvelopeVerifier:
+    """Explicit authenticated unit seam; real Tessera is exercised by integration tests."""
+
+    def verify(
+        self,
+        envelope_path: Path,
+        *,
+        expected_kind: str,
+        expected_payload_digest: str,
+        expected_envelope_digest: str,
+        expected_signer_identity: str,
+        expected_authority_genesis_digest: str,
+    ) -> Any:
+        from factory_core.manifest import digest_bytes, digest_obj
+        from factory_runtime.evidence_plane import (
+            EvidencePlaneError,
+            EvidenceVerificationReceipt,
+            VerifiedEvidenceEnvelope,
+        )
+
+        try:
+            raw = envelope_path.read_bytes()
+            document = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvidencePlaneError(f"fixture evidence envelope is unreadable: {exc}") from exc
+        if digest_bytes(raw) != expected_envelope_digest:
+            raise EvidencePlaneError("fixture evidence envelope differs from its address")
+        if not isinstance(document, dict):
+            raise EvidencePlaneError("fixture evidence envelope must be an object")
+        signature = str(document.pop("fixture_mac", ""))
+        authenticated = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        expected_mac = hmac.new(
+            _FIXTURE_EVIDENCE_KEY,
+            authenticated,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected_mac):
+            raise EvidencePlaneError("fixture evidence MAC is invalid")
+        if document.get("kind") != expected_kind:
+            raise EvidencePlaneError("fixture evidence kind differs")
+        if document.get("signer_identity") != expected_signer_identity:
+            raise EvidencePlaneError("fixture evidence signer identity differs")
+        if document.get("authority_genesis_digest") != expected_authority_genesis_digest:
+            raise EvidencePlaneError("fixture evidence authority genesis differs")
+        payload = document.get("payload")
+        if not isinstance(payload, dict) or digest_obj(payload) != expected_payload_digest:
+            raise EvidencePlaneError("fixture evidence payload differs")
+        signer_public_key = _fixture_signer_public_key(expected_signer_identity)
+        if document.get("signer_public_key") != signer_public_key:
+            raise EvidencePlaneError("fixture evidence signer key differs")
+        return VerifiedEvidenceEnvelope(
+            payload=payload,
+            receipt=EvidenceVerificationReceipt(
+                schema_version="factory-evidence-verification-receipt/1",
+                verifier_id="factory-test-evidence-verifier/1",
+                authority_genesis_digest=expected_authority_genesis_digest,
+                signer_identity=expected_signer_identity,
+                signer_public_key=signer_public_key,
+                envelope_digest=expected_envelope_digest,
+                payload_digest=expected_payload_digest,
+            ),
+        )
+
+
+def fixture_preview_evidence_verifier() -> FixtureEvidenceEnvelopeVerifier:
+    return FixtureEvidenceEnvelopeVerifier()
 
 
 def synthetic_candidate_digest() -> str:
@@ -127,7 +201,12 @@ def retained_generation_artifacts(
 
     def retain(label: str, document: object) -> tuple[str, str]:
         data = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-        blob = freeze_blob(root, label=label, data=data)
+        blob = freeze_blob(
+            root,
+            label=label,
+            data=data,
+            durable_through=store.root / run_id,
+        )
         return digest_obj(document), blob.digest
 
     pattern_digest, pattern_source = retain(
@@ -339,6 +418,7 @@ def validator_execution_artifacts(
         execution_root / "manifests",
         label="validator-execution-manifest",
         data=json.dumps(capture.document, sort_keys=True, separators=(",", ":")).encode(),
+        durable_through=store.root / run_id,
     )
     with tempfile.TemporaryDirectory(prefix="factory-state-validator-") as temporary:
         source = Path(temporary)
@@ -347,7 +427,11 @@ def validator_execution_artifacts(
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(item.content)
             os.chmod(path, item.mode)
-        validator_snapshot = freeze_tree(source, execution_root / "trees")
+        validator_snapshot = freeze_tree(
+            source,
+            execution_root / "trees",
+            durable_through=store.root / run_id,
+        )
     if manifest.digest != capture.command_digest:
         raise AssertionError("Validator fixture manifest did not retain at its command address")
     if validator_snapshot.digest != capture.document["snapshot_tree_digest"]:
@@ -384,8 +468,16 @@ def validation_artifacts(
         (tester / "acceptance_test.py").write_bytes(SYNTHETIC_TEST_BYTES)
         os.chmod(coder / "artifact.py", 0o444)
         os.chmod(tester / "acceptance_test.py", 0o444)
-        coder_snapshot = freeze_tree(source / "coder", review_root)
-        tester_snapshot = freeze_tree(source / "tester", review_root)
+        coder_snapshot = freeze_tree(
+            source / "coder",
+            review_root,
+            durable_through=store.root / run_id,
+        )
+        tester_snapshot = freeze_tree(
+            source / "tester",
+            review_root,
+            durable_through=store.root / run_id,
+        )
 
     candidate_digest = tree_digest(coder_snapshot.files_directory / "artifact")
     acceptance_tests_digest = tree_digest(tester_snapshot.files_directory / "tests")
@@ -857,15 +949,22 @@ def preview_artifacts(
         "monitor_declared_unit_count": 0,
     }
     bundle_digest = digest_obj(bundle)
+    genesis = store.verified_ledger_entries(run_id)[0]["artifact_digests"]
+    assert isinstance(genesis, dict)
     envelope = {
-        "pubkey": "1" * 64,
-        "signature": "2" * 128,
-        "state": {
-            "kind": "factory-evidence-bundle",
-            "payload": json.dumps(bundle, sort_keys=True, separators=(",", ":")),
-            "payload_digest": bundle_digest,
-        },
+        "kind": "factory-evidence-bundle",
+        "payload": bundle,
+        "payload_digest": bundle_digest,
+        "signer_identity": reviewer_identity,
+        "signer_public_key": _fixture_signer_public_key(reviewer_identity),
+        "authority_genesis_digest": str(genesis["authority-genesis"]),
     }
+    authenticated = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+    envelope["fixture_mac"] = hmac.new(
+        _FIXTURE_EVIDENCE_KEY,
+        authenticated,
+        hashlib.sha256,
+    ).hexdigest()
     envelope_bytes = canonical_document_bytes(envelope)
     building = [
         entry

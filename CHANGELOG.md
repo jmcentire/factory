@@ -22,6 +22,15 @@ public API is still pre-1.0.
   typed clean-claim checks, and a host-derived verdict. The `/1` protocol grants no self-refutation
   authority: every emitted finding prevents a clean verdict. Review remains evidence-only and
   grants no merge, release, deploy, or promotion authority.
+- PREVIEW admission and every ledger replay now require an explicit Tessera verifier bound to the
+  active founder-anchored genesis and the recorded Validator identity. The state store derives a
+  versioned verification receipt from the exact retained envelope; shaped signatures, wrong keys,
+  caller-supplied receipts, and unanchored `status`/projection rebuilds fail closed.
+- New lifecycles use `factory-run/5`, which versions the immutable review/execution tuple and
+  cryptographic verification receipt instead of silently changing the released `/4` contract.
+  Released v0.3 `/4` ledgers retain their exact historical transition-obligation and validation
+  replay profile, remain read-only, and require current cryptographic envelope verification when
+  replaying PREVIEW; they are never silently upgraded or credited with evidence they did not record.
 
 - A closed effective-directive contract derived from externally checkpoint-bound directive and
   provisional sources, with a canonical run/generation/role scope grammar, same-scope
@@ -82,6 +91,10 @@ public API is still pre-1.0.
 - Release CI now builds and inspects both wheel and sdist, installs and smokes each artifact outside
   the source checkout, requires every runtime schema and CLI entry point, preserves the historical
   runner-receipt/2 bytes, and excludes the incomplete repository test tree from published sdists.
+- Generation blobs and Coder/Tester review trees now require a caller-declared durable run boundary.
+  New and idempotently reused snapshots fsync exact contents, internal directory entries, the
+  published content address, and every ancestor through that boundary before a ledger transition
+  may cite them.
 
 ### Explicit boundaries
 

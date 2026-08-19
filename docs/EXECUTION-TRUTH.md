@@ -183,7 +183,10 @@ host filesystem actually provides. A transition never outruns the evidence it ci
 envelopes are stable-read and fsynced through the exact installed inode and containing directory;
 the ledger caller then fsyncs every remaining parent through its known durable run/root boundary.
 An idempotent identical evidence or authority bundle likewise fsyncs every exact inode and the
-complete directory chain before ledger append. Transition-obligation files stage in a private
+complete directory chain before ledger append. Content-addressed generation blobs and Coder/Tester
+review trees likewise require a caller-declared run boundary; they fsync exact files, internal tree
+directories, the published address, and every ancestor through that boundary before returning, and
+an identical retry re-verifies and re-syncs the existing address. Transition-obligation files stage in a private
 same-directory temporary and publish with a no-replace hard link, so a failed write cannot poison
 the canonical address. A surviving `.lock` file is treated as evidence of an interrupted append,
 not timed away: recovery requires proving no writer remains, preserving the lock bytes, verifying

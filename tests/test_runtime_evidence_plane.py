@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import factory_runtime.snapshot as snapshot_module
 from factory_core.build_plan import (
     BuildPlan,
     BuildStep,
@@ -57,6 +58,7 @@ from factory_core.provenance import (
     ProvenanceClaim,
 )
 from factory_core.target import load_target_manifest
+from factory_runtime.durability import DurabilityError
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
     DeterminismRecord,
@@ -66,7 +68,7 @@ from factory_runtime.evidence_plane import (
 )
 from factory_runtime.generation import GenerationPreparer, build_input_document
 from factory_runtime.schema import DocumentValidationError
-from factory_runtime.snapshot import freeze_tree, tree_digest
+from factory_runtime.snapshot import SnapshotError, freeze_tree, tree_digest
 from factory_runtime.state import RunState, RunStore
 from tests.conftest import (
     build_payload,
@@ -273,8 +275,16 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
     candidate_file.chmod(0o444)
     tests_file.chmod(0o444)
     review_root = root / "run-1" / "evidence" / "review-snapshots"
-    coder_snapshot = freeze_tree(coder_output, review_root)
-    tester_snapshot = freeze_tree(tester_output, review_root)
+    coder_snapshot = freeze_tree(
+        coder_output,
+        review_root,
+        durable_through=root / "run-1",
+    )
+    tester_snapshot = freeze_tree(
+        tester_output,
+        review_root,
+        durable_through=root / "run-1",
+    )
     assert tree_digest(coder_snapshot.files_directory / "artifact") == CANDIDATE
     assert tree_digest(tester_snapshot.files_directory / "tests") == TESTS
     store.transition(
@@ -292,6 +302,27 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
         implementer_identity="coder",
     )
     return store, artifacts
+
+
+def test_generation_publication_failure_cannot_reach_building_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_sync = snapshot_module.fsync_directory_chain
+
+    def fail_generation_sync(start: str | Path, *, through: str | Path) -> None:
+        if "evidence/generation" in Path(start).as_posix():
+            raise DurabilityError("injected generation publication failure")
+        real_sync(start, through=through)
+
+    monkeypatch.setattr(snapshot_module, "fsync_directory_chain", fail_generation_sync)
+
+    with pytest.raises(SnapshotError, match="injected generation publication failure"):
+        _ratified_run(tmp_path)
+
+    projection = RunStore(tmp_path).load("run-1")
+    assert projection.state is RunState.OPERATIONAL_MATURITY_RATIFIED
+    assert projection.build_attempt_count == 0
 
 
 def _claim(artifact: PhaseArtifact) -> ProvenanceClaim:
