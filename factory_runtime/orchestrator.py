@@ -43,7 +43,7 @@ from factory_runtime.test_change_authority import (
     TestChangeAuthorityError,
     verify_and_retain_test_change_authorization,
 )
-from factory_runtime.workflow import FactoryWorkflow
+from factory_runtime.workflow import FactoryWorkflow, WorkflowError
 
 BUILD_CHECKLIST = (
     "lane-isolation",
@@ -138,6 +138,8 @@ class FactoryOrchestrator:
         tester_identity: str,
         implementer_identity: str = "",
         verifier_identity: str = "",
+        candidate_digest: str = "",
+        tests_digest: str = "",
     ) -> None:
         """Make an internal refusal recoverable without exposing lane/test internals."""
 
@@ -148,6 +150,14 @@ class FactoryOrchestrator:
             run_id,
             RunState.BLOCKED,
             actor="validator",
+            artifact_digests=(
+                {
+                    "candidate": candidate_digest,
+                    "acceptance-tests": tests_digest,
+                }
+                if candidate_digest and tests_digest
+                else None
+            ),
             payload={
                 "reason": "orchestration-error",
                 "error_type": type(exc).__name__,
@@ -190,6 +200,7 @@ class FactoryOrchestrator:
         monitors: Sequence[Monitor] = (),
         monitor_declared_unit_count: int = 0,
         correction: CorrectionRecord | None = None,
+        repair_brief_path: str | Path | None = None,
         changed_existing_tests: Sequence[str] = (),
         test_change_authorization_path: str | Path | None = None,
         test_change_human_receipt_path: str | Path | None = None,
@@ -235,6 +246,28 @@ class FactoryOrchestrator:
             raise OrchestrationError(
                 "build requires ratified invariant documents or a recoverable blocked attempt"
             )
+        repair_brief_bytes: bytes | None = None
+        repair_artifacts: dict[str, str] = {}
+        if current.state == RunState.BLOCKED:
+            if repair_brief_path is None:
+                raise OrchestrationError("a blocked retry requires its signed repair brief")
+            try:
+                verified_repair = self.workflow.verify_recorded_repair_brief(
+                    run_id,
+                    envelope_path=repair_brief_path,
+                    validator_identity=verifier_identity,
+                    expected_attempt_id=attempt_id,
+                )
+                repair_envelope = verified_repair.envelope
+                repair_brief_bytes = verified_repair.content
+            except WorkflowError as exc:
+                raise OrchestrationError(str(exc)) from exc
+            repair_artifacts = {
+                "repair-brief": repair_envelope.payload_digest,
+                "repair-brief-envelope": repair_envelope.envelope_digest,
+            }
+        elif repair_brief_path is not None:
+            raise OrchestrationError("an initial build may not inject a repair brief")
         verifier = self.workflow.policy.principal(verifier_identity)
         if verifier is None or verifier.kind != "agent":
             raise OrchestrationError("Validator verifier identity is not an enrolled agent")
@@ -376,6 +409,7 @@ class FactoryOrchestrator:
             artifact_digests={
                 **prepared.artifact_digests,
                 "resume-checkpoint": resume.checkpoint_digest,
+                **repair_artifacts,
                 **catalog_activation_artifacts,
                 **test_change_artifacts,
             },
@@ -481,6 +515,7 @@ class FactoryOrchestrator:
                 review_snapshot_store=(
                     self.workflow.root / run_id / "evidence" / "review-snapshots"
                 ),
+                repair_brief_bytes=repair_brief_bytes,
                 before_validation=enter_validation,
             )
         except Exception as exc:
@@ -489,6 +524,8 @@ class FactoryOrchestrator:
                 exc=exc,
                 tester_identity=tester_identity,
                 implementer_identity=(implementer_identity if candidate_digest else ""),
+                candidate_digest=candidate_digest,
+                tests_digest=tests_digest,
             )
             raise
         if not execution.coder.succeeded or not execution.tester.succeeded:
@@ -620,6 +657,10 @@ class FactoryOrchestrator:
                     run_id,
                     RunState.BLOCKED,
                     actor="validator",
+                    artifact_digests={
+                        "candidate": candidate_digest,
+                        "acceptance-tests": tests_digest,
+                    },
                     payload={
                         "reason": "mechanical-evidence-gate-failed",
                         "repair_signal": "fail",
@@ -686,6 +727,8 @@ class FactoryOrchestrator:
                 tester_identity=tester_identity,
                 implementer_identity=implementer_identity,
                 verifier_identity=verifier_identity,
+                candidate_digest=candidate_digest,
+                tests_digest=tests_digest,
             )
             raise
         return BuildOutcome(

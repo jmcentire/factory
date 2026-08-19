@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -141,11 +142,20 @@ def _ratify_all(store: RunStore) -> None:
 
 
 def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
-    first_activation = not store.load("run-1").acceptance_obligation_catalog_digest
+    current = store.load("run-1")
+    first_activation = not current.acceptance_obligation_catalog_digest
     seed = f"attempt-{attempt}"
     artifacts = generation_artifacts(seed, include_acceptance_catalog=False)
     if first_activation:
         artifacts.update(acceptance_catalog_artifacts(store))
+    if current.state == RunState.BLOCKED:
+        retained = store.current_artifact_digests("run-1")
+        artifacts.update(
+            {
+                "repair-brief": retained["repair-brief"],
+                "repair-brief-envelope": retained["repair-brief-envelope"],
+            }
+        )
     store.transition(
         "run-1",
         RunState.BUILDING,
@@ -157,6 +167,30 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
             seed=seed,
             activate_catalog=first_activation,
         ),
+    )
+
+
+def _authorize_repair(store: RunStore, *, attempt: int) -> None:
+    current = store.load("run-1")
+    attempt_id = f"attempt-{attempt}-attempt-{attempt}"
+    brief = "sha256:" + hashlib.sha256(f"brief:{attempt}".encode()).hexdigest()
+    envelope = "sha256:" + hashlib.sha256(f"envelope:{attempt}".encode()).hexdigest()
+    store.transition(
+        "run-1",
+        RunState.BLOCKED,
+        actor="repair-supervisor",
+        artifact_digests={"repair-brief": brief, "repair-brief-envelope": envelope},
+        payload={
+            "reason": "repair-brief-recorded",
+            "predecessor_ledger_head": current.ledger_head,
+            "repair_brief_digest": brief,
+            "repair_brief_envelope_digest": envelope,
+            "repair_signal": "retry",
+            "authorized_attempt_id": attempt_id,
+            "failure_signature": f"failure-{attempt - 1}",
+            "authority_receipt_nonces": [],
+        },
+        verifier_identity="validator",
     )
 
 
@@ -444,6 +478,7 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
     assert first.build_attempt_count == 1
     assert first.build_attempt_limit == 2
 
+    _authorize_repair(store, attempt=2)
     with pytest.raises(RunStateError, match="cannot raise the attempt limit"):
         _start_build(store, attempt=2, limit=3)
 
@@ -454,8 +489,58 @@ def test_build_attempt_limit_is_monotone_and_mechanically_exhausted(tmp_path: Pa
     assert second.build_attempt_count == 2
     assert second.build_attempt_limit == 2
 
+    _authorize_repair(store, attempt=3)
     with pytest.raises(RunStateError, match="exceeds the authorized build attempt limit"):
         _start_build(store, attempt=3, limit=2)
+
+
+def test_blocked_retry_requires_the_immediately_preceding_repair_bytes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    store.transition(
+        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
+    )
+    _authorize_repair(store, attempt=2)
+    artifacts = generation_artifacts("attempt-2", include_acceptance_catalog=False)
+    retained = store.current_artifact_digests("run-1")
+    artifacts.update(
+        {
+            "repair-brief": "sha256:" + ("9" * 64),
+            "repair-brief-envelope": retained["repair-brief-envelope"],
+        }
+    )
+
+    with pytest.raises(RunStateError, match="repair-brief differs"):
+        store.transition(
+            "run-1",
+            RunState.BUILDING,
+            actor="validator",
+            artifact_digests=artifacts,
+            payload=build_payload(
+                attempt_number=2,
+                attempt_limit=2,
+                seed="attempt-2",
+                activate_catalog=False,
+            ),
+        )
+
+
+def test_one_failed_attempt_cannot_authorize_multiple_repair_briefs(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store, attempt=1, limit=2)
+    store.transition(
+        "run-1", RunState.BLOCKED, actor="validator", payload={"reason": "attempt-failed"}
+    )
+    _authorize_repair(store, attempt=2)
+
+    with pytest.raises(RunStateError, match="only one repair brief"):
+        _authorize_repair(store, attempt=3)
 
 
 def test_ratified_state_requires_the_corresponding_artifact(tmp_path: Path) -> None:

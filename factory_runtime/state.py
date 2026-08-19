@@ -46,6 +46,7 @@ LEGACY_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/1", "factory-run/2", "facto
 TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/3", RUN_SCHEMA_VERSION})
 GENERATION_RUN_SCHEMA_VERSIONS = frozenset({"factory-run/2", "factory-run/3", RUN_SCHEMA_VERSION})
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
@@ -151,6 +152,7 @@ ALLOWED_TRANSITIONS: Mapping[RunState, frozenset[RunState]] = {
     ),
     RunState.BLOCKED: frozenset(
         {
+            RunState.BLOCKED,
             RunState.BUILDING,
             RunState.SPECIFICATION_DEFECT,
         }
@@ -291,11 +293,17 @@ def _require_build_attempt(
     *,
     expected_attempt: int,
     context: str,
+    prior_attempt_ids: Collection[str] = (),
 ) -> int:
     """Make convergence a ledger predicate rather than an agent promise."""
 
+    attempt_id = payload.get("attempt_id")
     attempt_number = payload.get("attempt_number")
     attempt_limit = payload.get("attempt_limit")
+    if not isinstance(attempt_id, str) or not _ATTEMPT_ID.fullmatch(attempt_id):
+        raise RunStateError(f"{context} requires a canonical attempt_id")
+    if attempt_id in prior_attempt_ids:
+        raise RunStateError(f"{context} reuses build attempt id {attempt_id!r}")
     if (
         isinstance(attempt_number, bool)
         or not isinstance(attempt_number, int)
@@ -312,6 +320,55 @@ def _require_build_attempt(
             f"({attempt_number} > {attempt_limit})"
         )
     return attempt_limit
+
+
+def _require_repair_brief_event(
+    *,
+    supplied: Mapping[str, str],
+    payload: Mapping[str, Any],
+    predecessor_ledger_head: str,
+    verifier_identity: str,
+    prior_attempt_ids: Collection[str],
+    context: str,
+) -> str:
+    """Admit only the one typed same-state event used to authorize a blocked retry."""
+
+    required_artifacts = {"repair-brief", "repair-brief-envelope"}
+    if set(supplied) != required_artifacts:
+        raise RunStateError(
+            f"{context} requires exactly the signed repair brief artifact pair"
+        )
+    _require_digest_keys(supplied, tuple(sorted(required_artifacts)), context=context)
+    if payload.get("reason") != "repair-brief-recorded":
+        raise RunStateError(f"{context} requires reason 'repair-brief-recorded'")
+    if payload.get("repair_signal") != "retry":
+        raise RunStateError(f"{context} requires repair_signal 'retry'")
+    if payload.get("predecessor_ledger_head") != predecessor_ledger_head:
+        raise RunStateError(f"{context} does not bind its exact predecessor ledger head")
+    if payload.get("repair_brief_digest") != supplied["repair-brief"]:
+        raise RunStateError(f"{context} repair brief digest differs from its artifact binding")
+    if payload.get("repair_brief_envelope_digest") != supplied["repair-brief-envelope"]:
+        raise RunStateError(
+            f"{context} repair brief envelope differs from its artifact binding"
+        )
+    if not verifier_identity.strip():
+        raise RunStateError(f"{context} requires a Validator verifier identity")
+    authorized_attempt_id = payload.get("authorized_attempt_id")
+    if not isinstance(authorized_attempt_id, str) or not _ATTEMPT_ID.fullmatch(
+        authorized_attempt_id
+    ):
+        raise RunStateError(f"{context} requires a canonical authorized_attempt_id")
+    if authorized_attempt_id in prior_attempt_ids:
+        raise RunStateError(
+            f"{context} reuses prior build attempt id {authorized_attempt_id!r}"
+        )
+    failure_signature = payload.get("failure_signature")
+    if not isinstance(failure_signature, str) or not failure_signature.strip():
+        raise RunStateError(f"{context} requires a nonempty failure signature")
+    authority_nonces = payload.get("authority_receipt_nonces", [])
+    if authority_nonces != []:
+        raise RunStateError(f"{context} may not consume human authority receipts")
+    return authorized_attempt_id
 
 
 def _require_approval_identities(
@@ -387,6 +444,22 @@ def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
         if not isinstance(digests, Mapping):
             continue
         seen |= _receipt_digests_in(digests)
+    return seen
+
+
+def _recorded_build_attempt_ids(records: Iterable[Mapping[str, Any]]) -> set[str]:
+    """Return attempt identities already committed by BUILDING ledger entries."""
+
+    seen: set[str] = set()
+    for record in records:
+        if record.get("to_state") != RunState.BUILDING:
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        attempt_id = payload.get("attempt_id")
+        if isinstance(attempt_id, str) and attempt_id:
+            seen.add(attempt_id)
     return seen
 
 
@@ -750,6 +823,21 @@ class RunStore:
             raise RunStateError("latest run ledger entry has no artifact digest map")
         return dict(raw)
 
+    def build_attempt_ids(self, run_id: str) -> frozenset[str]:
+        """Return durable BUILDING attempt identities from one verified ledger snapshot."""
+
+        entries = self.verified_ledger_entries(run_id)
+        return frozenset(_recorded_build_attempt_ids(entries))
+
+    def verified_ledger_entries(self, run_id: str) -> tuple[Mapping[str, Any], ...]:
+        """Return one head-checked verified ledger snapshot for runtime authority consumers."""
+
+        projection = self.load(run_id)
+        entries = self._ledger(run_id).verified_entries()
+        if not entries or entries[-1].get("entry_hash") != projection.ledger_head:
+            raise RunStateError("run ledger changed while verified entries were being read")
+        return tuple(dict(entry) for entry in entries)
+
     def execution_authority_digests(self, run_id: str) -> Mapping[str, str]:
         """Return the unique Stage-E artifact bindings from one verified run snapshot.
 
@@ -877,9 +965,58 @@ class RunStore:
             )
         for key, value in supplied.items():
             _require_digest(value, f"artifact_digests[{key!r}]")
+        verified_entries = self._ledger(run_id).verified_entries()
+        if not verified_entries or verified_entries[-1].get("entry_hash") != current.ledger_head:
+            raise RunStateError("run changed while transition evidence was being read")
+        prior_attempt_ids = _recorded_build_attempt_ids(verified_entries)
         phases = dict(current.phase_artifact_digests)
         next_acceptance_catalog_digest = current.acceptance_obligation_catalog_digest
         transition_payload = dict(payload or {})
+        if source is RunState.BLOCKED and destination is RunState.BLOCKED:
+            predecessor = verified_entries[-1]
+            predecessor_payload = predecessor.get("payload")
+            if (
+                predecessor.get("from_state") == RunState.BLOCKED
+                and predecessor.get("to_state") == RunState.BLOCKED
+                and isinstance(predecessor_payload, Mapping)
+                and predecessor_payload.get("reason") == "repair-brief-recorded"
+            ):
+                raise RunStateError(
+                    "a blocked failure may authorize only one repair brief before retry"
+                )
+            _require_repair_brief_event(
+                supplied=supplied,
+                payload=transition_payload,
+                predecessor_ledger_head=current.ledger_head,
+                verifier_identity=verifier_identity,
+                prior_attempt_ids=prior_attempt_ids,
+                context="blocked repair-brief event",
+            )
+        elif source is RunState.BLOCKED and destination is RunState.BUILDING:
+            predecessor = verified_entries[-1]
+            predecessor_payload = predecessor.get("payload")
+            predecessor_artifacts = predecessor.get("artifact_digests")
+            if (
+                predecessor.get("from_state") != RunState.BLOCKED
+                or predecessor.get("to_state") != RunState.BLOCKED
+                or not isinstance(predecessor_payload, Mapping)
+                or not isinstance(predecessor_artifacts, Mapping)
+                or predecessor_payload.get("reason") != "repair-brief-recorded"
+            ):
+                raise RunStateError(
+                    "blocked retry requires an immediately preceding signed repair brief"
+                )
+            if transition_payload.get("attempt_id") != predecessor_payload.get(
+                "authorized_attempt_id"
+            ):
+                raise RunStateError(
+                    "blocked retry attempt_id differs from the signed repair brief"
+                )
+            for key in ("repair-brief", "repair-brief-envelope"):
+                if supplied.get(key) != predecessor_artifacts.get(key):
+                    raise RunStateError(
+                        f"blocked retry {key} differs from its immediately preceding authorization"
+                    )
         next_target_state_digest = current.target_state_digest
         next_target_state = dict(current.target_state)
         next_source_digest = current.source_digest
@@ -1115,6 +1252,7 @@ class RunStore:
                 transition_payload,
                 expected_attempt=current.build_attempt_count + 1,
                 context=str(destination),
+                prior_attempt_ids=prior_attempt_ids,
             )
             if current.build_attempt_limit and attempt_limit > current.build_attempt_limit:
                 raise RunStateError(
@@ -1266,6 +1404,8 @@ class RunStore:
         validation_evidence: dict[str, str] = {}
         build_attempt_count = 0
         build_attempt_limit = 0
+        build_attempt_ids: set[str] = set()
+        pending_repair_attempt_id = ""
         schema_version = ""
         created_at = 0
         updated_at = 0
@@ -1306,6 +1446,64 @@ class RunStore:
             payload_raw = record.get("payload")
             if not isinstance(payload_raw, Mapping):
                 raise RunStateError(f"ledger entry {index} has no payload object")
+            if index > 0 and source is RunState.BLOCKED and destination is RunState.BLOCKED:
+                if pending_repair_attempt_id:
+                    raise RunStateError(
+                        f"ledger entry {index} records a second repair brief before retry"
+                    )
+                allowed_repair_keys = {
+                    "repair-brief",
+                    "repair-brief-envelope",
+                    TRANSITION_OBLIGATION_SET_KEY,
+                    TRANSITION_OBLIGATION_REPORT_KEY,
+                    "target",
+                    "target-state",
+                    "source",
+                    "phase_artifacts",
+                    "generation_artifacts",
+                    ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY,
+                }
+                unexpected_repair_keys = sorted(set(digests) - allowed_repair_keys)
+                if unexpected_repair_keys:
+                    raise RunStateError(
+                        f"ledger entry {index} repair event has unexpected artifact keys: "
+                        + ", ".join(unexpected_repair_keys)
+                    )
+                pending_repair_attempt_id = _require_repair_brief_event(
+                    supplied={
+                        "repair-brief": str(digests.get("repair-brief", "")),
+                        "repair-brief-envelope": str(
+                            digests.get("repair-brief-envelope", "")
+                        ),
+                    },
+                    payload=payload_raw,
+                    predecessor_ledger_head=str(record.get("prev_hash", "")),
+                    verifier_identity=str(record.get("verifier_identity", "")),
+                    prior_attempt_ids=build_attempt_ids,
+                    context=f"ledger entry {index} blocked repair-brief event",
+                )
+            elif index > 0 and source is RunState.BLOCKED and destination is RunState.BUILDING:
+                if not pending_repair_attempt_id:
+                    raise RunStateError(
+                        f"ledger entry {index} blocked retry has no signed repair brief"
+                    )
+                if payload_raw.get("attempt_id") != pending_repair_attempt_id:
+                    raise RunStateError(
+                        f"ledger entry {index} attempt_id differs from the signed repair brief"
+                    )
+                prior_digests = entries[index - 1].get("artifact_digests")
+                if not isinstance(prior_digests, Mapping):
+                    raise RunStateError(
+                        f"ledger entry {index} repair predecessor has no artifact bindings"
+                    )
+                for key in ("repair-brief", "repair-brief-envelope"):
+                    if digests.get(key) != prior_digests.get(key):
+                        raise RunStateError(
+                            f"ledger entry {index} {key} differs from its repair authorization"
+                        )
+                pending_repair_attempt_id = ""
+            elif index > 0:
+                pending_repair_attempt_id = ""
             stamp = _as_int(record.get("created_at"))
             if stamp <= 0:
                 raise RunStateError(f"ledger entry {index} has no valid created_at")
@@ -1536,6 +1734,7 @@ class RunStore:
                         payload_raw,
                         expected_attempt=build_attempt_count + 1,
                         context=f"ledger entry {index} building",
+                        prior_attempt_ids=build_attempt_ids,
                     )
                     if build_attempt_limit and candidate_limit > build_attempt_limit:
                         raise RunStateError(f"ledger entry {index} raises the build attempt limit")
@@ -1545,6 +1744,7 @@ class RunStore:
                         else candidate_limit
                     )
                     build_attempt_count += 1
+                    build_attempt_ids.add(str(payload_raw["attempt_id"]))
                 elif destination is RunState.SPECIFICATION_DEFECT or derived_phase_key:
                     generation_artifacts = {}
                     if destination is RunState.SPECIFICATION_DEFECT:

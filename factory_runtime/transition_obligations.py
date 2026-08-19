@@ -197,6 +197,7 @@ _ALLOWED_TRIGGER_PAIRS = frozenset(
         ("specification-defect", "architecture-ratified"),
         ("specification-defect", "operational-maturity-ratified"),
         ("blocked", "building"),
+        ("blocked", "blocked"),
         ("blocked", "specification-defect"),
     }
 )

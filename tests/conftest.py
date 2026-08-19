@@ -99,6 +99,7 @@ def build_payload(
     """First-build payload including the two stand-in catalog-ratification nonces."""
 
     payload: dict[str, Any] = {
+        "attempt_id": f"{seed}-attempt-{attempt_number}",
         "attempt_number": attempt_number,
         "attempt_limit": attempt_limit,
         "resume_checkpoint_id": f"{seed}-checkpoint",

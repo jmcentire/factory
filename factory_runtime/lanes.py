@@ -122,6 +122,7 @@ class IsolatedBuildLoop:
         pattern_catalog_path: str | Path | None = None,
         acceptance_catalog_path: str | Path | None = None,
         review_snapshot_store: str | Path | None = None,
+        repair_brief_bytes: bytes | None = None,
         before_validation: Callable[[LaneExecution, LaneExecution, FrozenTree, FrozenTree], None]
         | None = None,
     ) -> ValidationExecution:
@@ -156,6 +157,7 @@ class IsolatedBuildLoop:
             input_bytes,
             plan_bytes=plan_bytes,
             catalog_bytes=catalog_bytes,
+            repair_brief_bytes=repair_brief_bytes,
         )
         tester = self._prepare_lane(
             LaneRole.TESTER,
@@ -233,6 +235,7 @@ class IsolatedBuildLoop:
         plan_bytes: bytes | None = None,
         catalog_bytes: bytes | None = None,
         acceptance_catalog_bytes: bytes | None = None,
+        repair_brief_bytes: bytes | None = None,
     ) -> Path:
         lane = self.root / role
         (lane / "input").mkdir(parents=True)
@@ -243,6 +246,10 @@ class IsolatedBuildLoop:
         if role is LaneRole.CODER and plan_bytes is not None and catalog_bytes is not None:
             (lane / "input" / "build-plan.json").write_bytes(plan_bytes)
             (lane / "input" / "pattern-catalog.json").write_bytes(catalog_bytes)
+            if repair_brief_bytes is not None:
+                (lane / "input" / "repair-brief.tessera.json").write_bytes(
+                    repair_brief_bytes
+                )
         if role is LaneRole.TESTER and acceptance_catalog_bytes is not None:
             (lane / "input" / "acceptance-obligation-catalog.json").write_bytes(
                 acceptance_catalog_bytes
@@ -283,6 +290,17 @@ class IsolatedBuildLoop:
                         "FACTORY_PATTERN_CATALOG_SOURCE_DIGEST": digest_bytes(catalog.read_bytes()),
                     }
                 )
+                repair_brief = lane / "input" / "repair-brief.tessera.json"
+                if repair_brief.is_file():
+                    readable_paths = (*readable_paths, repair_brief)
+                    environment.update(
+                        {
+                            "FACTORY_REPAIR_BRIEF_PATH": str(repair_brief),
+                            "FACTORY_REPAIR_BRIEF_ENVELOPE_DIGEST": digest_bytes(
+                                repair_brief.read_bytes()
+                            ),
+                        }
+                    )
         elif role is LaneRole.TESTER:
             acceptance_catalog = lane / "input" / "acceptance-obligation-catalog.json"
             if acceptance_catalog.is_file():

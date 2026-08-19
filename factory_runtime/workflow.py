@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -22,7 +23,7 @@ from factory_core.manifest import (
     digest_bytes,
     digest_obj,
 )
-from factory_core.provenance import PhaseArtifact
+from factory_core.provenance import REQUIRED_PHASES, IntentBackreference, PhaseArtifact
 from factory_core.target import TargetManifestError, load_target_manifest
 from factory_runtime.authority import (
     AuthorityPolicy,
@@ -39,7 +40,9 @@ from factory_runtime.target_state import (
     normalize_subpath,
     verify_target_state,
 )
-from factory_runtime.tessera import TesseraCli, VerifiedEnvelope
+from factory_runtime.tessera import TesseraCli, TesseraVerificationError, VerifiedEnvelope
+
+_MAX_REPAIR_BRIEF_BYTES = 65_536
 
 _PHASE_ACTIONS: Mapping[str, tuple[str, RunState]] = {
     "product-specification": (
@@ -71,6 +74,14 @@ class StoredRatification:
     validator_receipt: VerifiedReceipt
     directory: Path
     projection: RunProjection
+
+
+@dataclass(frozen=True)
+class VerifiedRepairBrief:
+    """A repair envelope plus the exact bytes verified from its retained path."""
+
+    envelope: VerifiedEnvelope
+    content: bytes
 
 
 def _read_json_object(path: str | Path) -> tuple[dict[str, Any], bytes]:
@@ -132,15 +143,65 @@ def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
 def _verified_envelope_bytes(receipt: VerifiedReceipt) -> bytes:
     """Read the exact verified envelope and refuse a verify-to-copy swap."""
 
-    if receipt.envelope.path.is_symlink():
+    return _verified_tessera_bytes(receipt.envelope)
+
+
+def _verified_tessera_bytes(envelope: VerifiedEnvelope) -> bytes:
+    """Read exact already-verified Tessera bytes and refuse a verify-to-copy swap."""
+
+    if envelope.path.is_symlink():
         raise WorkflowError("verified receipt envelope may not be a symlink")
     try:
-        content = receipt.envelope.path.read_bytes()
+        content = envelope.path.read_bytes()
     except OSError as exc:
         raise WorkflowError(f"verified receipt envelope became unreadable: {exc}") from exc
-    if digest_bytes(content) != receipt.envelope.envelope_digest:
+    if digest_bytes(content) != envelope.envelope_digest:
         raise WorkflowError("verified receipt envelope changed before evidence persistence")
     return content
+
+
+def _retained_intent_backreferences(
+    root: Path,
+    run_id: str,
+    phase_artifact_digests: Mapping[str, str],
+) -> frozenset[IntentBackreference]:
+    """Resolve exact canonical intent pointers from the run-retained phase artifacts."""
+
+    if set(phase_artifact_digests) != set(REQUIRED_PHASES):
+        raise WorkflowError("repair brief requires the exact three ratified phase artifacts")
+    resolved: set[IntentBackreference] = set()
+    for phase in REQUIRED_PHASES:
+        expected_digest = str(phase_artifact_digests[phase])
+        path = (
+            root
+            / run_id
+            / "evidence"
+            / phase
+            / expected_digest.removeprefix("sha256:")
+            / "artifact.json"
+        )
+        raw, _ = _read_json_object(path)
+        try:
+            validate_document("phase-artifact", raw)
+        except DocumentValidationError as exc:
+            raise WorkflowError(str(exc)) from exc
+        artifact = PhaseArtifact.from_dict(raw)
+        if artifact.phase != phase or artifact.content_digest != expected_digest:
+            raise WorkflowError(f"retained {phase} artifact differs from the run ledger")
+        resolved.update(artifact.backreference(item) for item in artifact.items)
+    return frozenset(resolved)
+
+
+def _latest_build_attempt_id(entries: tuple[Mapping[str, Any], ...]) -> str:
+    for entry in reversed(entries):
+        if entry.get("to_state") != RunState.BUILDING:
+            continue
+        payload = entry.get("payload")
+        if isinstance(payload, Mapping):
+            attempt_id = str(payload.get("attempt_id", ""))
+            if attempt_id:
+                return attempt_id
+    return ""
 
 
 def _segregation_policy(policy: AuthorityPolicy) -> SegregationPolicy:
@@ -470,7 +531,7 @@ class FactoryWorkflow:
         """
 
         current = self.store.load(run_id)
-        if current.state is not RunState.BLOCKED:
+        if current.state != RunState.BLOCKED:
             raise WorkflowError("repair brief requires a blocked run")
         if current.ledger_head != expected_ledger_head:
             raise WorkflowError("repair brief predecessor ledger head changed")
@@ -484,16 +545,59 @@ class FactoryWorkflow:
         if envelope.payload_digest != brief_digest:
             raise WorkflowError("repair brief envelope binds a different document")
         payload = envelope.payload
+        try:
+            validate_document("repair-brief", payload)
+        except DocumentValidationError as exc:
+            raise WorkflowError(str(exc)) from exc
+        if digest_obj(dict(payload)) != brief_digest:
+            raise WorkflowError("repair brief digest does not re-derive from its payload")
         if payload.get("run_id") != run_id:
             raise WorkflowError("repair brief belongs to a different run")
         if payload.get("predecessor_ledger_head") != expected_ledger_head:
             raise WorkflowError("repair brief does not bind the blocked ledger head")
         if payload.get("phase_artifact_digests") != dict(current.phase_artifact_digests):
             raise WorkflowError("repair brief changes or omits ratified phase authority")
+        current_artifacts = self.store.current_artifact_digests(run_id)
+        for payload_key, artifact_key in (
+            ("candidate_digest", "candidate"),
+            ("oracle_digest", "acceptance-tests"),
+        ):
+            retained = str(current_artifacts.get(artifact_key, ""))
+            if not retained:
+                raise WorkflowError(
+                    "repair brief requires a retained candidate and acceptance-test subject"
+                )
+            if payload.get(payload_key) != retained:
+                raise WorkflowError(
+                    f"repair brief {payload_key} differs from the blocked attempt ledger"
+                )
+        entries = self.store.verified_ledger_entries(run_id)
+        if payload.get("failed_attempt_id") != _latest_build_attempt_id(entries):
+            raise WorkflowError("repair brief does not name the causal build attempt")
+        raw_references = payload.get("intent_backreferences")
+        if not isinstance(raw_references, list):
+            raise WorkflowError("repair brief intent_backreferences must be an array")
+        references = tuple(
+            IntentBackreference.from_dict(item)
+            for item in raw_references
+            if isinstance(item, Mapping)
+        )
+        if len(references) != len(raw_references) or len(references) != len(set(references)):
+            raise WorkflowError("repair brief intent backreferences are malformed or repeated")
+        resolved = _retained_intent_backreferences(
+            self.root,
+            run_id,
+            current.phase_artifact_digests,
+        )
+        unresolved = [reference for reference in references if reference not in resolved]
+        if unresolved:
+            raise WorkflowError("repair brief contains an unresolved intent backreference")
+        if payload.get("authorized_attempt_id") in self.store.build_attempt_ids(run_id):
+            raise WorkflowError("repair brief authorizes a previously committed attempt id")
 
         directory = self.root / run_id / "evidence" / "repair-briefs"
         stem = envelope.payload_digest.removeprefix("sha256:")
-        _write_once(directory / f"{stem}.tessera.json", envelope.path.read_bytes())
+        _write_once(directory / f"{stem}.tessera.json", _verified_tessera_bytes(envelope))
         return self.store.transition(
             run_id,
             RunState.BLOCKED,
@@ -508,9 +612,127 @@ class FactoryWorkflow:
                 "repair_brief_digest": brief_digest,
                 "repair_brief_envelope_digest": envelope.envelope_digest,
                 "repair_signal": "retry",
+                "authorized_attempt_id": payload["authorized_attempt_id"],
+                "failure_signature": payload["failure_signature"],
+                "authority_receipt_nonces": [],
             },
             verifier_identity=validator_identity,
         )
+
+    def verify_recorded_repair_brief(
+        self,
+        run_id: str,
+        *,
+        envelope_path: str | Path,
+        validator_identity: str,
+        expected_attempt_id: str,
+    ) -> VerifiedRepairBrief:
+        """Verify the exact latest repair event before its Coder-visible retry executes."""
+
+        path = Path(envelope_path)
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise WorkflowError(f"recorded repair brief is unreadable: {exc}") from exc
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_REPAIR_BRIEF_BYTES:
+            raise WorkflowError("recorded repair brief is not regular or exceeds its byte ceiling")
+        current = self.store.load(run_id)
+        if current.state != RunState.BLOCKED:
+            raise WorkflowError("recorded repair brief requires a blocked run")
+        principal = self.policy.principal(validator_identity)
+        if principal is None or principal.kind != "agent":
+            raise WorkflowError("repair brief verifier must be an enrolled Validator agent")
+        try:
+            envelope = self.tessera.verify_json(
+                path,
+                trusted_public_keys=(principal.public_key,),
+                expected_kind="factory-repair-brief",
+            )
+            validate_document("repair-brief", envelope.payload)
+        except (TesseraVerificationError, DocumentValidationError) as exc:
+            raise WorkflowError(str(exc)) from exc
+        exact_bytes = _verified_tessera_bytes(envelope)
+        if len(exact_bytes) > _MAX_REPAIR_BRIEF_BYTES:
+            raise WorkflowError("recorded repair brief exceeds its byte ceiling")
+        canonical = (
+            self.root
+            / run_id
+            / "evidence"
+            / "repair-briefs"
+            / f"{envelope.payload_digest.removeprefix('sha256:')}.tessera.json"
+        )
+        try:
+            if path.resolve(strict=True) != canonical.resolve(strict=True):
+                raise WorkflowError("repair brief path is not the retained canonical evidence")
+        except OSError as exc:
+            raise WorkflowError(f"repair brief canonical path is unreadable: {exc}") from exc
+
+        entries = self.store.verified_ledger_entries(run_id)
+        if len(entries) < 2:
+            raise WorkflowError("recorded repair brief has no causal blocked predecessor")
+        event = entries[-1]
+        predecessor = entries[-2]
+        event_payload = event.get("payload")
+        event_artifacts = event.get("artifact_digests")
+        predecessor_artifacts = predecessor.get("artifact_digests")
+        if not isinstance(event_payload, Mapping) or not isinstance(event_artifacts, Mapping):
+            raise WorkflowError("recorded repair event is structurally incomplete")
+        if not isinstance(predecessor_artifacts, Mapping):
+            raise WorkflowError("recorded repair predecessor has no artifact bindings")
+        if (
+            event.get("from_state") != RunState.BLOCKED
+            or event.get("to_state") != RunState.BLOCKED
+            or event_payload.get("reason") != "repair-brief-recorded"
+        ):
+            raise WorkflowError("latest ledger event is not a repair-brief authorization")
+        if event_payload.get("predecessor_ledger_head") != predecessor.get("entry_hash"):
+            raise WorkflowError("recorded repair event does not bind its causal predecessor")
+        if event_artifacts.get("repair-brief") != envelope.payload_digest:
+            raise WorkflowError("recorded repair event binds a different brief payload")
+        if event_artifacts.get("repair-brief-envelope") != envelope.envelope_digest:
+            raise WorkflowError("recorded repair event binds different signed bytes")
+        payload = envelope.payload
+        if payload.get("run_id") != run_id:
+            raise WorkflowError("recorded repair brief belongs to another run")
+        if payload.get("predecessor_ledger_head") != predecessor.get("entry_hash"):
+            raise WorkflowError("recorded repair brief does not bind its blocked predecessor")
+        if payload.get("phase_artifact_digests") != dict(current.phase_artifact_digests):
+            raise WorkflowError("recorded repair brief differs from current phase authority")
+        if payload.get("failed_attempt_id") != _latest_build_attempt_id(entries[:-1]):
+            raise WorkflowError("recorded repair brief does not name the causal build attempt")
+        if payload.get("authorized_attempt_id") != expected_attempt_id:
+            raise WorkflowError("recorded repair brief authorizes a different next attempt")
+        if event_payload.get("authorized_attempt_id") != payload.get("authorized_attempt_id"):
+            raise WorkflowError("recorded repair event authorizes a different next attempt")
+        if event_payload.get("failure_signature") != payload.get("failure_signature"):
+            raise WorkflowError("recorded repair event binds a different failure signature")
+        for payload_key, artifact_key in (
+            ("candidate_digest", "candidate"),
+            ("oracle_digest", "acceptance-tests"),
+        ):
+            if payload.get(payload_key) != predecessor_artifacts.get(artifact_key):
+                raise WorkflowError(
+                    f"recorded repair brief {payload_key} differs from its failed subject"
+                )
+        raw_references = payload.get("intent_backreferences")
+        reference_items = raw_references if isinstance(raw_references, list) else []
+        references = tuple(
+            IntentBackreference.from_dict(item)
+            for item in reference_items
+            if isinstance(item, Mapping)
+        )
+        if not isinstance(raw_references, list) or len(references) != len(raw_references):
+            raise WorkflowError("recorded repair brief intent backreferences are malformed")
+        resolved = _retained_intent_backreferences(
+            self.root,
+            run_id,
+            current.phase_artifact_digests,
+        )
+        if len(references) != len(set(references)) or any(
+            reference not in resolved for reference in references
+        ):
+            raise WorkflowError("recorded repair brief has repeated or unresolved authority")
+        return VerifiedRepairBrief(envelope=envelope, content=exact_bytes)
 
     def ratify_phase(
         self,

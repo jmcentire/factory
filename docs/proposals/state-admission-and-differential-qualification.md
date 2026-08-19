@@ -1,6 +1,6 @@
 # State admission and differential qualification
 
-> Status: implemented Factory slice, pending release. This document does not grant
+> Status: implemented Factory slice, released in v0.3.0. This document does not grant
 > authority and does not weaken any ratified Factory invariant.
 
 ## Outcome

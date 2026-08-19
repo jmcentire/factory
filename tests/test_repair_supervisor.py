@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from factory_core.provenance import IntentBackreference
 from factory_runtime.repair import (
     RepairBrief,
     RepairCampaignBlocked,
@@ -10,12 +13,20 @@ from factory_runtime.repair import (
     RepairSupervisor,
     RepairSupervisorError,
 )
+from factory_runtime.workflow import WorkflowError
 
 
 def _brief() -> RepairBrief:
+    reference = IntentBackreference(
+        artifact_id="architecture",
+        artifact_digest="sha256:" + ("c" * 64),
+        item_id="target-binding",
+        intent_digest="sha256:" + ("1" * 64),
+    )
     return RepairBrief(
         run_id="run-1",
         failed_attempt_id="attempt-1",
+        authorized_attempt_id="attempt-2",
         predecessor_ledger_head="sha256:" + ("a" * 64),
         phase_artifact_digests={
             "product-specification": "sha256:" + ("b" * 64),
@@ -30,7 +41,7 @@ def _brief() -> RepairBrief:
                 "Persist explicit selection in the session control state.",
                 "Bind each accepted turn to that selection before dispatch.",
             ),
-            requirement_ids=("architecture:target-binding",),
+            intent_backreferences=(reference,),
             failure_signature="target-binding-missing",
         ),
     )
@@ -43,8 +54,12 @@ def test_repair_brief_is_derived_from_existing_authority_and_coder_safe() -> Non
 
     assert document["schema_version"] == "factory-repair-brief/1"
     assert document["predecessor_ledger_head"] == brief.predecessor_ledger_head
+    assert document["authorized_attempt_id"] == "attempt-2"
     assert document["phase_artifact_digests"] == dict(brief.phase_artifact_digests)
     assert document["actions"] == list(brief.plan.actions)
+    assert document["intent_backreferences"] == [
+        brief.plan.intent_backreferences[0].to_dict()
+    ]
     assert brief.digest.startswith("sha256:")
 
 
@@ -76,9 +91,13 @@ def test_repair_brief_refuses_structured_tester_oracle_leakage() -> None:
 
 def test_repair_campaign_block_is_not_a_coder_retry() -> None:
     class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
         def load(self, _run_id):
             from types import SimpleNamespace
             return SimpleNamespace(
+                run_id="run-1",
                 state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.BLOCKED,
                 ledger_head="sha256:" + "a" * 64,
                 phase_artifact_digests={
@@ -119,9 +138,13 @@ def test_repair_campaign_block_is_not_a_coder_retry() -> None:
 
 def test_pre_author_lane_launch_fault_never_mints_empty_digest_repair_brief() -> None:
     class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
         def load(self, _run_id):
             from types import SimpleNamespace
             return SimpleNamespace(
+                run_id="run-1",
                 state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.BLOCKED,
                 ledger_head="sha256:" + "a" * 64,
                 phase_artifact_digests={
@@ -159,10 +182,14 @@ def test_pre_author_lane_launch_fault_never_mints_empty_digest_repair_brief() ->
 
 def test_exhausted_single_attempt_campaign_does_not_mint_an_unlaunchable_brief() -> None:
     class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
         def load(self, _run_id):
             from types import SimpleNamespace
 
             return SimpleNamespace(
+                run_id="run-1",
                 state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.BLOCKED,
                 ledger_head="sha256:" + "a" * 64,
                 phase_artifact_digests={},
@@ -201,9 +228,13 @@ def test_exhausted_single_attempt_campaign_does_not_mint_an_unlaunchable_brief()
 
 def test_validator_retries_its_own_launch_configuration_without_coder_budget() -> None:
     class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
         def load(self, _run_id):
             from types import SimpleNamespace
             return SimpleNamespace(
+                run_id="run-1",
                 state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.PREVIEW,
                 ledger_head="sha256:" + "a" * 64,
                 phase_artifact_digests={},
@@ -246,8 +277,159 @@ def test_validator_retries_its_own_launch_configuration_without_coder_budget() -
         ),
     )
 
-    assert calls == ["attempt-1", "attempt-2"]
+    assert calls == ["attempt-1", "attempt-1"]
     assert repairs == [("attempt-1", "configured-coding-agent-mismatch")]
     assert result.attempts_run == 2
     assert result.repair_brief_paths == ()
     assert result.terminal_reason == "preview"
+
+
+def test_validator_launch_repair_cannot_relaunch_an_admitted_attempt() -> None:
+    class Store:
+        admitted = False
+
+        def build_attempt_ids(self, _run_id):
+            return frozenset({"attempt-1"}) if self.admitted else frozenset()
+
+        def load(self, _run_id):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                run_id="run-1",
+                state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.BLOCKED,
+                ledger_head="sha256:" + "a" * 64,
+                phase_artifact_digests={},
+            )
+
+    store = Store()
+
+    class Workflow:
+        pass
+
+    workflow = Workflow()
+    workflow.store = store
+    supervisor = RepairSupervisor(
+        workflow,  # type: ignore[arg-type]
+        validator_identity="validator",
+        validator_key_path="unused",
+        policy=RepairPolicy(
+            max_attempts=1, max_elapsed_seconds=60, max_validator_launch_repairs=1
+        ),
+    )
+    launch_repair_called = False
+
+    def run_attempt(_attempt_id, _brief):
+        store.admitted = True
+        raise RepairCampaignBlocked("late-launch-failure", validator_retriable=True)
+
+    def repair_launch(_attempt_id, _reason):
+        nonlocal launch_repair_called
+        launch_repair_called = True
+        return True
+
+    result = supervisor.run(
+        "run-1",
+        initial_attempt_id="attempt-1",
+        next_attempt_id=lambda index: f"attempt-{index}",
+        attempt_runner=run_attempt,
+        validator_diagnose=lambda *_args, **_kwargs: pytest.fail(
+            "admitted launch failure must not diagnose Coder"
+        ),
+        validator_repair_launch_failure=repair_launch,
+    )
+
+    assert result.terminal_reason == (
+        "infrastructure-blocked:launch-failure-after-attempt-admission"
+    )
+    assert launch_repair_called is False
+
+
+def test_retry_attempt_id_must_be_fresh_before_any_brief_is_recorded() -> None:
+    from types import SimpleNamespace
+
+    projection = SimpleNamespace(
+        run_id="run-1",
+        state=__import__("factory_runtime.state", fromlist=["RunState"]).RunState.BLOCKED,
+        ledger_head="sha256:" + "a" * 64,
+        phase_artifact_digests={
+            "product-specification": "sha256:" + "b" * 64,
+            "architecture": "sha256:" + "c" * 64,
+            "operational-maturity": "sha256:" + "d" * 64,
+        },
+    )
+
+    class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
+        def load(self, _run_id):
+            return projection
+
+        def current_artifact_digests(self, _run_id):
+            return {
+                "candidate": "sha256:" + "e" * 64,
+                "acceptance-tests": "sha256:" + "f" * 64,
+            }
+
+    class Workflow:
+        store = Store()
+
+    supervisor = RepairSupervisor(
+        Workflow(),  # type: ignore[arg-type]
+        validator_identity="validator",
+        validator_key_path="unused",
+        policy=RepairPolicy(max_attempts=2, max_elapsed_seconds=60),
+    )
+    outcome = SimpleNamespace(
+        passed=False,
+        projection=projection,
+        candidate_digest="sha256:" + "e" * 64,
+        tests_digest="sha256:" + "f" * 64,
+    )
+
+    with pytest.raises(RepairSupervisorError, match="must be fresh"):
+        supervisor.run(
+            "run-1",
+            initial_attempt_id="attempt-1",
+            next_attempt_id=lambda _index: "attempt-1",
+            attempt_runner=lambda _attempt_id, _brief: outcome,
+            validator_diagnose=lambda *_args, **_kwargs: _brief().plan,
+        )
+
+
+def test_initial_repair_brief_must_be_verified_before_attempt_runner(
+    tmp_path: Path,
+) -> None:
+    class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
+    class Workflow:
+        store = Store()
+
+        def verify_recorded_repair_brief(self, *_args, **_kwargs):
+            raise WorkflowError("Tessera refused unsigned repair brief")
+
+    supervisor = RepairSupervisor(
+        Workflow(),  # type: ignore[arg-type]
+        validator_identity="validator",
+        validator_key_path="unused",
+        policy=RepairPolicy(max_attempts=1, max_elapsed_seconds=60),
+    )
+    called = False
+
+    def run_attempt(_attempt_id, _brief):
+        nonlocal called
+        called = True
+        raise AssertionError("unverified brief reached attempt runner")
+
+    with pytest.raises(RepairSupervisorError, match="unsigned"):
+        supervisor.run(
+            "run-1",
+            initial_attempt_id="attempt-2",
+            next_attempt_id=lambda _index: "attempt-3",
+            attempt_runner=run_attempt,
+            validator_diagnose=lambda *_args, **_kwargs: _brief().plan,
+            initial_repair_brief_path=tmp_path / "unsigned.json",
+        )
+    assert called is False

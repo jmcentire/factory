@@ -8,6 +8,7 @@ artifacts.  New requirements are never a retry outcome.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -16,12 +17,15 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from factory_core.manifest import digest_obj
+from factory_core.provenance import IntentBackreference
 from factory_runtime.orchestrator import BuildOutcome
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState
-from factory_runtime.workflow import FactoryWorkflow
+from factory_runtime.workflow import FactoryWorkflow, WorkflowError
 
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MAX_REPAIR_BRIEF_BYTES = 65_536
+_MAX_REPAIR_PAYLOAD_BYTES = 24_576
 _FORBIDDEN_BRIEF_KEYS = frozenset(
     {
         "test_name",
@@ -123,7 +127,7 @@ class RepairPlan:
 
     summary: str
     actions: tuple[str, ...]
-    requirement_ids: tuple[str, ...]
+    intent_backreferences: tuple[IntentBackreference, ...]
     failure_signature: str
 
     def __post_init__(self) -> None:
@@ -131,8 +135,10 @@ class RepairPlan:
             raise ValueError("repair plan summary is required")
         if not self.actions or not all(action.strip() for action in self.actions):
             raise ValueError("repair plan requires at least one ordered action")
-        if not self.requirement_ids or not all(item.strip() for item in self.requirement_ids):
-            raise ValueError("repair plan requires existing requirement references")
+        if not self.intent_backreferences:
+            raise ValueError("repair plan requires exact intent backreferences")
+        if len(self.intent_backreferences) != len(set(self.intent_backreferences)):
+            raise ValueError("repair plan repeats an intent backreference")
         if not self.failure_signature.strip():
             raise ValueError("repair plan requires a stable failure signature")
 
@@ -143,6 +149,7 @@ class RepairBrief:
 
     run_id: str
     failed_attempt_id: str
+    authorized_attempt_id: str
     predecessor_ledger_head: str
     phase_artifact_digests: Mapping[str, str]
     candidate_digest: str
@@ -154,13 +161,16 @@ class RepairBrief:
             "schema_version": "factory-repair-brief/1",
             "run_id": self.run_id,
             "failed_attempt_id": self.failed_attempt_id,
+            "authorized_attempt_id": self.authorized_attempt_id,
             "predecessor_ledger_head": self.predecessor_ledger_head,
             "phase_artifact_digests": dict(self.phase_artifact_digests),
             "candidate_digest": self.candidate_digest,
             "oracle_digest": self.oracle_digest,
             "summary": self.plan.summary,
             "actions": list(self.plan.actions),
-            "requirement_ids": list(self.plan.requirement_ids),
+            "intent_backreferences": [
+                reference.to_dict() for reference in self.plan.intent_backreferences
+            ],
             "failure_signature": self.plan.failure_signature,
         }
         _assert_coder_safe(document)
@@ -168,6 +178,10 @@ class RepairBrief:
             validate_document("repair-brief", document)
         except DocumentValidationError as exc:
             raise RepairSupervisorError(str(exc)) from exc
+        if len(json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")) > (
+            _MAX_REPAIR_PAYLOAD_BYTES
+        ):
+            raise RepairSupervisorError("repair brief payload exceeds its byte ceiling")
         return document
 
     @property
@@ -228,8 +242,6 @@ class RepairSupervisor:
         validator_escalate: RepairPlanner | None = None,
         validator_repair_launch_failure: ValidatorLaunchRepairer | None = None,
         initial_repair_brief_path: Path | None = None,
-        initial_failure_signature: str | None = None,
-        initial_failure_signatures: Sequence[str] = (),
     ) -> RepairCampaignResult:
         """Run fresh attempts until preview, a human gate, or the explicit budget.
 
@@ -241,26 +253,30 @@ class RepairSupervisor:
         if not _ATTEMPT_ID.fullmatch(initial_attempt_id):
             raise RepairSupervisorError("initial attempt id is invalid")
         started = self.clock()
-        has_initial_signatures = bool(initial_failure_signature or initial_failure_signatures)
-        if (initial_repair_brief_path is None) != (not has_initial_signatures):
-            raise RepairSupervisorError(
-                "an initial repair brief and normalized failure signature(s) must be "
-                "supplied together"
-            )
-        if initial_repair_brief_path is not None and not initial_repair_brief_path.is_file():
-            raise RepairSupervisorError("initial repair brief path does not exist")
-        if any(not signature.strip() for signature in initial_failure_signatures):
-            raise RepairSupervisorError("initial failure signatures must not be empty")
-
+        recorded_attempt_ids = set(self.workflow.store.build_attempt_ids(run_id))
+        if initial_attempt_id in recorded_attempt_ids:
+            raise RepairSupervisorError("initial attempt id was already committed by this run")
         attempt_id = initial_attempt_id
-        brief_path = initial_repair_brief_path
-        briefs: list[Path] = [initial_repair_brief_path] if initial_repair_brief_path else []
+        brief_path: Path | None = None
+        briefs: list[Path] = []
         # A campaign may begin after a previously blocked attempt has already
         # received a Validator diagnosis.  Seed the normalized cluster so the
         # first fresh attempt cannot silently re-run the same diagnosis forever.
-        signatures = set(initial_failure_signatures)
-        if initial_failure_signature:
-            signatures.add(initial_failure_signature)
+        signatures: set[str] = set()
+        if initial_repair_brief_path is not None:
+            try:
+                verified = self.workflow.verify_recorded_repair_brief(
+                    run_id,
+                    envelope_path=initial_repair_brief_path,
+                    validator_identity=self.validator_identity,
+                    expected_attempt_id=initial_attempt_id,
+                )
+            except WorkflowError as exc:
+                raise RepairSupervisorError(str(exc)) from exc
+            brief_path = verified.envelope.path
+            briefs.append(verified.envelope.path)
+            signatures.add(str(verified.envelope.payload["failure_signature"]))
+        reserved_attempt_ids = {*recorded_attempt_ids, initial_attempt_id}
         repeat_escalations: dict[str, int] = {}
 
         attempts_run = 0
@@ -278,6 +294,17 @@ class RepairSupervisor:
                 # oracle digest to bind into a RepairBrief, and treating the
                 # failure as a Coder repair would invent provenance.
                 if exc.validator_retriable and validator_repair_launch_failure is not None:
+                    if attempt_id in self.workflow.store.build_attempt_ids(run_id):
+                        return self._terminal(
+                            run_id,
+                            attempts_run,
+                            briefs,
+                            "infrastructure-blocked:launch-failure-after-attempt-admission",
+                        )
+                    if self._elapsed(started):
+                        return self._terminal(
+                            run_id, attempts_run, briefs, "repair-budget-elapsed"
+                        )
                     if launch_repairs >= self.policy.max_validator_launch_repairs:
                         return self._terminal(
                             run_id,
@@ -287,9 +314,12 @@ class RepairSupervisor:
                         )
                     if validator_repair_launch_failure(attempt_id, str(exc)):
                         launch_repairs += 1
-                        attempt_id = next_attempt_id(attempts_run + 1)
-                        if not _ATTEMPT_ID.fullmatch(attempt_id):
-                            raise RepairSupervisorError("next attempt id is invalid") from exc
+                        if self._elapsed(started):
+                            return self._terminal(
+                                run_id, attempts_run, briefs, "repair-budget-elapsed"
+                            )
+                        # No author ran and no build artifact exists. This is an idempotent
+                        # relaunch of the same signed attempt, not a new candidate attempt.
                         continue
                 disposition = (
                     "user-action-required"
@@ -297,6 +327,13 @@ class RepairSupervisor:
                     else "infrastructure-blocked"
                 )
                 return self._terminal(run_id, attempts_run, briefs, f"{disposition}:{exc}")
+            if self._elapsed(started):
+                return self._terminal(run_id, attempts_run, briefs, "repair-budget-elapsed")
+            current = self.workflow.store.load(run_id)
+            if outcome.projection.run_id != run_id:
+                raise RepairSupervisorError("attempt outcome belongs to a different run")
+            if outcome.projection.ledger_head != current.ledger_head:
+                raise RepairSupervisorError("attempt outcome is stale against the run ledger")
             candidate_attempts += 1
             if outcome.passed:
                 return RepairCampaignResult(
@@ -317,7 +354,6 @@ class RepairSupervisor:
                 return self._terminal(
                     run_id, attempts_run, briefs, "repair-attempt-budget-exhausted"
                 )
-            current = self.workflow.store.load(run_id)
             try:
                 plan = validator_diagnose(
                     outcome,
@@ -326,7 +362,22 @@ class RepairSupervisor:
                 )
             except RepairCampaignBlocked as exc:
                 return self._terminal(run_id, attempts_run, briefs, f"infrastructure-blocked:{exc}")
+            if self._elapsed(started):
+                return self._terminal(run_id, attempts_run, briefs, "repair-budget-elapsed")
             digests = self.workflow.store.current_artifact_digests(run_id)
+            candidate_digest = str(digests.get("candidate", ""))
+            oracle_digest = str(digests.get("acceptance-tests", ""))
+            if not candidate_digest or not oracle_digest:
+                return self._terminal(
+                    run_id, attempts_run, briefs, "repair-subject-unavailable"
+                )
+            if (
+                candidate_digest != outcome.candidate_digest
+                or oracle_digest != outcome.tests_digest
+            ):
+                raise RepairSupervisorError(
+                    "attempt outcome candidate/oracle differs from the blocked ledger"
+                )
             repeated_failure = plan.failure_signature in signatures
             if self.policy.stop_on_repeated_failure_signature and repeated_failure:
                 escalation_count = repeat_escalations.get(plan.failure_signature, 0)
@@ -342,6 +393,10 @@ class RepairSupervisor:
                     predecessor_ledger_head=current.ledger_head,
                     phase_artifact_digests=current.phase_artifact_digests,
                 )
+                if self._elapsed(started):
+                    return self._terminal(
+                        run_id, attempts_run, briefs, "repair-budget-elapsed"
+                    )
                 if escalated_plan.failure_signature == plan.failure_signature:
                     raise RepairSupervisorError(
                         "repeat escalation must supply a distinct failure strategy signature"
@@ -353,17 +408,19 @@ class RepairSupervisor:
                 repeat_escalations[plan.failure_signature] = escalation_count + 1
                 plan = escalated_plan
             signatures.add(plan.failure_signature)
+            authorized_attempt_id = self._reserve_attempt_id(
+                next_attempt_id,
+                attempts_run + 1,
+                reserved_attempt_ids,
+            )
             brief = RepairBrief(
                 run_id=run_id,
                 failed_attempt_id=attempt_id,
+                authorized_attempt_id=authorized_attempt_id,
                 predecessor_ledger_head=current.ledger_head,
                 phase_artifact_digests=current.phase_artifact_digests,
-                # A terminal BLOCK can retain an artifact key with an empty
-                # value after the candidate bundle has been consumed by
-                # validation.  Empty ledger values are not authority: retain
-                # the attempt receipt's verified digest in that case.
-                candidate_digest=str(digests.get("candidate") or outcome.candidate_digest),
-                oracle_digest=str(digests.get("acceptance-tests") or outcome.tests_digest),
+                candidate_digest=candidate_digest,
+                oracle_digest=oracle_digest,
                 plan=plan,
             )
             envelope_path = self._brief_path(run_id, brief.digest)
@@ -373,6 +430,8 @@ class RepairSupervisor:
                 key_path=self.validator_key_path,
                 output_path=envelope_path,
             )
+            if envelope.path.lstat().st_size > _MAX_REPAIR_BRIEF_BYTES:
+                raise RepairSupervisorError("signed repair brief exceeds its byte ceiling")
             self.workflow.record_repair_brief(
                 run_id,
                 expected_ledger_head=brief.predecessor_ledger_head,
@@ -382,14 +441,31 @@ class RepairSupervisor:
             )
             briefs.append(envelope.path)
             brief_path = envelope.path
-            attempt_id = next_attempt_id(attempts_run + 1)
-            if not _ATTEMPT_ID.fullmatch(attempt_id):
-                raise RepairSupervisorError("next attempt id is invalid")
+            attempt_id = authorized_attempt_id
         raise AssertionError("repair campaign escaped its attempt budget")
 
     def _brief_path(self, run_id: str, digest: str) -> Path:
         stem = digest.removeprefix("sha256:")
         return self.workflow.root / run_id / "evidence" / "repair-briefs" / f"{stem}.tessera.json"
+
+    def _elapsed(self, started: float) -> bool:
+        """Observed campaign ceiling; the attempt runner owns its hard per-call ceiling."""
+
+        return self.clock() - started > self.policy.max_elapsed_seconds
+
+    @staticmethod
+    def _reserve_attempt_id(
+        selector: Callable[[int], str],
+        index: int,
+        reserved: set[str],
+    ) -> str:
+        candidate = selector(index)
+        if not isinstance(candidate, str) or not _ATTEMPT_ID.fullmatch(candidate):
+            raise RepairSupervisorError("next attempt id is invalid")
+        if candidate in reserved:
+            raise RepairSupervisorError("next attempt id must be fresh within the run")
+        reserved.add(candidate)
+        return candidate
 
     def _terminal(
         self,

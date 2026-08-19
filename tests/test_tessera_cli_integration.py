@@ -45,7 +45,8 @@ from factory_runtime.acceptance_obligations import (
 from factory_runtime.authority import load_genesis
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
 from factory_runtime.generation import build_input_document, verify_prepared_generation
-from factory_runtime.orchestrator import FactoryOrchestrator, OrchestrationError
+from factory_runtime.orchestrator import BuildOutcome, FactoryOrchestrator, OrchestrationError
+from factory_runtime.repair import RepairPlan, RepairPolicy, RepairSupervisor
 from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState
@@ -766,27 +767,68 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         )
     assert workflow.store.load("synthetic-run").state == RunState.OPERATIONAL_MATURITY_RATIFIED
 
-    failed = orchestrator.build_and_validate(
-        "synthetic-run",
-        attempt_id="attempt-failed",
-        coder_command=(sys.executable, "-c", "raise SystemExit(1)"),
-        **common_arguments,
+    repair_supervisor = RepairSupervisor(
+        workflow,
+        validator_identity="agent:validator",
+        validator_key_path=validator_key,
+        policy=RepairPolicy(max_attempts=2, max_elapsed_seconds=120),
     )
-    assert failed.repair_signal == "fail"
-    assert failed.projection.state == RunState.BLOCKED
+    attempted: list[tuple[str, Path | None]] = []
+    attempt_outcomes: list[BuildOutcome] = []
 
-    outcome = orchestrator.build_and_validate(
+    def run_attempt(attempt_id: str, repair_brief_path: Path | None) -> BuildOutcome:
+        attempted.append((attempt_id, repair_brief_path))
+        coder_command = (
+            (sys.executable, str(RUNTIME_FIXTURES / "coder.py"), "--broken")
+            if repair_brief_path is None
+            else (sys.executable, str(RUNTIME_FIXTURES / "coder.py"))
+        )
+        attempt_outcome = orchestrator.build_and_validate(
+            "synthetic-run",
+            attempt_id=attempt_id,
+            coder_command=coder_command,
+            repair_brief_path=repair_brief_path,
+            **common_arguments,
+        )
+        attempt_outcomes.append(attempt_outcome)
+        return attempt_outcome
+
+    result = repair_supervisor.run(
         "synthetic-run",
-        attempt_id="attempt-1",
-        coder_command=(sys.executable, str(RUNTIME_FIXTURES / "coder.py")),
-        **common_arguments,
+        initial_attempt_id="attempt-failed",
+        next_attempt_id=lambda _index: "attempt-1",
+        attempt_runner=run_attempt,
+        validator_diagnose=lambda _outcome, **_context: RepairPlan(
+            summary="Implement the ratified integer-addition behavior.",
+            actions=("Return the sum required by the product specification.",),
+            intent_backreferences=(product_reference, architecture_reference),
+            failure_signature="integer-addition-behavior-mismatch",
+        ),
     )
+    assert attempted[0] == ("attempt-failed", None)
+    assert attempted[1][0] == "attempt-1"
+    assert attempted[1][1] == result.repair_brief_paths[0]
+    assert result.attempts_run == 2
+    assert result.terminal_reason == "preview"
+    assert result.projection.state == RunState.PREVIEW
+    outcome = attempt_outcomes[-1]
     assert outcome.passed is True
     assert outcome.repair_signal == "pass"
-    assert outcome.projection.state == RunState.PREVIEW
+    assert outcome.projection == result.projection
     assert outcome.evidence_report is not None
     assert outcome.evidence_report.provenance.satisfied is True
     assert outcome.evidence_report.checklist.satisfied is True
+    final_attempt_root = (
+        workflow.root / "synthetic-run" / "evidence" / "build-attempts" / "attempt-1"
+    )
+    coder_evidence = json.loads(
+        (final_attempt_root / "coder" / "output" / "evidence" / "lane-evidence.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert coder_evidence["repair_brief_present"] is True
+    preview = workflow.store.load("synthetic-run")
+    assert preview == result.projection
     evidence = outcome.evidence_report.document
     assert evidence["schema_version"] == "factory-evidence-bundle/2"
     assert evidence["build_attempt"] == {"number": 2, "limit": 2}
