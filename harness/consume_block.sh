@@ -327,7 +327,7 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
             raise SystemExit("blocking event lacks exactly one durable write receipt")
         evidence_id = retain_evidence(evidence_raw, evidence_digest)
         timestamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
-        sink.seek(0, os.SEEK_END)
+        receipts = []
         for event, event_digest in zip(events, event_digests, strict=True):
             stable = {
                 "kind": "blocking_consumed",
@@ -347,9 +347,40 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
                 if comparable != stable:
                     raise SystemExit("blocking event was already dispositioned differently")
                 continue
-            sink.write(canonical({"ts": timestamp, **stable}) + "\n")
+            receipts.append((canonical({"ts": timestamp, **stable}) + "\n").encode("utf-8"))
         sink.flush()
-        os.fsync(sink.fileno())
+        descriptor = sink.fileno()
+        append_start = os.fstat(descriptor).st_size
+        separator = (
+            b"\n"
+            if append_start and os.pread(descriptor, 1, append_start - 1) != b"\n"
+            else b""
+        )
+        payload = separator + b"".join(receipts)
+        written = 0
+        inject_partial_failure = (
+            os.environ.get("FACTORY_TEST_CONSUME_FAIL_AFTER_PARTIAL_RECEIPT_WRITE") == "1"
+        )
+        try:
+            while written < len(payload):
+                chunk = payload[written:]
+                if inject_partial_failure and written == 0 and len(chunk) > 1:
+                    chunk = chunk[:7]
+                count = os.write(descriptor, chunk)
+                if count < 1:
+                    raise OSError("blocking disposition append made no progress")
+                written += count
+                if inject_partial_failure:
+                    raise OSError("injected partial blocking disposition append")
+            os.fsync(descriptor)
+        except OSError:
+            # The attention lock and events-file flock exclude every supported
+            # producer while the exact pre-append prefix is restored.  Include the
+            # separator in that rollback boundary so a failed recovery never turns a
+            # legacy fragment into false authority or strands a partial receipt.
+            os.ftruncate(descriptor, append_start)
+            os.fsync(descriptor)
+            raise
     # The receipt pathname must be durable before the gate can be cleared. Otherwise a crash on
     # first use could preserve the fsynced truncation while losing the newly created ledger entry.
     event_directory = open_directory(events_path.parent)

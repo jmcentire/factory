@@ -590,7 +590,8 @@ if [ "$RUN_RC" -ne 0 ]; then
     fi
     set +e
     FAILURE_DETAIL=$(PYTHONPATH="$D/.." python3 -m factory_runtime.runner_failure \
-      --workspace "$RUNNER_WS" --evidence-root "$RUNNER_EVIDENCE" --run-root "$ROOT" \
+      --workspace "$RUNNER_WS" --workspace-root "$RUNNER_WORKSPACE_ROOT" \
+      --evidence-root "$RUNNER_EVIDENCE" --run-root "$ROOT" \
       --projection "$MODEL_PROJECTION" --task "$TASK_FILE" --manifest "$RUNNER_MANIFEST" \
       --run-id "$RUN" --generation "$FACTORY_GENERATION" --role "$ROLE" \
       --receipt-id "$RECEIPT_ID" --target-state-digest "$FACTORY_TARGET_STATE_DIGEST" \

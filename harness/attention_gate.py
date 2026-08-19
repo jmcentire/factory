@@ -249,6 +249,11 @@ def _repair_incomplete_blocking_tail(path: pathlib.Path) -> None:
         if current.st_size > _MAX_BLOCKING_BYTES:
             raise AttentionGateError(f"blocking source exceeds its byte ceiling: {path}")
         if not current.st_size or os.pread(descriptor, 1, current.st_size - 1) == b"\n":
+            # A previous producer may have been killed after the complete row reached
+            # the page cache but before _append_jsonl fsynced it.  Exact retry is the
+            # recovery boundary: make the already-published blocker durable before a
+            # blocking_written receipt can be admitted for it.
+            os.fsync(descriptor)
             return
         raw = os.pread(descriptor, current.st_size, 0)
         boundary = raw.rfind(b"\n") + 1

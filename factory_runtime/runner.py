@@ -7,6 +7,7 @@ represented as typed broker requests in the structured handoff and executed else
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -124,18 +125,34 @@ class RunnerQualification:
         )
 
     @property
+    def document(self) -> Mapping[str, Any]:
+        return {
+            "backend": self.backend,
+            "scope_digest": self.scope_digest,
+            "forbidden_read_denied": self.forbidden_read_denied,
+            "forbidden_write_denied": self.forbidden_write_denied,
+            "model_network_available": self.model_network_available,
+            "arbitrary_shell_denied": self.arbitrary_shell_denied,
+            "process_containment": self.process_containment,
+        }
+
+    @property
     def content_digest(self) -> str:
-        return digest_obj(
-            {
-                "backend": self.backend,
-                "scope_digest": self.scope_digest,
-                "forbidden_read_denied": self.forbidden_read_denied,
-                "forbidden_write_denied": self.forbidden_write_denied,
-                "model_network_available": self.model_network_available,
-                "arbitrary_shell_denied": self.arbitrary_shell_denied,
-                "process_containment": self.process_containment,
-            }
-        )
+        return digest_obj(self.document)
+
+
+@dataclass(frozen=True)
+class RunnerExecutableSnapshot:
+    path: Path
+    byte_count: int
+    content_digest: str
+
+    def evidence(self, *, workspace: Path) -> Mapping[str, Any]:
+        return {
+            "relative_path": self.path.relative_to(workspace).as_posix(),
+            "byte_count": self.byte_count,
+            "content_digest": self.content_digest,
+        }
 
 
 @dataclass(frozen=True)
@@ -340,6 +357,80 @@ def _regular_executable(path: str | Path) -> Path:
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise RunnerError(f"runner executable is unavailable: {resolved}")
     return resolved
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _snapshot_executable(source: Path, destination: Path) -> RunnerExecutableSnapshot:
+    """Copy one stable executable inode into the private runner workspace.
+
+    Qualification and every invocation use the snapshot rather than reopening a
+    mutable installation path.  The retained snapshot is therefore the exact byte
+    identity the failure boundary can verify after the process exits.
+    """
+
+    source_fd = -1
+    destination_fd = -1
+    try:
+        source_fd = os.open(
+            source,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise RunnerError(f"runner executable source is not regular: {source}")
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o500,
+        )
+        hasher = hashlib.sha256()
+        byte_count = 0
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            offset = 0
+            while offset < len(chunk):
+                written = os.write(destination_fd, chunk[offset:])
+                if written < 1:
+                    raise OSError("runner executable snapshot made no progress")
+                offset += written
+            byte_count += len(chunk)
+        after = os.fstat(source_fd)
+        if _file_identity(before) != _file_identity(after) or byte_count != before.st_size:
+            raise RunnerError("runner executable changed while being snapshotted")
+        os.fchmod(destination_fd, 0o500)
+        os.fsync(destination_fd)
+    except OSError as exc:
+        raise RunnerError(f"runner executable snapshot failed: {source}: {exc}") from exc
+    finally:
+        if destination_fd >= 0:
+            os.close(destination_fd)
+        if source_fd >= 0:
+            os.close(source_fd)
+    fsync_directory(destination.parent)
+    return RunnerExecutableSnapshot(
+        path=destination,
+        byte_count=byte_count,
+        content_digest="sha256:" + hasher.hexdigest(),
+    )
 
 
 def _write_once(path: Path, content: bytes) -> None:
@@ -647,8 +738,8 @@ class HardenedModelRunner:
             sort_keys=True,
             separators=(",", ":"),
         )
-        executable = _regular_executable(str(manifest.document["executable"]))
-        child_executables = tuple(
+        executable_source = _regular_executable(str(manifest.document["executable"]))
+        child_executable_sources = tuple(
             _regular_executable(path) for path in manifest.document["child_executables"]
         )
         workspace = Path(workspace_root)
@@ -658,11 +749,22 @@ class HardenedModelRunner:
         output_root = workspace / "output"
         home = workspace / "home"
         temporary = workspace / "tmp"
+        executable_root = workspace / "executables"
         workspace.mkdir(mode=0o700, parents=True, exist_ok=False)
         workspace.chmod(0o700)
-        for directory in (input_root, output_root, home, temporary):
+        for directory in (input_root, output_root, home, temporary, executable_root):
             directory.mkdir(mode=0o700, exist_ok=False)
             directory.chmod(0o700)
+        executable_snapshot = _snapshot_executable(
+            executable_source,
+            executable_root / "runner",
+        )
+        child_executable_snapshots = tuple(
+            _snapshot_executable(source, executable_root / "codex")
+            for source in child_executable_sources
+        )
+        executable = executable_snapshot.path
+        child_executables = tuple(item.path for item in child_executable_snapshots)
         projection = input_root / "projection.json"
         output_schema = input_root / "output-schema.json"
         state_capsule = input_root / "state-capsule.json"
@@ -701,6 +803,12 @@ class HardenedModelRunner:
         )
         if not qualification.satisfied:
             raise RunnerError("networked runner backend did not satisfy its qualification")
+        qualification_bytes = json.dumps(
+            qualification.document,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        _write_once(input_root / "runner-qualification.json", qualification_bytes)
         max_cost = limits.max_cost_microusd
         if max_cost and _cost(manifest, 0, 0) is None:
             raise RunnerError("runner cost ceiling cannot use unknown pricing as zero")
@@ -826,11 +934,16 @@ class HardenedModelRunner:
                     run_ledger_head=run_ledger_head,
                     resume_checkpoint_digest=resume_checkpoint_digest,
                     broker_registry_source_digest=broker_registry_source_digest,
-                    qualification_digest=qualification.content_digest,
+                    qualification=qualification,
                     continuity_nonce_digest=digest_obj(
                         {"continuity_nonce": continuity_nonce}
                     ),
-                    prompt=prompt_sequence[index - 1],
+                    prompt_sequence=prompt_sequence[:index],
+                    executable_snapshot=executable_snapshot.evidence(workspace=workspace),
+                    child_executable_snapshots=[
+                        item.evidence(workspace=workspace)
+                        for item in child_executable_snapshots
+                    ],
                     failed_at=self._clock(),
                 ) from exc
 
@@ -854,7 +967,7 @@ class HardenedModelRunner:
             "runner_manifest_source_digest": digest_bytes(manifest_bytes),
             "runner_id": manifest.document["runner_id"],
             "adapter": manifest.document["adapter"],
-            "executable_digest": digest_bytes(executable.read_bytes()),
+            "executable_digest": executable_snapshot.content_digest,
             "runner_version": manifest.document["runner_version"],
             "model": manifest.document["model"],
             "model_version": manifest.document["model_version"],
@@ -927,9 +1040,11 @@ class HardenedModelRunner:
         run_ledger_head: str,
         resume_checkpoint_digest: str,
         broker_registry_source_digest: str,
-        qualification_digest: str,
+        qualification: RunnerQualification,
         continuity_nonce_digest: str,
-        prompt: Mapping[str, Any],
+        prompt_sequence: Sequence[Mapping[str, Any]],
+        executable_snapshot: Mapping[str, Any],
+        child_executable_snapshots: Sequence[Mapping[str, Any]],
         failed_at: int,
     ) -> RunnerInvocationError:
         """Write only bounded, redacted output outside the model's grants."""
@@ -969,7 +1084,7 @@ class HardenedModelRunner:
             invocation_termination_reason=result.termination_reason,
         )
         failure_receipt = {
-            "schema_version": "factory-runner-failure-receipt/1",
+            "schema_version": "factory-runner-failure-receipt/2",
             "receipt_id": receipt_id,
             "run_id": run_id,
             "generation": generation,
@@ -980,11 +1095,19 @@ class HardenedModelRunner:
             "runner_manifest_source_digest": digest_bytes(manifest_bytes),
             "runner_id": manifest.document["runner_id"],
             "adapter": manifest.document["adapter"],
+            "executable_digest": executable_snapshot["content_digest"],
+            "executable_snapshot": dict(executable_snapshot),
+            "child_executable_snapshots": [
+                dict(item) for item in child_executable_snapshots
+            ],
             "runner_version": manifest.document["runner_version"],
             "model": manifest.document["model"],
             "model_version": manifest.document["model_version"],
             "configuration_digest": manifest.document["configuration_digest"],
             "state_profile_digest": manifest.document["state_profile_digest"],
+            "state_qualification_digest": manifest.document[
+                "state_qualification_digest"
+            ],
             "state_capsule_digest": state_capsule_digest,
             "projection_digest": projection_digest,
             "task_digest": task_digest,
@@ -992,11 +1115,13 @@ class HardenedModelRunner:
             "run_ledger_head": run_ledger_head,
             "resume_checkpoint_digest": resume_checkpoint_digest,
             "broker_registry_source_digest": broker_registry_source_digest,
-            "qualification_digest": qualification_digest,
+            "qualification_digest": qualification.content_digest,
+            "qualification": dict(qualification.document),
             "continuity_nonce_digest": continuity_nonce_digest,
             "prompt_schema_version": _PROMPT_SCHEMA_VERSION,
             "prompt_assembler_version": _PROMPT_ASSEMBLER_VERSION,
-            "prompt": dict(prompt),
+            "prompt_sequence": [dict(item) for item in prompt_sequence],
+            "prompt_bytes_retained": True,
             "diagnostic": {
                 "content_digest": digest_bytes(diagnostic_bytes),
                 "byte_count": len(diagnostic_bytes),

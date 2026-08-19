@@ -91,7 +91,7 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Function | Owner | Mechanism |
 |---|---|---|
 | Authority (what was said) | **Directive ledger** + Tessera | Append-only hash-chained JSONL of verbatim founder text; hardware-signed git commits (agent verifies, cannot sign); qualifier-preserving supersession. Chess genesis holds run-level authorization logic under the root signature. |
-| Effective instructions (what this invocation receives) | **factory_runtime instruction control** | External resume configuration binds exact ledger, provisional-chain, and role-doctrine bytes. Runtime verifies both chains, resolves a closed canonical run/generation/role scope, blocks applicable live unsettled candidates, derives one bounded role-specific contract, requires exact directive and qualifier readback, and binds all three through the capsule and prompt. Unknown scope and cross-scope supersession refuse. Checkpoint binding proves selected bytes, not signer identity or semantic comprehension. |
+| Effective instructions (what this invocation receives) | **factory_runtime instruction control** | External resume configuration binds exact ledger, provisional-chain, and role-doctrine bytes. Before every dispatch or resume, runtime verifies both chains, resolves a closed canonical run/generation/role scope, blocks applicable live unsettled candidates, derives one bounded role-specific contract, requires exact directive and qualifier readback, and binds all three through the capsule and prompt. Source/head/scope/checkpoint drift refuses; context-only Kindex primers cannot enter the compiler or satisfy an effect. Unknown scope and cross-scope supersession refuse. Checkpoint binding proves selected bytes, not signer identity, natural-language conflict detection, or semantic comprehension. |
 | Identity (who acts) | **Signet** | Per-lane principals from the enrollment registry (deliverable 8); short-lived scoped tokens, per-hop; deny-wins resolution. "The Tester cannot read the Coder's channel" becomes an ACL fact. |
 | Policy (what a token may do) | **SPL** (jmcentire/agent-safe) | Total, gas-metered evaluation in-token at the tool boundary; sealed attenuation; expressions are approval rules, so human-signed under I8, never agent-authored into force. |
 | State (what is true now) | **factory_runtime** RunState + **Chess** anchors | Per settled decisions: machine evidence chained in the factory_core ledger; anchor transitions (`*-ratified`, `human-approved`, `promoted`) carry Chess move records — prev/new state hash, actor key, signature over all four, re-execution at the anchor; anchors carry the ledger head digest only. |
@@ -112,6 +112,9 @@ is local commands and their output, and no model should be paying to watch that.
 **orchestrator-agent** is invoked, not resident: the dispatcher wakes it on defined
 triggers — judgment-shaped failure classes, a lane's blocking question, a human message —
 under the lease discipline of control 6, and hands it a *projection*, not the transcript.
+Accordingly, “orchestrator enforcement” means the host dispatcher/runtime gates below, never
+the model orchestrator's judgment. The model may force an exact-subject human/Validator
+disposition by raising a blocker, but it cannot choose that disposition or satisfy any effect.
 The executable projection is a closed nine-section document (trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata), built
 from one stable-open confirmed read of each bounded input and one stable bounded-suffix read of
@@ -399,8 +402,9 @@ dependency-free (bash + python3 + git):
   verifies/appends the dispatch chain; requires a role-specific Kindex primer and externally
   checkpoint-bound structural qualification report; then invokes the qualified model runner and
   typed broker. A failed invocation crosses this boundary only through the closed verified failure
-  receipt and retained exact evidence; no failed canary reaches the broker. Ambient gap flags
-  cannot bypass either precondition.
+  receipt and retained exact evidence: canonical qualification, every presented prompt, private
+  primary/child executable snapshots, state capsule, and bounded diagnostic. No failed canary
+  reaches the broker. Ambient gap flags cannot bypass either precondition.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
   Append-only sources are read as stable bounded suffixes rather than rejected when their full

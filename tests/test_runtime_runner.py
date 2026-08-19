@@ -731,14 +731,26 @@ def test_failed_invocation_writes_redacted_private_diagnostics_and_safe_capsule(
     assert failure_receipt["receipt_id"] == "runner-receipt-1"
     assert failure_receipt["invocation"] == 1
     assert failure_receipt["model_attempts"] == 1
-    assert failure_receipt["prompt"] == {
-        "attempt": 1,
-        "kind": "qualification",
-        "byte_count": len((fixture[5] / "input" / "prompt-1.json").read_bytes()),
-        "content_digest": digest_bytes(
-            (fixture[5] / "input" / "prompt-1.json").read_bytes()
-        ),
-    }
+    assert failure_receipt["prompt_sequence"] == [
+        {
+            "attempt": 1,
+            "kind": "qualification",
+            "byte_count": len((fixture[5] / "input" / "prompt-1.json").read_bytes()),
+            "content_digest": digest_bytes(
+                (fixture[5] / "input" / "prompt-1.json").read_bytes()
+            ),
+        }
+    ]
+    assert failure_receipt["prompt_bytes_retained"] is True
+    executable_snapshot = fixture[5] / failure_receipt["executable_snapshot"][
+        "relative_path"
+    ]
+    assert failure_receipt["executable_digest"] == digest_bytes(
+        executable_snapshot.read_bytes()
+    )
+    assert failure_receipt["qualification_digest"] == digest_obj(
+        failure_receipt["qualification"]
+    )
     assert failure_receipt["diagnostic"] == {
         "content_digest": digest_bytes(error.diagnostic_path.read_bytes()),
         "byte_count": len(error.diagnostic_path.read_bytes()),
@@ -768,6 +780,37 @@ def test_output_limited_invocation_classifies_without_exposing_output(tmp_path: 
     assert "private oracle details" not in json.dumps(error.failure_capsule.document())
 
 
+def _failure_boundary_arguments(
+    tmp_path: Path,
+    fixture: tuple[Any, ...],
+    *,
+    evidence_name: str = "evidence",
+) -> dict[str, Any]:
+    manifest_path = tmp_path / "runner-manifest.json"
+    manifest_path.write_bytes(
+        json.dumps(fixture[2], sort_keys=True, separators=(",", ":")).encode()
+    )
+    task_path = tmp_path / "task.md"
+    task_path.write_bytes(b"Implement the signed criterion")
+    evidence_root = tmp_path / evidence_name / "runner" / "coder"
+    evidence_root.mkdir(parents=True)
+    return {
+        "workspace": fixture[5],
+        "workspace_root": fixture[5].parent,
+        "evidence_root": evidence_root,
+        "run_root": tmp_path,
+        "projection_path": fixture[3],
+        "task_path": task_path,
+        "manifest_path": manifest_path,
+        "expected_run_id": "run-1",
+        "expected_generation": 1,
+        "expected_role": "coder",
+        "expected_receipt_id": "runner-receipt-1",
+        "expected_target_state_digest": digest_obj({"target": "fixture"}),
+        "expected_resume_checkpoint_digest": digest_obj({"resume": "fixture"}),
+    }
+
+
 def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
     tmp_path: Path,
 ) -> None:
@@ -777,31 +820,10 @@ def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
     with pytest.raises(RunnerInvocationError):
         _dispatch(fixture)
 
-    manifest_path = tmp_path / "runner-manifest.json"
-    manifest_path.write_bytes(
-        json.dumps(fixture[2], sort_keys=True, separators=(",", ":")).encode()
-    )
-    task_path = tmp_path / "task.md"
-    task_path.write_bytes(b"Implement the signed criterion")
-    evidence_root = tmp_path / "evidence" / "runner" / "coder"
-    evidence_root.mkdir(parents=True)
-    target_digest = digest_obj({"target": "fixture"})
-    resume_digest = digest_obj({"resume": "fixture"})
+    arguments = _failure_boundary_arguments(tmp_path, fixture)
+    evidence_root = arguments["evidence_root"]
 
-    detail = verify_and_retain_runner_failure(
-        workspace=fixture[5],
-        evidence_root=evidence_root,
-        run_root=tmp_path,
-        projection_path=fixture[3],
-        task_path=task_path,
-        manifest_path=manifest_path,
-        expected_run_id="run-1",
-        expected_generation=1,
-        expected_role="coder",
-        expected_receipt_id="runner-receipt-1",
-        expected_target_state_digest=target_digest,
-        expected_resume_checkpoint_digest=resume_digest,
-    )
+    detail = verify_and_retain_runner_failure(**arguments)
 
     assert detail["disposition"] == {
         "reason": "qualified runner invocation failed",
@@ -822,6 +844,15 @@ def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
     assert (evidence_root / "failed-prompt-1.json").read_bytes() == (
         fixture[5] / "input" / "prompt-1.json"
     ).read_bytes()
+    assert (evidence_root / "runner-qualification.json").read_bytes() == (
+        fixture[5] / "input" / "runner-qualification.json"
+    ).read_bytes()
+    assert digest_bytes((evidence_root / "runner-executable").read_bytes()) == detail[
+        "evidence_digests"
+    ]["runner-executable"]
+    assert os.stat(evidence_root / "runner-executable").st_ino != os.stat(
+        fixture[5] / "executables" / "runner"
+    ).st_ino
 
     receipt_path = fixture[5] / "runner-failure-receipt.json"
     original_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -832,20 +863,7 @@ def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
         encoding="utf-8",
     )
     with pytest.raises(RunnerFailureEvidenceError, match="different projection"):
-        verify_and_retain_runner_failure(
-            workspace=fixture[5],
-            evidence_root=evidence_root,
-            run_root=tmp_path,
-            projection_path=fixture[3],
-            task_path=task_path,
-            manifest_path=manifest_path,
-            expected_run_id="run-1",
-            expected_generation=1,
-            expected_role="coder",
-            expected_receipt_id="runner-receipt-1",
-            expected_target_state_digest=target_digest,
-            expected_resume_checkpoint_digest=resume_digest,
-        )
+        verify_and_retain_runner_failure(**arguments)
 
     receipt = dict(original_receipt)
     receipt["failure_capsule"] = {
@@ -859,20 +877,126 @@ def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
         encoding="utf-8",
     )
     with pytest.raises(RunnerFailureEvidenceError, match="failure classification"):
-        verify_and_retain_runner_failure(
-            workspace=fixture[5],
-            evidence_root=evidence_root,
-            run_root=tmp_path,
-            projection_path=fixture[3],
-            task_path=task_path,
-            manifest_path=manifest_path,
-            expected_run_id="run-1",
-            expected_generation=1,
-            expected_role="coder",
-            expected_receipt_id="runner-receipt-1",
-            expected_target_state_digest=target_digest,
-            expected_resume_checkpoint_digest=resume_digest,
-        )
+        verify_and_retain_runner_failure(**arguments)
+
+
+def test_later_failure_binds_every_prompt_presented_to_resumed_session(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[2] = 1
+    fixture[1].termination_reasons[2] = "exit-nonzero"
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    assert raised.value.failure_receipt["invocation"] == 3
+    assert [
+        item["attempt"] for item in raised.value.failure_receipt["prompt_sequence"]
+    ] == [1, 2, 3]
+    prompt_two = fixture[5] / "input" / "prompt-2.json"
+    prompt_two.write_bytes(prompt_two.read_bytes() + b" ")
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name="prompt-mutation-evidence",
+    )
+
+    with pytest.raises(RunnerFailureEvidenceError, match="different prompt sequence"):
+        verify_and_retain_runner_failure(**arguments)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("qualification_digest", "sha256:" + "f" * 64, "qualification digest"),
+        ("model_attempts", 3, "misstates model attempts"),
+    ],
+)
+def test_failure_boundary_rederives_qualification_and_attempt_count(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+    message: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    with pytest.raises(RunnerInvocationError):
+        _dispatch(fixture)
+    receipt_path = fixture[5] / "runner-failure-receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt[field] = replacement
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name=f"{field}-evidence",
+    )
+
+    with pytest.raises(RunnerFailureEvidenceError, match=message):
+        verify_and_retain_runner_failure(**arguments)
+
+
+def test_failure_boundary_refuses_changed_executable_snapshot(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+    snapshot = fixture[5] / raised.value.failure_receipt["executable_snapshot"][
+        "relative_path"
+    ]
+    snapshot.chmod(0o700)
+    snapshot.write_bytes(snapshot.read_bytes() + b"tampered")
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name="executable-mutation-evidence",
+    )
+
+    with pytest.raises(RunnerFailureEvidenceError, match="primary executable digest"):
+        verify_and_retain_runner_failure(**arguments)
+
+
+def test_failure_boundary_refuses_workspace_outside_admitted_root(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    with pytest.raises(RunnerInvocationError):
+        _dispatch(fixture)
+    unrelated_root = tmp_path / "unrelated-runner-root"
+    unrelated_root.mkdir()
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name="workspace-root-evidence",
+    )
+    arguments["workspace_root"] = unrelated_root
+
+    with pytest.raises(RunnerFailureEvidenceError, match="outside its admitted root"):
+        verify_and_retain_runner_failure(**arguments)
+
+
+def test_ollama_failure_retains_exact_codex_child_snapshot(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, adapter="ollama-codex")
+    fixture[1].returncodes[0] = 1
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+    child = raised.value.failure_receipt["child_executable_snapshots"]
+    assert len(child) == 1
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name="ollama-child-evidence",
+    )
+
+    detail = verify_and_retain_runner_failure(**arguments)
+
+    retained = arguments["evidence_root"] / "runner-child-executable-1"
+    assert digest_bytes(retained.read_bytes()) == child[0]["content_digest"]
+    assert detail["evidence_digests"]["runner-child-executable-1"] == child[0][
+        "content_digest"
+    ]
 
 
 def test_diagnostic_retention_failure_preserves_real_model_attempt_count(

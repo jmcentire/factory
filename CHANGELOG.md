@@ -17,8 +17,10 @@ public API is still pre-1.0.
   event is receipted and the dispatch gate is durably released.
 - Bounded, named-secret-redacted Validator-private diagnostics for failed model invocations, paired
   with a closed host-authored failure receipt and a small downstream-safe failure capsule rather
-  than raw runner or oracle output. The receipt binds exact runner, model, configuration, state,
-  prompt, termination, and diagnostic evidence across the Python/CLI/shell lane boundary.
+  than raw runner or oracle output. The receipt binds the exact private runner executable snapshot,
+  any adapter child executable, canonical qualification document, runner, model, configuration,
+  state, every prompt presented through the failed invocation, termination, and diagnostic evidence
+  across the Python/CLI/shell lane boundary.
 
 ### Changed
 
@@ -51,13 +53,17 @@ public API is still pre-1.0.
   preserves the real post-model attempt count instead of being laundered into pre-model refusal.
 - Runner supervision, diagnostics, schemas, and failure classification share one closed termination
   vocabulary. Model-controlled stdout/stderr cannot assign failure ownership; the lane independently
-  verifies and retains the exact failure receipt, private diagnostic, state capsule, and failed
-  prompt, records their digests, retains the workspace, and executes no broker operation.
+  re-derives and retains the exact failure receipt, private diagnostic, state capsule, canonical
+  qualification, complete presented-prompt sequence, and primary/child executable snapshots,
+  records their digests, retains the workspace, and executes no broker operation.
 
 ### Explicit boundaries
 
 - External checkpoint binding and hash-chain verification prove the exact directive bytes selected;
   they do not independently prove founder/hardware-signer identity or semantic model compliance.
+- The runtime re-derives the contract on every dispatch/resume and rejects structural drift, but it
+  does not pretend to infer whether independently active natural-language directives conflict.
+  Explicit supersession and provisional ratification/refusal remain human authority actions.
 - Kindex remains contextual memory and incident history, never instruction authority or an
   enforcement boundary. Behavioral adherence qualification and a closed advisory process
   environment remain planned work.

@@ -203,8 +203,9 @@ if verb == "run-model":
         workspace = pathlib.Path(argument("--workspace"))
         input_root = workspace / "input"
         output_root = workspace / "output"
+        executable_root = workspace / "executables"
         workspace.mkdir(parents=True)
-        for directory in (input_root, output_root):
+        for directory in (input_root, output_root, executable_root):
             directory.mkdir()
         role = argument("--role")
         run_id = argument("--run-id")
@@ -216,6 +217,23 @@ if verb == "run-model":
         broker_raw = pathlib.Path(argument("--broker-registry")).read_bytes()
         manifest_document = json.loads(manifest_raw)
         manifest = RunnerManifest.from_dict(manifest_document)
+        executable_raw = pathlib.Path(manifest_document["executable"]).read_bytes()
+        executable_path = executable_root / "runner"
+        executable_path.write_bytes(executable_raw)
+        executable_path.chmod(0o500)
+        qualification = {
+            "backend": "fixture-qualified-v1",
+            "scope_digest": digest_obj({"scope": "fixture"}),
+            "forbidden_read_denied": True,
+            "forbidden_write_denied": True,
+            "model_network_available": True,
+            "arbitrary_shell_denied": True,
+            "process_containment": True,
+        }
+        qualification_raw = json.dumps(
+            qualification, sort_keys=True, separators=(",", ":")
+        ).encode()
+        (input_root / "runner-qualification.json").write_bytes(qualification_raw)
         dependencies = {
             item["dependency_id"]: f"fixture:{item['dependency_id']}".encode()
             for item in profile_document("lane-dispatch")["dependencies"]
@@ -269,7 +287,7 @@ if verb == "run-model":
             "summary": "The Validator caller raised before it could complete the attempt protocol.",
         }
         receipt = {
-            "schema_version": "factory-runner-failure-receipt/1",
+            "schema_version": "factory-runner-failure-receipt/2",
             "receipt_id": receipt_id,
             "run_id": run_id,
             "generation": generation,
@@ -280,11 +298,19 @@ if verb == "run-model":
             "runner_manifest_source_digest": digest_bytes(manifest_raw),
             "runner_id": manifest_document["runner_id"],
             "adapter": manifest_document["adapter"],
+            "executable_digest": digest_bytes(executable_raw),
+            "executable_snapshot": {
+                "relative_path": "executables/runner",
+                "byte_count": len(executable_raw),
+                "content_digest": digest_bytes(executable_raw),
+            },
+            "child_executable_snapshots": [],
             "runner_version": manifest_document["runner_version"],
             "model": manifest_document["model"],
             "model_version": manifest_document["model_version"],
             "configuration_digest": manifest_document["configuration_digest"],
             "state_profile_digest": manifest_document["state_profile_digest"],
+            "state_qualification_digest": manifest_document["state_qualification_digest"],
             "state_capsule_digest": capsule_digest,
             "projection_digest": digest_bytes(projection_raw),
             "task_digest": digest_bytes(task_raw),
@@ -292,16 +318,18 @@ if verb == "run-model":
             "run_ledger_head": capsule["run_ledger_head"],
             "resume_checkpoint_digest": os.environ["FACTORY_RESUME_CHECKPOINT_DIGEST"],
             "broker_registry_source_digest": digest_bytes(broker_raw),
-            "qualification_digest": "sha256:" + "2" * 64,
+            "qualification_digest": digest_obj(qualification),
+            "qualification": qualification,
             "continuity_nonce_digest": digest_obj({"continuity_nonce": continuity_nonce}),
             "prompt_schema_version": "factory-runner-prompt/3",
             "prompt_assembler_version": "factory-runner-prompt-assembler/2",
-            "prompt": {
+            "prompt_sequence": [{
                 "attempt": 1,
                 "kind": "qualification",
                 "byte_count": len(prompt_raw),
                 "content_digest": digest_bytes(prompt_raw),
-            },
+            }],
+            "prompt_bytes_retained": True,
             "diagnostic": {
                 "content_digest": digest_bytes(diagnostic_raw),
                 "byte_count": len(diagnostic_raw),
@@ -3524,6 +3552,106 @@ def test_consume_block_ignores_bounded_malformed_legacy_event_rows(tmp_path: Pat
     )
 
 
+def test_consume_block_separates_interrupted_events_tail_before_receipt(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rA-torn-consume"
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    blocking = append_blockers(root, "validator", event)
+    events_path = root / "events.jsonl"
+    with events_path.open("ab") as stream:
+        stream.write(b'{"kind":"blocking_consumed"')
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The valid event remains independently receipted.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rA-torn-consume",
+            "validator",
+            "--disposition",
+            "resolve",
+            "--reason",
+            "The valid event is resolved after isolating the interrupted tail.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert blocking.read_bytes() == b""
+    rows = []
+    malformed = 0
+    for line in events_path.read_bytes().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            malformed += 1
+    assert malformed == 1
+    assert [row["kind"] for row in rows] == ["blocking_written", "blocking_consumed"]
+
+
+def test_consume_block_rolls_back_partial_receipt_before_retry(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rA-partial-consume"
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    blocking = append_blockers(root, "validator", event)
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The stopped lane cannot dispatch again.\n", encoding="utf-8")
+    arguments = [
+        "bash",
+        str(HARNESS / "consume_block.sh"),
+        "rA-partial-consume",
+        "validator",
+        "--disposition",
+        "stop",
+        "--reason",
+        "The stalled lane was stopped before another dispatch.",
+        "--subject-digest",
+        "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+        "--evidence-file",
+        str(evidence),
+        "--evidence-digest",
+        "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+    ]
+    events_path = root / "events.jsonl"
+    prior = events_path.read_bytes()
+
+    interrupted = run(
+        arguments,
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "FACTORY_TEST_CONSUME_FAIL_AFTER_PARTIAL_RECEIPT_WRITE": "1",
+        },
+    )
+
+    assert interrupted.returncode != 0
+    assert "injected partial blocking disposition append" in interrupted.stderr
+    assert blocking.stat().st_size > 0
+    assert events_path.read_bytes() == prior
+
+    recovered = run(arguments, tmp_path, {"HARNESS_DIR": str(tmp_path / ".harness")})
+    assert recovered.returncode == 0, recovered.stderr
+    assert blocking.read_bytes() == b""
+    assert [row["kind"] for row in read_chain(events_path)] == [
+        "blocking_written",
+        "blocking_consumed",
+    ]
+
+
 def test_consume_block_noop_when_empty(tmp_path: Path) -> None:
     root = tmp_path / ".harness" / "runs" / "rB"
     (root / "lanes").mkdir(parents=True)
@@ -3972,6 +4100,51 @@ def test_blocking_event_exact_retry_repairs_killed_unterminated_tail(tmp_path: P
 
     mod.append_blocking_event(root, "coder", event)  # type: ignore[attr-defined]
 
+    assert read_chain(blocker) == [event]
+    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == [
+        "blocking_written"
+    ]
+
+
+def test_blocking_event_exact_retry_fsyncs_complete_unreceipted_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A kill after a full write but before fsync leaves valid-looking bytes.
+
+    The retry must sync that existing inode before it creates the durable write
+    receipt; accepting the row by shape alone would let the receipt outlive the
+    blocker after power loss.
+    """
+
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    lanes = root / "lanes"
+    lanes.mkdir(parents=True)
+    blocker = lanes / "coder.blocking"
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "coder quiet 30m",
+    }
+    blocker.write_text(
+        json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    blocker_identity = (blocker.stat().st_dev, blocker.stat().st_ino)
+    synced: list[tuple[int, int]] = []
+    original_fsync = mod.os.fsync  # type: ignore[attr-defined]
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append((metadata.st_dev, metadata.st_ino))
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(mod.os, "fsync", record_fsync)  # type: ignore[attr-defined]
+
+    mod.append_blocking_event(root, "coder", event)  # type: ignore[attr-defined]
+
+    assert blocker_identity in synced
     assert read_chain(blocker) == [event]
     assert [row["kind"] for row in read_chain(root / "events.jsonl")] == [
         "blocking_written"
@@ -4637,9 +4810,18 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
     diagnostic_path = retained / "validator-invocation-diagnostic.json"
     state_capsule_path = retained / "failed-state-capsule.json"
     prompt_path = retained / "failed-prompt-1.json"
+    qualification_path = retained / "runner-qualification.json"
+    executable_path = retained / "runner-executable"
     assert all(
         path.is_file()
-        for path in (receipt_path, diagnostic_path, state_capsule_path, prompt_path)
+        for path in (
+            receipt_path,
+            diagnostic_path,
+            state_capsule_path,
+            prompt_path,
+            qualification_path,
+            executable_path,
+        )
     )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert receipt["run_id"] == "r1"
@@ -4651,7 +4833,11 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
     assert receipt["state_capsule_digest"] == digest_obj(
         json.loads(state_capsule_path.read_text(encoding="utf-8"))
     )
-    assert receipt["prompt"]["content_digest"] == digest_bytes(prompt_path.read_bytes())
+    assert receipt["prompt_sequence"][0]["content_digest"] == digest_bytes(
+        prompt_path.read_bytes()
+    )
+    assert receipt["qualification_digest"] == digest_bytes(qualification_path.read_bytes())
+    assert receipt["executable_digest"] == digest_bytes(executable_path.read_bytes())
     resources = ResourceLedger(root, "r1").latest()
     assert resources["runner-workspace-coder"]["status"] == "retained"
     failure_event = next(
@@ -4666,6 +4852,12 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
     assert failure_event["evidence_digests"][
         "validator-invocation-diagnostic"
     ] == digest_bytes(diagnostic_path.read_bytes())
+    assert failure_event["evidence_digests"]["failed-prompt-1"] == digest_bytes(
+        prompt_path.read_bytes()
+    )
+    assert failure_event["evidence_digests"]["runner-executable"] == digest_bytes(
+        executable_path.read_bytes()
+    )
     assert "tmux-window-coder" not in resources
 
 
