@@ -22,6 +22,7 @@ import jsonschema
 
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
+from factory_runtime.durability import fsync_directory
 from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
 from factory_runtime.instruction_control import validate_directive_readback
 from factory_runtime.schema import DocumentValidationError, validate_document
@@ -354,6 +355,7 @@ def _write_once(path: Path, content: bytes) -> None:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    fsync_directory(path.parent)
 
 
 def _redact_diagnostic_stream(value: str, secret_values: Sequence[str]) -> str:
@@ -902,16 +904,23 @@ class HardenedModelRunner:
             "stdout": _redact_diagnostic_stream(result.stdout, secret_values),
             "stderr": _redact_diagnostic_stream(result.stderr, secret_values),
         }
+        path = workspace / "validator-invocation-diagnostic.json"
         try:
             validate_document("runner-invocation-diagnostic", diagnostic)
-        except DocumentValidationError as exc:
-            raise RunnerError(str(exc)) from exc
-        path = workspace / "validator-invocation-diagnostic.json"
-        _write_once(
-            path,
-            json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            + b"\n",
-        )
+            _write_once(
+                path,
+                json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+                + b"\n",
+            )
+        except (DocumentValidationError, OSError, RunnerError) as exc:
+            # A model process already ran. Never let a secondary evidence-retention
+            # failure erase that fact and become a zero-attempt admission refusal.
+            raise RunnerError(
+                "private invocation diagnostic could not be retained",
+                model_attempts=model_attempts,
+            ) from exc
         capsule = classify_terminal_failure(
             final={"status": "runtime-exception"},
             caller_returncode=result.returncode,

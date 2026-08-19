@@ -15,6 +15,8 @@ public API is still pre-1.0.
 - Exact-subject advisory dispositions. Clearing a blocking event now requires a typed consequence,
   bounded reason, and exact evidence bytes copied into a content-addressed run artifact before the
   event is receipted and the dispatch gate is durably released.
+- Bounded, named-secret-redacted Validator-private diagnostics for failed model invocations, paired
+  with a small downstream-safe failure capsule rather than raw runner or oracle output.
 
 ### Changed
 
@@ -31,6 +33,8 @@ public API is still pre-1.0.
   publications. Existing bytes are stable-read, re-derived, and reused; different bytes refuse.
 - Runner prompt/3 executions emit `factory-runner-receipt/3`. The original receipt/2 schema remains
   immutable for historical validation and is explicitly non-executable after this cutover.
+- Runner evidence publication fsyncs the containing directory, and a diagnostic-retention failure
+  preserves the real post-model attempt count instead of being laundered into pre-model refusal.
 
 ### Explicit boundaries
 

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import factory_runtime.runner as runtime_runner
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.instruction_control import (
     canonical_document_bytes,
@@ -735,6 +736,30 @@ def test_output_limited_invocation_classifies_without_exposing_output(tmp_path: 
     assert diagnostic["stderr"].endswith("[TRUNCATED]")
     assert len(diagnostic["stderr"].encode("utf-8")) <= 16_384
     assert "private oracle details" not in json.dumps(error.failure_capsule.document())
+
+
+def test_diagnostic_retention_failure_preserves_real_model_attempt_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    real_write_once = runtime_runner._write_once
+
+    def fail_diagnostic(path: Path, content: bytes) -> None:
+        if path.name == "validator-invocation-diagnostic.json":
+            raise OSError("injected diagnostic durability failure")
+        real_write_once(path, content)
+
+    monkeypatch.setattr(runtime_runner, "_write_once", fail_diagnostic)
+
+    with pytest.raises(
+        RunnerError,
+        match="private invocation diagnostic could not be retained",
+    ) as raised:
+        _dispatch(fixture)
+
+    assert raised.value.model_attempts == 1
 
 
 def test_secret_exfiltration_in_any_model_output_fails_closed(tmp_path: Path) -> None:
