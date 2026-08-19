@@ -29,6 +29,7 @@ from factory_core.manifest import LedgerEntry, digest_bytes, digest_obj
 from factory_core.target import load_target_manifest
 from factory_runtime.resources import ResourceLedger
 from factory_runtime.state import RunState, RunStore
+from factory_runtime.state_admission import profile_digest
 from factory_runtime.target_state import TargetResolver, normalize_repository_url, normalize_subpath
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
@@ -194,6 +195,130 @@ if verb == "bundle-orchestrator-projection":
     raise SystemExit(0)
 if verb == "run-model":
     note("run-model")
+    if os.environ.get("FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT") == "1":
+        from factory_core.manifest import digest_bytes, digest_obj
+        from factory_runtime.runner import RunnerManifest
+        from factory_runtime.state_admission import derive_state_capsule, profile_document
+
+        workspace = pathlib.Path(argument("--workspace"))
+        input_root = workspace / "input"
+        output_root = workspace / "output"
+        workspace.mkdir(parents=True)
+        for directory in (input_root, output_root):
+            directory.mkdir()
+        role = argument("--role")
+        run_id = argument("--run-id")
+        generation = int(os.environ["FACTORY_GENERATION"])
+        receipt_id = argument("--receipt-id")
+        projection_raw = pathlib.Path(argument("--projection")).read_bytes()
+        task_raw = pathlib.Path(argument("--task-file")).read_bytes()
+        manifest_raw = pathlib.Path(argument("--runner-manifest")).read_bytes()
+        broker_raw = pathlib.Path(argument("--broker-registry")).read_bytes()
+        manifest_document = json.loads(manifest_raw)
+        manifest = RunnerManifest.from_dict(manifest_document)
+        dependencies = {
+            item["dependency_id"]: f"fixture:{item['dependency_id']}".encode()
+            for item in profile_document("lane-dispatch")["dependencies"]
+        }
+        dependencies.update({
+            "runner-manifest": manifest_raw,
+            "runner-projection": projection_raw,
+            "frozen-task": task_raw,
+            "broker-registry": broker_raw,
+        })
+        capsule = derive_state_capsule(
+            purpose="lane-dispatch",
+            run_id=run_id,
+            generation=generation,
+            role=role,
+            target_state_digest=os.environ["FACTORY_TARGET_STATE_DIGEST"],
+            run_ledger_head="sha256:" + "1" * 64,
+            resume_checkpoint_digest=os.environ["FACTORY_RESUME_CHECKPOINT_DIGEST"],
+            dependencies=dependencies,
+        )
+        capsule_raw = json.dumps(capsule, sort_keys=True, separators=(",", ":")).encode() + b"\\n"
+        (input_root / "state-capsule.json").write_bytes(capsule_raw)
+        continuity_nonce = "a" * 64
+        prompt_document = {
+            "schema_version": "factory-runner-prompt/3",
+            "kind": "qualification",
+            "control": {
+                "continuity": {"store_and_echo": continuity_nonce},
+            },
+        }
+        prompt_raw = json.dumps(prompt_document, sort_keys=True, separators=(",", ":")).encode()
+        (input_root / "prompt-1.json").write_bytes(prompt_raw)
+        diagnostic = {
+            "schema_version": "factory-runner-invocation-diagnostic/1",
+            "invocation": 1,
+            "returncode": 1,
+            "termination_reason": "exit-nonzero",
+            "process_peak": 1,
+            "stdout": "private fixture output",
+            "stderr": "fixture failure",
+        }
+        diagnostic_raw = json.dumps(
+            diagnostic, sort_keys=True, separators=(",", ":")
+        ).encode() + b"\\n"
+        (workspace / "validator-invocation-diagnostic.json").write_bytes(diagnostic_raw)
+        capsule_digest = digest_obj(capsule)
+        failure_capsule = {
+            "schema_version": "factory-failure-capsule/1",
+            "owner": "validator-harness",
+            "code": "validator-caller-exception",
+            "summary": "The Validator caller raised before it could complete the attempt protocol.",
+        }
+        receipt = {
+            "schema_version": "factory-runner-failure-receipt/1",
+            "receipt_id": receipt_id,
+            "run_id": run_id,
+            "generation": generation,
+            "role": role,
+            "invocation": 1,
+            "model_attempts": 1,
+            "runner_manifest_digest": manifest.content_digest,
+            "runner_manifest_source_digest": digest_bytes(manifest_raw),
+            "runner_id": manifest_document["runner_id"],
+            "adapter": manifest_document["adapter"],
+            "runner_version": manifest_document["runner_version"],
+            "model": manifest_document["model"],
+            "model_version": manifest_document["model_version"],
+            "configuration_digest": manifest_document["configuration_digest"],
+            "state_profile_digest": manifest_document["state_profile_digest"],
+            "state_capsule_digest": capsule_digest,
+            "projection_digest": digest_bytes(projection_raw),
+            "task_digest": digest_bytes(task_raw),
+            "target_state_digest": os.environ["FACTORY_TARGET_STATE_DIGEST"],
+            "run_ledger_head": capsule["run_ledger_head"],
+            "resume_checkpoint_digest": os.environ["FACTORY_RESUME_CHECKPOINT_DIGEST"],
+            "broker_registry_source_digest": digest_bytes(broker_raw),
+            "qualification_digest": "sha256:" + "2" * 64,
+            "continuity_nonce_digest": digest_obj({"continuity_nonce": continuity_nonce}),
+            "prompt_schema_version": "factory-runner-prompt/3",
+            "prompt_assembler_version": "factory-runner-prompt-assembler/2",
+            "prompt": {
+                "attempt": 1,
+                "kind": "qualification",
+                "byte_count": len(prompt_raw),
+                "content_digest": digest_bytes(prompt_raw),
+            },
+            "diagnostic": {
+                "content_digest": digest_bytes(diagnostic_raw),
+                "byte_count": len(diagnostic_raw),
+                "visibility": "validator-private",
+            },
+            "termination_reason": "exit-nonzero",
+            "returncode": 1,
+            "process_peak": 1,
+            "failure_capsule": failure_capsule,
+            "failed_at": 1,
+        }
+        (workspace / "runner-failure-receipt.json").write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\\n",
+            encoding="utf-8",
+        )
+        print(json.dumps({"status": "failed", "failure_receipt": receipt}))
+        raise SystemExit(70)
     if os.environ.get("FACTORY_TEST_RUN_MODEL_FAIL") == "1":
         raise SystemExit(70)
     workspace = pathlib.Path(argument("--workspace"))
@@ -1315,6 +1440,16 @@ def load_attention_gate() -> object:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def append_blockers(root: Path, lane: str, *events: Mapping[str, object]) -> Path:
+    """Publish test blockers through the production receipt-bearing writer."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    mod = load_attention_gate()
+    for event in events:
+        mod.append_blocking_event(root, lane, event)  # type: ignore[attr-defined]
+    return root / "lanes" / f"{lane}.blocking"
 
 
 def test_promise_detection_catches_announced_intent() -> None:
@@ -3186,32 +3321,22 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     a blocking_consumed record (so clearing-without-reading is visible by its
     absence), then atomically truncates the file to release the gate."""
     root = tmp_path / ".harness" / "runs" / "rA"
-    (root / "lanes").mkdir(parents=True)
-    blocking = root / "lanes" / "validator.blocking"
-    blocking.write_text(
-        json.dumps(
-            {
-                "ts": "2026-08-19T12:00:00+00:00",
-                "class": "stall",
-                "evidence": "validator quiet 30m",
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "ts": "2026-08-19T12:00:01+00:00",
-                "class": "orchestrator_response",
-                "response": "wakes/wake-1.response.md",
-                "wake": "wake-1",
-                "trust_class": "untrusted-advisory",
-                "effect_route": "validator-blocking-only",
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
+    blocking = append_blockers(
+        root,
+        "validator",
+        {
+            "ts": "2026-08-19T12:00:00+00:00",
+            "class": "stall",
+            "evidence": "validator quiet 30m",
+        },
+        {
+            "ts": "2026-08-19T12:00:01+00:00",
+            "class": "orchestrator_response",
+            "response": "wakes/wake-1.response.md",
+            "wake": "wake-1",
+            "trust_class": "untrusted-advisory",
+            "effect_route": "validator-blocking-only",
+        },
     )
     evidence = root / "disposition-proof.txt"
     evidence.write_text("The narrowed task excludes the disputed surface.\n", encoding="utf-8")
@@ -3241,28 +3366,26 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     assert "dispositioned 2" in r.stdout
     assert (root / "lanes" / "validator.blocking").read_text() == ""
     events = read_chain(root / "events.jsonl")
-    assert len(events) == 2 and all(e["kind"] == "blocking_consumed" for e in events)
-    assert all(e["disposition"] == "narrow" for e in events)
-    assert all(e["blocking_subject_digest"] == subject_digest for e in events)
-    assert all(e["disposition_evidence_digest"] == evidence_digest for e in events)
-    retained = root / events[0]["disposition_evidence_id"]
+    consumed = [event for event in events if event["kind"] == "blocking_consumed"]
+    assert len(consumed) == 2
+    assert all(e["disposition"] == "narrow" for e in consumed)
+    assert all(e["blocking_subject_digest"] == subject_digest for e in consumed)
+    assert all(e["disposition_evidence_digest"] == evidence_digest for e in consumed)
+    retained = root / consumed[0]["disposition_evidence_id"]
     assert retained.read_bytes() == evidence.read_bytes()
-    assert all(e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in events)
+    assert all(
+        e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in consumed
+    )
 
 
 def test_consume_block_durably_receipts_before_clearing_gate(tmp_path: Path) -> None:
     root = tmp_path / ".harness" / "runs" / "rA-crash"
-    (root / "lanes").mkdir(parents=True)
-    blocking = root / "lanes" / "validator.blocking"
     event = {
         "ts": "2026-08-19T12:00:00+00:00",
         "class": "stall",
         "evidence": "validator quiet 30m",
     }
-    blocking.write_text(
-        json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    blocking = append_blockers(root, "validator", event)
     evidence = root / "disposition-proof.txt"
     evidence.write_text("The stalled lane was stopped.\n", encoding="utf-8")
     arguments = [
@@ -3295,7 +3418,8 @@ def test_consume_block_durably_receipts_before_clearing_gate(tmp_path: Path) -> 
     assert "after durable receipt" in interrupted.stderr
     assert blocking.stat().st_size > 0
     assert [item["kind"] for item in read_chain(root / "events.jsonl")] == [
-        "blocking_consumed"
+        "blocking_written",
+        "blocking_consumed",
     ]
 
     recovered = run(
@@ -3306,8 +3430,98 @@ def test_consume_block_durably_receipts_before_clearing_gate(tmp_path: Path) -> 
     assert recovered.returncode == 0, recovered.stderr
     assert blocking.read_bytes() == b""
     assert [item["kind"] for item in read_chain(root / "events.jsonl")] == [
-        "blocking_consumed"
+        "blocking_written",
+        "blocking_consumed",
     ]
+
+
+def test_consume_block_refuses_orphan_without_write_receipt(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rA-orphan"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    blocking.write_text(
+        json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The event has no durable publication receipt.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rA-orphan",
+            "validator",
+            "--disposition",
+            "stop",
+            "--reason",
+            "An orphan cannot be consumed until its producer recovers the receipt.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode != 0
+    assert "lacks exactly one durable write receipt" in result.stderr
+    assert blocking.stat().st_size > 0
+    assert not (root / "evidence" / "dispositions").exists()
+
+
+def test_consume_block_ignores_bounded_malformed_legacy_event_rows(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rA-legacy"
+    root.mkdir(parents=True)
+    (root / "events.jsonl").write_bytes(b"interrupted legacy tail")
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    blocking = append_blockers(root, "validator", event)
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The valid event remains independently receipted.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rA-legacy",
+            "validator",
+            "--disposition",
+            "resolve",
+            "--reason",
+            "The valid event is resolved without trusting the legacy fragment.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert blocking.read_bytes() == b""
+    assert any(
+        row.get("kind") == "blocking_consumed"
+        for row in (
+            json.loads(line)
+            for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.startswith("{")
+        )
+    )
 
 
 def test_consume_block_noop_when_empty(tmp_path: Path) -> None:
@@ -3487,22 +3701,17 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
 
 def test_disposition_releases_same_unpublished_dispatch(tmp_path: Path) -> None:
     cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    (root / "lanes").mkdir(parents=True)
-    blocking = root / "lanes" / "validator.blocking"
-    blocking.write_text(
-        json.dumps(
-            {
-                "ts": "2026-08-19T12:00:00+00:00",
-                "class": "orchestrator_response",
-                "response": "wakes/wake-1.response.md",
-                "wake": "wake-1",
-                "trust_class": "untrusted-advisory",
-                "effect_route": "validator-blocking-only",
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
+    blocking = append_blockers(
+        root,
+        "validator",
+        {
+            "ts": "2026-08-19T12:00:00+00:00",
+            "class": "orchestrator_response",
+            "response": "wakes/wake-1.response.md",
+            "wake": "wake-1",
+            "trust_class": "untrusted-advisory",
+            "effect_route": "validator-blocking-only",
+        },
     )
     environment = _dispatch_env(stub, root)
 
@@ -3710,6 +3919,80 @@ def test_blocking_event_partial_append_rolls_back_and_exact_retry_recovers(
     ) == 1
 
 
+def test_attention_append_rollback_preserves_preexisting_durable_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    root.mkdir()
+    events = root / "events.jsonl"
+    prior = b'{"kind":"legacy-dispatcher-event"}\n'
+    events.write_bytes(prior)
+    original_write = mod.os.write  # type: ignore[attr-defined]
+    calls = 0
+
+    def interrupted_write(descriptor: int, payload: bytes) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return original_write(descriptor, payload[:7])
+        raise OSError("injected attention receipt failure")
+
+    monkeypatch.setattr(mod.os, "write", interrupted_write)  # type: ignore[attr-defined]
+    with pytest.raises(OSError, match="injected attention receipt failure"):
+        mod._append_jsonl(  # type: ignore[attr-defined]
+            events,
+            {
+                "ts": "2026-08-19T12:00:00+00:00",
+                "kind": "blocking_written",
+                "lane": "coder",
+                "event": {
+                    "ts": "2026-08-19T12:00:00+00:00",
+                    "class": "stall",
+                    "evidence": "coder quiet 30m",
+                },
+            },
+        )
+
+    assert events.read_bytes() == prior
+
+
+def test_blocking_event_exact_retry_repairs_killed_unterminated_tail(tmp_path: Path) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    (root / "lanes").mkdir(parents=True)
+    blocker = root / "lanes" / "coder.blocking"
+    blocker.write_bytes(b'{"class')
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "coder quiet 30m",
+    }
+
+    mod.append_blocking_event(root, "coder", event)  # type: ignore[attr-defined]
+
+    assert read_chain(blocker) == [event]
+    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == [
+        "blocking_written"
+    ]
+
+
+def test_inherited_dispatch_descriptor_repeats_blocker_admission(tmp_path: Path) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    lanes = root / "lanes"
+    lanes.mkdir(parents=True)
+    lock_path = lanes / ".dispatch-coder.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    (lanes / "validator.blocking").write_text("pending\n", encoding="utf-8")
+    try:
+        with pytest.raises(mod.BlockingEventPending):  # type: ignore[attr-defined]
+            mod.verify_dispatch_lock(root, "coder", descriptor)  # type: ignore[attr-defined]
+    finally:
+        os.close(descriptor)
+
+
 @pytest.mark.parametrize("retained_publications", [1, 2, 3, 4])
 def test_dispatch_exact_retry_recovers_after_partial_instruction_publication(
     tmp_path: Path,
@@ -3908,13 +4191,50 @@ def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
     qualifications = runner_config / "qualifications"
     for directory in (manifests, registries, secrets, qualifications):
         directory.mkdir(parents=True, exist_ok=True)
+    output_schema = runner_config / "runner-output.schema.json"
+    output_schema.write_text(
+        (
+            Path(__file__).resolve().parents[1]
+            / "factory_runtime"
+            / "schemas"
+            / "runner-output.schema.json"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     for role in ("coder", "tester"):
         (manifests / f"{role}.json").write_text(
             json.dumps(
                 {
+                    "schema_version": "factory-runner-manifest/2",
+                    "runner_id": f"fixture-{role}",
                     "role": role,
                     "adapter": "codex",
-                    "limits": {"max_cost_microusd": 1000},
+                    "executable": sys.executable,
+                    "child_executables": [],
+                    "runner_version": "fixture-1",
+                    "model": "fixture-model",
+                    "model_version": "fixture-model-1",
+                    "configuration_digest": digest_obj({"fixture": role}),
+                    "state_profile_digest": profile_digest("lane-dispatch"),
+                    "state_qualification_digest": digest_obj({"qualified": role}),
+                    "billing_key_name": "TEST_TOKEN",
+                    "secret_names": ["TEST_TOKEN"],
+                    "output_schema_digest": digest_bytes(output_schema.read_bytes()),
+                    "network_mode": "unrestricted-outbound",
+                    "limits": {
+                        "wall_seconds": 60,
+                        "idle_seconds": 10,
+                        "max_processes": 4,
+                        "max_attempts": 3,
+                        "max_output_bytes": 65536,
+                        "max_tokens": 1000,
+                        "max_cost_microusd": 1000,
+                    },
+                    "pricing": {
+                        "input_microusd_per_million": 1,
+                        "output_microusd_per_million": 1,
+                    },
+                    "created_at": 1,
                 }
             )
             + "\n",
@@ -3932,16 +4252,6 @@ def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
             json.dumps({"observations": [], "test_fixture": True}) + "\n",
             encoding="utf-8",
         )
-    output_schema = runner_config / "runner-output.schema.json"
-    output_schema.write_text(
-        (
-            Path(__file__).resolve().parents[1]
-            / "factory_runtime"
-            / "schemas"
-            / "runner-output.schema.json"
-        ).read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     return {
         "HARNESS_DIR": str(root.parent.parent),
         "FACTORY_RUNS_DIR": str(root.parent),
@@ -4305,6 +4615,57 @@ def test_dispatch_failed_canary_executes_no_broker_operation(tmp_path: Path) -> 
     assert len(read_chain(root / "budget-reservations.jsonl")) == 1
     resources = ResourceLedger(root, "r1").latest()
     assert resources["runner-workspace-coder"]["status"] in {"abandoned", "retained"}
+    assert "tmux-window-coder" not in resources
+
+
+def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "no broker operation was executed" in result.stderr
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    retained = root / "evidence" / "runner" / "coder"
+    receipt_path = retained / "runner-failure-receipt.json"
+    diagnostic_path = retained / "validator-invocation-diagnostic.json"
+    state_capsule_path = retained / "failed-state-capsule.json"
+    prompt_path = retained / "failed-prompt-1.json"
+    assert all(
+        path.is_file()
+        for path in (receipt_path, diagnostic_path, state_capsule_path, prompt_path)
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["run_id"] == "r1"
+    assert receipt["role"] == "coder"
+    assert receipt["failure_capsule"]["owner"] == "validator-harness"
+    assert receipt["diagnostic"]["content_digest"] == digest_bytes(
+        diagnostic_path.read_bytes()
+    )
+    assert receipt["state_capsule_digest"] == digest_obj(
+        json.loads(state_capsule_path.read_text(encoding="utf-8"))
+    )
+    assert receipt["prompt"]["content_digest"] == digest_bytes(prompt_path.read_bytes())
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["runner-workspace-coder"]["status"] == "retained"
+    failure_event = next(
+        record
+        for record in ResourceLedger(root, "r1").records()
+        if record["resource_id"] == "runner-workspace-coder"
+        and record["status"] == "failed"
+    )
+    assert failure_event["evidence_digests"]["runner-failure-receipt"] == digest_bytes(
+        receipt_path.read_bytes()
+    )
+    assert failure_event["evidence_digests"][
+        "validator-invocation-diagnostic"
+    ] == digest_bytes(diagnostic_path.read_bytes())
     assert "tmux-window-coder" not in resources
 
 

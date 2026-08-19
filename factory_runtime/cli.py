@@ -36,6 +36,7 @@ from factory_runtime.runner import (
     HardenedModelRunner,
     NamedSecretStore,
     RunnerError,
+    RunnerInvocationError,
     RunnerManifest,
 )
 from factory_runtime.runner_isolation import MacOSNetworkedRunner
@@ -1426,6 +1427,18 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                     count,
                 ),
             )
+        except RunnerInvocationError as exc:
+            arguments._model_attempts = exc.model_attempts
+            _emit(
+                {
+                    "status": "failed",
+                    "run_id": arguments.run_id,
+                    "role": arguments.role,
+                    "failure_receipt": dict(exc.failure_receipt),
+                    "failure_receipt_path": str(exc.failure_receipt_path),
+                }
+            )
+            raise
         except RunnerError as exc:
             arguments._model_attempts = exc.model_attempts
             raise

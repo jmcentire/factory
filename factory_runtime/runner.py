@@ -25,6 +25,7 @@ from factory_core.provenance import PhaseArtifact
 from factory_runtime.durability import fsync_directory
 from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
 from factory_runtime.instruction_control import validate_directive_readback
+from factory_runtime.runner_termination import COMPLETED
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state_admission import (
     StateAdmissionError,
@@ -77,11 +78,15 @@ class RunnerInvocationError(RunnerError):
         message: str,
         *,
         diagnostic_path: Path,
+        failure_receipt_path: Path,
+        failure_receipt: Mapping[str, Any],
         failure_capsule: FailureCapsule,
         model_attempts: int,
     ) -> None:
         super().__init__(message, model_attempts=model_attempts)
         self.diagnostic_path = diagnostic_path
+        self.failure_receipt_path = failure_receipt_path
+        self.failure_receipt = dict(failure_receipt)
         self.failure_capsule = failure_capsule
 
 
@@ -804,11 +809,29 @@ class HardenedModelRunner:
             except RunnerError as exc:
                 raise self._invocation_error(
                     workspace=workspace,
+                    run_id=run_id,
+                    generation=generation,
+                    receipt_id=receipt_id,
                     invocation=index,
                     result=result,
                     secret_values=tuple(secrets.values()),
                     message=str(exc),
                     model_attempts=max(exc.model_attempts, index),
+                    manifest=manifest,
+                    manifest_bytes=manifest_bytes,
+                    projection_digest=projection_digest,
+                    task_digest=task_digest,
+                    state_capsule_digest=state_capsule_digest,
+                    target_state_digest=target_state_digest,
+                    run_ledger_head=run_ledger_head,
+                    resume_checkpoint_digest=resume_checkpoint_digest,
+                    broker_registry_source_digest=broker_registry_source_digest,
+                    qualification_digest=qualification.content_digest,
+                    continuity_nonce_digest=digest_obj(
+                        {"continuity_nonce": continuity_nonce}
+                    ),
+                    prompt=prompt_sequence[index - 1],
+                    failed_at=self._clock(),
                 ) from exc
 
         handoff = dict(results[-1].structured_output)
@@ -866,7 +889,7 @@ class HardenedModelRunner:
             "cost_known": cost is not None,
             "meter_semantics": "observed-post-call",
             "process_peak": max(result.process_peak for result in results),
-            "termination_reason": "completed",
+            "termination_reason": COMPLETED,
             "handoff_digest": digest_bytes(handoff_bytes),
             "started_at": started_at,
             "finished_at": self._clock(),
@@ -887,11 +910,27 @@ class HardenedModelRunner:
     def _invocation_error(
         *,
         workspace: Path,
+        run_id: str,
+        generation: int,
+        receipt_id: str,
         invocation: int,
         result: RunnerProcessResult,
         secret_values: Sequence[str],
         message: str,
         model_attempts: int,
+        manifest: RunnerManifest,
+        manifest_bytes: bytes,
+        projection_digest: str,
+        task_digest: str,
+        state_capsule_digest: str,
+        target_state_digest: str,
+        run_ledger_head: str,
+        resume_checkpoint_digest: str,
+        broker_registry_source_digest: str,
+        qualification_digest: str,
+        continuity_nonce_digest: str,
+        prompt: Mapping[str, Any],
+        failed_at: int,
     ) -> RunnerInvocationError:
         """Write only bounded, redacted output outside the model's grants."""
 
@@ -905,15 +944,13 @@ class HardenedModelRunner:
             "stderr": _redact_diagnostic_stream(result.stderr, secret_values),
         }
         path = workspace / "validator-invocation-diagnostic.json"
+        diagnostic_bytes = (
+            json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
         try:
             validate_document("runner-invocation-diagnostic", diagnostic)
-            _write_once(
-                path,
-                json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode(
-                    "utf-8"
-                )
-                + b"\n",
-            )
+            _write_once(path, diagnostic_bytes)
         except (DocumentValidationError, OSError, RunnerError) as exc:
             # A model process already ran. Never let a secondary evidence-retention
             # failure erase that fact and become a zero-attempt admission refusal.
@@ -931,9 +968,68 @@ class HardenedModelRunner:
             tester_receipt_present=False,
             invocation_termination_reason=result.termination_reason,
         )
+        failure_receipt = {
+            "schema_version": "factory-runner-failure-receipt/1",
+            "receipt_id": receipt_id,
+            "run_id": run_id,
+            "generation": generation,
+            "role": manifest.document["role"],
+            "invocation": invocation,
+            "model_attempts": model_attempts,
+            "runner_manifest_digest": manifest.content_digest,
+            "runner_manifest_source_digest": digest_bytes(manifest_bytes),
+            "runner_id": manifest.document["runner_id"],
+            "adapter": manifest.document["adapter"],
+            "runner_version": manifest.document["runner_version"],
+            "model": manifest.document["model"],
+            "model_version": manifest.document["model_version"],
+            "configuration_digest": manifest.document["configuration_digest"],
+            "state_profile_digest": manifest.document["state_profile_digest"],
+            "state_capsule_digest": state_capsule_digest,
+            "projection_digest": projection_digest,
+            "task_digest": task_digest,
+            "target_state_digest": target_state_digest,
+            "run_ledger_head": run_ledger_head,
+            "resume_checkpoint_digest": resume_checkpoint_digest,
+            "broker_registry_source_digest": broker_registry_source_digest,
+            "qualification_digest": qualification_digest,
+            "continuity_nonce_digest": continuity_nonce_digest,
+            "prompt_schema_version": _PROMPT_SCHEMA_VERSION,
+            "prompt_assembler_version": _PROMPT_ASSEMBLER_VERSION,
+            "prompt": dict(prompt),
+            "diagnostic": {
+                "content_digest": digest_bytes(diagnostic_bytes),
+                "byte_count": len(diagnostic_bytes),
+                "visibility": "validator-private",
+            },
+            "termination_reason": result.termination_reason,
+            "returncode": result.returncode,
+            "process_peak": result.process_peak,
+            "failure_capsule": capsule.document(),
+            "failed_at": failed_at,
+        }
+        failure_receipt_path = workspace / "runner-failure-receipt.json"
+        try:
+            validate_document("runner-failure-receipt", failure_receipt)
+            _write_once(
+                failure_receipt_path,
+                json.dumps(
+                    failure_receipt,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                + b"\n",
+            )
+        except (DocumentValidationError, OSError, RunnerError) as exc:
+            raise RunnerError(
+                "private invocation failure receipt could not be retained",
+                model_attempts=model_attempts,
+            ) from exc
         return RunnerInvocationError(
             message,
             diagnostic_path=path,
+            failure_receipt_path=failure_receipt_path,
+            failure_receipt=failure_receipt,
             failure_capsule=capsule,
             model_attempts=model_attempts,
         )
@@ -1016,7 +1112,7 @@ class HardenedModelRunner:
 
     @staticmethod
     def _require_process_success(result: RunnerProcessResult, limits: RunnerLimits) -> None:
-        if result.returncode != 0 or result.termination_reason != "completed":
+        if result.returncode != 0 or result.termination_reason != COMPLETED:
             raise RunnerError(
                 f"runner process failed closed: {result.termination_reason} / {result.returncode}"
             )

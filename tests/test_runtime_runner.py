@@ -28,6 +28,10 @@ from factory_runtime.runner import (
     RunnerProcessResult,
     RunnerQualification,
 )
+from factory_runtime.runner_failure import (
+    RunnerFailureEvidenceError,
+    verify_and_retain_runner_failure,
+)
 from factory_runtime.runner_isolation import MacOSNetworkedRunner
 from factory_runtime.schema import validate_document
 from factory_runtime.state_admission import derive_state_capsule, profile_digest
@@ -640,7 +644,7 @@ def test_canary_must_echo_exact_state_capsule_digest(tmp_path: Path) -> None:
         (lambda backend: backend.kinds.__setitem__(0, "handoff"), "wrong kind", 1),
         (lambda backend: backend.returncodes.__setitem__(0, 1), "failed closed", 1),
         (
-            lambda backend: backend.termination_reasons.__setitem__(0, "no-artifact"),
+            lambda backend: backend.termination_reasons.__setitem__(0, "process-escape"),
             "failed closed",
             1,
         ),
@@ -700,7 +704,7 @@ def test_failed_invocation_writes_redacted_private_diagnostics_and_safe_capsule(
     fixture = _fixture(tmp_path)
     backend = fixture[1]
     backend.returncodes[0] = 1
-    backend.termination_reasons[0] = "wall-timeout"
+    backend.termination_reasons[0] = "wall-limit"
     backend.stdout[0] = "named-secret-value private model output"
     backend.stderr[0] = "runner timed out"
 
@@ -709,13 +713,39 @@ def test_failed_invocation_writes_redacted_private_diagnostics_and_safe_capsule(
 
     error = raised.value
     diagnostic = json.loads(error.diagnostic_path.read_text(encoding="utf-8"))
+    failure_receipt = json.loads(error.failure_receipt_path.read_text(encoding="utf-8"))
+    validate_document("runner-failure-receipt", failure_receipt)
     assert error.failure_capsule.owner == "validator-harness"
     assert error.failure_capsule.code == "runner-invocation-timeout"
     assert diagnostic["stdout"] == "[REDACTED] private model output"
     assert diagnostic["stderr"] == "runner timed out"
-    assert diagnostic["termination_reason"] == "wall-timeout"
+    assert diagnostic["termination_reason"] == "wall-limit"
     assert error.diagnostic_path == fixture[5] / "validator-invocation-diagnostic.json"
+    assert error.failure_receipt_path == fixture[5] / "runner-failure-receipt.json"
     assert str(error.diagnostic_path) not in backend.calls[0]["writable"]
+    assert str(error.failure_receipt_path) not in backend.calls[0]["writable"]
+    assert failure_receipt == error.failure_receipt
+    assert failure_receipt["run_id"] == "run-1"
+    assert failure_receipt["generation"] == 1
+    assert failure_receipt["role"] == "coder"
+    assert failure_receipt["receipt_id"] == "runner-receipt-1"
+    assert failure_receipt["invocation"] == 1
+    assert failure_receipt["model_attempts"] == 1
+    assert failure_receipt["prompt"] == {
+        "attempt": 1,
+        "kind": "qualification",
+        "byte_count": len((fixture[5] / "input" / "prompt-1.json").read_bytes()),
+        "content_digest": digest_bytes(
+            (fixture[5] / "input" / "prompt-1.json").read_bytes()
+        ),
+    }
+    assert failure_receipt["diagnostic"] == {
+        "content_digest": digest_bytes(error.diagnostic_path.read_bytes()),
+        "byte_count": len(error.diagnostic_path.read_bytes()),
+        "visibility": "validator-private",
+    }
+    assert failure_receipt["termination_reason"] == "wall-limit"
+    assert failure_receipt["failure_capsule"] == error.failure_capsule.document()
     assert "private model output" not in json.dumps(error.failure_capsule.document())
     assert "named-secret-value" not in error.diagnostic_path.read_text(encoding="utf-8")
 
@@ -736,6 +766,113 @@ def test_output_limited_invocation_classifies_without_exposing_output(tmp_path: 
     assert diagnostic["stderr"].endswith("[TRUNCATED]")
     assert len(diagnostic["stderr"].encode("utf-8")) <= 16_384
     assert "private oracle details" not in json.dumps(error.failure_capsule.document())
+
+
+def test_failed_invocation_crosses_lane_boundary_with_exact_retained_state(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    fixture[1].termination_reasons[0] = "exit-nonzero"
+    with pytest.raises(RunnerInvocationError):
+        _dispatch(fixture)
+
+    manifest_path = tmp_path / "runner-manifest.json"
+    manifest_path.write_bytes(
+        json.dumps(fixture[2], sort_keys=True, separators=(",", ":")).encode()
+    )
+    task_path = tmp_path / "task.md"
+    task_path.write_bytes(b"Implement the signed criterion")
+    evidence_root = tmp_path / "evidence" / "runner" / "coder"
+    evidence_root.mkdir(parents=True)
+    target_digest = digest_obj({"target": "fixture"})
+    resume_digest = digest_obj({"resume": "fixture"})
+
+    detail = verify_and_retain_runner_failure(
+        workspace=fixture[5],
+        evidence_root=evidence_root,
+        run_root=tmp_path,
+        projection_path=fixture[3],
+        task_path=task_path,
+        manifest_path=manifest_path,
+        expected_run_id="run-1",
+        expected_generation=1,
+        expected_role="coder",
+        expected_receipt_id="runner-receipt-1",
+        expected_target_state_digest=target_digest,
+        expected_resume_checkpoint_digest=resume_digest,
+    )
+
+    assert detail["disposition"] == {
+        "reason": "qualified runner invocation failed",
+        "residue": True,
+    }
+    assert detail["evidence_digests"]["runner-failure-receipt"] == digest_bytes(
+        (evidence_root / "runner-failure-receipt.json").read_bytes()
+    )
+    assert (evidence_root / "runner-failure-receipt.json").read_bytes() == (
+        fixture[5] / "runner-failure-receipt.json"
+    ).read_bytes()
+    assert (evidence_root / "validator-invocation-diagnostic.json").read_bytes() == (
+        fixture[5] / "validator-invocation-diagnostic.json"
+    ).read_bytes()
+    assert (evidence_root / "failed-state-capsule.json").read_bytes() == (
+        fixture[5] / "input" / "state-capsule.json"
+    ).read_bytes()
+    assert (evidence_root / "failed-prompt-1.json").read_bytes() == (
+        fixture[5] / "input" / "prompt-1.json"
+    ).read_bytes()
+
+    receipt_path = fixture[5] / "runner-failure-receipt.json"
+    original_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt = dict(original_receipt)
+    receipt["projection_digest"] = "sha256:" + "f" * 64
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RunnerFailureEvidenceError, match="different projection"):
+        verify_and_retain_runner_failure(
+            workspace=fixture[5],
+            evidence_root=evidence_root,
+            run_root=tmp_path,
+            projection_path=fixture[3],
+            task_path=task_path,
+            manifest_path=manifest_path,
+            expected_run_id="run-1",
+            expected_generation=1,
+            expected_role="coder",
+            expected_receipt_id="runner-receipt-1",
+            expected_target_state_digest=target_digest,
+            expected_resume_checkpoint_digest=resume_digest,
+        )
+
+    receipt = dict(original_receipt)
+    receipt["failure_capsule"] = {
+        "schema_version": "factory-failure-capsule/1",
+        "owner": "host-prerequisite",
+        "code": "validator-launch-environment-unavailable",
+        "summary": "A model-authored but schema-valid ownership reassignment.",
+    }
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RunnerFailureEvidenceError, match="failure classification"):
+        verify_and_retain_runner_failure(
+            workspace=fixture[5],
+            evidence_root=evidence_root,
+            run_root=tmp_path,
+            projection_path=fixture[3],
+            task_path=task_path,
+            manifest_path=manifest_path,
+            expected_run_id="run-1",
+            expected_generation=1,
+            expected_role="coder",
+            expected_receipt_id="runner-receipt-1",
+            expected_target_state_digest=target_digest,
+            expected_resume_checkpoint_digest=resume_digest,
+        )
 
 
 def test_diagnostic_retention_failure_preserves_real_model_attempt_count(

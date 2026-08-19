@@ -73,6 +73,16 @@ MAX_EVIDENCE_BYTES = 1_048_576
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
+def require_utc_timestamp(value, label):
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 64:
+        raise SystemExit(f"{label} has an invalid timestamp")
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise SystemExit(f"{label} has an invalid timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != datetime.timedelta(0):
+        raise SystemExit(f"{label} timestamp is not UTC")
+
 def identity(metadata):
     return (
         metadata.st_dev,
@@ -246,7 +256,6 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
     actual_evidence_digest = "sha256:" + hashlib.sha256(evidence_raw).hexdigest()
     if actual_evidence_digest != evidence_digest:
         raise SystemExit("disposition evidence differs from its supplied digest")
-    evidence_id = retain_evidence(evidence_raw, evidence_digest)
     events_path.parent.mkdir(parents=True, exist_ok=True)
     event_flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     event_fd = os.open(events_path, event_flags, 0o600)
@@ -256,16 +265,67 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
     with os.fdopen(event_fd, "r+", encoding="utf-8") as sink:
         fcntl.flock(sink, fcntl.LOCK_EX)
         sink.seek(0)
+        expected_events = dict(zip(event_digests, events, strict=True))
+        written_counts = {digest: 0 for digest in event_digests}
         prior = {}
         for number, line in enumerate(sink, 1):
             if not line.strip():
                 continue
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f"events ledger row {number} is not JSON: {exc}") from exc
-            if record.get("kind") == "blocking_consumed" and record.get("lane") == lane:
-                prior[str(record.get("event_digest", ""))] = record
+            except json.JSONDecodeError:
+                # events.jsonl is a mature heterogeneous stream.  Bounded malformed
+                # legacy rows grant no authority but cannot permanently wedge a new,
+                # independently receipted blocker.
+                continue
+            if not isinstance(record, dict):
+                continue
+            kind = record.get("kind")
+            record_lane = record.get("lane")
+            if kind == "blocking_written" and record_lane == lane:
+                record_event = record.get("event")
+                try:
+                    candidate = validate_blocking_event(record_event)
+                except AttentionGateError:
+                    continue
+                candidate_digest = "sha256:" + hashlib.sha256(
+                    canonical(candidate).encode("utf-8")
+                ).hexdigest()
+                if candidate_digest not in expected_events:
+                    continue
+                if set(record) != {"ts", "kind", "lane", "event"}:
+                    raise SystemExit("matching blocking write receipt has an invalid shape")
+                require_utc_timestamp(record["ts"], "matching blocking write receipt")
+                if record["ts"] != candidate["ts"]:
+                    raise SystemExit("matching blocking write receipt timestamp differs")
+                written_counts[candidate_digest] += 1
+                continue
+            if kind != "blocking_consumed" or record_lane != lane:
+                continue
+            record_digest = str(record.get("event_digest", ""))
+            if record_digest not in expected_events:
+                continue
+            expected_keys = {
+                "ts", "kind", "lane", "event", "event_digest",
+                "blocking_subject_digest", "disposition", "disposition_reason",
+                "disposition_evidence_id", "disposition_evidence_digest",
+                "disposition_evidence_byte_count",
+            }
+            if set(record) != expected_keys:
+                raise SystemExit("matching blocking disposition receipt has an invalid shape")
+            require_utc_timestamp(record["ts"], "matching blocking disposition receipt")
+            try:
+                receipt_event = validate_blocking_event(record["event"])
+            except AttentionGateError as exc:
+                raise SystemExit("matching blocking disposition receipt has an invalid event") from exc
+            if canonical(receipt_event) != canonical(expected_events[record_digest]):
+                raise SystemExit("blocking disposition receipt event differs from its digest")
+            if record_digest in prior:
+                raise SystemExit("blocking event has duplicate disposition receipts")
+            prior[record_digest] = record
+        if any(count != 1 for count in written_counts.values()):
+            raise SystemExit("blocking event lacks exactly one durable write receipt")
+        evidence_id = retain_evidence(evidence_raw, evidence_digest)
         timestamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
         sink.seek(0, os.SEEK_END)
         for event, event_digest in zip(events, event_digests, strict=True):

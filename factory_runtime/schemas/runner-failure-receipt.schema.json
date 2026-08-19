@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/runner-failure-receipt/1",
+  "title": "Factory failed runner invocation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "run_id",
+    "generation",
+    "role",
+    "invocation",
+    "model_attempts",
+    "runner_manifest_digest",
+    "runner_manifest_source_digest",
+    "runner_id",
+    "adapter",
+    "runner_version",
+    "model",
+    "model_version",
+    "configuration_digest",
+    "state_profile_digest",
+    "state_capsule_digest",
+    "projection_digest",
+    "task_digest",
+    "target_state_digest",
+    "run_ledger_head",
+    "resume_checkpoint_digest",
+    "broker_registry_source_digest",
+    "qualification_digest",
+    "continuity_nonce_digest",
+    "prompt_schema_version",
+    "prompt_assembler_version",
+    "prompt",
+    "diagnostic",
+    "termination_reason",
+    "returncode",
+    "process_peak",
+    "failure_capsule",
+    "failed_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-runner-failure-receipt/1"},
+    "receipt_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "invocation": {"type": "integer", "minimum": 1, "maximum": 3},
+    "model_attempts": {"type": "integer", "minimum": 1, "maximum": 3},
+    "runner_manifest_digest": {"$ref": "#/$defs/digest"},
+    "runner_manifest_source_digest": {"$ref": "#/$defs/digest"},
+    "runner_id": {"$ref": "#/$defs/id"},
+    "adapter": {"enum": ["codex", "ollama-codex"]},
+    "runner_version": {"type": "string", "minLength": 1, "maxLength": 256},
+    "model": {"type": "string", "minLength": 1, "maxLength": 256},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 256},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "state_profile_digest": {"$ref": "#/$defs/digest"},
+    "state_capsule_digest": {"$ref": "#/$defs/digest"},
+    "projection_digest": {"$ref": "#/$defs/digest"},
+    "task_digest": {"$ref": "#/$defs/digest"},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "run_ledger_head": {"$ref": "#/$defs/digest"},
+    "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
+    "broker_registry_source_digest": {"$ref": "#/$defs/digest"},
+    "qualification_digest": {"$ref": "#/$defs/digest"},
+    "continuity_nonce_digest": {"$ref": "#/$defs/digest"},
+    "prompt_schema_version": {"const": "factory-runner-prompt/3"},
+    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/2"},
+    "prompt": {"$ref": "#/$defs/prompt"},
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_digest", "byte_count", "visibility"],
+      "properties": {
+        "content_digest": {"$ref": "#/$defs/digest"},
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "visibility": {"const": "validator-private"}
+      }
+    },
+    "termination_reason": {"$ref": "#/$defs/termination_reason"},
+    "returncode": {"type": "integer"},
+    "process_peak": {"type": "integer", "minimum": 0},
+    "failure_capsule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "owner", "code", "summary"],
+      "properties": {
+        "schema_version": {"const": "factory-failure-capsule/1"},
+        "owner": {"enum": ["validator-harness", "host-prerequisite", "tester", "coder"]},
+        "code": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "failed_at": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt", "kind", "byte_count", "content_digest"],
+      "properties": {
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "kind": {"enum": ["qualification", "task"]},
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 2097152},
+        "content_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "termination_reason": {
+      "enum": [
+        "completed",
+        "process-limit",
+        "wall-limit",
+        "idle-limit",
+        "output-limit",
+        "process-escape",
+        "exit-nonzero"
+      ]
+    }
+  }
+}

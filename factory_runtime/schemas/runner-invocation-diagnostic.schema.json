@@ -16,7 +16,17 @@
     "schema_version": {"const": "factory-runner-invocation-diagnostic/1"},
     "invocation": {"type": "integer", "minimum": 1, "maximum": 3},
     "returncode": {"type": "integer"},
-    "termination_reason": {"type": "string", "minLength": 1, "maxLength": 128},
+    "termination_reason": {
+      "enum": [
+        "completed",
+        "process-limit",
+        "wall-limit",
+        "idle-limit",
+        "output-limit",
+        "process-escape",
+        "exit-nonzero"
+      ]
+    },
     "process_peak": {"type": "integer", "minimum": 0},
     "stdout": {"type": "string", "maxLength": 16384},
     "stderr": {"type": "string", "maxLength": 16384}

@@ -530,10 +530,10 @@ runner_retain() {
   if [ -e "$RUNNER_WS" ] || [ -L "$RUNNER_WS" ]; then
     $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
       --resource-id "$RUNNER_RESOURCE_ID" --status retained --reason "$reason" \
-      --residue true --evidence-json "$EVIDENCE" --actor lane-dispatch >/dev/null || true
+      --residue true --evidence-json "$EVIDENCE" --actor lane-dispatch >/dev/null
   else
     resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" abandoned \
-      '{"reason":"runner failed before workspace creation","residue":false}' "$EVIDENCE" || true
+      '{"reason":"runner failed before workspace creation","residue":false}' "$EVIDENCE"
   fi
 }
 
@@ -573,11 +573,76 @@ $FACTORY_CLI run-model --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --role "$ROLE
 RUN_RC=$?
 set -e
 if [ "$RUN_RC" -ne 0 ]; then
+  FAILURE_RECEIPT="$RUNNER_WS/runner-failure-receipt.json"
+  FAILURE_DIAGNOSTIC="$RUNNER_WS/validator-invocation-diagnostic.json"
+  FAILURE_DISPOSITION='{"reason":"qualified runner or canary failed","residue":true}'
+  FAILURE_EVIDENCE="$EVIDENCE"
+  if [ -e "$FAILURE_RECEIPT" ] || [ -L "$FAILURE_RECEIPT" ] || \
+     [ -e "$FAILURE_DIAGNOSTIC" ] || [ -L "$FAILURE_DIAGNOSTIC" ]; then
+    if [ ! -f "$FAILURE_RECEIPT" ] || [ -L "$FAILURE_RECEIPT" ] || \
+       [ ! -f "$FAILURE_DIAGNOSTIC" ] || [ -L "$FAILURE_DIAGNOSTIC" ]; then
+      resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" failed \
+        '{"reason":"runner failure evidence was partial or unsafe","residue":true}' \
+        "$EVIDENCE" || fail "partial runner failure could not be recorded"
+      runner_retain "runner failure evidence was partial or unsafe; workspace retained" || \
+        fail "partial runner workspace retention could not be recorded"
+      fail "runner failure evidence was partial or unsafe; no broker operation was executed"
+    fi
+    set +e
+    FAILURE_DETAIL=$(PYTHONPATH="$D/.." python3 -m factory_runtime.runner_failure \
+      --workspace "$RUNNER_WS" --evidence-root "$RUNNER_EVIDENCE" --run-root "$ROOT" \
+      --projection "$MODEL_PROJECTION" --task "$TASK_FILE" --manifest "$RUNNER_MANIFEST" \
+      --run-id "$RUN" --generation "$FACTORY_GENERATION" --role "$ROLE" \
+      --receipt-id "$RECEIPT_ID" --target-state-digest "$FACTORY_TARGET_STATE_DIGEST" \
+      --resume-checkpoint-digest "$FACTORY_RESUME_CHECKPOINT_DIGEST")
+    FAILURE_EVIDENCE_RC=$?
+    set -e
+    if [ "$FAILURE_EVIDENCE_RC" -ne 0 ]; then
+      resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" failed \
+        '{"reason":"runner failure evidence did not validate","residue":true}' \
+        "$EVIDENCE" || fail "invalid runner failure could not be recorded"
+      runner_retain "runner failure evidence did not validate; workspace retained" || \
+        fail "invalid runner workspace retention could not be recorded"
+      fail "runner failure evidence did not validate; no broker operation was executed"
+    fi
+    FAILURE_DISPOSITION=$(python3 - "$FAILURE_DETAIL" <<'PY'
+import json, sys
+document = json.loads(sys.argv[1])
+if set(document) != {"disposition", "evidence_digests"}:
+    raise SystemExit(1)
+disposition = document["disposition"]
+if set(disposition) != {"reason", "residue"} or disposition["residue"] is not True:
+    raise SystemExit(1)
+print(json.dumps(disposition, sort_keys=True, separators=(",", ":")))
+PY
+    ) || fail "runner failure disposition was not closed"
+    FAILURE_EVIDENCE=$(python3 - "$EVIDENCE" "$FAILURE_DETAIL" <<'PY'
+import json, re, sys
+base = json.loads(sys.argv[1])
+detail = json.loads(sys.argv[2])
+evidence = detail["evidence_digests"]
+digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+if not isinstance(base, dict) or not isinstance(evidence, dict):
+    raise SystemExit(1)
+if set(base) & set(evidence):
+    raise SystemExit(1)
+merged = {**base, **evidence}
+if not all(
+    isinstance(key, str) and isinstance(value, str) and digest.fullmatch(value)
+    for key, value in merged.items()
+):
+    raise SystemExit(1)
+print(json.dumps(merged, sort_keys=True, separators=(",", ":")))
+PY
+    ) || fail "runner failure evidence digests were not closed"
+  fi
   if [ -e "$RUNNER_WS" ] || [ -L "$RUNNER_WS" ]; then
     resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" failed \
-      '{"reason":"qualified runner or canary failed","residue":true}' "$EVIDENCE" || true
+      "$FAILURE_DISPOSITION" "$FAILURE_EVIDENCE" || \
+      fail "runner failure resource event could not be recorded"
   fi
-  runner_retain "qualified runner or canary failed; evidence retained"
+  runner_retain "qualified runner or canary failed; evidence retained" || \
+    fail "runner workspace retention could not be recorded"
   fail "qualified runner or canary failed; no broker operation was executed"
 fi
 resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" active '{}' "$EVIDENCE"
@@ -646,7 +711,8 @@ $FACTORY_CLI execute-broker-handoff --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" 
 BROKER_RC=$?
 set -e
 if [ "$BROKER_RC" -ne 0 ]; then
-  runner_retain "typed broker refused or failed; runner evidence retained"
+  runner_retain "typed broker refused or failed; runner evidence retained" || \
+    fail "runner workspace retention could not be recorded after broker refusal"
   fail "typed broker refused the handoff"
 fi
 
@@ -782,7 +848,8 @@ PY
 }
 
 append_dispatch_receipt || fail "dispatch receipt chain is invalid"
-runner_retain "qualified runner completed; immutable evidence retained"
+runner_retain "qualified runner completed; immutable evidence retained" || \
+  fail "completed runner workspace retention could not be recorded"
 $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
   --resource-id "$WORKSPACE_ID" --status retained \
   --reason "typed broker outputs and lane projection retained" --residue true \

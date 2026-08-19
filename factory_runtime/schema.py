@@ -36,6 +36,7 @@ SCHEMA_NAMES = frozenset(
         "resume-checkpoint",
         "role-contract",
         "runner-manifest",
+        "runner-failure-receipt",
         "runner-invocation-diagnostic",
         "runner-output",
         "runner-projection",

@@ -3,7 +3,7 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
-## Unreleased
+## [0.4.0] - 2026-08-19
 
 ### Added
 
@@ -16,7 +16,9 @@ public API is still pre-1.0.
   bounded reason, and exact evidence bytes copied into a content-addressed run artifact before the
   event is receipted and the dispatch gate is durably released.
 - Bounded, named-secret-redacted Validator-private diagnostics for failed model invocations, paired
-  with a small downstream-safe failure capsule rather than raw runner or oracle output.
+  with a closed host-authored failure receipt and a small downstream-safe failure capsule rather
+  than raw runner or oracle output. The receipt binds exact runner, model, configuration, state,
+  prompt, termination, and diagnostic evidence across the Python/CLI/shell lane boundary.
 
 ### Changed
 
@@ -35,13 +37,22 @@ public API is still pre-1.0.
   are durable before the blocker is truncated, so malformed evidence and first-use crash windows
   cannot silently clear the gate.
 - Exact blocking-event retries repair an interrupted event/receipt publication without duplicating
-  the event, and partial JSONL appends roll back before the shared lock is released.
+  the event, discard only unterminated blocker tails, and roll back partial JSONL appends from a
+  boundary selected under the common file lock. Malformed unrelated legacy event rows grant no
+  authority but cannot wedge an independently receipted blocker.
+- Inherited dispatch descriptors no longer confer admission authority: the recursive lane process
+  repeats blocker admission under the shared attention lock. Consumption requires exactly one
+  closed durable producer receipt for every pending event before the gate can clear.
 - Exact caller dispatch bytes and instruction artifacts recover idempotently after a crash between
   publications. Existing bytes are stable-read, re-derived, and reused; different bytes refuse.
 - Runner prompt/3 executions emit `factory-runner-receipt/3`. The original receipt/2 schema remains
   immutable for historical validation and is explicitly non-executable after this cutover.
 - Runner evidence publication fsyncs the containing directory, and a diagnostic-retention failure
   preserves the real post-model attempt count instead of being laundered into pre-model refusal.
+- Runner supervision, diagnostics, schemas, and failure classification share one closed termination
+  vocabulary. Model-controlled stdout/stderr cannot assign failure ownership; the lane independently
+  verifies and retains the exact failure receipt, private diagnostic, state capsule, and failed
+  prompt, records their digests, retains the workspace, and executes no broker operation.
 
 ### Explicit boundaries
 

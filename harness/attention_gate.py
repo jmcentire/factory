@@ -192,7 +192,11 @@ def _append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
             raise AttentionGateError(f"attention event sink is not regular: {path}")
         os.fchmod(descriptor, 0o600)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        start = metadata.st_size
+        # The file lock, rather than the broader attention lock, is the common
+        # ordering primitive with legacy dispatcher writers.  Snapshot the rollback
+        # boundary only after acquiring it so a failed append can never erase bytes
+        # another supported producer made durable while we were waiting.
+        start = os.fstat(descriptor).st_size
         # events.jsonl predates this closed writer and may end in an interrupted legacy fragment.
         # Preserve those bytes as their own (invalid, ignored) row rather than concatenating the
         # new closed receipt onto them.
@@ -215,6 +219,43 @@ def _append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
     finally:
         os.close(descriptor)
     _fsync_directory(path.parent)
+
+
+def _repair_incomplete_blocking_tail(path: pathlib.Path) -> None:
+    """Discard only an unterminated final blocker row left by a killed writer.
+
+    Blocking files contain only closed, newline-terminated producer events.  The
+    run-wide attention lock is already held by the caller; the per-file lock also
+    excludes legacy readers/writers while the exact last complete-row boundary is
+    restored.  Complete malformed rows remain fail-closed evidence.
+    """
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDWR
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except FileNotFoundError:
+        return
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AttentionGateError(f"blocking source is not regular: {path}")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        current = os.fstat(descriptor)
+        if current.st_size > _MAX_BLOCKING_BYTES:
+            raise AttentionGateError(f"blocking source exceeds its byte ceiling: {path}")
+        if not current.st_size or os.pread(descriptor, 1, current.st_size - 1) == b"\n":
+            return
+        raw = os.pread(descriptor, current.st_size, 0)
+        boundary = raw.rfind(b"\n") + 1
+        os.ftruncate(descriptor, boundary)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _canonical(value: object) -> str:
@@ -387,6 +428,7 @@ def append_blocking_event(
     admitted = validate_blocking_event(dict(event))
     lock_fd = acquire_attention_lock(root)
     try:
+        _repair_incomplete_blocking_tail(root / "lanes" / f"{lane}.blocking")
         blocker_count, written_count, consumed_count = _event_state(root, lane, admitted)
         if consumed_count:
             return
@@ -493,7 +535,12 @@ def acquire_dispatch_lock(root: pathlib.Path, role: str) -> int:
 
 
 def verify_dispatch_lock(root: pathlib.Path, role: str, descriptor: int) -> None:
-    """Prove the recursive shell inherited the exact locked role inode."""
+    """Verify the role mutex and repeat admission at this process boundary.
+
+    An environment variable and caller-opened descriptor are not authority.  The
+    recursive process therefore rechecks both blockers under the shared attention
+    lock even when the descriptor names and locks the canonical inode.
+    """
 
     if role not in _DISPATCH_ROLES or descriptor < 3:
         raise AttentionGateError("invalid inherited dispatch lock")
@@ -510,6 +557,20 @@ def verify_dispatch_lock(root: pathlib.Path, role: str, descriptor: int) -> None
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         raise AttentionGateError("inherited dispatch lock is not owned by this invocation") from exc
+    attention_fd = acquire_attention_lock(pathlib.Path(root))
+    try:
+        pending = tuple(
+            path
+            for path in (
+                pathlib.Path(root) / "lanes" / "validator.blocking",
+                pathlib.Path(root) / "lanes" / f"{role}.blocking",
+            )
+            if _file_has_bytes(path)
+        )
+        if pending:
+            raise BlockingEventPending(pending)
+    finally:
+        os.close(attention_fd)
 
 
 def main() -> int:

@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from factory_runtime.runner_termination import IDLE_LIMIT, OUTPUT_LIMIT, WALL_LIMIT
+
 
 @dataclass(frozen=True)
 class FailureCapsule:
@@ -41,18 +43,20 @@ def classify_terminal_failure(
 ) -> FailureCapsule:
     """Classify an attempt without serialising raw lane or oracle output.
 
-    The textual inputs are inspected only in Validator memory.  No token from
-    them is copied into the resulting capsule.  This keeps test mechanics and
-    command output out of all downstream repair briefs.
+    Textual process output is deliberately not interpreted as authority.  It is
+    untrusted model-controlled evidence retained for the Validator only; stable
+    ownership is derived from authenticated runtime state and the supervisor's
+    closed termination vocabulary.
     """
 
-    if invocation_termination_reason in {"wall-timeout", "idle-timeout"}:
+    _ = caller_stdout, caller_stderr
+    if invocation_termination_reason in {WALL_LIMIT, IDLE_LIMIT}:
         return FailureCapsule(
             owner="validator-harness",
             code="runner-invocation-timeout",
             summary="The Validator-owned runner exceeded its declared invocation time limit.",
         )
-    if invocation_termination_reason == "output-limit":
+    if invocation_termination_reason == OUTPUT_LIMIT:
         return FailureCapsule(
             owner="validator-harness",
             code="runner-invocation-output-limit",
@@ -61,8 +65,6 @@ def classify_terminal_failure(
 
     final = final or {}
     status = str(final.get("status", ""))
-    evidence = "\n".join((caller_stdout, caller_stderr, str(final.get("exception", "")))).lower()
-
     if not final:
         return FailureCapsule(
             owner="validator-harness",
@@ -70,12 +72,6 @@ def classify_terminal_failure(
             summary="The Validator caller ended without writing a terminal report.",
         )
     if status == "runtime-exception":
-        if "direnv" in evidence or "coding_agent" in evidence or "coding-agent" in evidence:
-            return FailureCapsule(
-                owner="host-prerequisite",
-                code="validator-launch-environment-unavailable",
-                summary="The Validator could not establish its declared launch environment.",
-            )
         return FailureCapsule(
             owner="validator-harness",
             code="validator-caller-exception",

@@ -6,6 +6,7 @@ import jsonschema
 import pytest
 
 from factory_core.manifest import digest_obj
+from factory_runtime.runner_termination import RUNNER_TERMINATION_REASONS
 from factory_runtime.schema import (
     SCHEMA_NAMES,
     DocumentValidationError,
@@ -37,6 +38,17 @@ def _phase(phase: str, artifact_id: str) -> dict[str, Any]:
 def test_every_runtime_schema_is_a_valid_draft_2020_12_schema() -> None:
     for name in SCHEMA_NAMES:
         jsonschema.Draft202012Validator.check_schema(load_schema(name))
+
+
+def test_runner_diagnostic_schema_uses_the_supervisor_termination_vocabulary() -> None:
+    schema = load_schema("runner-invocation-diagnostic")
+    assert set(schema["properties"]["termination_reason"]["enum"]) == set(
+        RUNNER_TERMINATION_REASONS
+    )
+    failure_schema = load_schema("runner-failure-receipt")
+    assert set(failure_schema["$defs"]["termination_reason"]["enum"]) == set(
+        RUNNER_TERMINATION_REASONS
+    )
 
 
 def test_phase_artifact_schema_is_closed() -> None:

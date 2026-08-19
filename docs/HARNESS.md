@@ -249,7 +249,12 @@ diffed against the registry; cadence is audited; and the tripwire runs. No `orig
 is blocked without a fresh grounding receipt.
 
 **8. Failure classes as runner state.** A failure's class determines who may resolve it —
-never the agent's prose. The classes that matter most, from the postmortems and the
+never the agent's prose or its stdout/stderr. Supervision, receipts, schemas, and classification
+share one closed termination vocabulary. After any model attempt, the host writes a closed failure
+receipt over the exact runner/model/configuration, state capsule, failed prompt, private redacted
+diagnostic, and safe failure capsule. The lane independently verifies and durably retains those
+bytes, records their digests in the run-resource ledger, retains the workspace, and cannot invoke
+the broker. The classes that matter most, from the postmortems and the
 research: `POLICY_DENIED` hard-stops with no alternative-path retry (a creative agent
 routing around a 403 is the failure, not the fix); `AUTHORITY_AMBIGUOUS` freezes the branch
 for ratification; `ORACLE_DEFECT` is never the Coder's to resolve; `BASELINE_CONFLICT`
@@ -366,10 +371,13 @@ dependency-free (bash + python3 + git):
   live-ruling bridge (control 1a), and verified `active` inspection. Runtime consumers derive
   their own closed effective contract rather than trusting this human-readable listing.
 - `harness/attention_gate.py` — validates the closed producer-event shapes and owns the shared
-  run-local lock that orders blocking-event production, disposition, and dispatch admission.
+  run-local lock that orders blocking-event production, disposition, and dispatch admission;
+  exact retries repair only unterminated blocker tails, and an inherited dispatch descriptor
+  repeats admission rather than becoming authority.
 - `harness/consume_block.sh` — locks the exact pending subject, rejects malformed producer events,
-  requires a typed disposition, retains and hashes the run-owned evidence bytes, and fsyncs the
-  receipt plus its parent before durably releasing the dispatch gate.
+  requires exactly one durable producer receipt plus a typed disposition, retains and hashes the
+  run-owned evidence bytes, and fsyncs the receipt plus its parent before durably releasing the
+  dispatch gate. Unrelated malformed legacy event rows are ignored and grant no authority.
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
   a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.
@@ -390,7 +398,9 @@ dependency-free (bash + python3 + git):
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
   verifies/appends the dispatch chain; requires a role-specific Kindex primer and externally
   checkpoint-bound structural qualification report; then invokes the qualified model runner and
-  typed broker. Ambient gap flags cannot bypass either precondition.
+  typed broker. A failed invocation crosses this boundary only through the closed verified failure
+  receipt and retained exact evidence; no failed canary reaches the broker. Ambient gap flags
+  cannot bypass either precondition.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
   Append-only sources are read as stable bounded suffixes rather than rejected when their full

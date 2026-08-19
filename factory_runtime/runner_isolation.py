@@ -29,6 +29,15 @@ from factory_runtime.runner import (
     RunnerProcessResult,
     RunnerQualification,
 )
+from factory_runtime.runner_termination import (
+    COMPLETED,
+    EXIT_NONZERO,
+    IDLE_LIMIT,
+    OUTPUT_LIMIT,
+    PROCESS_ESCAPE,
+    PROCESS_LIMIT,
+    WALL_LIMIT,
+)
 
 _POLL_SECONDS = 0.10
 _MAX_STDIN_BYTES = 2_097_152
@@ -319,7 +328,7 @@ print(json.dumps(result, sort_keys=True))
             model_network_available=facts.get("network") is True,
             arbitrary_shell_denied=facts.get("shell_denied") is True,
             process_containment=(
-                tree.termination_reason == "process-limit" and tree.process_peak > 2
+                tree.termination_reason == PROCESS_LIMIT and tree.process_peak > 2
             ),
         )
         if not qualification.satisfied:
@@ -444,7 +453,7 @@ print(json.dumps(result, sort_keys=True))
         stdout = bytearray()
         stderr = bytearray()
         process_peak = 0
-        reason = "completed"
+        reason = COMPLETED
         process: subprocess.Popen[bytes] | None = None
         selector = selectors.DefaultSelector()
         try:
@@ -474,13 +483,13 @@ print(json.dumps(result, sort_keys=True))
                 members = _process_group_members(process.pid)
                 process_peak = max(process_peak, len(members))
                 if len(members) > limits.max_processes:
-                    reason = "process-limit"
+                    reason = PROCESS_LIMIT
                     _kill_group(process.pid)
                 elif now - started > limits.wall_seconds:
-                    reason = "wall-limit"
+                    reason = WALL_LIMIT
                     _kill_group(process.pid)
                 elif now - last_activity > limits.idle_seconds:
-                    reason = "idle-limit"
+                    reason = IDLE_LIMIT
                     _kill_group(process.pid)
                 events = selector.select(_POLL_SECONDS)
                 for selector_key, _ in events:
@@ -508,16 +517,16 @@ print(json.dumps(result, sort_keys=True))
                     else:
                         selector.unregister(selector_key.fileobj)
                 if len(stdout) + len(stderr) > limits.max_output_bytes:
-                    reason = "output-limit"
+                    reason = OUTPUT_LIMIT
                     _kill_group(process.pid)
                 if process.poll() is not None and not selector.get_map():
                     break
             returncode = process.wait(timeout=2)
             if _process_group_members(process.pid):
-                reason = "process-escape"
+                reason = PROCESS_ESCAPE
                 _kill_group(process.pid)
-            if returncode != 0 and reason == "completed":
-                reason = "exit-nonzero"
+            if returncode != 0 and reason == COMPLETED:
+                reason = EXIT_NONZERO
         except (OSError, subprocess.SubprocessError, RunnerError) as exc:
             if process is not None:
                 _kill_group(process.pid)

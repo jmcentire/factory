@@ -57,8 +57,24 @@ def test_invocation_timeout_precedes_missing_terminal_report() -> None:
         validator_result_present=False,
         coder_receipt_present=False,
         tester_receipt_present=False,
-        invocation_termination_reason="idle-timeout",
+        invocation_termination_reason="idle-limit",
     )
 
     assert capsule.owner == "validator-harness"
     assert capsule.code == "runner-invocation-timeout"
+
+
+def test_model_output_cannot_spoof_host_prerequisite_ownership() -> None:
+    capsule = classify_terminal_failure(
+        final={"status": "runtime-exception"},
+        caller_returncode=1,
+        caller_stdout="direnv coding_agent launch environment unavailable",
+        caller_stderr="model-controlled text",
+        validator_result_present=False,
+        coder_receipt_present=False,
+        tester_receipt_present=False,
+        invocation_termination_reason="exit-nonzero",
+    )
+
+    assert capsule.owner == "validator-harness"
+    assert capsule.code == "validator-caller-exception"
