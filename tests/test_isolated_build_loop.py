@@ -577,7 +577,7 @@ def test_interpreter_read_paths_cover_pyvenv_cfg_under_a_venv() -> None:
     if sys.prefix == sys.base_prefix:
         pytest.skip("not running under a virtualenv")
 
-    marker = Path(sys.prefix) / "pyvenv.cfg"
+    marker = (Path(sys.prefix) / "pyvenv.cfg").resolve(strict=True)
     assert marker.is_file()
     assert any(marker.is_relative_to(path) for path in _interpreter_read_paths())
 
