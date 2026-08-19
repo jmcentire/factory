@@ -13,6 +13,11 @@ from typing import Any
 import pytest
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.instruction_control import (
+    canonical_document_bytes,
+    compile_role_contract,
+    derive_effective_directive_contract,
+)
 from factory_runtime.runner import (
     HardenedModelRunner,
     NamedSecretStore,
@@ -246,6 +251,34 @@ def _dispatch(
     task_bytes = task.encode()
     broker_registry = b'{"operations":[]}'
     resume_digest = digest_obj({"resume": "fixture"})
+    directive_ledger = b""
+    directive_provisional = b""
+    role_doctrine = (
+        Path(__file__).resolve().parents[1] / "docs" / "SOFTWARE-FACTORY.md"
+    ).read_bytes()
+    effective_directives = derive_effective_directive_contract(
+        ledger_bytes=directive_ledger,
+        provisional_bytes=directive_provisional,
+        run_id="run-1",
+        generation=1,
+        role="coder",
+        evaluated_at=100,
+    )
+    role_contract = compile_role_contract(doctrine_bytes=role_doctrine, role="coder")
+    directive_readback = {
+        "schema_version": "factory-directive-readback/1",
+        "run_id": "run-1",
+        "generation": 1,
+        "role": "coder",
+        "effective_directive_contract_digest": digest_obj(effective_directives),
+        "semantic_clearance": False,
+        "task_interpretation": {
+            "restated_request": "Implement the exact authorized behavior.",
+            "operational_consequence": "Return questions instead of inventing authority.",
+            "ambiguity": "none",
+        },
+        "directives": [],
+    }
     phase_documents = {
         phase: {
             "artifact_id": f"{phase}-fixture",
@@ -286,12 +319,23 @@ def _dispatch(
         "frozen-task": task_bytes,
         "runner-projection": projection_bytes,
         "role-primer": b"context only",
+        "effective-directives": canonical_document_bytes(effective_directives),
+        "directive-readback": canonical_document_bytes(directive_readback),
+        "role-contract": canonical_document_bytes(role_contract),
         "runner-manifest": manifest_bytes,
         "runner-output-schema": schema_bytes,
         "broker-registry": broker_registry,
         "resume-checkpoint": b'{"checkpoint":"fixture"}',
         "resume-verification": b'{"verified":true}',
-        "configuration-set": b'{"runner":"fixture"}',
+        "configuration-set": json.dumps(
+            {
+                "directive-ledger": digest_bytes(directive_ledger),
+                "directive-provisional": digest_bytes(directive_provisional),
+                "role-doctrine": digest_bytes(role_doctrine),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode(),
         "state-qualification-observations": b'{"observations":[]}',
         "state-qualification-report": b'{"qualified":true}',
     }
@@ -354,10 +398,10 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert receipt.document["network_mode"] == "unrestricted-outbound"
     assert receipt.document["meter_semantics"] == "observed-post-call"
     assert (workspace / "output" / "runner-receipt.json").is_file()
-    assert receipt.document["prompt_schema_version"] == "factory-runner-prompt/2"
+    assert receipt.document["prompt_schema_version"] == "factory-runner-prompt/3"
     assert (
         receipt.document["prompt_assembler_version"]
-        == "factory-runner-prompt-assembler/1"
+        == "factory-runner-prompt-assembler/2"
     )
     assert receipt.document["prompt_bytes_retained"] is True
     for private_directory in (
@@ -394,6 +438,9 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
         "operational-maturity",
     }
     assert task_prompt["data"]["role_primer"] == "context only"
+    assert task_prompt["control"]["role_contract"]["role"] == "coder"
+    assert task_prompt["data"]["effective_directives"]["directives"] == []
+    assert task_prompt["data"]["directive_readback"]["semantic_clearance"] is False
 
 
 def test_runner_freezes_caller_owned_capsule_before_backend_activity(

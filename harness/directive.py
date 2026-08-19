@@ -23,8 +23,10 @@ GENESIS = "0" * 64
 def canon(d): return json.dumps(d, sort_keys=True, separators=(",", ":"))
 def ehash(body): return hashlib.sha256(canon(body).encode()).hexdigest()
 
-def load():
-    if not LEDGER.exists(): return []
+def load(required=False):
+    if not LEDGER.exists():
+        if required: sys.exit(f"directive ledger missing: {LEDGER}")
+        return []
     out = []
     for i, line in enumerate(LEDGER.read_text().splitlines(), 1):
         if line.strip():
@@ -32,34 +34,41 @@ def load():
             except json.JSONDecodeError: sys.exit(f"line {i}: not JSON — ledger corrupt, stop")
     return out
 
-def loadp():
-    if not PROV.exists(): return []
+def loadp(required=False):
+    if not PROV.exists():
+        if required: sys.exit(f"provisional directive chain missing: {PROV}")
+        return []
     return [json.loads(l) for l in PROV.read_text().splitlines() if l.strip()]
 
-def verify(sigs=False):
-    prev, entries = GENESIS, load()
+def verify(sigs=False, emit=True, required=True):
+    prev, entries = GENESIS, load(required=required)
     for e in entries:
         body = {k: v for k, v in e.items() if k != "hash"}
         if body.get("prev_hash") != prev: sys.exit(f"{e.get('id')}: chain broken")
         if ehash(body) != e.get("hash"): sys.exit(f"{e.get('id')}: content altered")
         prev = e["hash"]
     prevp = GENESIS
-    for p in loadp():
+    provisional = loadp(required=required)
+    for p in provisional:
         bodyp = {k: v for k, v in p.items() if k != "hash"}
         if bodyp.get("prev_hash") != prevp: sys.exit(f"{p.get('id')}: provisional chain broken")
         if ehash(bodyp) != p.get("hash"): sys.exit(f"{p.get('id')}: provisional altered")
         prevp = p["hash"]
-    if sigs and (LEDGER.parent / ".git").exists():
+    if sigs and not (LEDGER.parent / ".git").exists():
+        sys.exit("signature verification requested but directive source is not a Git repository")
+    if sigs:
         r = subprocess.run(["git", "-C", str(LEDGER.parent), "log",
                             "--format=%H %G? %GS", "--", LEDGER.name],
                            capture_output=True, text=True)
         bad = [l for l in r.stdout.splitlines() if l.split()[1:2] != ["G"]]
         if bad: sys.exit("unsigned/badly-signed ledger commits:\n" + "\n".join(bad))
-    print(f"ok: {len(entries)} signed + {len(loadp())} provisional, head={prev[:12]}")
+    if emit:
+        print(f"ok: {len(entries)} signed + {len(provisional)} provisional, head={prev[:12]}")
 
 def write(body):
     body["hash"] = ehash(body)
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    PROV.touch(exist_ok=True)
     with open(LEDGER, "a") as f: f.write(canon(body) + "\n")
     print(body["id"], body["hash"][:12])
 
@@ -108,6 +117,7 @@ def cmd_provisional(args):
             "prev_hash": entries[-1]["hash"] if entries else GENESIS}
     body["hash"] = ehash(body)
     PROV.parent.mkdir(parents=True, exist_ok=True)
+    LEDGER.touch(exist_ok=True)
     with open(PROV, "a") as f: f.write(canon(body) + "\n")
     print(body["id"], body["hash"][:12], "expires", body["expires"])
 
@@ -130,10 +140,11 @@ def cmd_ratify(args):
         print("freeze them and route each for an explicit keep/revert disposition")
 
 def cmd_active(args):
-    entries = load()
+    verify(emit=False, required=True)
+    entries = load(required=True)
     dead = {e["supersedes"] for e in entries if e.get("supersedes")}
     for e in entries:
-        if e["id"] in dead: continue
+        if e["id"] in dead or "refuses" in e: continue
         if args.since and e["ts"] < args.since: continue
         print(f'{e["id"]} [{e["scope"]}] {e["text"]}')
         for q in e.get("qualifiers", []): print(f"      ↳ {q}")
@@ -142,7 +153,7 @@ def cmd_active(args):
         for k in ("ratifies", "refuses"):
             if e.get(k): settled.add(e[k]["id"])
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    for p in loadp():
+    for p in loadp(required=True):
         if p["id"] in settled or p["expires"] < now: continue
         if args.since and p["ts"] < args.since: continue
         print(f'{p["id"]} [PROVISIONAL until {p["expires"]}] [{p["scope"]}] {p["text"]}  <- {p["cite"]}')

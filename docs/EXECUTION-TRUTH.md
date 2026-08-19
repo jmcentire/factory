@@ -225,7 +225,8 @@ identity/size/time change during
 the read, verifies its external resume/configuration binding, and derives a closed
 `factory-state-dependency-capsule/1`. The capsule covers the exact target state, ledger head,
 phase references and the exact three canonical phase artifacts, frozen task, lane projection,
-role-specific Kindex primer, runner manifest, output schema, broker registry, resume evidence,
+role-specific Kindex primer, checkpoint-derived effective directives, structured exact
+readback, compiled role contract, runner manifest, output schema, broker registry, resume evidence,
 configuration set, and structural qualification observations and report. The runner receives
 those same in-memory bytes; it does not reopen caller paths. Missing,
 unknown, duplicate, oversized, stale-profile, trust-escalated, or byte-substituted dependencies

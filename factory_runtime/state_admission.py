@@ -45,6 +45,9 @@ _TRUST_CEILINGS: Mapping[str, str] = {
     "task-input": "context",
     "lane-projection": "context",
     "role-primer": "context",
+    "effective-directives": "context",
+    "directive-readback": "context",
+    "role-contract": "configuration-reference",
     "runner-manifest": "configuration-reference",
     "output-schema": "configuration-reference",
     "broker-registry": "configuration-reference",
@@ -83,6 +86,15 @@ _PURPOSE_PROFILES: Mapping[str, Mapping[str, DependencyRule]] = {
         "frozen-task": DependencyRule("task-input", "context", 2_097_152),
         "runner-projection": DependencyRule("lane-projection", "context", 1_500_000),
         "role-primer": DependencyRule("role-primer", "context", 262_144),
+        "effective-directives": DependencyRule(
+            "effective-directives", "context", 262_144
+        ),
+        "directive-readback": DependencyRule(
+            "directive-readback", "context", 262_144
+        ),
+        "role-contract": DependencyRule(
+            "role-contract", "configuration-reference", 262_144
+        ),
         "runner-manifest": DependencyRule(
             "runner-manifest", "configuration-reference", 262_144
         ),
@@ -118,7 +130,7 @@ _PURPOSE_PROFILES: Mapping[str, Mapping[str, DependencyRule]] = {
         "event-tail": DependencyRule("event-tail", "context", 65_536),
         "minutes-tail": DependencyRule("minutes-tail", "untrusted-data", 65_536),
         "active-directives": DependencyRule(
-            "directive-snapshot", "context", 65_536
+            "directive-snapshot", "context", 262_144
         ),
         "run-projection": DependencyRule("run-projection", "verified-state", 65_536),
         "harness-metadata": DependencyRule("harness-metadata", "context", 65_536),

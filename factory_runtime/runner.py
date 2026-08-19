@@ -22,6 +22,7 @@ import jsonschema
 
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
+from factory_runtime.instruction_control import validate_directive_readback
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state_admission import (
     StateAdmissionError,
@@ -32,8 +33,8 @@ from factory_runtime.state_admission import (
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _MAX_SECRET_BYTES = 65_536
 _MAX_PROMPT_BYTES = 2_097_152
-_PROMPT_SCHEMA_VERSION = "factory-runner-prompt/2"
-_PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/1"
+_PROMPT_SCHEMA_VERSION = "factory-runner-prompt/3"
+_PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/2"
 
 
 class RunnerError(ValueError):
@@ -485,6 +486,13 @@ class HardenedModelRunner:
             "runner-output-schema": digest_bytes(output_schema_bytes),
             "frozen-task": task_digest,
             "broker-registry": broker_registry_source_digest,
+            "effective-directives": digest_bytes(
+                state_dependencies_snapshot["effective-directives"]
+            ),
+            "directive-readback": digest_bytes(
+                state_dependencies_snapshot["directive-readback"]
+            ),
+            "role-contract": digest_bytes(state_dependencies_snapshot["role-contract"]),
         }
         for dependency_id, expected_digest in expected_dependency_digests.items():
             if dependency_map.get(dependency_id) != expected_digest:
@@ -530,6 +538,68 @@ class HardenedModelRunner:
             role_primer = state_dependencies_snapshot["role-primer"].decode("utf-8")
         except (KeyError, UnicodeDecodeError) as exc:
             raise RunnerError("role-scoped primer must be admitted UTF-8 context") from exc
+        try:
+            effective_directives = json.loads(
+                state_dependencies_snapshot["effective-directives"]
+            )
+            role_contract = json.loads(state_dependencies_snapshot["role-contract"])
+            directive_readback = json.loads(
+                state_dependencies_snapshot["directive-readback"]
+            )
+            configuration_set = json.loads(
+                state_dependencies_snapshot["configuration-set"]
+            )
+        except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RunnerError("runner instruction dependencies are not valid JSON") from exc
+        for label, document, schema_name in (
+            ("effective directive contract", effective_directives, "effective-directive-contract"),
+            ("role contract", role_contract, "role-contract"),
+        ):
+            if not isinstance(document, Mapping):
+                raise RunnerError(f"{label} must be a JSON object")
+            try:
+                validate_document(schema_name, document)
+            except DocumentValidationError as exc:
+                raise RunnerError(str(exc)) from exc
+        if not isinstance(directive_readback, Mapping):
+            raise RunnerError("directive readback must be a JSON object")
+        if not isinstance(configuration_set, Mapping) or not all(
+            isinstance(value, str) for value in configuration_set.values()
+        ):
+            raise RunnerError("runner configuration set is invalid")
+        configuration_digests = set(configuration_set.values())
+        source_digests = {
+            str(effective_directives["ledger"]["source_digest"]),
+            str(effective_directives["provisional"]["source_digest"]),
+            str(role_contract["source_digest"]),
+        }
+        if not source_digests <= configuration_digests:
+            raise RunnerError("instruction sources are not in the checkpoint configuration set")
+        if role_contract["role"] != manifest.document["role"]:
+            raise RunnerError("role contract belongs to another lane")
+        expected_effective_scope = {
+            "run_id": run_id,
+            "generation": generation,
+            "role": manifest.document["role"],
+        }
+        if any(
+            effective_directives.get(field) != expected
+            for field, expected in expected_effective_scope.items()
+        ):
+            raise RunnerError("effective directive contract belongs to another lane invocation")
+        instructions = str(role_contract["instructions"])
+        if digest_bytes(instructions.encode("utf-8")) != role_contract["instructions_digest"]:
+            raise RunnerError("role contract instructions digest differs")
+        try:
+            validate_directive_readback(
+                directive_readback,
+                contract=effective_directives,
+                expected_run_id=run_id,
+                expected_generation=generation,
+                expected_role=str(manifest.document["role"]),
+            )
+        except ValueError as exc:
+            raise RunnerError(str(exc)) from exc
         projection_payload = json.dumps(
             projection_document,
             sort_keys=True,
@@ -614,6 +684,9 @@ class HardenedModelRunner:
                 state_capsule_digest,
                 projection_payload,
                 phase_artifacts,
+                role_contract,
+                effective_directives,
+                directive_readback,
                 role_primer,
                 task,
             ),
@@ -804,6 +877,9 @@ class HardenedModelRunner:
         state_capsule_digest: str,
         projection_payload: str,
         phase_artifacts: Mapping[str, Mapping[str, Any]],
+        role_contract: Mapping[str, Any],
+        effective_directives: Mapping[str, Any],
+        directive_readback: Mapping[str, Any],
         role_primer: str,
         task: str,
     ) -> str:
@@ -821,6 +897,7 @@ class HardenedModelRunner:
                     "continuity": {"recall_and_echo_from_first_turn": True},
                     "effect_boundary": "typed-broker-requests-only",
                     "authority_shaped_model_fields": "forbidden",
+                    "role_contract": dict(role_contract),
                 },
                 "data": {
                     "projection": json.loads(projection_payload),
@@ -828,6 +905,8 @@ class HardenedModelRunner:
                         phase: dict(artifact)
                         for phase, artifact in sorted(phase_artifacts.items())
                     },
+                    "effective_directives": dict(effective_directives),
+                    "directive_readback": dict(directive_readback),
                     "role_primer": role_primer,
                     "task": task,
                 },

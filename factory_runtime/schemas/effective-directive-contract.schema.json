@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/effective-directive-contract/1",
+  "title": "Factory effective contextual directive contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "generation", "role", "evaluated_at",
+    "selection_policy", "verification_mode", "ledger", "provisional", "directives"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-effective-directive-contract/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator", "orchestrator"]},
+    "evaluated_at": {"type": "integer", "minimum": 1},
+    "selection_policy": {
+      "const": "all-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
+    },
+    "verification_mode": {"const": "externally-checkpoint-bound-hash-chain"},
+    "ledger": {"$ref": "#/$defs/source"},
+    "provisional": {
+      "allOf": [
+        {"$ref": "#/$defs/source"},
+        {
+          "type": "object",
+          "required": ["live_unsettled_count"],
+          "properties": {"live_unsettled_count": {"const": 0}}
+        }
+      ]
+    },
+    "directives": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/directive"}
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_digest", "head", "entry_count"],
+      "properties": {
+        "source_digest": {"$ref": "#/$defs/digest"},
+        "head": {"$ref": "#/$defs/digest"},
+        "entry_count": {"type": "integer", "minimum": 0, "maximum": 256},
+        "live_unsettled_count": {"type": "integer", "minimum": 0, "maximum": 256}
+      }
+    },
+    "directive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "directive_id", "scope", "text", "qualifiers", "entry_digest", "source_class"
+      ],
+      "properties": {
+        "directive_id": {"type": "string", "pattern": "^D-[0-9]{4}$"},
+        "scope": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "text": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "qualifiers": {
+          "type": "array", "maxItems": 64, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 16384}
+        },
+        "entry_digest": {"$ref": "#/$defs/digest"},
+        "source_class": {"const": "externally-checkpoint-bound-directive-ledger"}
+      }
+    }
+  }
+}

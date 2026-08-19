@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/lane-dispatch/1",
+  "title": "Factory structured lane dispatch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "generation", "role", "semantic_clearance",
+    "interpretation", "directive_readback", "task"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-lane-dispatch/1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "semantic_clearance": {"const": false},
+    "interpretation": {"$ref": "#/$defs/interpretation"},
+    "directive_readback": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/readback"}
+    },
+    "task": {"type": "string", "minLength": 1, "maxLength": 2097152}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "boundedText": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "interpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restated_request", "operational_consequence", "ambiguity"],
+      "properties": {
+        "restated_request": {"$ref": "#/$defs/boundedText"},
+        "operational_consequence": {"$ref": "#/$defs/boundedText"},
+        "ambiguity": {"enum": ["none", "unresolved"]}
+      }
+    },
+    "readback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directive_id", "source_quote", "operational_consequence", "ambiguity"],
+      "properties": {
+        "directive_id": {"type": "string", "pattern": "^D-[0-9]{4}$"},
+        "source_quote": {"$ref": "#/$defs/boundedText"},
+        "operational_consequence": {"$ref": "#/$defs/boundedText"},
+        "ambiguity": {"enum": ["none", "unresolved"]}
+      }
+    }
+  }
+}

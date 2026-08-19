@@ -1,10 +1,12 @@
 # The Harness
 
 > Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
-> remain available in `harness/lane_env.sh` as compatibility controls. Live Coder/Tester
+> available in `harness/lane_env.sh` as compatibility controls. Live Coder/Tester
 > dispatch instead routes through the executable runner boundary: externally anchored resume is
 > re-verified, every admitted context dependency is captured in a closed content-addressed
-> capsule, a current structural state-qualification report is required, and macOS Seatbelt
+> capsule, one runtime-derived effective-directive contract plus structured readback and exact
+> role contract are required, a current structural state-qualification report is required, and
+> macOS Seatbelt
 > constrains files and process exec. Execution-truth PR1 (2026-08-15) wires Stage R/E authority,
 > exact run-owned target-state, control/source-root separation, and run-resource accounting into
 > the runtime and tmux consumers. Provider-only egress is still not enforced: the Seatbelt
@@ -89,6 +91,7 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Function | Owner | Mechanism |
 |---|---|---|
 | Authority (what was said) | **Directive ledger** + Tessera | Append-only hash-chained JSONL of verbatim founder text; hardware-signed git commits (agent verifies, cannot sign); qualifier-preserving supersession. Chess genesis holds run-level authorization logic under the root signature. |
+| Effective instructions (what this invocation receives) | **factory_runtime instruction control** | External resume configuration binds exact ledger, provisional-chain, and role-doctrine bytes. Runtime verifies both chains, blocks live unsettled candidates, derives one bounded role-specific contract, requires an exact structured readback, and binds all three through the capsule and prompt. Checkpoint binding proves selected bytes, not signer identity or semantic comprehension. |
 | Identity (who acts) | **Signet** | Per-lane principals from the enrollment registry (deliverable 8); short-lived scoped tokens, per-hop; deny-wins resolution. "The Tester cannot read the Coder's channel" becomes an ACL fact. |
 | Policy (what a token may do) | **SPL** (jmcentire/agent-safe) | Total, gas-metered evaluation in-token at the tool boundary; sealed attenuation; expressions are approval rules, so human-signed under I8, never agent-authored into force. |
 | State (what is true now) | **factory_runtime** RunState + **Chess** anchors | Per settled decisions: machine evidence chained in the factory_core ledger; anchor transitions (`*-ratified`, `human-approved`, `promoted`) carry Chess move records — prev/new state hash, actor key, signature over all four, re-execution at the anchor; anchors carry the ledger head digest only. |
@@ -118,8 +121,10 @@ initial size, so concurrent appends do not invalidate already-read bytes. Comple
 are admitted without byte slicing, oversized records are marked as omitted, and minutes input
 enumeration has a code-owned file-count ceiling.
 The runtime itself derives the phase snapshot from the exact three ratified artifacts and the
-run projection from the verified ledger; the wake caller cannot supply either authoritative
-section. The agent
+run projection from the verified ledger. It also derives `active-directives` from the exact
+checkpoint-configured directive sources; missing, corrupt, substituted, or oversized sources
+refuse instead of becoming an empty list. The wake caller cannot supply any of those sections.
+The agent
 starts in a fresh empty working directory and cannot extend that admitted set by asking the
 dispatcher to inspect another path; missing context becomes a blocking question for the human.
 Context cost then scales with exceptions rather than the run — the inverse of the
@@ -131,6 +136,11 @@ manifests, registries, and the ledger are human-signed files they read and canno
 The executable sink is one-way: a bounded response is labeled `untrusted-advisory` and
 appended only as `validator-blocking-only` data; no parser converts its prose into a broker
 request, signature, ledger transition, or cleanup action.
+That advisory data does exert bounded influence through the dispatcher: it blocks the next lane
+dispatch until a Validator records an exact-subject `stop`, `narrow`, `escalate`, `refute`, or
+`resolve` disposition. The disposition must retain exact evidence bytes under the run root and
+bind their digest; acknowledgement or elapsed time cannot clear the gate. This forces a response
+to the finding without promoting the orchestrator into authority or making it judge its own claim.
 The advisory process is supervised while it runs: a code-owned wall ceiling and combined output
 ceiling terminate the client's dedicated process group before post-processing, even if its
 principal exited first. The dispatcher starts the wrapper in a separate process group, sends TERM
@@ -184,19 +194,19 @@ stall on live rulings or improvise, and improvising is the disease this cures. S
 provisional entries live in a **side chain** (`provisional.jsonl`), agent-appendable,
 hash-chained, each citing the transcript precisely (file:line:uuid:line-sha) and carrying a
 TTL. They never enter the signed ledger; they are *settled* by it — batch-ratified at the
-next ceremony into signed entries that confirm verbatim or correct, or refused. Refusal
-after action has defined semantics: every artifact citing the provisional is reclassified
-as `[AGENT]`-originated, frozen, and routed for an explicit keep/revert disposition — the
-same downstream invalidation the runner already performs on an authority-generation change.
-An expired, unsettled provisional authorizes nothing new; actions already taken under it
-stand, awaiting the same disposition.
+next ceremony into signed entries that confirm verbatim or correct, or refused. A live,
+unsettled candidate blocks model dispatch; it is never silently added to the operative set.
+Refusal settles it without activating its text. Expiry removes the candidate from the live
+blocking set but never turns it into authority. The chain remains in the exact source digest so
+history cannot be rewritten by expiry.
 
-**2. Restatement gate.** Corrective instructions carry a diagnosis and a remedy; agents
-latch onto the remedy and satisfy it in ways that worsen the diagnosis. Before work starts
-on any corrective directive, the interpretation — diagnosis restated, in the agent's words —
-is recorded against the directive id and confirmed. `interpretation_confirmed: false`
-blocks the INTAKE transition. One sentence per correction; it would have killed the
-scoreboard in five seconds.
+**2. Structured readback gate.** Corrective instructions carry a diagnosis and a remedy; agents
+latch onto the remedy and satisfy it in ways that worsen the diagnosis. Before work starts, a
+closed lane-dispatch document must bind the exact run, generation, role, and every effective
+directive id, with a source quote, operational consequence, and ambiguity state. Any missing id,
+wrong scope tuple, or unresolved ambiguity blocks before model use. The runtime adds the exact
+effective-contract digest. This is exact translation evidence with no author-identity claim, not proof that the model
+understood or will obey it; observable obligations and effect gates still judge behavior.
 
 **3. Positive-control receipts.** Four wrong conclusions in one day, each a correct answer
 to a too-narrow query. An absence claim ("this is dead code," "no CI exists," "the role has
@@ -351,7 +361,11 @@ dependency-free (bash + python3 + git):
 
 - `harness/directive.py` — append/supersede (qualifier dispositions enforced), verify
   (`--sigs` requires signature-clean git history), `provisional`/`ratify` for the
-  live-ruling bridge (control 1a), `active` listing both chains.
+  live-ruling bridge (control 1a), and verified `active` inspection. Runtime consumers derive
+  their own closed effective contract rather than trusting this human-readable listing.
+- `harness/consume_block.sh` — locks the exact pending subject, requires a typed disposition,
+  retains and hashes the run-owned evidence bytes, receipts every event, and only then durably
+  releases the dispatch gate.
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
   a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.

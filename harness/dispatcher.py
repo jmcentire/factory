@@ -16,6 +16,7 @@ an agent mid-run.
 """
 import argparse
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -23,9 +24,11 @@ import pathlib
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 
 _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
@@ -117,6 +120,44 @@ def read_lines(path: pathlib.Path) -> list[str]:
         return []
 
 
+def append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
+    """Append one durable record under the same advisory-plane lock protocol.
+
+    `consume_block.sh` holds the blocking file before it takes the events lock. Every producer
+    must therefore lock its append as well; otherwise a disposition can race a partial write or
+    silently truncate a newly appended event.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_APPEND
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise RuntimeError(f"event sink is not a regular file: {path}")
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        stream.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 class Dispatcher:
     def __init__(self, run: str, root: pathlib.Path, interval: int) -> None:
         self.run = run
@@ -156,8 +197,7 @@ class Dispatcher:
     # -- record ---------------------------------------------------------------
     def event(self, kind: str, detail: str, wake: bool = False) -> None:
         body = {"ts": now(), "kind": kind, "detail": detail, "wake": wake}
-        with open(self.events, "a") as f:
-            f.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
+        append_jsonl(self.events, body)
         print(f"[{body['ts']}] {kind}: {detail[:140]}")
         if wake:
             self.wake_orchestrator(body)
@@ -331,16 +371,14 @@ class Dispatcher:
         bf.parent.mkdir(parents=True, exist_ok=True)
         ts = now()
         payload = {"ts": ts, "class": cls, "evidence": evidence[:200]}
-        with open(bf, "a") as f:
-            f.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+        append_jsonl(bf, payload)
         # Receipt the WRITE so a silent clear is visible by its absence: a
         # blocking_written record with no matching blocking_consumed means the
         # file was rm'd/truncated without consume_block.sh, not consumed.
-        with open(self.events, "a") as f:
-            f.write(json.dumps(
-                {"ts": ts, "kind": "blocking_written", "lane": lane,
-                 "event": payload},
-                sort_keys=True, separators=(",", ":")) + "\n")
+        append_jsonl(
+            self.events,
+            {"ts": ts, "kind": "blocking_written", "lane": lane, "event": payload},
+        )
 
     def check_validator_failure_modes(self, fresh: str) -> None:
         """The Orchestrator's charter, detected deterministically, judged on wake:

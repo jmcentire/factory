@@ -77,6 +77,29 @@ factory_verify_resume_anchor() {
   export FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST
 }
 
+factory_config_source_path() {
+  local name="${1:?configuration source name required}"
+  local index entry source_name source_path="" matches=0
+  # Resolve only from the exact argv vector already presented to and accepted by
+  # verify-resume-checkpoint. Re-reading the mutable manifest here would create a path-selection
+  # TOCTOU even though the later runtime digest check would eventually refuse the substituted bytes.
+  for ((index = 0; index < ${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}; index += 2)); do
+    [ "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$index]}" = "--config-source" ] || return 72
+    [ "$((index + 1))" -lt "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" ] || return 72
+    entry="${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$((index + 1))]}"
+    source_name="${entry%%=*}"
+    if [ "$source_name" = "$name" ]; then
+      source_path="${entry#*=}"
+      matches=$((matches + 1))
+    fi
+  done
+  [ "$matches" -eq 1 ] && [[ "$source_path" = /* ]] || {
+    echo "configuration source '$name' is missing, duplicated, or not absolute" >&2
+    return 72
+  }
+  printf '%s\n' "$source_path"
+}
+
 factory_load_context() {
   local run="${1:?run id required}"
   local runs_in="${2:?runs root required}"

@@ -70,8 +70,8 @@
     "state_capsule_digest": {"$ref": "#/$defs/digest"},
     "projection_digest": {"$ref": "#/$defs/digest"},
     "task_digest": {"$ref": "#/$defs/digest"},
-    "prompt_schema_version": {"const": "factory-runner-prompt/2"},
-    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/1"},
+    "prompt_schema_version": {"const": "factory-runner-prompt/3"},
+    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/2"},
     "prompt_sequence": {
       "type": "array",
       "minItems": 3,

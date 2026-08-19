@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +18,15 @@ from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest_bytes
 from factory_runtime.authority import load_genesis
 from factory_runtime.broker import TypedOperationBroker, load_broker_registry
+from factory_runtime.instruction_control import (
+    canonical_document_bytes,
+    compile_role_contract,
+    derive_effective_directive_contract,
+    validate_directive_readback,
+    validate_lane_dispatch,
+    verify_effective_directive_contract,
+    verify_role_contract,
+)
 from factory_runtime.isolation import MacOSSandbox
 from factory_runtime.orchestrator_projection import build_orchestrator_projection
 from factory_runtime.projection_bundle import bundle_runner_projection
@@ -277,6 +287,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     bundle_orchestrator.add_argument("--output", required=True)
     bundle_orchestrator.add_argument("--capsule-output", required=True)
+    bundle_orchestrator.add_argument("--directive-ledger", required=True)
+    bundle_orchestrator.add_argument("--directive-ledger-config-source-name", required=True)
+    bundle_orchestrator.add_argument("--directive-provisional", required=True)
+    bundle_orchestrator.add_argument(
+        "--directive-provisional-config-source-name", required=True
+    )
     bundle_orchestrator.add_argument(
         "--config-source", action="append", default=[], metavar="NAME=PATH"
     )
@@ -284,6 +300,24 @@ def _parser() -> argparse.ArgumentParser:
         "--accepted-previous-checkpoint-digest", action="append", default=[]
     )
     _add_authority_arguments(bundle_orchestrator)
+
+    prepare_lane = commands.add_parser(
+        "prepare-lane-dispatch",
+        help="compile one structured lane dispatch against exact instruction sources",
+    )
+    prepare_lane.add_argument("--dispatch", required=True)
+    prepare_lane.add_argument("--directive-ledger", required=True)
+    prepare_lane.add_argument("--directive-provisional", required=True)
+    prepare_lane.add_argument("--role-doctrine", required=True)
+    prepare_lane.add_argument("--run-id", required=True)
+    prepare_lane.add_argument("--generation", type=int, required=True)
+    prepare_lane.add_argument(
+        "--role", required=True, choices=("coder", "tester", "validator")
+    )
+    prepare_lane.add_argument("--effective-directives-output", required=True)
+    prepare_lane.add_argument("--role-contract-output", required=True)
+    prepare_lane.add_argument("--readback-output", required=True)
+    prepare_lane.add_argument("--task-output", required=True)
 
     run_model = commands.add_parser(
         "run-model",
@@ -305,6 +339,15 @@ def _parser() -> argparse.ArgumentParser:
     run_model.add_argument("--task-file", required=True)
     run_model.add_argument("--task-digest", required=True)
     run_model.add_argument("--role-primer", required=True)
+    run_model.add_argument("--effective-directives", required=True)
+    run_model.add_argument("--directive-readback", required=True)
+    run_model.add_argument("--role-contract", required=True)
+    run_model.add_argument("--directive-ledger", required=True)
+    run_model.add_argument("--directive-ledger-config-source-name", required=True)
+    run_model.add_argument("--directive-provisional", required=True)
+    run_model.add_argument("--directive-provisional-config-source-name", required=True)
+    run_model.add_argument("--role-doctrine", required=True)
+    run_model.add_argument("--role-doctrine-config-source-name", required=True)
     run_model.add_argument("--broker-registry", required=True)
     run_model.add_argument("--broker-registry-digest", required=True)
     run_model.add_argument("--broker-registry-config-source-name", required=True)
@@ -580,6 +623,81 @@ def _write_json_once(path: str | Path, document: Mapping[str, Any]) -> None:
         os.close(directory)
 
 
+def _write_bytes_once(path: str | Path, raw: bytes) -> None:
+    destination = Path(path)
+    missing: list[Path] = []
+    cursor = destination.parent
+    while not cursor.exists():
+        missing.append(cursor)
+        if cursor.parent == cursor:
+            raise ValueError("output path has no existing filesystem ancestor")
+        cursor = cursor.parent
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    durable_directories = [*missing, cursor]
+    if cursor.parent != cursor:
+        durable_directories.append(cursor.parent)
+    for directory_path in dict.fromkeys(durable_directories):
+        directory = os.open(
+            directory_path,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.pending-", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination, follow_symlinks=False)
+        except FileExistsError:
+            existing = read_stable_regular_bytes(
+                destination,
+                label="existing output",
+                max_bytes=len(raw),
+            )
+            if existing != raw:
+                raise ValueError(f"existing output differs: {destination}") from None
+            existing_descriptor = os.open(
+                destination,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            try:
+                os.fsync(existing_descriptor)
+            finally:
+                os.close(existing_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    directory = os.open(
+        destination.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def _retain_state_admission_refusal(
     arguments: argparse.Namespace,
     error: StateAdmissionError,
@@ -677,6 +795,86 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "rebuild-projection":
         _emit(RunStore(arguments.runs).rebuild_projection(arguments.run_id))
+        return
+    if arguments.command == "prepare-lane-dispatch":
+        ledger_bytes = _read_regular_bytes(
+            arguments.directive_ledger,
+            label="directive ledger",
+        )
+        provisional_bytes = _read_regular_bytes(
+            arguments.directive_provisional,
+            label="provisional directive chain",
+        )
+        doctrine_bytes = _read_regular_bytes(
+            arguments.role_doctrine,
+            label="role doctrine",
+        )
+        dispatch = _object_from_bytes(
+            _read_regular_bytes(arguments.dispatch, label="lane dispatch"),
+            label="lane dispatch",
+        )
+        effective_path = Path(arguments.effective_directives_output)
+        if effective_path.exists() or effective_path.is_symlink():
+            effective = _object_from_bytes(
+                _read_regular_bytes(
+                    effective_path,
+                    label="existing effective directive contract",
+                ),
+                label="existing effective directive contract",
+            )
+            verify_effective_directive_contract(
+                effective,
+                ledger_bytes=ledger_bytes,
+                provisional_bytes=provisional_bytes,
+                expected_run_id=arguments.run_id,
+                expected_generation=arguments.generation,
+                expected_role=arguments.role,
+                current_time=int(time.time()),
+            )
+        else:
+            effective = derive_effective_directive_contract(
+                ledger_bytes=ledger_bytes,
+                provisional_bytes=provisional_bytes,
+                run_id=arguments.run_id,
+                generation=arguments.generation,
+                role=arguments.role,
+                evaluated_at=int(time.time()),
+            )
+        role_contract = compile_role_contract(
+            doctrine_bytes=doctrine_bytes,
+            role=arguments.role,
+        )
+        task_bytes, readback = validate_lane_dispatch(
+            dispatch,
+            contract=effective,
+            expected_run_id=arguments.run_id,
+            expected_generation=arguments.generation,
+            expected_role=arguments.role,
+        )
+        _write_bytes_once(
+            effective_path,
+            canonical_document_bytes(effective),
+        )
+        _write_bytes_once(
+            arguments.role_contract_output,
+            canonical_document_bytes(role_contract),
+        )
+        _write_bytes_once(
+            arguments.readback_output,
+            canonical_document_bytes(readback),
+        )
+        _write_bytes_once(arguments.task_output, task_bytes)
+        _emit(
+            {
+                "run_id": arguments.run_id,
+                "generation": arguments.generation,
+                "role": arguments.role,
+                "effective_directive_contract_digest": digest_obj(effective),
+                "role_contract_digest": digest_obj(role_contract),
+                "directive_readback_digest": digest_obj(readback),
+                "task_digest": digest_bytes(task_bytes),
+            }
+        )
         return
     if arguments.command == "verify-genesis":
         tessera = _tessera(arguments.tessera_bin)
@@ -825,7 +1023,11 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             arguments.section,
             label="orchestrator section",
         )
-        runtime_owned_sections = {"phase-artifacts", "run-projection"}
+        runtime_owned_sections = {
+            "active-directives",
+            "phase-artifacts",
+            "run-projection",
+        }
         supplied_runtime_sections = runtime_owned_sections & set(section_paths)
         if supplied_runtime_sections:
             raise ValueError(
@@ -840,6 +1042,34 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 label=f"orchestrator section {section_id}",
                 max_bytes=rule.max_bytes,
             )
+        ledger_bytes = _read_regular_bytes(
+            arguments.directive_ledger,
+            label="directive ledger",
+        )
+        provisional_bytes = _read_regular_bytes(
+            arguments.directive_provisional,
+            label="provisional directive chain",
+        )
+        instruction_sources = {
+            arguments.directive_ledger_config_source_name: ledger_bytes,
+            arguments.directive_provisional_config_source_name: provisional_bytes,
+        }
+        if len(instruction_sources) != 2:
+            raise ValueError("directive configuration source names must be distinct")
+        for source_name, raw in instruction_sources.items():
+            if resume.configuration_digests.get(source_name) != digest_bytes(raw):
+                raise ValueError(
+                    f"{source_name} is not bound by the external resume checkpoint"
+                )
+        effective_directives = derive_effective_directive_contract(
+            ledger_bytes=ledger_bytes,
+            provisional_bytes=provisional_bytes,
+            run_id=arguments.run_id,
+            generation=projection_state.generation,
+            role="orchestrator",
+            evaluated_at=int(time.time()),
+        )
+        sections["active-directives"] = canonical_document_bytes(effective_directives)
         _, phase_documents = _ratified_phase_artifacts(
             arguments.runs,
             arguments.run_id,
@@ -959,6 +1189,75 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             arguments.role_primer,
             label="role-scoped Kindex primer",
         )
+        ledger_bytes = _read_regular_bytes(
+            arguments.directive_ledger,
+            label="directive ledger",
+        )
+        provisional_bytes = _read_regular_bytes(
+            arguments.directive_provisional,
+            label="provisional directive chain",
+        )
+        doctrine_bytes = _read_regular_bytes(
+            arguments.role_doctrine,
+            label="role doctrine",
+        )
+        instruction_sources = {
+            arguments.directive_ledger_config_source_name: ledger_bytes,
+            arguments.directive_provisional_config_source_name: provisional_bytes,
+            arguments.role_doctrine_config_source_name: doctrine_bytes,
+        }
+        if len(instruction_sources) != 3:
+            raise ValueError("instruction configuration source names must be distinct")
+        for source_name, raw in instruction_sources.items():
+            if resume.configuration_digests.get(source_name) != digest_bytes(raw):
+                raise ValueError(
+                    f"{source_name} is not bound by the external resume checkpoint"
+                )
+        effective_directives_bytes = _read_regular_bytes(
+            arguments.effective_directives,
+            label="effective directive contract",
+        )
+        effective_directives = _object_from_bytes(
+            effective_directives_bytes,
+            label="effective directive contract",
+        )
+        verify_effective_directive_contract(
+            effective_directives,
+            ledger_bytes=ledger_bytes,
+            provisional_bytes=provisional_bytes,
+            expected_run_id=arguments.run_id,
+            expected_generation=projection_state.generation,
+            expected_role=arguments.role,
+            current_time=int(time.time()),
+        )
+        role_contract_bytes = _read_regular_bytes(
+            arguments.role_contract,
+            label="role contract",
+        )
+        role_contract = _object_from_bytes(
+            role_contract_bytes,
+            label="role contract",
+        )
+        verify_role_contract(
+            role_contract,
+            doctrine_bytes=doctrine_bytes,
+            expected_role=arguments.role,
+        )
+        directive_readback_bytes = _read_regular_bytes(
+            arguments.directive_readback,
+            label="directive readback",
+        )
+        directive_readback = _object_from_bytes(
+            directive_readback_bytes,
+            label="directive readback",
+        )
+        validate_directive_readback(
+            directive_readback,
+            contract=effective_directives,
+            expected_run_id=arguments.run_id,
+            expected_generation=projection_state.generation,
+            expected_role=arguments.role,
+        )
         broker_registry_bytes = _read_regular_bytes(
             arguments.broker_registry,
             label="broker registry",
@@ -1062,6 +1361,9 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             "frozen-task": task_bytes,
             "runner-projection": projection_bytes,
             "role-primer": role_primer_bytes,
+            "effective-directives": effective_directives_bytes,
+            "directive-readback": directive_readback_bytes,
+            "role-contract": role_contract_bytes,
             "runner-manifest": runner_manifest_bytes,
             "runner-output-schema": output_schema_bytes,
             "broker-registry": broker_registry_bytes,

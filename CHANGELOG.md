@@ -3,6 +3,36 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## Unreleased
+
+### Added
+
+- A closed effective-directive contract derived from externally checkpoint-bound directive and
+  provisional sources, with qualifier-preserving supersession, future-time refusal, live-candidate
+  blocking, structured per-directive readback, and one compiled role contract admitted through
+  every lane state capsule and prompt.
+- Exact-subject advisory dispositions. Clearing a blocking event now requires a typed consequence,
+  bounded reason, and exact evidence bytes copied into a content-addressed run artifact before the
+  event is receipted and the dispatch gate is durably released.
+
+### Changed
+
+- Orchestrator directive selection no longer accepts ambient paths, malformed chains, missing
+  sources, or an empty-list fallback. Lane dispatch no longer accepts a bare
+  `interpretation_confirmed: true` substring.
+- Dispatcher event writers now participate in the same locked, fsynced JSONL protocol as the
+  disposition consumer, preventing a newly appended blocking event from racing a gate release.
+- Instruction artifacts recover idempotently after a crash between publications: an existing
+  effective contract is re-derived against the exact sources and reused, never overwritten.
+
+### Explicit boundaries
+
+- External checkpoint binding and hash-chain verification prove the exact directive bytes selected;
+  they do not independently prove founder/hardware-signer identity or semantic model compliance.
+- Kindex remains contextual memory and incident history, never instruction authority or an
+  enforcement boundary. Behavioral adherence qualification and a closed advisory process
+  environment remain planned work.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

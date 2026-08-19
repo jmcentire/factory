@@ -58,7 +58,28 @@ def run(
     for path in (checkpoint, genesis, configuration):
         if not path.exists():
             path.write_text("{}\n", encoding="utf-8")
-    config_manifest.write_text(f"harness-test={configuration.resolve()}\n", encoding="utf-8")
+    directive_ledger = Path(
+        env.get(
+            "FACTORY_TEST_DIRECTIVE_LEDGER_SOURCE",
+            str(support / "directive-ledger.jsonl"),
+        )
+    )
+    directive_ledger.parent.mkdir(parents=True, exist_ok=True)
+    directive_ledger.touch(exist_ok=True)
+    directive_provisional = directive_ledger.with_name("provisional.jsonl")
+    directive_provisional.touch(exist_ok=True)
+    role_doctrine = Path(__file__).resolve().parents[1] / "docs" / "SOFTWARE-FACTORY.md"
+    config_manifest.write_text(
+        "".join(
+            (
+                f"harness-test={configuration.resolve()}\n",
+                f"factory-directive-ledger={directive_ledger.resolve()}\n",
+                f"factory-directive-provisional={directive_provisional.resolve()}\n",
+                f"factory-role-doctrine={role_doctrine.resolve()}\n",
+            )
+        ),
+        encoding="utf-8",
+    )
     shim = support / "factory-cli-shim.py"
     shim.write_text(
         """import hashlib
@@ -96,7 +117,6 @@ if verb == "bundle-orchestrator-projection":
         "receipt-tail",
         "event-tail",
         "minutes-tail",
-        "active-directives",
         "harness-metadata",
     }
     caller_sections = {spec.split("=", 1)[0] for spec in section_specs}
@@ -128,6 +148,26 @@ if verb == "bundle-orchestrator-projection":
             "byte_count": len(raw),
             "trust_class": trust_class,
         })
+    from factory_runtime.instruction_control import (
+        canonical_document_bytes,
+        derive_effective_directive_contract,
+    )
+    effective = derive_effective_directive_contract(
+        ledger_bytes=pathlib.Path(argument("--directive-ledger")).read_bytes(),
+        provisional_bytes=pathlib.Path(argument("--directive-provisional")).read_bytes(),
+        run_id=argument("--run-id"),
+        generation=1,
+        role="orchestrator",
+        evaluated_at=int(__import__("time").time()),
+    )
+    active = canonical_document_bytes(effective)
+    sections.append({
+        "section_id": "active-directives",
+        "content": active.decode("utf-8"),
+        "content_digest": "sha256:" + hashlib.sha256(active).hexdigest(),
+        "byte_count": len(active),
+        "trust_class": "context",
+    })
     capsule = {
         "schema_version": "factory-state-dependency-capsule/1",
         "test_fixture": True,
@@ -514,6 +554,10 @@ def ground_fixture(tmp: Path) -> dict[str, str]:
     # machine instead of the script.
     scratch_transcripts = tmp / "transcripts"
     scratch_transcripts.mkdir()
+    directives = tmp / "DIRECTIVES"
+    directives.mkdir()
+    (directives / "ledger.jsonl").write_bytes(b"")
+    (directives / "provisional.jsonl").write_bytes(b"")
     return {
         "TRANSCRIPTS": str(scratch_transcripts),
         "DIRECTIVE_LEDGER": str(tmp / "DIRECTIVES" / "ledger.jsonl"),
@@ -595,13 +639,72 @@ def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
 def test_dispatch_refuses_unconfirmed_interpretation(tmp_path: Path) -> None:
     cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
     dispatch = tmp_path / "d.md"
-    dispatch.write_text("requirement: build the thing\n")  # restatement gate missing
+    dispatch.write_text(
+        json.dumps(_lane_dispatch("coder", ambiguity="unresolved")),
+        encoding="utf-8",
+    )
     r = run(
         ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
         cwd,
         _dispatch_env(stub, root),
     )
-    assert r.returncode == 70 and "interpretation_confirmed" in r.stderr
+    assert r.returncode == 70 and "structured dispatch" in r.stderr
+
+
+def test_dispatch_refuses_omitted_effective_directive_before_model_use(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    appended = dl(
+        tmp_path,
+        "append",
+        "--scope",
+        "run",
+        "--text",
+        "Do not alter migrations",
+    )
+    assert appended.returncode == 0, appended.stderr
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_TEST_DIRECTIVE_LEDGER_SOURCE"] = str(
+        tmp_path / "DIRECTIVES" / "ledger.jsonl"
+    )
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "structured dispatch" in result.stderr
+    assert not (tmp_path / "boundary.log").exists()
+
+
+def test_config_source_resolution_uses_verified_vector_not_reread_manifest(
+    tmp_path: Path,
+) -> None:
+    trusted = tmp_path / "trusted-ledger.jsonl"
+    forged = tmp_path / "forged-ledger.jsonl"
+    manifest = tmp_path / "config.sources"
+    trusted.write_bytes(b"")
+    forged.write_text("ambient forged directive\n", encoding="utf-8")
+    manifest.write_text(
+        f"factory-directive-ledger={forged.resolve()}\n",
+        encoding="utf-8",
+    )
+    script = f"""
+source {HARNESS / 'run_context.sh'}
+FACTORY_RESUME_CONFIG_MANIFEST={manifest}
+FACTORY_VERIFIED_RESUME_CONFIG_ARGS=(
+  --config-source factory-directive-ledger={trusted.resolve()}
+)
+factory_config_source_path factory-directive-ledger
+"""
+
+    result = run(["bash", "-c", script], tmp_path, {})
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(trusted.resolve())
 
 
 # --------------------------------------------------------------------------
@@ -993,6 +1096,10 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     timers.write_text("", encoding="utf-8")
     transcripts = tmp_path / "transcripts"
     transcripts.mkdir()
+    directives = tmp_path / "DIRECTIVES"
+    directives.mkdir()
+    (directives / "ledger.jsonl").write_bytes(b"")
+    (directives / "provisional.jsonl").write_bytes(b"")
     return (
         {
             "PATH": f"{stub}:{os.environ['PATH']}",
@@ -1539,7 +1646,8 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
             "FACTORY_TEST_AGY_LOG": str(log),
             "FACTORY_TEST_AGY_INPUT": str(input_log),
             "FACTORY_TEST_WAKE_ROOT": str(root / "wakes"),
-            "DIRECTIVE_LEDGER": str(directive_ledger),
+            "FACTORY_TEST_DIRECTIVE_LEDGER_SOURCE": str(directive_ledger),
+            "DIRECTIVE_LEDGER": str(tmp_path / "ambient-forged-ledger.jsonl"),
         },
     )
 
@@ -1565,6 +1673,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         if section["section_id"] == "active-directives"
     )
     assert "project this exact directive" in active_directives["content"]
+    assert "ambient-forged" not in active_directives["content"]
     minutes = next(
         section for section in projected["sections"]
         if section["section_id"] == "minutes-tail"
@@ -2966,32 +3075,161 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     absence), then atomically truncates the file to release the gate."""
     root = tmp_path / ".harness" / "runs" / "rA"
     (root / "lanes").mkdir(parents=True)
-    (root / "lanes" / "validator.blocking").write_text(
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text(
         '{"class":"stall","evidence":"validator quiet 30m"}\n'
         '{"class":"orchestrator_response","response":"x"}\n'
     )
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The narrowed task excludes the disputed surface.\n", encoding="utf-8")
+    subject_digest = "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest()
+    evidence_digest = "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest()
     r = run(
-        ["bash", str(HARNESS / "consume_block.sh"), "rA", "validator"],
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rA",
+            "validator",
+            "--disposition",
+            "narrow",
+            "--reason",
+            "The next dispatch excludes the disputed surface.",
+            "--subject-digest",
+            subject_digest,
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            evidence_digest,
+        ],
         tmp_path,
         {"HARNESS_DIR": str(tmp_path / ".harness")},
     )
     assert r.returncode == 0, r.stderr
-    assert "consumed 2" in r.stdout
+    assert "dispositioned 2" in r.stdout
     assert (root / "lanes" / "validator.blocking").read_text() == ""
     events = read_chain(root / "events.jsonl")
     assert len(events) == 2 and all(e["kind"] == "blocking_consumed" for e in events)
+    assert all(e["disposition"] == "narrow" for e in events)
+    assert all(e["blocking_subject_digest"] == subject_digest for e in events)
+    assert all(e["disposition_evidence_digest"] == evidence_digest for e in events)
+    retained = root / events[0]["disposition_evidence_id"]
+    assert retained.read_bytes() == evidence.read_bytes()
+    assert all(e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in events)
 
 
 def test_consume_block_noop_when_empty(tmp_path: Path) -> None:
     root = tmp_path / ".harness" / "runs" / "rB"
     (root / "lanes").mkdir(parents=True)
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("No pending event remains.\n", encoding="utf-8")
     r = run(
-        ["bash", str(HARNESS / "consume_block.sh"), "rB", "validator"],
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rB",
+            "validator",
+            "--disposition",
+            "resolve",
+            "--reason",
+            "No pending event remains.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(b"").hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
         tmp_path,
         {"HARNESS_DIR": str(tmp_path / ".harness")},
     )
     assert r.returncode == 0
     assert "no blocking event pending" in r.stderr
+
+
+def test_consume_block_cannot_clear_without_a_disposition(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rC"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text('{"class":"orchestrator_response"}\n', encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "consume_block.sh"), "rC", "validator"],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode == 64
+    assert "valid disposition" in result.stderr
+    assert blocking.read_text(encoding="utf-8") != ""
+
+
+def test_consume_block_refuses_non_event_bytes_without_clearing(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rC-empty"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text(" \n", encoding="utf-8")
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("No valid event exists.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rC-empty",
+            "validator",
+            "--disposition",
+            "refute",
+            "--reason",
+            "Malformed control bytes cannot be dispositioned as an event.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode != 0
+    assert "contains no events" in result.stderr
+    assert blocking.read_text(encoding="utf-8") == " \n"
+
+
+def test_consume_block_refuses_stale_subject_without_clearing(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rD"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text('{"class":"orchestrator_response"}\n', encoding="utf-8")
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("Response was independently refuted.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rD",
+            "validator",
+            "--disposition",
+            "refute",
+            "--reason",
+            "The advisory premise differs from the retained proof.",
+            "--subject-digest",
+            "sha256:" + "d" * 64,
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode != 0
+    assert "subject changed" in result.stderr
+    assert blocking.read_text(encoding="utf-8") != ""
+    assert not (root / "events.jsonl").exists()
 
 
 # --------------------------------------------------------------------------
@@ -3015,6 +3253,94 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
     )
     assert r.returncode == 81, r.stdout + r.stderr
     assert "blocking event pending" in r.stderr
+    assert not (root / "dispatch-inputs").exists()
+    assert not (root / "instruction-inputs").exists()
+
+
+def test_disposition_releases_same_unpublished_dispatch(tmp_path: Path) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text('{"class":"orchestrator_response","response":"narrow"}\n')
+    environment = _dispatch_env(stub, root)
+
+    refused = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert refused.returncode == 81, refused.stdout + refused.stderr
+    assert not (root / "dispatch-inputs").exists()
+
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The retained task already excludes the disputed surface.\n")
+    disposition = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "r1",
+            "validator",
+            "--disposition",
+            "narrow",
+            "--reason",
+            "Proceed only with the exact already-bounded task.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        cwd,
+        {"HARNESS_RUN_ROOT": str(root)},
+    )
+    assert disposition.returncode == 0, disposition.stderr
+
+    admitted = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
+
+
+def test_blocking_append_after_admission_marker_applies_to_next_dispatch(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    environment = _dispatch_env(stub, root)
+    delegate = tmp_path / "factory-with-post-admission-block"
+    delegate.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [ \"${1:-}\" = prepare-lane-dispatch ] && "
+        "[ ! -e \"$HARNESS_RUN_ROOT/post-admission-block-injected\" ]; then\n"
+        "  mkdir -p \"$HARNESS_RUN_ROOT/lanes\"\n"
+        "  printf '%s\\n' '{\"class\":\"orchestrator_response\",\"response\":\"next\"}' "
+        ">> \"$HARNESS_RUN_ROOT/lanes/validator.blocking\"\n"
+        "  : > \"$HARNESS_RUN_ROOT/post-admission-block-injected\"\n"
+        "fi\n"
+        f"exec {sys.executable} -m factory_runtime.cli \"$@\"\n",
+        encoding="utf-8",
+    )
+    delegate.chmod(0o755)
+    environment["FACTORY_CLI"] = str(delegate)
+
+    admitted = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
+    assert (root / "lanes" / "validator.blocking").stat().st_size > 0
+
+    next_dispatch = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert next_dispatch.returncode == 81
+    assert "blocking event pending" in next_dispatch.stderr
 
 
 # --------------------------------------------------------------------------
@@ -3023,6 +3349,30 @@ def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
 # precondition. A gate that has never been watched firing is theater, so each
 # drill watches the gate fire (refuse) and pass (deliver + structure).
 # --------------------------------------------------------------------------
+
+
+def _lane_dispatch(
+    role: str,
+    *,
+    task: str = "requirement: build R1.1",
+    ambiguity: str = "none",
+) -> dict[str, object]:
+    return {
+        "schema_version": "factory-lane-dispatch/1",
+        "run_id": "r1",
+        "generation": 1,
+        "role": role,
+        "semantic_clearance": False,
+        "interpretation": {
+            "restated_request": "Build the exact ratified R1.1 behavior.",
+            "operational_consequence": (
+                "Return a question rather than inventing missing intent or authority."
+            ),
+            "ambiguity": ambiguity,
+        },
+        "directive_readback": [],
+        "task": task,
+    }
 
 
 def dispatch_success_fixture(
@@ -3053,8 +3403,8 @@ def dispatch_success_fixture(
             "constraint: never push to main without a green ship\n"
             "research: vendor doc for the touched surface\n"
         )
-    dispatch = tmp_path / "d.md"
-    dispatch.write_text("interpretation_confirmed: true\nrequirement: build R1.1\n")
+    dispatch = tmp_path / "d.json"
+    dispatch.write_text(json.dumps(_lane_dispatch(role)) + "\n", encoding="utf-8")
     stub = tmp_path / "bin"
     stub.mkdir()
     (stub / "tmux").write_text("#!/usr/bin/env bash\nexit 0\n")
@@ -3509,7 +3859,7 @@ def test_dispatch_refuses_runner_reservation_above_objective_budget(tmp_path: Pa
 def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
     tmp_path: Path,
 ) -> None:
-    cwd, root, dispatch_file, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    cwd, root, _, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
     (root / "artifacts" / "primer.tester.md").write_text(
         "# Tester primer\nconstraint: preserve exact test authority\n",
         encoding="utf-8",
@@ -3521,6 +3871,11 @@ def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
     environment = _dispatch_env(stub, root)
 
     def run_dispatch(role: str) -> subprocess.CompletedProcess[str]:
+        role_dispatch = tmp_path / f"dispatch-{role}.json"
+        role_dispatch.write_text(
+            json.dumps(_lane_dispatch(role)) + "\n",
+            encoding="utf-8",
+        )
         return run(
             [
                 "bash",
@@ -3528,7 +3883,7 @@ def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
                 "r1",
                 role,
                 "--dispatch",
-                str(dispatch_file),
+                str(role_dispatch),
             ],
             cwd,
             environment,
@@ -3825,31 +4180,40 @@ def test_receipt_takes_last_summary_match(tmp_path: Path) -> None:
     assert chain[-1]["pass_count"] == 3, chain[-1]
 
 
-def test_consume_block_handles_non_json_line(tmp_path: Path) -> None:
-    """A process with filesystem access could place a non-JSON line in
-    <lane>.blocking. The old printf '%s' embedded it raw into events.jsonl,
-    corrupting the ledger for every downstream reader. The python receipt parses
-    each line and, on failure, embeds it as an escaped string under event_raw with
-    a parse_error flag — events.jsonl stays well-formed (read_chain did not throw)
-    and the JSON line after it is still consumed correctly."""
+def test_consume_block_refuses_non_json_line_without_clearing(tmp_path: Path) -> None:
+    """Malformed control input is neither a valid event nor safe to disposition."""
     root = tmp_path / ".harness" / "runs" / "rA"
     (root / "lanes").mkdir(parents=True)
     (root / "lanes" / "validator.blocking").write_text(
         'this is not json\n{"class":"stall","evidence":"validator quiet 30m"}\n'
     )
+    blocking = root / "lanes" / "validator.blocking"
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("Malformed input is not admissible.\n", encoding="utf-8")
     r = run(
-        ["bash", str(HARNESS / "consume_block.sh"), "rA", "validator"],
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rA",
+            "validator",
+            "--disposition",
+            "refute",
+            "--reason",
+            "The malformed event cannot be authenticated.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
         tmp_path,
         {"HARNESS_DIR": str(tmp_path / ".harness")},
     )
-    assert r.returncode == 0, r.stderr
-    events = read_chain(root / "events.jsonl")
-    assert len(events) == 2, events
-    assert events[0].get("parse_error") is True, events[0]
-    assert events[0].get("event_raw") == "this is not json", events[0]
-    assert events[1].get("event") == {"class": "stall", "evidence": "validator quiet 30m"}, events[
-        1
-    ]
+    assert r.returncode != 0
+    assert "not JSON" in r.stderr
+    assert not (root / "events.jsonl").exists()
+    assert (root / "lanes" / "validator.blocking").read_text() != ""
 
 
 def test_postmortem_reports_silent_clears(tmp_path: Path) -> None:

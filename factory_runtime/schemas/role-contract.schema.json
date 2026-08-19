@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/role-contract/1",
+  "title": "Factory provider-neutral role instruction contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "compiler_version", "role", "source_digest",
+    "instructions_digest", "instructions"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-role-contract/1"},
+    "compiler_version": {"const": "factory-role-contract-compiler/1"},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "source_digest": {"$ref": "#/$defs/digest"},
+    "instructions_digest": {"$ref": "#/$defs/digest"},
+    "instructions": {"type": "string", "minLength": 1, "maxLength": 262144}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

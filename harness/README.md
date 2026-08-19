@@ -22,7 +22,9 @@
   100-items-of-lingering-work state is almost never wanted). Detection is the
   dispatcher's (deterministic patterns, timers, receipt counts); judgment is the
   woken agent's; the verdict FLAGS to the Validator or escalates to the human —
-  it never gates and never touches a lane.
+  it never touches a lane or acquires verdict authority. Its structured event does gate the next
+  dispatch until the Validator records an evidence-bound `stop`, `narrow`, `escalate`, `refute`,
+  or `resolve` disposition.
 
 ## The workflow, bound to mechanisms
 
@@ -32,7 +34,7 @@
 | 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens `ctl` and `validator` in the exact target workdir. |
 | 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Artifacts are settled one behavior-ledger row at a time and land content-addressed in `.factory/runs/<run>/artifacts/` with `.digest` files. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
-| 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` — refuses without the full authority tuple, externally pinned resume checkpoint, role manifest, output schema, named-secret root, and broker registry. It bundles an asymmetric path-free projection, qualifies two canaries plus same-session resume, runs the task under hard resource ceilings, and executes only signed typed broker requests. No lane tmux process exists. The strategic orchestrator remains `dispatcher.py` plus trigger-only `/orchestrate`. |
+| 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` accepts only `factory-lane-dispatch/1` JSON: exact run/generation/role, bounded task interpretation, ambiguity state, and one exact readback for every effective checkpoint-bound directive. It also requires the full authority tuple, externally pinned resume checkpoint, compiled role contract, role manifest, output schema, named-secret root, and broker registry. It bundles an asymmetric path-free projection, qualifies two canaries plus same-session resume, runs the task under hard resource ceilings, and executes only signed typed broker requests. No lane tmux process exists. The strategic orchestrator remains `dispatcher.py` plus trigger-only `/orchestrate`. |
 | 8. Orchestrator tracks tasks, takes minutes | `dispatcher.py` snapshots the human↔Validator window into `minutes/` — labeled `[INFERRED]`, non-authoritative, an index into the directive ledger, never the record. |
 | 9. Validator dispatches immutable objectives; active poll | Validator dispatches only through `dispatch_lane.sh`. Model output is a closed handoff, not a live conversational lane; questions and blocked status return as retained data. The *dispatcher* owns coordination cadence for the interactive Validator surface. |
 | Stalls / lulls | Dispatcher stall FSM: lane-tending metric, confirm-before-prod, `idle-awaiting-handoff` never prodded, repo-diff metrics forbidden. Prods go to the Validator, not past it. |
@@ -52,10 +54,13 @@ names a consuming project:
   records, harness coordination, and evidence live under `<runs>/<run>/`; source bytes do not.
 - Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
   from the immutable target workdir after target-state verification.
-- Env seams: `HARNESS_DIR`, `DIRECTIVE_LEDGER`, `HARNESS_PROJECTION_CONF`,
+- Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`, plus externally supplied
   `FACTORY_RESUME_*`, `FACTORY_RUNNER_*`, and `FACTORY_BROKER_REGISTRY_DIR` paths. Secrets are
   read only from the named-secret root declared by the checkpoint-bound runner manifest.
+  Directive ledger, provisional chain, and role doctrine paths are not ambient seams: the external
+  resume configuration must name them exactly as `factory-directive-ledger`,
+  `factory-directive-provisional`, and `factory-role-doctrine`.
 - The founder's hardware signing key is per-**founder**, not per-project: one key
   signs many project ledgers; each project's ledger root is its own chain.
 - This repo's own `.factory/` and `DIRECTIVES/` exist because the factory
@@ -65,6 +70,9 @@ names a consuming project:
 
 - `directive.py` — control 1/1a: verbatim hash-chained ledger, qualifier-preserving
   supersession, provisional side chain, `verify --sigs`.
+- `consume_block.sh` — exact-subject typed disposition of advisory/stall events; it copies the
+  supplied run-owned evidence into a content-addressed run artifact before receipting and release.
+  A read, stale subject digest, unretained digest string, or acknowledgement cannot clear the gate.
 - `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses HALT
   and stale grounding. Model dispatch uses the stronger `factory run-model` boundary, which also
   removes profile inheritance, qualifies Seatbelt, constrains process trees, and receipts config.

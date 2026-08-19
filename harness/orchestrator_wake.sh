@@ -13,6 +13,8 @@ D="$(cd "$(dirname "$0")" && pwd)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 RUNS_ROOT="${FACTORY_RUNS_DIR:-$H/runs}"
 HARNESS_META="$ROOT/harness.json"
+# shellcheck source=harness/run_context.sh
+source "$D/run_context.sh"
 FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
 FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
 [ -f "$HARNESS_META" ] && [ ! -L "$HARNESS_META" ] || {
@@ -283,42 +285,17 @@ write("minutes-tail", b"".join(minute_lines))
 write("harness-metadata", stable(root / "harness.json", required=True))
 PY
 
-DIRECTIVE_LEDGER_SOURCE="${DIRECTIVE_LEDGER:-$D/../DIRECTIVES/ledger.jsonl}"
-python3 - "$D/directive.py" "$SECTIONS/active-directives" "$DIRECTIVE_LEDGER_SOURCE" <<'PY'
-import os, pathlib, subprocess, sys
-
-script, destination, ledger = (
-    pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
-)
-try:
-    completed = subprocess.run(
-        [sys.executable, str(script), "active"],
-        check=False,
-        capture_output=True,
-        timeout=30,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "LANG": "C.UTF-8",
-            "LC_ALL": "C.UTF-8",
-            "DIRECTIVE_LEDGER": ledger,
-        },
-    )
-except (OSError, subprocess.SubprocessError):
-    raw = b"[]\n"
-else:
-    raw = completed.stdout if completed.returncode == 0 else b"[]\n"
-if len(raw) > 65536:
-    raise SystemExit("oversized active-directives projection")
-descriptor = os.open(
-    destination,
-    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-    0o600,
-)
-with os.fdopen(descriptor, "wb") as stream:
-    stream.write(raw)
-    stream.flush()
-    os.fsync(stream.fileno())
-PY
+DIRECTIVE_LEDGER_SOURCE_NAME="factory-directive-ledger"
+DIRECTIVE_PROVISIONAL_SOURCE_NAME="factory-directive-provisional"
+DIRECTIVE_LEDGER_SOURCE="$(factory_config_source_path "$DIRECTIVE_LEDGER_SOURCE_NAME")" || {
+  echo "orchestrator wake refused: checkpoint has no unique directive ledger" >&2
+  exit 72
+}
+DIRECTIVE_PROVISIONAL_SOURCE="$(factory_config_source_path \
+  "$DIRECTIVE_PROVISIONAL_SOURCE_NAME")" || {
+  echo "orchestrator wake refused: checkpoint has no unique provisional directive source" >&2
+  exit 72
+}
 
 set +e
 set +u
@@ -333,8 +310,11 @@ $FACTORY_CLI bundle-orchestrator-projection \
   --section "receipt-tail=$SECTIONS/receipt-tail" \
   --section "event-tail=$SECTIONS/event-tail" \
   --section "minutes-tail=$SECTIONS/minutes-tail" \
-  --section "active-directives=$SECTIONS/active-directives" \
   --section "harness-metadata=$SECTIONS/harness-metadata" \
+  --directive-ledger "$DIRECTIVE_LEDGER_SOURCE" \
+  --directive-ledger-config-source-name "$DIRECTIVE_LEDGER_SOURCE_NAME" \
+  --directive-provisional "$DIRECTIVE_PROVISIONAL_SOURCE" \
+  --directive-provisional-config-source-name "$DIRECTIVE_PROVISIONAL_SOURCE_NAME" \
   --output "$PROJ" --capsule-output "$CAPSULE" \
   "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
   "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}" >/dev/null
@@ -582,6 +562,14 @@ def append_jsonl(path: pathlib.Path, body: dict[str, object]) -> None:
         stream.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 stdout, stdout_oversized = read_bounded(stdout_path)
 stderr, stderr_oversized = read_bounded(stderr_path)
