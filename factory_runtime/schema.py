@@ -33,6 +33,7 @@ SCHEMA_NAMES = frozenset(
         "resource-record",
         "resume-checkpoint",
         "runner-manifest",
+        "runner-invocation-diagnostic",
         "runner-output",
         "runner-projection",
         "runner-receipt",

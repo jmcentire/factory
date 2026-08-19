@@ -17,6 +17,7 @@ from factory_runtime.runner import (
     HardenedModelRunner,
     NamedSecretStore,
     RunnerError,
+    RunnerInvocationError,
     RunnerLimits,
     RunnerProcessResult,
     RunnerQualification,
@@ -627,6 +628,50 @@ def test_attempt_observer_distinguishes_prelaunch_refusal_from_started_process(
 
     assert error.value.model_attempts == expected_attempts
     assert observations == expected_observations
+
+
+def test_failed_invocation_writes_redacted_private_diagnostics_and_safe_capsule(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    backend = fixture[1]
+    backend.returncodes[0] = 1
+    backend.termination_reasons[0] = "wall-timeout"
+    backend.stdout[0] = "named-secret-value private model output"
+    backend.stderr[0] = "runner timed out"
+
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    error = raised.value
+    diagnostic = json.loads(error.diagnostic_path.read_text(encoding="utf-8"))
+    assert error.failure_capsule.owner == "validator-harness"
+    assert error.failure_capsule.code == "runner-invocation-timeout"
+    assert diagnostic["stdout"] == "[REDACTED] private model output"
+    assert diagnostic["stderr"] == "runner timed out"
+    assert diagnostic["termination_reason"] == "wall-timeout"
+    assert error.diagnostic_path == fixture[5] / "validator-invocation-diagnostic.json"
+    assert str(error.diagnostic_path) not in backend.calls[0]["writable"]
+    assert "private model output" not in json.dumps(error.failure_capsule.document())
+    assert "named-secret-value" not in error.diagnostic_path.read_text(encoding="utf-8")
+
+
+def test_output_limited_invocation_classifies_without_exposing_output(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    backend = fixture[1]
+    backend.returncodes[0] = 124
+    backend.termination_reasons[0] = "output-limit"
+    backend.stderr[0] = "private oracle details " + ("x" * 20_000)
+
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    error = raised.value
+    diagnostic = json.loads(error.diagnostic_path.read_text(encoding="utf-8"))
+    assert error.failure_capsule.code == "runner-invocation-output-limit"
+    assert diagnostic["stderr"].endswith("[TRUNCATED]")
+    assert len(diagnostic["stderr"].encode("utf-8")) <= 16_384
+    assert "private oracle details" not in json.dumps(error.failure_capsule.document())
 
 
 def test_secret_exfiltration_in_any_model_output_fails_closed(tmp_path: Path) -> None:
