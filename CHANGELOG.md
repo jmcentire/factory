@@ -11,7 +11,13 @@ public API is still pre-1.0.
   the complete bounded Git-object baseline, canonical candidate change set, exact ratified
   intent/architecture/operations, build input, build plan, pattern catalog, acceptance obligations,
   frozen implementation/tests and snapshots, resume checkpoint, configuration and exceptional
-  test-change authority, target state, and frozen Validator executable identity. The closed report
+  test-change authority, target state, and frozen Validator execution identity. Validator source
+  is constrained to one admitted Python file and streamed from the exact captured bytes rather
+  than reopened through a mutable pathname; the Factory Python installation is the explicit host
+  runtime TCB, and the retained execution snapshot is reverified after the process exits. The
+  versioned standalone-source ABI binds `python -`, `<stdin>`, exhausted standard input, no
+  source-directory import path, no interpreter flags, and no additional path-bound arguments into
+  the ratified Validator configuration and environment identities. The closed report
   requires eight code-owned engineering lenses, exact cited bytes, content-addressed findings,
   typed clean-claim checks, and a host-derived verdict. The `/1` protocol grants no self-refutation
   authority: every emitted finding prevents a clean verdict. Review remains evidence-only and

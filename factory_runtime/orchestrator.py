@@ -22,6 +22,7 @@ from factory_runtime.acceptance_obligations import (
     retain_acceptance_obligation_report,
     validator_execution_digests,
     verify_and_retain_acceptance_catalog,
+    verify_retained_validator_execution,
 )
 from factory_runtime.adversarial_review import (
     VerifiedAdversarialReview,
@@ -464,6 +465,7 @@ class FactoryOrchestrator:
         tests_digest = ""
         coder_snapshot_digest = ""
         tester_snapshot_digest = ""
+        validator_execution_snapshot_digest = ""
         review_subject: Mapping[str, object] | None = None
         journal: ChecklistJournal | None = None
 
@@ -475,10 +477,18 @@ class FactoryOrchestrator:
         ) -> Mapping[str, object]:
             nonlocal candidate_digest, tests_digest, journal
             nonlocal coder_snapshot_digest, tester_snapshot_digest, review_subject
+            nonlocal validator_execution_snapshot_digest
             candidate_digest = digest_artifact_tree(coder_snapshot.files_directory / "artifact")
             tests_digest = digest_artifact_tree(tester_snapshot.files_directory / "tests")
             coder_snapshot_digest = coder_snapshot.digest
             tester_snapshot_digest = tester_snapshot.digest
+            validator_execution_snapshot_digest = verify_retained_validator_execution(
+                self.workflow.root / run_id,
+                attempt_id=attempt_id,
+                command_digest=command_digest,
+                configuration_digest=configuration_digest,
+                environment_digest=environment_digest,
+            )
             journal = ChecklistJournal(
                 attempt_root / "checklist.jsonl",
                 subject_digest=candidate_digest,
@@ -519,6 +529,10 @@ class FactoryOrchestrator:
                     "acceptance-tests": tests_digest,
                     "coder-output-snapshot": coder_snapshot_digest,
                     "tester-output-snapshot": tester_snapshot_digest,
+                    "validator-execution-manifest": command_digest,
+                    "validator-execution-configuration": configuration_digest,
+                    "validator-execution-environment": environment_digest,
+                    "validator-execution-snapshot": validator_execution_snapshot_digest,
                 },
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
@@ -895,6 +909,10 @@ class FactoryOrchestrator:
                     "acceptance-tests": tests_digest,
                     REPORT_ARTIFACT_KEY: product_acceptance_report_digest,
                     **dict(review_artifacts),
+                    "validator-execution-manifest": command_digest,
+                    "validator-execution-configuration": configuration_digest,
+                    "validator-execution-environment": environment_digest,
+                    "validator-execution-snapshot": validator_execution_snapshot_digest,
                     "evidence-bundle": envelope.payload_digest,
                     "evidence-envelope": envelope.envelope_digest,
                 },

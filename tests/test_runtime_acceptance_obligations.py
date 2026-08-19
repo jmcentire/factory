@@ -13,6 +13,7 @@ from factory_core.manifest import digest_obj
 from factory_runtime.acceptance_obligations import (
     AcceptanceObligationCatalog,
     AcceptanceObligationError,
+    capture_validator_execution,
     derive_acceptance_obligation_report,
     validator_execution_digests,
     verify_acceptance_obligation_report,
@@ -88,6 +89,58 @@ def test_validator_execution_identity_binds_trusted_input_tree_bytes(tmp_path: P
 
     assert first[0] != second[0]
     assert first[1] != second[1]
+
+
+def test_validator_execution_configuration_binds_the_closed_stdin_launch_abi(
+    tmp_path: Path,
+) -> None:
+    validator = tmp_path / "validator.py"
+    validator.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    capture = capture_validator_execution(
+        (sys.executable, str(validator), "review"),
+        trusted_paths=(validator,),
+    )
+    launch_contract = {
+        "schema_version": "factory-validator-launch/1",
+        "launch_mode": "python-source-stdin/1",
+        "runtime_tcb": "current-factory-python/1",
+        "validator_abi": "standalone-python-source/1",
+        "argv_0": "-",
+        "file": "<stdin>",
+        "stdin_after_source": "eof",
+        "script_directory_on_sys_path": False,
+        "interpreter_flags": "forbidden",
+        "additional_path_bindings": "forbidden",
+    }
+
+    assert capture.configuration_digest == digest_obj(
+        {
+            "schema_version": "factory-validator-configuration/3",
+            "runner": "isolated-build-loop/3",
+            "launch_contract": launch_contract,
+            "command_digest": capture.command_digest,
+            "execution_identity_digest": capture.identity_digest,
+            "snapshot_tree_digest": capture.document["snapshot_tree_digest"],
+        }
+    )
+    assert capture.environment_digest == digest_obj(
+        {
+            "schema_version": "factory-validator-environment/3",
+            "ambient_environment": "closed",
+            "network": "denied",
+            "launch_contract": launch_contract,
+            "read_scope": [
+                "build-input",
+                "build-plan",
+                "pattern-catalog",
+                "acceptance-obligation-catalog",
+                "coder-output-snapshot",
+                "tester-output-snapshot",
+                "validator-execution-snapshot",
+            ],
+            "write_scope": ["validator-work", "validator-output"],
+        }
+    )
 
 
 def test_first_use_acceptance_report_fsyncs_evidence_chain_through_run(

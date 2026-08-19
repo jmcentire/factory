@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from factory_core.manifest import digest_obj
 from factory_runtime.candidate_diff import (
     CandidateDiffError,
     build_candidate_review_context,
@@ -32,6 +33,7 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
     _git("init", "-q", cwd=source)
     (source / "README.md").write_text("old\n", encoding="utf-8")
     (source / "deleted.txt").write_text("delete me\n", encoding="utf-8")
+    (source / "unchanged.txt").write_text("same\n", encoding="utf-8")
     script = source / "script.sh"
     script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     script.chmod(0o644)
@@ -58,6 +60,7 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
     changed_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     changed_script.chmod(0o755)
     (candidate / "added.txt").write_text("new file\n", encoding="utf-8")
+    (candidate / "unchanged.txt").write_text("same\n", encoding="utf-8")
     state: dict[str, object] = {
         "object_store": str(object_store),
         "resolved_commit": commit,
@@ -65,6 +68,22 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
         "subpath": "",
     }
     return state, candidate
+
+
+def _rehash_baseline_and_change_set(
+    baseline: dict[str, object],
+    changes: dict[str, object],
+) -> None:
+    snapshot_body = {key: value for key, value in baseline.items() if key != "snapshot_digest"}
+    baseline["snapshot_digest"] = digest_obj(snapshot_body)
+    changes["baseline_snapshot_digest"] = baseline["snapshot_digest"]
+    change_body = {key: value for key, value in changes.items() if key != "change_set_digest"}
+    changes["change_set_digest"] = digest_obj(change_body)
+
+
+def _rehash_change_set(changes: dict[str, object]) -> None:
+    change_body = {key: value for key, value in changes.items() if key != "change_set_digest"}
+    changes["change_set_digest"] = digest_obj(change_body)
 
 
 def test_candidate_review_context_is_complete_deterministic_and_self_verifying(
@@ -116,6 +135,60 @@ def test_candidate_review_context_refuses_baseline_and_candidate_substitution(
     tampered_changes = copy.deepcopy(changes)
     tampered_changes["candidate_digest"] = "sha256:" + ("0" * 64)
     with pytest.raises(CandidateDiffError, match="digest"):
+        verify_candidate_review_context(baseline, tampered_changes)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("entry_type", "symlink", "entry type"),
+        ("mode", 0o755, "mode"),
+        ("content_utf8", "different\n", "UTF-8 display"),
+    ],
+)
+def test_candidate_review_context_rejects_rehashed_redundant_baseline_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    state, candidate = _fixture(tmp_path)
+    baseline, changes = build_candidate_review_context(
+        target_state=state,
+        candidate_root=candidate,
+        candidate_digest=tree_digest(candidate),
+        construction_mode="regenerate",
+    )
+    tampered_baseline = copy.deepcopy(baseline)
+    tampered_changes = copy.deepcopy(changes)
+    unchanged = next(
+        row for row in tampered_baseline["files"] if row["path"] == "unchanged.txt"
+    )
+    unchanged[field] = value
+    _rehash_baseline_and_change_set(tampered_baseline, tampered_changes)
+
+    with pytest.raises(CandidateDiffError, match=message):
+        verify_candidate_review_context(tampered_baseline, tampered_changes)
+
+
+def test_candidate_review_context_rejects_a_rehashed_inconsistent_change_kind(
+    tmp_path: Path,
+) -> None:
+    state, candidate = _fixture(tmp_path)
+    baseline, changes = build_candidate_review_context(
+        target_state=state,
+        candidate_root=candidate,
+        candidate_digest=tree_digest(candidate),
+        construction_mode="regenerate",
+    )
+    tampered_changes = copy.deepcopy(changes)
+    changed_readme = next(
+        row for row in tampered_changes["changes"] if row["path"] == "README.md"
+    )
+    changed_readme["kind"] = "mode-changed"
+    _rehash_change_set(tampered_changes)
+
+    with pytest.raises(CandidateDiffError, match="kind must re-derive as modified"):
         verify_candidate_review_context(baseline, tampered_changes)
 
 

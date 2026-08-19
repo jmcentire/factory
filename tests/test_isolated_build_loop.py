@@ -26,6 +26,7 @@ from factory_runtime.isolation import (
 from factory_runtime.lanes import (
     IsolatedBuildLoop,
     LaneError,
+    freeze_validator_execution,
     temporary_build_loop_root,
 )
 from factory_runtime.snapshot import tree_digest
@@ -134,7 +135,9 @@ class _UnqualifiedBackend:
         readable_paths: Sequence[str | Path] = (),
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
     ) -> IsolatedProcessResult:
+        del stdin_bytes
         raise AssertionError("an unqualified backend must never launch a lane")
 
 
@@ -160,6 +163,7 @@ class _RecordingQualifiedBackend:
         readable_paths: Sequence[str | Path] = (),
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
     ) -> IsolatedProcessResult:
         del cwd, readable_paths, writable_paths
         values = dict(environment or {})
@@ -176,13 +180,42 @@ class _RecordingQualifiedBackend:
         else:
             selected = tuple(str(part) for part in command)
             self.commands.append(selected)
-            self.validator_script_bytes = Path(selected[1]).read_bytes()
+            self.validator_script_bytes = stdin_bytes or b""
             self.validator_environment = values
         return IsolatedProcessResult(
             command=tuple(str(part) for part in command),
             returncode=0,
             stdout="",
             stderr="",
+        )
+
+
+class _MutatingValidatorSnapshotBackend(_RecordingQualifiedBackend):
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
+    ) -> IsolatedProcessResult:
+        if dict(environment or {}).get("FACTORY_ROLE") == "validator":
+            source = next(
+                Path(path)
+                for path in readable_paths
+                if Path(path).as_posix().endswith("inputs/input-001/payload")
+            )
+            source.chmod(0o644)
+            source.write_bytes(b"print('substituted validator')\n")
+        return super().run(
+            command,
+            cwd=cwd,
+            readable_paths=readable_paths,
+            writable_paths=writable_paths,
+            environment=environment,
+            stdin_bytes=stdin_bytes,
         )
 
 
@@ -377,8 +410,8 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     assert result.passed is True
     assert len(backend.commands) == 1
     frozen_command = backend.commands[0]
-    assert Path(frozen_command[0]).is_relative_to(root / "validator-execution")
-    assert Path(frozen_command[1]).is_relative_to(root / "validator-execution")
+    assert Path(frozen_command[0]).resolve() == Path(sys.executable).resolve()
+    assert frozen_command[1] == "-"
     assert backend.validator_script_bytes == ratified_bytes
     assert validator.read_bytes() != ratified_bytes
     assert backend.validator_environment["FACTORY_VALIDATOR_COMMAND_DIGEST"] == (
@@ -389,6 +422,72 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     )
     assert frozen_manifest.is_relative_to(root / "validator-execution")
     assert digest_bytes(frozen_manifest.read_bytes()) == execution_digests[0]
+
+
+def test_frozen_validator_launch_has_the_declared_standalone_stdin_abi(
+    tmp_path: Path,
+) -> None:
+    validator = tmp_path / "validator.py"
+    validator.write_text(
+        "import json, sys\n"
+        f"source_dir = {str(tmp_path)!r}\n"
+        "print(json.dumps({\n"
+        "    'argv': sys.argv,\n"
+        "    'file': __file__,\n"
+        "    'stdin_eof': sys.stdin.buffer.read() == b'',\n"
+        "    'source_dir_on_path': source_dir in sys.path,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    frozen = freeze_validator_execution(
+        tmp_path / "validator-execution",
+        (sys.executable, str(validator), "review"),
+        (validator,),
+    )
+
+    completed = subprocess.run(
+        frozen.command,
+        input=frozen.source,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    observed = json.loads(completed.stdout)
+    assert observed == {
+        "argv": ["-", "review"],
+        "file": "<stdin>",
+        "stdin_eof": True,
+        "source_dir_on_path": False,
+    }
+
+
+@pytest.mark.parametrize("variant", ("interpreter-flag", "additional-path-binding"))
+def test_validator_launch_refuses_inputs_outside_the_standalone_source_abi(
+    tmp_path: Path,
+    variant: str,
+) -> None:
+    validator = tmp_path / "validator.py"
+    validator.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    extra = tmp_path / "helper.py"
+    extra.write_text("VALUE = 1\n", encoding="utf-8")
+    trusted: tuple[Path, ...]
+    if variant == "interpreter-flag":
+        command = (sys.executable, "-I", str(validator))
+        trusted = (validator,)
+    else:
+        command = (sys.executable, str(validator), str(extra))
+        trusted = (validator, extra)
+
+    with pytest.raises(
+        LaneError,
+        match="requires exactly one admitted Python source path",
+    ):
+        freeze_validator_execution(
+            tmp_path / "validator-execution",
+            command,
+            trusted,
+        )
 
 
 def test_validator_launch_refuses_same_path_mutation_before_snapshot(tmp_path: Path) -> None:
@@ -417,6 +516,49 @@ def test_validator_launch_refuses_same_path_mutation_before_snapshot(tmp_path: P
         )
 
     assert backend.commands == []
+
+
+def test_validator_launch_refuses_snapshot_mutation_after_prelaunch_verify(
+    tmp_path: Path,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    ratified_bytes = b"print('ratified validator')\n"
+    validator.write_bytes(ratified_bytes)
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command,
+        trusted_paths=validator_trusted_paths,
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+    backend = _MutatingValidatorSnapshotBackend()
+
+    with pytest.raises(LaneError, match="Validator execution snapshot is invalid"):
+        IsolatedBuildLoop(root, sandbox=backend).execute(
+            build_input_path=FIXTURES / "build-input.json",
+            coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+            tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+            validator_command=validator_command,
+            acceptance_catalog_path=acceptance_catalog_path,
+            coder_trusted_paths=(FIXTURES / "coder.py",),
+            tester_trusted_paths=(FIXTURES / "tester.py",),
+            validator_trusted_paths=validator_trusted_paths,
+            before_validation=lambda *_: {"validator_execution": expected_execution},
+        )
+
+    assert backend.validator_script_bytes == ratified_bytes
 
 
 def test_interpreter_read_paths_cover_the_running_interpreter() -> None:

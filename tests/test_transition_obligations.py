@@ -278,7 +278,7 @@ def test_replaying_a_prior_set_digest_for_a_new_transition_is_rejected(tmp_path:
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )
@@ -350,7 +350,7 @@ def test_build_requires_external_resume_anchor(tmp_path: Path) -> None:
 def test_validation_requires_both_immutable_lane_snapshots(tmp_path: Path) -> None:
     store = _operations_ready(tmp_path)
     _build(store)
-    artifacts = validation_artifacts(candidate=CANDIDATE)
+    artifacts = validation_artifacts(store, candidate=CANDIDATE)
     del artifacts["tester-output-snapshot"]
 
     with pytest.raises(RunStateError, match="tester-output-snapshot"):

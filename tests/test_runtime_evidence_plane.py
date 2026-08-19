@@ -68,7 +68,12 @@ from factory_runtime.generation import GenerationPreparer, build_input_document
 from factory_runtime.schema import DocumentValidationError
 from factory_runtime.snapshot import freeze_tree, tree_digest
 from factory_runtime.state import RunState, RunStore
-from tests.conftest import build_payload, create_intake_run, ratification_receipts
+from tests.conftest import (
+    build_payload,
+    create_intake_run,
+    ratification_receipts,
+    validator_execution_artifacts,
+)
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
@@ -281,6 +286,7 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
             "acceptance-tests": TESTS,
             "coder-output-snapshot": coder_snapshot.digest,
             "tester-output-snapshot": tester_snapshot.digest,
+            **validator_execution_artifacts(store),
         },
         payload={"tester_identity": "tester"},
         implementer_identity="coder",

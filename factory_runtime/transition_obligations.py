@@ -285,6 +285,10 @@ def require_transition_inputs(
             "acceptance-tests",
             "coder-output-snapshot",
             "tester-output-snapshot",
+            "validator-execution-manifest",
+            "validator-execution-configuration",
+            "validator-execution-environment",
+            "validator-execution-snapshot",
         )
     elif destination == "preview":
         required = (
@@ -293,6 +297,11 @@ def require_transition_inputs(
             "acceptance-obligation-report",
             "validator-review-subject",
             "validator-adversarial-review",
+            "validator-review-observations-source",
+            "validator-execution-manifest",
+            "validator-execution-configuration",
+            "validator-execution-environment",
+            "validator-execution-snapshot",
             "evidence-bundle",
             "evidence-envelope",
         )
@@ -449,6 +458,10 @@ def _verify_obligation(
                 "acceptance-tests",
                 "coder-output-snapshot",
                 "tester-output-snapshot",
+                "validator-execution-manifest",
+                "validator-execution-configuration",
+                "validator-execution-environment",
+                "validator-execution-snapshot",
             ),
         )
     elif verifier_id == "lane-identity-check":
@@ -476,6 +489,7 @@ def _verify_obligation(
                 "base-source-snapshot",
                 "candidate-change-set",
                 "validator-review-authority-context",
+                "validator-review-observations-source",
             ),
         )
     elif verifier_id == "human-identity-candidate-binding-check":

@@ -106,6 +106,7 @@ class MacOSSandbox:
         readable_paths: Sequence[str | Path] = (),
         writable_paths: Sequence[str | Path] = (),
         environment: Mapping[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
     ) -> IsolatedProcessResult:
         """Run with no ambient environment, network, or user-file access."""
 
@@ -145,20 +146,38 @@ class MacOSSandbox:
                 "TMPDIR": str(working_directory),
                 **dict(environment or {}),
             }
-            completed = subprocess.run(
-                [
-                    str(self.executable),
-                    "-f",
-                    profile_path,
-                    *[str(part) for part in command],
-                ],
-                cwd=working_directory,
-                env=lane_environment,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-            )
+            invocation = [
+                str(self.executable),
+                "-f",
+                profile_path,
+                *[str(part) for part in command],
+            ]
+            if stdin_bytes is None:
+                completed_text = subprocess.run(
+                    invocation,
+                    cwd=working_directory,
+                    env=lane_environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                )
+                returncode = completed_text.returncode
+                stdout = completed_text.stdout
+                stderr = completed_text.stderr
+            else:
+                completed_bytes = subprocess.run(
+                    invocation,
+                    cwd=working_directory,
+                    env=lane_environment,
+                    check=False,
+                    capture_output=True,
+                    input=stdin_bytes,
+                    timeout=self.timeout_seconds,
+                )
+                returncode = completed_bytes.returncode
+                stdout = completed_bytes.stdout.decode("utf-8", errors="replace")
+                stderr = completed_bytes.stderr.decode("utf-8", errors="replace")
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise IsolationError(f"isolated process execution failed: {exc}") from exc
         finally:
@@ -166,9 +185,9 @@ class MacOSSandbox:
                 os.unlink(profile_path)
         return IsolatedProcessResult(
             command=tuple(str(part) for part in command),
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
         )
 
     def qualify(self, root: str | Path) -> IsolationQualification:

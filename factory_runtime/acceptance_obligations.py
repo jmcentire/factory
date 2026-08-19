@@ -40,6 +40,11 @@ from factory_runtime.authority import (
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.schema import DocumentValidationError, validate_document
+from factory_runtime.snapshot import (
+    SnapshotError,
+    verify_frozen_blob,
+    verify_frozen_tree,
+)
 from factory_runtime.state import RunState, RunStore
 from factory_runtime.tessera import TesseraCli
 
@@ -57,10 +62,23 @@ TRUSTED_EVIDENCE_IDS = frozenset(
         "tester-output-snapshot",
     }
 )
+_VALIDATOR_LAUNCH_CONTRACT = {
+    "schema_version": "factory-validator-launch/1",
+    "launch_mode": "python-source-stdin/1",
+    "runtime_tcb": "current-factory-python/1",
+    "validator_abi": "standalone-python-source/1",
+    "argv_0": "-",
+    "file": "<stdin>",
+    "stdin_after_source": "eof",
+    "script_directory_on_sys_path": False,
+    "interpreter_flags": "forbidden",
+    "additional_path_bindings": "forbidden",
+}
 _VALIDATOR_ENVIRONMENT_CONTRACT = {
-    "schema_version": "factory-validator-environment/2",
+    "schema_version": "factory-validator-environment/3",
     "ambient_environment": "closed",
     "network": "denied",
+    "launch_contract": _VALIDATOR_LAUNCH_CONTRACT,
     "read_scope": [
         "build-input",
         "build-plan",
@@ -73,6 +91,7 @@ _VALIDATOR_ENVIRONMENT_CONTRACT = {
     "write_scope": ["validator-work", "validator-output"],
 }
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_VALIDATOR_EXECUTION_FILES = 4096
 _MAX_VALIDATOR_EXECUTION_BYTES = 128 * 1024 * 1024
 
@@ -111,8 +130,9 @@ class ValidatorExecutionCapture:
     def configuration_digest(self) -> str:
         return digest_obj(
             {
-                "schema_version": "factory-validator-configuration/2",
-                "runner": "isolated-build-loop/2",
+                "schema_version": "factory-validator-configuration/3",
+                "runner": "isolated-build-loop/3",
+                "launch_contract": _VALIDATOR_LAUNCH_CONTRACT,
                 "command_digest": self.command_digest,
                 "execution_identity_digest": self.identity_digest,
                 "snapshot_tree_digest": self.document["snapshot_tree_digest"],
@@ -417,6 +437,94 @@ def validator_execution_digests(
     """
 
     return capture_validator_execution(command, trusted_paths=trusted_paths).digests
+
+
+def verify_retained_validator_execution(
+    run_dir: str | Path,
+    *,
+    attempt_id: str,
+    command_digest: str,
+    configuration_digest: str,
+    environment_digest: str,
+    expected_snapshot_digest: str | None = None,
+) -> str:
+    """Reopen the attempt-local Validator manifest and every frozen executable/input byte.
+
+    The ratified command address is the manifest address.  Its embedded tree address is not a
+    sufficient replay proof by itself: both content-addressed snapshots must still exist and
+    re-derive before a VALIDATING or PREVIEW ledger entry may depend on them.
+    """
+
+    if not _ATTEMPT_ID.fullmatch(attempt_id):
+        raise AcceptanceObligationError("Validator execution has an invalid attempt id")
+    for label, value in (
+        ("Validator command digest", command_digest),
+        ("Validator configuration digest", configuration_digest),
+        ("Validator environment digest", environment_digest),
+    ):
+        if not isinstance(value, str) or not _DIGEST.fullmatch(value):
+            raise AcceptanceObligationError(f"{label} is not a canonical content address")
+    root = Path(run_dir) / "evidence" / "build-attempts" / attempt_id / "validator-execution"
+    manifest_dir = (
+        root
+        / "manifests"
+        / "validator-execution-manifest"
+        / command_digest.removeprefix("sha256:")
+    )
+    try:
+        manifest = verify_frozen_blob(
+            manifest_dir,
+            expected_digest=command_digest,
+            label="validator-execution-manifest",
+        )
+        manifest_bytes = manifest.payload_path.read_bytes()
+        document = json.loads(manifest_bytes.decode("utf-8"))
+    except (SnapshotError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AcceptanceObligationError(
+            f"retained Validator execution manifest is invalid: {exc}"
+        ) from exc
+    if not isinstance(document, Mapping):
+        raise AcceptanceObligationError("retained Validator execution manifest must be an object")
+    document = dict(document)
+    if manifest_bytes != json.dumps(document, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    ):
+        raise AcceptanceObligationError(
+            "retained Validator execution manifest is not canonical JSON"
+        )
+    if set(document) != {
+        "schema_version",
+        "argv",
+        "path_bindings",
+        "trusted_input_ids",
+        "inputs",
+        "snapshot_tree_digest",
+    } or document.get("schema_version") != "factory-validator-execution-identity/1":
+        raise AcceptanceObligationError("retained Validator execution manifest is malformed")
+    snapshot_digest = str(document.get("snapshot_tree_digest", ""))
+    if not _DIGEST.fullmatch(snapshot_digest):
+        raise AcceptanceObligationError(
+            "retained Validator execution snapshot address is malformed"
+        )
+    if expected_snapshot_digest is not None and snapshot_digest != expected_snapshot_digest:
+        raise AcceptanceObligationError(
+            "retained Validator execution snapshot differs from its ledger address"
+        )
+    try:
+        verify_frozen_tree(
+            root / "trees" / snapshot_digest.removeprefix("sha256:"),
+            expected_digest=snapshot_digest,
+        )
+    except SnapshotError as exc:
+        raise AcceptanceObligationError(
+            f"retained Validator execution snapshot is invalid: {exc}"
+        ) from exc
+    capture = ValidatorExecutionCapture(document, ())
+    if capture.digests != (command_digest, configuration_digest, environment_digest):
+        raise AcceptanceObligationError(
+            "retained Validator execution identity differs from its ratified digest tuple"
+        )
+    return snapshot_digest
 
 
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
@@ -1251,5 +1359,6 @@ __all__ = [
     "validator_execution_digests",
     "verify_acceptance_obligation_report",
     "verify_retained_acceptance_obligation_report",
+    "verify_retained_validator_execution",
     "verify_and_retain_acceptance_catalog",
 ]

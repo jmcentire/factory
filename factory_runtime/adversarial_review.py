@@ -27,13 +27,19 @@ from factory_runtime.candidate_diff import (
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.schema import DocumentValidationError, validate_document
-from factory_runtime.snapshot import SnapshotError, tree_digest
+from factory_runtime.snapshot import (
+    SnapshotError,
+    tree_digest,
+    verify_frozen_blob,
+    verify_frozen_tree,
+)
 
 REVIEW_SUBJECT_ARTIFACT_KEY = "validator-review-subject"
 REVIEW_REPORT_ARTIFACT_KEY = "validator-adversarial-review"
 BASE_SOURCE_SNAPSHOT_ARTIFACT_KEY = "base-source-snapshot"
 CANDIDATE_CHANGE_SET_ARTIFACT_KEY = "candidate-change-set"
 REVIEW_AUTHORITY_CONTEXT_ARTIFACT_KEY = "validator-review-authority-context"
+REVIEW_OBSERVATIONS_SOURCE_ARTIFACT_KEY = "validator-review-observations-source"
 REVIEW_PROTOCOL_ID = "factory-validator-adversarial-review/1"
 REQUIRED_REVIEW_DIMENSIONS = (
     "intent-conformance",
@@ -90,6 +96,7 @@ class VerifiedAdversarialReview:
     report: Mapping[str, Any]
     subject_digest: str
     report_digest: str
+    acceptance_observations_bytes: bytes
 
     @property
     def verdict(self) -> str:
@@ -558,6 +565,7 @@ def _verify_evidence_reference(
     build_plan_path: Path,
     acceptance_catalog_path: Path,
     acceptance_observations_path: Path,
+    acceptance_observations_bytes: bytes | None = None,
 ) -> None:
     source = str(reference["source"])
     if source == "baseline-source":
@@ -590,6 +598,15 @@ def _verify_evidence_reference(
                 "review authority evidence must cite review-authority-context.json"
             )
         data = canonical_document_bytes(subject["authority_context"])
+    elif source == "acceptance-observations" and acceptance_observations_bytes is not None:
+        if (
+            _relative_evidence_path(reference["path"]).as_posix()
+            != "acceptance-obligation-observations.json"
+        ):
+            raise AdversarialReviewError(
+                "acceptance observation evidence must cite its canonical filename"
+            )
+        data = acceptance_observations_bytes
     else:
         path = _evidence_file(
             reference,
@@ -796,10 +813,11 @@ def _verify_review_contract(
         "build-plan",
         "acceptance-obligation-catalog",
         "acceptance-observations",
-        "baseline-source",
         "candidate-change-set",
         "review-authority-context",
     }
+    if subject["base_source_snapshot"]["files"]:
+        required_sources.add("baseline-source")
     cited_sources = {str(reference["source"]) for reference in evidence}
     if cited_sources != required_sources:
         missing = ", ".join(sorted(required_sources - cited_sources))
@@ -839,6 +857,22 @@ def verify_validator_adversarial_review(
         acceptance_observations=acceptance_observations,
     )
     artifacts = subject["artifacts"]
+    observations_bytes = _stable_read(
+        Path(acceptance_observations_path),
+        label="review acceptance-obligation observations",
+    )
+    try:
+        retained_observations = json.loads(observations_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AdversarialReviewError(
+            f"review acceptance-obligation observations are invalid: {exc}"
+        ) from exc
+    if not isinstance(retained_observations, Mapping) or dict(retained_observations) != dict(
+        acceptance_observations
+    ):
+        raise AdversarialReviewError(
+            "review acceptance-obligation observation bytes differ from the verified report"
+        )
     _verify_bound_json_input(
         Path(build_input_path),
         label="review build input",
@@ -882,12 +916,14 @@ def verify_validator_adversarial_review(
             build_plan_path=Path(build_plan_path),
             acceptance_catalog_path=Path(acceptance_catalog_path),
             acceptance_observations_path=Path(acceptance_observations_path),
+            acceptance_observations_bytes=observations_bytes,
         )
     return VerifiedAdversarialReview(
         subject=dict(subject),
         report=dict(report),
         subject_digest=subject_digest,
         report_digest=digest_obj(dict(report)),
+        acceptance_observations_bytes=observations_bytes,
     )
 
 
@@ -1010,12 +1046,23 @@ def retain_validator_adversarial_review(
     run_root = Path(runs_root) / run_id
     subject_path = root / "subject.json"
     report_path = root / f"{verified.report_digest.removeprefix('sha256:')}.json"
+    observations_path = root / "acceptance-obligation-observations.json"
     subject_bytes = canonical_document_bytes(verified.subject)
     report_bytes = canonical_document_bytes(verified.report)
+    observations_bytes = verified.acceptance_observations_bytes
+    if not observations_bytes:
+        raise AdversarialReviewError(
+            "verified Validator review has no exact acceptance-observation bytes"
+        )
     _write_once_or_identical(subject_path, subject_bytes, through=run_root)
     _write_once_or_identical(
         report_path,
         report_bytes,
+        through=run_root,
+    )
+    _write_once_or_identical(
+        observations_path,
+        observations_bytes,
         through=run_root,
     )
     # Re-open both canonical paths after both publications so replacement of the first while
@@ -1024,6 +1071,10 @@ def retain_validator_adversarial_review(
         raise AdversarialReviewError("retained Validator review subject changed after publish")
     if not _installed_is_identical(report_path, report_bytes, through=run_root):
         raise AdversarialReviewError("retained Validator review report changed after publish")
+    if not _installed_is_identical(observations_path, observations_bytes, through=run_root):
+        raise AdversarialReviewError(
+            "retained Validator review acceptance observations changed after publish"
+        )
     return {
         REVIEW_SUBJECT_ARTIFACT_KEY: verified.subject_digest,
         REVIEW_REPORT_ARTIFACT_KEY: verified.report_digest,
@@ -1036,6 +1087,7 @@ def retain_validator_adversarial_review(
         REVIEW_AUTHORITY_CONTEXT_ARTIFACT_KEY: digest_obj(
             dict(verified.subject["authority_context"])
         ),
+        REVIEW_OBSERVATIONS_SOURCE_ARTIFACT_KEY: digest_bytes(observations_bytes),
     }
 
 
@@ -1056,6 +1108,7 @@ def verify_retained_validator_adversarial_review(
     acceptance_obligation_catalog_digest: str,
     acceptance_report: Mapping[str, Any],
     trusted_evidence_digests: Mapping[str, str],
+    observations_source_digest: str,
 ) -> VerifiedAdversarialReview:
     """Reopen the exact review evidence and bind it to authoritative run state."""
 
@@ -1063,6 +1116,7 @@ def verify_retained_validator_adversarial_review(
         ("Validator review subject digest", subject_digest),
         ("Validator adversarial-review digest", report_digest),
         ("acceptance-obligation catalog digest", acceptance_obligation_catalog_digest),
+        ("Validator review observation source digest", observations_source_digest),
     ):
         if not isinstance(value, str) or not _DIGEST.fullmatch(value):
             raise AdversarialReviewError(f"{label} is not a canonical content address")
@@ -1083,6 +1137,25 @@ def verify_retained_validator_adversarial_review(
         schema_name="validator-adversarial-review",
         label="retained Validator adversarial-review report",
     )
+    observations_path = review_root / "acceptance-obligation-observations.json"
+    observations_bytes = _stable_read(
+        observations_path,
+        label="retained Validator review acceptance observations",
+    )
+    if digest_bytes(observations_bytes) != observations_source_digest:
+        raise AdversarialReviewError(
+            "retained Validator review acceptance observations differ from their ledger address"
+        )
+    try:
+        retained_observations = json.loads(observations_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AdversarialReviewError(
+            f"retained Validator review acceptance observations are invalid: {exc}"
+        ) from exc
+    if not isinstance(retained_observations, Mapping):
+        raise AdversarialReviewError(
+            "retained Validator review acceptance observations must be an object"
+        )
     if digest_obj(subject) != subject_digest:
         raise AdversarialReviewError(
             "retained Validator review subject differs from its content address"
@@ -1095,6 +1168,10 @@ def verify_retained_validator_adversarial_review(
     if not isinstance(observations, Mapping):
         raise AdversarialReviewError(
             "verified acceptance-obligation report has no observation object"
+        )
+    if dict(retained_observations) != dict(observations):
+        raise AdversarialReviewError(
+            "retained Validator review acceptance observations differ from the acceptance report"
         )
     derived_subject_digest, _ = _verify_review_contract(
         report,
@@ -1180,12 +1257,69 @@ def verify_retained_validator_adversarial_review(
         raise AdversarialReviewError(
             "retained Validator review execution tuple differs from ratified acceptance evidence"
         )
-    verified = VerifiedAdversarialReview(
+    coder_snapshot_digest = str(trusted_evidence_digests.get("coder-output-snapshot", ""))
+    tester_snapshot_digest = str(trusted_evidence_digests.get("tester-output-snapshot", ""))
+    for label, value in (
+        ("Coder review snapshot digest", coder_snapshot_digest),
+        ("Tester review snapshot digest", tester_snapshot_digest),
+    ):
+        if not _DIGEST.fullmatch(value):
+            raise AdversarialReviewError(f"{label} is not a canonical content address")
+    snapshot_root = root / "evidence" / "review-snapshots"
+    try:
+        coder_snapshot = verify_frozen_tree(
+            snapshot_root / coder_snapshot_digest.removeprefix("sha256:"),
+            expected_digest=coder_snapshot_digest,
+        )
+        tester_snapshot = verify_frozen_tree(
+            snapshot_root / tester_snapshot_digest.removeprefix("sha256:"),
+            expected_digest=tester_snapshot_digest,
+        )
+
+        def generation_blob(label: str, digest: str):
+            return verify_frozen_blob(
+                root
+                / "evidence"
+                / "generation"
+                / label
+                / digest.removeprefix("sha256:"),
+                expected_digest=digest,
+                label=label,
+            )
+
+        build_input = generation_blob(
+            "build-input", str(generation_artifact_digests.get("build-input", ""))
+        )
+        pattern_catalog = generation_blob(
+            "pattern-catalog",
+            str(generation_artifact_digests.get("pattern-catalog-source", "")),
+        )
+        build_plan = generation_blob(
+            "build-plan", str(generation_artifact_digests.get("build-plan-source", ""))
+        )
+    except SnapshotError as exc:
+        raise AdversarialReviewError(f"retained Validator review input is invalid: {exc}") from exc
+    fully_verified = verify_validator_adversarial_review(
+        report,
         subject=subject,
-        report=report,
-        subject_digest=subject_digest,
-        report_digest=report_digest,
+        reviewer_identity=reviewer_identity,
+        acceptance_observations=dict(retained_observations),
+        implementation_root=coder_snapshot.files_directory / "artifact",
+        tests_root=tester_snapshot.files_directory / "tests",
+        build_input_path=build_input.payload_path,
+        pattern_catalog_path=pattern_catalog.payload_path,
+        build_plan_path=build_plan.payload_path,
+        acceptance_catalog_path=catalog_path,
+        acceptance_observations_path=observations_path,
     )
+    if (
+        fully_verified.subject_digest != subject_digest
+        or fully_verified.report_digest != report_digest
+    ):
+        raise AdversarialReviewError(
+            "retained Validator adversarial review changed during full evidence verification"
+        )
+    verified = fully_verified
     if not verified.passed:
         raise AdversarialReviewError(
             f"retained Validator adversarial review does not authorize preview: {verified.verdict}"

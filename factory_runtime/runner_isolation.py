@@ -60,6 +60,65 @@ def _is_overlapping(left: Path, right: Path) -> bool:
     return left == right or left.is_relative_to(right) or right.is_relative_to(left)
 
 
+def _qualification_python_runtime() -> tuple[Path, tuple[Path, ...]]:
+    """Resolve the trusted CPython used by the Seatbelt qualification probes.
+
+    Framework builds need their ``Python.app`` executable inside Seatbelt, while standalone
+    distributions (including uv-managed CPython) have no app bundle.  Prefer the framework
+    executable when it exists to preserve the already-qualified Homebrew/python.org path, then
+    fall back to CPython's own base executable and finally the running executable.  The probe also
+    needs read-only access to its venv and base runtime; these paths are host-derived TCB inputs,
+    never model-provided grants.
+    """
+
+    base_prefix = Path(sys.base_prefix)
+    framework_executable = (
+        base_prefix / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    )
+    raw_candidates = [framework_executable]
+    base_executable = getattr(sys, "_base_executable", "")
+    if isinstance(base_executable, str) and base_executable:
+        raw_candidates.append(Path(base_executable))
+    if sys.executable:
+        raw_candidates.append(Path(sys.executable))
+    executable: Path | None = None
+    seen_candidates: dict[Path, None] = {}
+    for candidate in raw_candidates:
+        if candidate in seen_candidates:
+            continue
+        seen_candidates[candidate] = None
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            executable = resolved
+            break
+    if executable is None:
+        raise RunnerError(
+            "networked runner qualification has no executable trusted Python runtime"
+        )
+
+    readable: dict[Path, None] = {}
+    for candidate in (Path(sys.prefix), base_prefix, executable):
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise RunnerError(
+                f"networked runner trusted Python runtime path is unavailable: {candidate}"
+            ) from exc
+        if resolved.parent == resolved:
+            raise RunnerError(
+                "networked runner trusted Python runtime would require a filesystem-root grant"
+            )
+        if not (resolved.is_dir() or resolved.is_file()):
+            raise RunnerError(
+                f"networked runner trusted Python runtime path is unsupported: {resolved}"
+            )
+        readable.setdefault(resolved, None)
+    return executable, tuple(readable)
+
+
 def _write_regular_once(path: Path, content: bytes, mode: int = 0o600) -> None:
     descriptor = os.open(
         path,
@@ -254,15 +313,13 @@ print(json.dumps(result, sort_keys=True))
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
-        qualification_python = (
-            Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
-        ).resolve(strict=True)
+        qualification_python, qualification_runtime_paths = _qualification_python_runtime()
         probe_limits = RunnerLimits(10, 5, 2, 3, 65_536, 1, 0)
         try:
             probe = self._supervised(
                 (str(qualification_python), str(probe_path)),
                 cwd=probe_allowed,
-                readable_paths=(probe_path, qualification_python),
+                readable_paths=(probe_path, *qualification_runtime_paths),
                 writable_paths=(probe_allowed,),
                 environment={
                     "HOME": str(probe_allowed),
@@ -307,7 +364,7 @@ print(json.dumps(result, sort_keys=True))
         tree = self._supervised(
             (str(qualification_python), str(tree_probe)),
             cwd=probe_allowed,
-            readable_paths=(tree_probe, qualification_python),
+            readable_paths=(tree_probe, *qualification_runtime_paths),
             writable_paths=(probe_allowed,),
             environment={
                 "HOME": str(probe_allowed),

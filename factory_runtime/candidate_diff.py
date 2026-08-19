@@ -75,6 +75,18 @@ def _display_text(data: bytes) -> str | None:
         return None
 
 
+def _entry_attributes(path: str, git_mode: str) -> tuple[str, int]:
+    """Derive the review-facing type and mode from the authoritative Git mode."""
+
+    if git_mode in {"100644", "100755"}:
+        return "file", 0o755 if git_mode == "100755" else 0o644
+    if git_mode == "120000":
+        return "symlink", 0o777
+    if git_mode == "160000":
+        return "gitlink", 0
+    raise CandidateDiffError(f"unsupported Git mode for {path}: {git_mode}")
+
+
 def _entry(
     *,
     path: str,
@@ -82,17 +94,7 @@ def _entry(
     object_id: str,
     data: bytes,
 ) -> dict[str, Any]:
-    if git_mode in {"100644", "100755"}:
-        entry_type = "file"
-        mode = 0o755 if git_mode == "100755" else 0o644
-    elif git_mode == "120000":
-        entry_type = "symlink"
-        mode = 0o777
-    elif git_mode == "160000":
-        entry_type = "gitlink"
-        mode = 0
-    else:
-        raise CandidateDiffError(f"unsupported Git mode for {path}: {git_mode}")
+    entry_type, mode = _entry_attributes(path, git_mode)
     return {
         "path": path,
         "entry_type": entry_type,
@@ -286,17 +288,8 @@ def _derive_changes(
     for path in sorted(set(baseline) | set(candidate)):
         old = baseline.get(path)
         new = candidate.get(path)
-        if old is None:
-            kind = "added"
-        elif new is None:
-            kind = "deleted"
-        elif old["entry_type"] != new["entry_type"]:
-            kind = "type-changed"
-        elif old["content_digest"] != new["content_digest"]:
-            kind = "modified"
-        elif old["mode"] != new["mode"]:
-            kind = "mode-changed"
-        else:
+        kind = _derive_change_kind(old, new)
+        if kind is None:
             continue
         changes.append(
             {
@@ -311,6 +304,50 @@ def _derive_changes(
             }
         )
     return changes
+
+
+def _derive_change_kind(
+    old: Mapping[str, Any] | None,
+    new: Mapping[str, Any] | None,
+) -> str | None:
+    """Classify one row solely from its old/new semantic tuple."""
+
+    if old is None:
+        return "added" if new is not None else None
+    if new is None:
+        return "deleted"
+    if old["entry_type"] != new["entry_type"]:
+        return "type-changed"
+    if old["content_digest"] != new["content_digest"]:
+        return "modified"
+    if old["mode"] != new["mode"]:
+        return "mode-changed"
+    return None
+
+
+def _change_side(
+    row: Mapping[str, Any],
+    side: str,
+    *,
+    path: str,
+) -> dict[str, Any] | None:
+    """Normalize an old/new row side and reject partially populated tuples."""
+
+    values = (
+        row.get(f"{side}_type"),
+        row.get(f"{side}_mode"),
+        row.get(f"{side}_digest"),
+    )
+    present = tuple(value is not None for value in values)
+    if any(present) and not all(present):
+        raise CandidateDiffError(f"candidate change has a partial {side} tuple: {path}")
+    if not any(present):
+        return None
+    return {
+        "entry_type": values[0],
+        "mode": values[1],
+        "content_digest": values[2],
+    }
 
 
 def build_candidate_review_context(
@@ -411,6 +448,19 @@ def verify_candidate_review_context(
         if digest_bytes(data) != entry.get("content_digest"):
             raise CandidateDiffError(f"base source snapshot content changed: {path}")
         git_mode = str(entry.get("git_mode", ""))
+        expected_entry_type, expected_mode = _entry_attributes(path, git_mode)
+        if entry.get("entry_type") != expected_entry_type:
+            raise CandidateDiffError(
+                f"base source snapshot entry type disagrees with Git mode: {path}"
+            )
+        if type(entry.get("mode")) is not int or entry["mode"] != expected_mode:
+            raise CandidateDiffError(
+                f"base source snapshot mode disagrees with Git mode: {path}"
+            )
+        if "content_utf8" not in entry or entry["content_utf8"] != _display_text(data):
+            raise CandidateDiffError(
+                f"base source snapshot UTF-8 display disagrees with content: {path}"
+            )
         object_id = str(entry.get("object_id", ""))
         if git_mode != "160000" and _git_object_id(algorithm, "blob", data) != object_id:
             raise CandidateDiffError(f"base source snapshot blob changed: {path}")
@@ -448,6 +498,15 @@ def verify_candidate_review_context(
         assert isinstance(raw, Mapping)
         path = _canonical_path(str(raw["path"]).encode())
         old = resulting.get(path)
+        row_old = _change_side(raw, "old", path=path)
+        row_new = _change_side(raw, "new", path=path)
+        expected_kind = _derive_change_kind(row_old, row_new)
+        if expected_kind is None:
+            raise CandidateDiffError(f"candidate change row has no semantic change: {path}")
+        if raw.get("kind") != expected_kind:
+            raise CandidateDiffError(
+                f"candidate change kind must re-derive as {expected_kind}: {path}"
+            )
         if (None if old is None else old["entry_type"]) != raw.get("old_type"):
             raise CandidateDiffError(f"candidate change has the wrong old type: {path}")
         if (None if old is None else old["mode"]) != raw.get("old_mode"):

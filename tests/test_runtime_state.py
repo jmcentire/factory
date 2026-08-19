@@ -16,6 +16,7 @@ from tests.conftest import (
     generation_artifacts,
     preview_artifacts,
     ratification_receipts,
+    retained_generation_artifacts,
     synthetic_candidate_digest,
     terminalize_run_resources,
     validation_artifacts,
@@ -147,7 +148,9 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
     current = store.load("run-1")
     first_activation = not current.acceptance_obligation_catalog_digest
     seed = f"attempt-{attempt}"
-    artifacts = generation_artifacts(seed, include_acceptance_catalog=False)
+    artifacts = retained_generation_artifacts(
+        store, seed, include_acceptance_catalog=False
+    )
     if first_activation:
         artifacts.update(acceptance_catalog_artifacts(store))
     if current.state == RunState.BLOCKED:
@@ -172,6 +175,29 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
         implementer_identity="coder",
         verifier_identity="validator",
     )
+
+
+def _enter_preview(store: RunStore) -> dict[str, str]:
+    """Enter PREVIEW using only exact retained validation and review bytes."""
+
+    validation = validation_artifacts(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation,
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    artifacts = preview_artifacts(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="validator",
+        artifact_digests=artifacts,
+        verifier_identity="validator",
+    )
+    return {**validation, **artifacts}
 
 
 def _block_attempt(store: RunStore) -> None:
@@ -323,7 +349,7 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )
@@ -374,7 +400,7 @@ def test_preview_refuses_missing_retained_adversarial_review(tmp_path: Path) -> 
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )
@@ -410,7 +436,7 @@ def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> 
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )
@@ -436,6 +462,96 @@ def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> 
         RunStore(tmp_path, clock=_Clock()).load("run-1")
 
 
+@pytest.mark.parametrize("missing", ["validator-execution", "evidence-envelope"])
+def test_replay_refuses_missing_preview_dependency_bytes(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    artifacts = _enter_preview(store)
+    if missing == "validator-execution":
+        attempt = [
+            entry
+            for entry in store.verified_ledger_entries("run-1")
+            if entry.get("to_state") == RunState.BUILDING
+        ][-1]
+        payload = attempt["payload"]
+        assert isinstance(payload, dict)
+        tree = (
+            tmp_path
+            / "run-1"
+            / "evidence"
+            / "build-attempts"
+            / str(payload["attempt_id"])
+            / "validator-execution"
+            / "trees"
+            / artifacts["validator-execution-snapshot"].removeprefix("sha256:")
+        )
+        tree.chmod(0o755)
+        (tree / "manifest.json").unlink()
+        expected = "validating Validator execution is invalid"
+    else:
+        attempt = [
+            entry
+            for entry in store.verified_ledger_entries("run-1")
+            if entry.get("to_state") == RunState.BUILDING
+        ][-1]
+        payload = attempt["payload"]
+        assert isinstance(payload, dict)
+        (
+            tmp_path
+            / "run-1"
+            / "evidence"
+            / "build-attempts"
+            / str(payload["attempt_id"])
+            / "evidence-bundle.tessera.json"
+        ).unlink()
+        expected = "signed evidence bundle is invalid"
+
+    with pytest.raises(RunStateError, match=expected):
+        RunStore(tmp_path, clock=_Clock()).load("run-1")
+
+
+@pytest.mark.parametrize("mutated", ["cited-implementation", "review-observations"])
+def test_replay_refuses_mutated_preview_dependency_bytes(
+    tmp_path: Path,
+    mutated: str,
+) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    artifacts = _enter_preview(store)
+    if mutated == "cited-implementation":
+        path = (
+            tmp_path
+            / "run-1"
+            / "evidence"
+            / "review-snapshots"
+            / artifacts["coder-output-snapshot"].removeprefix("sha256:")
+            / "files"
+            / "artifact"
+            / "artifact.py"
+        )
+    else:
+        path = (
+            tmp_path
+            / "run-1"
+            / "evidence"
+            / "validator-adversarial-reviews"
+            / artifacts["validator-review-subject"].removeprefix("sha256:")
+            / "acceptance-obligation-observations.json"
+        )
+    path.chmod(0o644)
+    path.write_bytes(b"mutated after preview\n")
+
+    with pytest.raises(RunStateError, match="adversarial review is invalid"):
+        RunStore(tmp_path, clock=_Clock()).load("run-1")
+
+
 def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> None:
     from factory_runtime.resources import ResourceLedger
 
@@ -447,7 +563,7 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )
@@ -505,7 +621,7 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts("stale", candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, "stale", candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )

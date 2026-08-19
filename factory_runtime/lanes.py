@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -60,6 +61,7 @@ class IsolationBackend(Protocol):
         readable_paths: Sequence[str | Path] = (),
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
     ) -> IsolatedProcessResult: ...
 
 
@@ -96,13 +98,19 @@ class ValidationExecution:
 
 @dataclass(frozen=True)
 class FrozenValidatorExecution:
-    """Attempt-local immutable Validator executable and trusted-input snapshot."""
+    """Attempt-local Validator identity plus pathname-independent source bytes.
+
+    The already-running Factory interpreter is the host runtime TCB.  Target-controlled
+    Validator source is never executed from a filesystem pathname: exact captured bytes are
+    supplied on standard input to a fresh isolated interpreter process.
+    """
 
     capture: ValidatorExecutionCapture
     tree: FrozenTree
     manifest: FrozenBlob
     command: tuple[str, ...]
     readable_paths: tuple[Path, ...]
+    source: bytes
 
 
 def _canonical_json(document: Mapping[str, object]) -> bytes:
@@ -167,14 +175,36 @@ def freeze_validator_execution(
     inputs = {
         str(item["input_id"]): item for item in capture.document["inputs"]
     }
-    frozen_command = [str(part) for part in capture.document["argv"]]
-    for binding in capture.document["path_bindings"]:
-        input_document = inputs[str(binding["input_id"])]
-        selected = tree.files_directory / str(input_document["snapshot_path"])
-        relative = str(binding["relative_path"])
-        if relative:
-            selected /= relative
-        frozen_command[int(binding["argv_index"])] = str(selected)
+    original_command = [str(part) for part in capture.document["argv"]]
+    bindings_by_index = {
+        int(binding["argv_index"]): binding for binding in capture.document["path_bindings"]
+    }
+    if set(bindings_by_index) != {0, 1}:
+        raise LaneError(
+            "Validator execution requires exactly one admitted Python source path"
+        )
+    executable_input = inputs[str(bindings_by_index[0]["input_id"])]
+    source_input = inputs[str(bindings_by_index[1]["input_id"])]
+    if (
+        Path(str(executable_input["resolved_path"])) != Path(sys.executable).resolve()
+        or str(bindings_by_index[0]["relative_path"]) != "payload"
+        or source_input["kind"] != "file"
+        or str(bindings_by_index[1]["relative_path"]) != "payload"
+        or "trusted-runner-input" not in source_input["roles"]
+    ):
+        raise LaneError(
+            "Validator execution must use the current Factory Python runtime and one admitted "
+            "source file"
+        )
+    source_path = (
+        tree.files_directory / str(source_input["snapshot_path"]) / "payload"
+    )
+    try:
+        source_bytes = source_path.read_bytes()
+        compile(source_bytes, f"<factory-validator:{capture.command_digest}>", "exec")
+    except (OSError, SyntaxError, ValueError) as exc:
+        raise LaneError(f"Validator source cannot be executed from captured bytes: {exc}") from exc
+    frozen_command = [str(Path(sys.executable).resolve()), "-", *original_command[2:]]
     readable_paths = tuple(
         (
             tree.files_directory / str(item["snapshot_path"]) / "payload"
@@ -189,6 +219,7 @@ def freeze_validator_execution(
         manifest,
         tuple(frozen_command),
         readable_paths,
+        source_bytes,
     )
     _verify_frozen_validator_execution(frozen)
     try:
@@ -214,6 +245,23 @@ def _verify_frozen_validator_execution(
             raise LaneError("Validator execution manifest differs from its captured identity")
         if tree.digest != frozen.capture.document["snapshot_tree_digest"]:
             raise LaneError("Validator execution tree differs from its captured identity")
+        inputs = {
+            str(item["input_id"]): item for item in frozen.capture.document["inputs"]
+        }
+        source_binding = next(
+            (
+                binding
+                for binding in frozen.capture.document["path_bindings"]
+                if int(binding["argv_index"]) == 1
+            ),
+            None,
+        )
+        if source_binding is None:
+            raise LaneError("Validator execution identity has no source binding")
+        source_input = inputs[str(source_binding["input_id"])]
+        source_path = tree.files_directory / str(source_input["snapshot_path"]) / "payload"
+        if source_path.read_bytes() != frozen.source:
+            raise LaneError("Validator source differs from its captured bytes")
     except (SnapshotError, OSError) as exc:
         raise LaneError(f"Validator execution snapshot is invalid: {exc}") from exc
     return frozen
@@ -618,7 +666,9 @@ class IsolatedBuildLoop:
             ),
             writable_paths=(work, output),
             environment=environment,
+            stdin_bytes=validator_execution.source,
         )
+        _verify_frozen_validator_execution(validator_execution)
         return LaneExecution(
             role=LaneRole.VALIDATOR,
             process=process,

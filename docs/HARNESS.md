@@ -304,7 +304,17 @@ an optional instruction to "look carefully." Before the Validator runs, the host
 review subject binding the frozen implementation/tests and snapshots, all three ratified phase
 artifacts, complete bounded Git-object baseline and canonical candidate change set, build input,
 plan, pattern catalog, acceptance obligations, resume checkpoint, configuration and exceptional
-test-change authority, target state, and frozen Validator executable identity. The Validator's
+test-change authority, target state, and frozen Validator execution identity. Target-controlled
+Validator source is constrained to one admitted Python file and supplied from the exact captured
+bytes over standard input, so the launch never reopens that source pathname. The Factory Python
+installation is the explicit host runtime TCB, and the execution snapshot is reverified after the
+process exits. This is the closed `standalone-python-source/1` ABI: the runtime launches
+`python -`, so `sys.argv[0]` is `-`, `__file__` is `<stdin>`, standard input is at EOF when the
+source begins executing, and the original script directory is not added to `sys.path`.
+Interpreter flags and additional path-bound arguments are outside this ABI and refuse before any
+author lane launches. The ratified `factory-validator-configuration/3`,
+`factory-validator-environment/3`, and `isolated-build-loop/3` identities bind these semantics.
+The Validator's
 canonical report must cover intent, architecture, redundancy, clarity, separation of concerns,
 test adequacy, correctness/failure, and scope; cite exact retained line bytes; content-address every
 finding; and complete every host-declared clean-claim check. The `/1` report cannot self-refute:

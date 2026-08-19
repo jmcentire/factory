@@ -33,9 +33,9 @@ from tests.conftest import (
     build_payload,
     ci_artifacts,
     create_intake_run,
-    generation_artifacts,
     preview_artifacts,
     ratification_receipts,
+    retained_generation_artifacts,
     synthetic_candidate_digest,
     terminalize_run_resources,
     validation_artifacts,
@@ -84,7 +84,9 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         RunState.BUILDING,
         actor="validator",
         artifact_digests={
-            **generation_artifacts(include_acceptance_catalog=False),
+            **retained_generation_artifacts(
+                store, include_acceptance_catalog=False
+            ),
             **acceptance_catalog_artifacts(store),
         },
         payload=build_payload(),
@@ -93,7 +95,7 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         "run-1",
         RunState.VALIDATING,
         actor="validator",
-        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
     )

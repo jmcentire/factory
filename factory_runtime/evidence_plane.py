@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -28,7 +29,7 @@ from factory_core.independence import (
     IndependenceReport,
     verify_independence,
 )
-from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy, digest_obj
+from factory_core.manifest import Ledger, LedgerEntry, SegregationPolicy, digest_bytes, digest_obj
 from factory_core.monitors import Monitor, MonitorSetReport, verify_monitor_set
 from factory_core.provenance import (
     IntentBackreference,
@@ -38,13 +39,114 @@ from factory_core.provenance import (
     ProvenanceReport,
 )
 from factory_runtime.generation import GenerationError, verify_prepared_generation
-from factory_runtime.schema import validate_document
+from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.snapshot import SnapshotError, tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState, RunStore
+from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
 
 
 class EvidencePlaneError(ValueError):
     """Evidence could not be re-derived from its authoritative sources."""
+
+
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_PUBLIC_KEY = re.compile(r"^[0-9a-f]{64}$")
+_SIGNATURE = re.compile(r"^[0-9a-f]{128}$")
+
+
+def verify_retained_evidence_bundle(
+    run_dir: str | Path,
+    *,
+    attempt_id: str,
+    payload_digest: str,
+    envelope_digest: str,
+    run_id: str,
+    target_digest: str,
+    source_digest: str,
+    candidate_digest: str,
+    acceptance_tests_digest: str,
+    generation_artifacts: Mapping[str, str],
+    coder_snapshot_digest: str,
+    tester_snapshot_digest: str,
+    attempt_number: int,
+    attempt_limit: int,
+    validating_ledger_head: str,
+) -> Mapping[str, Any]:
+    """Reopen the exact signed bundle and rederive its authoritative subject bindings.
+
+    Tessera cryptography is verified before admission by the orchestrator.  Replay pins and
+    reopens those same signed envelope bytes, rederives the embedded payload address, and refuses
+    any absent, replaced, malformed, or differently-bound object.
+    """
+
+    if not _ATTEMPT_ID.fullmatch(attempt_id):
+        raise EvidencePlaneError("evidence bundle has an invalid attempt id")
+    for label, value in (
+        ("evidence bundle digest", payload_digest),
+        ("evidence envelope digest", envelope_digest),
+    ):
+        if not _DIGEST.fullmatch(value):
+            raise EvidencePlaneError(f"{label} is not a canonical content address")
+    path = Path(run_dir) / "evidence" / "build-attempts" / attempt_id / (
+        "evidence-bundle.tessera.json"
+    )
+    try:
+        raw_bytes = read_stable_regular_bytes(
+            path,
+            label="retained signed evidence bundle",
+            max_bytes=16 * 1024 * 1024,
+        )
+        envelope = json.loads(raw_bytes.decode("utf-8"))
+    except (StateAdmissionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvidencePlaneError(f"retained signed evidence bundle is invalid: {exc}") from exc
+    if digest_bytes(raw_bytes) != envelope_digest:
+        raise EvidencePlaneError("retained evidence envelope differs from its ledger address")
+    if not isinstance(envelope, Mapping):
+        raise EvidencePlaneError("retained evidence envelope must be an object")
+    if not _PUBLIC_KEY.fullmatch(str(envelope.get("pubkey", ""))) or not _SIGNATURE.fullmatch(
+        str(envelope.get("signature", ""))
+    ):
+        raise EvidencePlaneError("retained evidence envelope has no canonical Tessera signature")
+    state = envelope.get("state")
+    if not isinstance(state, Mapping) or state.get("kind") != "factory-evidence-bundle":
+        raise EvidencePlaneError("retained evidence envelope has the wrong Tessera kind")
+    encoded_payload = state.get("payload")
+    if not isinstance(encoded_payload, str):
+        raise EvidencePlaneError("retained evidence envelope has no encoded payload")
+    try:
+        payload = json.loads(encoded_payload)
+    except json.JSONDecodeError as exc:
+        raise EvidencePlaneError("retained evidence bundle payload is invalid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise EvidencePlaneError("retained evidence bundle payload must be an object")
+    payload = dict(payload)
+    if state.get("payload_digest") != payload_digest or digest_obj(payload) != payload_digest:
+        raise EvidencePlaneError("retained evidence bundle payload does not rederive its address")
+    try:
+        validate_document("evidence-bundle", payload)
+    except DocumentValidationError as exc:
+        raise EvidencePlaneError(f"retained evidence bundle payload is invalid: {exc}") from exc
+    expected = {
+        "run_id": run_id,
+        "target_digest": target_digest,
+        "source_digest": source_digest,
+        "candidate_digest": candidate_digest,
+        "acceptance_tests_digest": acceptance_tests_digest,
+        "generation_artifacts": dict(generation_artifacts),
+        "review_snapshots": {
+            "coder-output": coder_snapshot_digest,
+            "tester-output": tester_snapshot_digest,
+        },
+        "build_attempt": {"number": attempt_number, "limit": attempt_limit},
+        "ledger_head": validating_ledger_head,
+    }
+    for field, expected_value in expected.items():
+        if payload.get(field) != expected_value:
+            raise EvidencePlaneError(
+                f"retained evidence bundle has stale or substituted {field}"
+            )
+    return payload
 
 
 @dataclass(frozen=True)

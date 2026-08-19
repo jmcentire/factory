@@ -33,7 +33,10 @@ from factory_runtime.runner_failure import (
     RunnerFailureEvidenceError,
     verify_and_retain_runner_failure,
 )
-from factory_runtime.runner_isolation import MacOSNetworkedRunner
+from factory_runtime.runner_isolation import (
+    MacOSNetworkedRunner,
+    _qualification_python_runtime,
+)
 from factory_runtime.schema import validate_document
 from factory_runtime.state_admission import derive_state_capsule, profile_digest
 
@@ -1301,6 +1304,68 @@ def test_receipt_has_no_ambient_environment_value(tmp_path: Path) -> None:
     assert "ambient-sentinel-value" not in json.dumps(receipt.document)
 
 
+def _executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fixture executable")
+    path.chmod(0o755)
+    return path
+
+
+def test_qualification_python_runtime_preserves_framework_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "framework" / "Versions" / "3.12"
+    app = _executable(
+        base / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    )
+    base_executable = _executable(base / "bin" / "python3.12")
+    environment = tmp_path / "venv"
+    environment.mkdir()
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+    monkeypatch.setattr(sys, "prefix", str(environment))
+    monkeypatch.setattr(sys, "_base_executable", str(base_executable))
+    monkeypatch.setattr(sys, "executable", str(environment / "bin" / "python"))
+
+    executable, readable = _qualification_python_runtime()
+
+    assert executable == app.resolve()
+    assert readable == (environment.resolve(), base.resolve(), app.resolve())
+
+
+def test_qualification_python_runtime_supports_standalone_cpython(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "standalone-python"
+    base_executable = _executable(base / "bin" / "python3.12")
+    environment = tmp_path / "venv"
+    environment.mkdir()
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+    monkeypatch.setattr(sys, "prefix", str(environment))
+    monkeypatch.setattr(sys, "_base_executable", str(base_executable))
+    monkeypatch.setattr(sys, "executable", str(environment / "bin" / "python"))
+
+    executable, readable = _qualification_python_runtime()
+
+    assert executable == base_executable.resolve()
+    assert readable == (environment.resolve(), base.resolve(), base_executable.resolve())
+
+
+def test_qualification_python_runtime_refuses_missing_interpreter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(sys, "base_prefix", str(missing))
+    monkeypatch.setattr(sys, "prefix", str(missing / "venv"))
+    monkeypatch.setattr(sys, "_base_executable", str(missing / "bin" / "python3.12"))
+    monkeypatch.setattr(sys, "executable", str(missing / "venv" / "bin" / "python"))
+
+    with pytest.raises(RunnerError, match="no executable trusted Python runtime"):
+        _qualification_python_runtime()
+
+
 @pytest.mark.isolation_integration
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
 def test_networked_backend_qualifies_file_exec_network_and_process_boundaries(
@@ -1333,9 +1398,7 @@ def test_networked_backend_runs_only_qualified_exec_and_reopens_structured_artif
     output.mkdir()
     forbidden = tmp_path / "target"
     forbidden.mkdir()
-    interpreter = (
-        Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
-    ).resolve(strict=True)
+    interpreter, runtime_paths = _qualification_python_runtime()
     helper = workspace / "runner.py"
     helper.write_text(
         "import json, pathlib, sys\n"
@@ -1357,7 +1420,7 @@ def test_networked_backend_runs_only_qualified_exec_and_reopens_structured_artif
     result = backend.run(
         (str(interpreter), str(helper), "--output-last-message", str(destination)),
         cwd=workspace,
-        readable_paths=(interpreter, helper),
+        readable_paths=(*runtime_paths, helper),
         writable_paths=(output,),
         environment={
             "HOME": str(workspace),
@@ -1384,9 +1447,7 @@ def test_networked_backend_wall_limit_covers_a_child_that_never_reads_stdin(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    interpreter = (
-        Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
-    ).resolve(strict=True)
+    interpreter, runtime_paths = _qualification_python_runtime()
     helper = workspace / "never-read.py"
     helper.write_text("import time\ntime.sleep(20)\n", encoding="utf-8")
     backend = MacOSNetworkedRunner()
@@ -1395,7 +1456,7 @@ def test_networked_backend_wall_limit_covers_a_child_that_never_reads_stdin(
     result = backend._supervised(
         (str(interpreter), str(helper)),
         cwd=workspace,
-        readable_paths=(interpreter, helper),
+        readable_paths=(*runtime_paths, helper),
         writable_paths=(workspace,),
         environment={
             "HOME": str(workspace),

@@ -63,6 +63,12 @@ ACCEPTANCE_OBLIGATION_CATALOG_KEY = "acceptance-obligation-catalog"
 ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY = "acceptance_obligation_catalog"
 ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
 TEST_CHANGE_AUTHORIZATION_KEY = "test-change-authorization"
+VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
+    "validator-execution-manifest",
+    "validator-execution-configuration",
+    "validator-execution-environment",
+    "validator-execution-snapshot",
+)
 
 
 class RunState(StrEnum):
@@ -473,6 +479,21 @@ def _recorded_build_attempt_ids(records: Iterable[Mapping[str, Any]]) -> set[str
         if isinstance(attempt_id, str) and attempt_id:
             seen.add(attempt_id)
     return seen
+
+
+def _latest_build_attempt_id(records: Iterable[Mapping[str, Any]]) -> str:
+    """Return the most recent ledgered BUILDING attempt from a verified record sequence."""
+
+    for record in reversed(tuple(records)):
+        if record.get("to_state") != RunState.BUILDING:
+            continue
+        payload = record.get("payload")
+        if isinstance(payload, Mapping):
+            attempt_id = payload.get("attempt_id")
+            if isinstance(attempt_id, str) and _ATTEMPT_ID.fullmatch(attempt_id):
+                return attempt_id
+        break
+    raise RunStateError("active build has no canonical attempt id")
 
 
 def _require_receipts_belong_here(
@@ -1205,6 +1226,36 @@ class RunStore:
         if destination is RunState.SPECIFICATION_DEFECT:
             next_acceptance_catalog_digest = ""
 
+        if destination is RunState.VALIDATING:
+            _require_digest_keys(
+                supplied,
+                VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+                context=str(destination),
+            )
+            try:
+                from factory_runtime.acceptance_obligations import (
+                    AcceptanceObligationError,
+                    verify_retained_validator_execution,
+                )
+
+                active_attempt_id = _latest_build_attempt_id(verified_entries)
+                retained_snapshot_digest = verify_retained_validator_execution(
+                    self._run_dir(run_id),
+                    attempt_id=active_attempt_id,
+                    command_digest=supplied["validator-execution-manifest"],
+                    configuration_digest=supplied["validator-execution-configuration"],
+                    environment_digest=supplied["validator-execution-environment"],
+                    expected_snapshot_digest=supplied["validator-execution-snapshot"],
+                )
+                if retained_snapshot_digest != supplied["validator-execution-snapshot"]:
+                    raise AcceptanceObligationError(
+                        "retained Validator execution snapshot changed during admission"
+                    )
+            except AcceptanceObligationError as exc:
+                raise RunStateError(
+                    f"{destination} Validator execution evidence is invalid: {exc}"
+                ) from exc
+
         if destination is RunState.PREVIEW:
             _require_digest_keys(
                 supplied,
@@ -1217,6 +1268,8 @@ class RunStore:
                     "base-source-snapshot",
                     "candidate-change-set",
                     "validator-review-authority-context",
+                    "validator-review-observations-source",
+                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
                     "evidence-bundle",
                     "evidence-envelope",
                 ),
@@ -1230,6 +1283,7 @@ class RunStore:
                     "acceptance-tests",
                     "coder-output-snapshot",
                     "tester-output-snapshot",
+                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
                 )
             }
             _require_digest_keys(
@@ -1237,7 +1291,11 @@ class RunStore:
                 trusted_evidence,
                 context=f"{destination} prior validation",
             )
-            for key in ("candidate", "acceptance-tests"):
+            for key in (
+                "candidate",
+                "acceptance-tests",
+                *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+            ):
                 if supplied[key] != trusted_evidence[key]:
                     raise RunStateError(
                         f"{destination} changes {key} after immutable validation began"
@@ -1275,6 +1333,20 @@ class RunStore:
                     acceptance_tests_digest=supplied["acceptance-tests"],
                     trusted_evidence_digests=trusted_evidence,
                 )
+                ledger_execution = {
+                    "command_digest": trusted_evidence["validator-execution-manifest"],
+                    "configuration_digest": trusted_evidence[
+                        "validator-execution-configuration"
+                    ],
+                    "environment_digest": trusted_evidence["validator-execution-environment"],
+                }
+                if any(
+                    acceptance_report.get(field) != expected
+                    for field, expected in ledger_execution.items()
+                ):
+                    raise AcceptanceObligationError(
+                        "acceptance report execution tuple differs from retained Validator evidence"
+                    )
                 from factory_runtime.adversarial_review import (
                     AdversarialReviewError,
                     verify_retained_validator_adversarial_review,
@@ -1296,6 +1368,32 @@ class RunStore:
                     acceptance_obligation_catalog_digest=next_acceptance_catalog_digest,
                     acceptance_report=acceptance_report,
                     trusted_evidence_digests=review_evidence,
+                    observations_source_digest=supplied[
+                        "validator-review-observations-source"
+                    ],
+                )
+                from factory_runtime.evidence_plane import (
+                    EvidencePlaneError,
+                    verify_retained_evidence_bundle,
+                )
+
+                active_attempt_id = _latest_build_attempt_id(verified_entries)
+                verify_retained_evidence_bundle(
+                    self._run_dir(run_id),
+                    attempt_id=active_attempt_id,
+                    payload_digest=supplied["evidence-bundle"],
+                    envelope_digest=supplied["evidence-envelope"],
+                    run_id=run_id,
+                    target_digest=current.target_digest,
+                    source_digest=current.source_digest,
+                    candidate_digest=supplied["candidate"],
+                    acceptance_tests_digest=supplied["acceptance-tests"],
+                    generation_artifacts=current.generation_artifact_digests,
+                    coder_snapshot_digest=trusted_evidence["coder-output-snapshot"],
+                    tester_snapshot_digest=trusted_evidence["tester-output-snapshot"],
+                    attempt_number=current.build_attempt_count,
+                    attempt_limit=current.build_attempt_limit,
+                    validating_ledger_head=current.ledger_head,
                 )
             except AcceptanceObligationError as exc:
                 raise RunStateError(
@@ -1304,6 +1402,10 @@ class RunStore:
             except AdversarialReviewError as exc:
                 raise RunStateError(
                     f"{destination} Validator adversarial review is invalid: {exc}"
+                ) from exc
+            except EvidencePlaneError as exc:
+                raise RunStateError(
+                    f"{destination} signed evidence bundle is invalid: {exc}"
                 ) from exc
 
         generation = dict(current.generation_artifact_digests)
@@ -1469,6 +1571,7 @@ class RunStore:
         build_attempt_count = 0
         build_attempt_limit = 0
         build_attempt_ids: set[str] = set()
+        active_attempt_id = ""
         pending_repair_attempt_id = ""
         schema_version = ""
         created_at = 0
@@ -1822,12 +1925,14 @@ class RunStore:
                         else candidate_limit
                     )
                     build_attempt_count += 1
-                    build_attempt_ids.add(str(payload_raw["attempt_id"]))
+                    active_attempt_id = str(payload_raw["attempt_id"])
+                    build_attempt_ids.add(active_attempt_id)
                 elif destination is RunState.SPECIFICATION_DEFECT or derived_phase_key:
                     generation_artifacts = {}
                     if destination is RunState.SPECIFICATION_DEFECT:
                         build_attempt_count = 0
                         build_attempt_limit = 0
+                        active_attempt_id = ""
                 declared_generation = digests.get("generation_artifacts")
                 if not isinstance(declared_generation, Mapping):
                     raise RunStateError(f"ledger entry {index} has no generation artifact map")
@@ -1982,6 +2087,7 @@ class RunStore:
                     "acceptance-tests",
                     "coder-output-snapshot",
                     "tester-output-snapshot",
+                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
                 )
                 if destination is RunState.BUILDING:
                     validation_evidence = {}
@@ -1992,6 +2098,32 @@ class RunStore:
                         context=f"ledger entry {index} validating",
                     )
                     validation_evidence = {key: str(digests[key]) for key in validation_keys}
+                    try:
+                        from factory_runtime.acceptance_obligations import (
+                            AcceptanceObligationError,
+                            verify_retained_validator_execution,
+                        )
+
+                        verify_retained_validator_execution(
+                            self._run_dir(run_id),
+                            attempt_id=active_attempt_id,
+                            command_digest=validation_evidence[
+                                "validator-execution-manifest"
+                            ],
+                            configuration_digest=validation_evidence[
+                                "validator-execution-configuration"
+                            ],
+                            environment_digest=validation_evidence[
+                                "validator-execution-environment"
+                            ],
+                            expected_snapshot_digest=validation_evidence[
+                                "validator-execution-snapshot"
+                            ],
+                        )
+                    except AcceptanceObligationError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} validating Validator execution is invalid: {exc}"
+                        ) from exc
                 elif destination is RunState.PREVIEW:
                     _require_digest_keys(
                         digests,
@@ -2004,6 +2136,8 @@ class RunStore:
                             "base-source-snapshot",
                             "candidate-change-set",
                             "validator-review-authority-context",
+                            "validator-review-observations-source",
+                            *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
                             "evidence-bundle",
                             "evidence-envelope",
                         ),
@@ -2013,7 +2147,11 @@ class RunStore:
                         raise RunStateError(
                             f"ledger entry {index} preview has no immutable validation subject"
                         )
-                    for key in ("candidate", "acceptance-tests"):
+                    for key in (
+                        "candidate",
+                        "acceptance-tests",
+                        *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+                    ):
                         if digests[key] != validation_evidence[key]:
                             raise RunStateError(
                                 f"ledger entry {index} preview changes {key} after validation"
@@ -2051,6 +2189,25 @@ class RunStore:
                             acceptance_tests_digest=str(digests["acceptance-tests"]),
                             trusted_evidence_digests=validation_evidence,
                         )
+                        ledger_execution = {
+                            "command_digest": validation_evidence[
+                                "validator-execution-manifest"
+                            ],
+                            "configuration_digest": validation_evidence[
+                                "validator-execution-configuration"
+                            ],
+                            "environment_digest": validation_evidence[
+                                "validator-execution-environment"
+                            ],
+                        }
+                        if any(
+                            acceptance_report.get(field) != expected
+                            for field, expected in ledger_execution.items()
+                        ):
+                            raise AcceptanceObligationError(
+                                "acceptance report execution tuple differs from retained "
+                                "Validator evidence"
+                            )
                         from factory_runtime.adversarial_review import (
                             AdversarialReviewError,
                             verify_retained_validator_adversarial_review,
@@ -2074,6 +2231,35 @@ class RunStore:
                             ),
                             acceptance_report=acceptance_report,
                             trusted_evidence_digests=review_evidence,
+                            observations_source_digest=str(
+                                digests["validator-review-observations-source"]
+                            ),
+                        )
+                        from factory_runtime.evidence_plane import (
+                            EvidencePlaneError,
+                            verify_retained_evidence_bundle,
+                        )
+
+                        verify_retained_evidence_bundle(
+                            self._run_dir(run_id),
+                            attempt_id=active_attempt_id,
+                            payload_digest=str(digests["evidence-bundle"]),
+                            envelope_digest=str(digests["evidence-envelope"]),
+                            run_id=run_id,
+                            target_digest=target_digest,
+                            source_digest=source_digest,
+                            candidate_digest=str(digests["candidate"]),
+                            acceptance_tests_digest=str(digests["acceptance-tests"]),
+                            generation_artifacts=generation_artifacts,
+                            coder_snapshot_digest=validation_evidence[
+                                "coder-output-snapshot"
+                            ],
+                            tester_snapshot_digest=validation_evidence[
+                                "tester-output-snapshot"
+                            ],
+                            attempt_number=build_attempt_count,
+                            attempt_limit=build_attempt_limit,
+                            validating_ledger_head=str(record.get("prev_hash", "")),
                         )
                     except AcceptanceObligationError as exc:
                         raise RunStateError(
@@ -2084,6 +2270,10 @@ class RunStore:
                         raise RunStateError(
                             f"ledger entry {index} preview Validator adversarial review is "
                             f"invalid: {exc}"
+                        ) from exc
+                    except EvidencePlaneError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} preview signed evidence bundle is invalid: {exc}"
                         ) from exc
                 elif destination is RunState.SPECIFICATION_DEFECT:
                     validation_evidence = {}

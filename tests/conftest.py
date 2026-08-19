@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SYNTHETIC_TARGET = FIXTURES / "synthetic_target" / "target.toml"
 EMPTY_GIT_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SYNTHETIC_CANDIDATE_BYTES = b"fixture candidate\n"
+SYNTHETIC_TEST_BYTES = b"def test_fixture_acceptance():\n    assert True\n"
 
 
 def synthetic_candidate_digest() -> str:
@@ -33,7 +36,7 @@ def synthetic_candidate_digest() -> str:
             "files": [
                 {
                     "path": "artifact.py",
-                    "mode": 0o644,
+                    "mode": 0o444,
                     "digest": digest_bytes(SYNTHETIC_CANDIDATE_BYTES),
                 }
             ]
@@ -105,6 +108,61 @@ def generation_artifacts(
                 )
             }
         )
+    return artifacts
+
+
+def retained_generation_artifacts(
+    store: Any,
+    seed: str = "default",
+    *,
+    run_id: str = "run-1",
+    include_acceptance_catalog: bool = True,
+) -> dict[str, str]:
+    """Retain the exact generation blobs later cited by a Validator review fixture."""
+
+    from factory_core.manifest import digest_obj
+    from factory_runtime.snapshot import freeze_blob
+
+    root = store.root / run_id / "evidence" / "generation"
+
+    def retain(label: str, document: object) -> tuple[str, str]:
+        data = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        blob = freeze_blob(root, label=label, data=data)
+        return digest_obj(document), blob.digest
+
+    pattern_digest, pattern_source = retain(
+        "pattern-catalog",
+        {"schema_version": "fixture-pattern-catalog/1", "seed": seed},
+    )
+    plan_digest, plan_source = retain(
+        "build-plan",
+        {"schema_version": "fixture-build-plan/1", "seed": seed},
+    )
+    _, build_input = retain(
+        "build-input",
+        {"schema_version": "fixture-build-input/1", "seed": seed},
+    )
+    _, target_source = retain(
+        "target-manifest-source",
+        {"schema_version": "fixture-target-source/1", "seed": seed},
+    )
+    _, readiness = retain(
+        "generation-readiness",
+        {"schema_version": "fixture-generation-readiness/1", "seed": seed},
+    )
+    artifacts = {
+        "target-manifest-source": target_source,
+        "pattern-catalog": pattern_digest,
+        "pattern-catalog-source": pattern_source,
+        "build-plan": plan_digest,
+        "build-plan-source": plan_source,
+        "build-input": build_input,
+        "generation-readiness": readiness,
+        "resume-checkpoint": "sha256:"
+        + hashlib.sha256(f"{seed}:resume-checkpoint".encode()).hexdigest(),
+    }
+    if include_acceptance_catalog:
+        artifacts.update(acceptance_catalog_artifacts(store, run_id=run_id))
     return artifacts
 
 
@@ -250,25 +308,96 @@ def acceptance_catalog_artifacts(
     }
 
 
+def validator_execution_artifacts(
+    store: Any,
+    *,
+    run_id: str = "run-1",
+) -> dict[str, str]:
+    """Retain the exact Validator executable behind the active build attempt."""
+
+    from factory_runtime.acceptance_obligations import capture_validator_execution
+    from factory_runtime.snapshot import freeze_blob, freeze_tree
+
+    entries = store.verified_ledger_entries(run_id)
+    building = [entry for entry in entries if entry.get("to_state") == "building"]
+    if not building:
+        raise AssertionError("validation fixture requires a BUILDING attempt")
+    payload = building[-1].get("payload")
+    if not isinstance(payload, dict):
+        raise AssertionError("BUILDING fixture has no payload")
+    attempt_id = str(payload["attempt_id"])
+    capture = capture_validator_execution((sys.executable,))
+    execution_root = (
+        store.root
+        / run_id
+        / "evidence"
+        / "build-attempts"
+        / attempt_id
+        / "validator-execution"
+    )
+    manifest = freeze_blob(
+        execution_root / "manifests",
+        label="validator-execution-manifest",
+        data=json.dumps(capture.document, sort_keys=True, separators=(",", ":")).encode(),
+    )
+    with tempfile.TemporaryDirectory(prefix="factory-state-validator-") as temporary:
+        source = Path(temporary)
+        for item in capture.files:
+            path = source / item.snapshot_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(item.content)
+            os.chmod(path, item.mode)
+        validator_snapshot = freeze_tree(source, execution_root / "trees")
+    if manifest.digest != capture.command_digest:
+        raise AssertionError("Validator fixture manifest did not retain at its command address")
+    if validator_snapshot.digest != capture.document["snapshot_tree_digest"]:
+        raise AssertionError("Validator fixture tree differs from the captured execution bytes")
+    command_digest, configuration_digest, environment_digest = capture.digests
+    return {
+        "validator-execution-manifest": command_digest,
+        "validator-execution-configuration": configuration_digest,
+        "validator-execution-environment": environment_digest,
+        "validator-execution-snapshot": validator_snapshot.digest,
+    }
+
+
 def validation_artifacts(
+    store: Any,
     seed: str = "default",
     *,
+    run_id: str = "run-1",
     candidate: str | None = None,
 ) -> dict[str, str]:
-    """Exact immutable author outputs required when a v4 run enters validation."""
+    """Retain exact author trees and the exact Validator execution identity."""
 
-    values = {
-        key: "sha256:" + hashlib.sha256(f"{seed}:{key}".encode()).hexdigest()
-        for key in (
-            "candidate",
-            "acceptance-tests",
-            "coder-output-snapshot",
-            "tester-output-snapshot",
-        )
+    del seed
+    from factory_runtime.snapshot import freeze_tree, tree_digest
+
+    review_root = store.root / run_id / "evidence" / "review-snapshots"
+    with tempfile.TemporaryDirectory(prefix="factory-state-authors-") as temporary:
+        source = Path(temporary)
+        coder = source / "coder" / "artifact"
+        tester = source / "tester" / "tests"
+        coder.mkdir(parents=True)
+        tester.mkdir(parents=True)
+        (coder / "artifact.py").write_bytes(SYNTHETIC_CANDIDATE_BYTES)
+        (tester / "acceptance_test.py").write_bytes(SYNTHETIC_TEST_BYTES)
+        os.chmod(coder / "artifact.py", 0o444)
+        os.chmod(tester / "acceptance_test.py", 0o444)
+        coder_snapshot = freeze_tree(source / "coder", review_root)
+        tester_snapshot = freeze_tree(source / "tester", review_root)
+
+    candidate_digest = tree_digest(coder_snapshot.files_directory / "artifact")
+    acceptance_tests_digest = tree_digest(tester_snapshot.files_directory / "tests")
+    if candidate is not None and candidate != candidate_digest:
+        raise AssertionError("validation fixture candidate differs from retained Coder bytes")
+    return {
+        "candidate": candidate_digest,
+        "acceptance-tests": acceptance_tests_digest,
+        "coder-output-snapshot": coder_snapshot.digest,
+        "tester-output-snapshot": tester_snapshot.digest,
+        **validator_execution_artifacts(store, run_id=run_id),
     }
-    if candidate is not None:
-        values["candidate"] = candidate
-    return values
 
 
 def preview_artifacts(
@@ -290,11 +419,13 @@ def preview_artifacts(
     from factory_runtime.adversarial_review import (
         REQUIRED_COMPLETENESS_CHECKS,
         REQUIRED_REVIEW_DIMENSIONS,
-        VerifiedAdversarialReview,
         build_review_authority_context,
         build_validator_review_subject,
+        canonical_document_bytes,
         retain_validator_adversarial_review,
+        verify_validator_adversarial_review,
     )
+    from factory_runtime.snapshot import verify_frozen_blob, verify_frozen_tree
 
     projection = store.load(run_id)
     catalog_path = (
@@ -316,6 +447,15 @@ def preview_artifacts(
             "acceptance-tests",
             "coder-output-snapshot",
             "tester-output-snapshot",
+        )
+    }
+    execution = {
+        key: str(store.current_artifact_digests(run_id)[key])
+        for key in (
+            "validator-execution-manifest",
+            "validator-execution-configuration",
+            "validator-execution-environment",
+            "validator-execution-snapshot",
         )
     }
     test_results = [
@@ -390,6 +530,16 @@ def preview_artifacts(
         trusted_evidence_digests=trusted,
     )
     report_digest = retain_acceptance_obligation_report(store.root, run_id, report)
+    observations_bytes = canonical_document_bytes(observations)
+    observations_input = (
+        store.root
+        / run_id
+        / "evidence"
+        / "fixture-review-inputs"
+        / f"{digest_bytes(observations_bytes).removeprefix('sha256:')}.json"
+    )
+    observations_input.parent.mkdir(parents=True, exist_ok=True)
+    observations_input.write_bytes(observations_bytes)
     catalog_source_digest = digest_bytes(catalog_path.read_bytes())
     snapshot_body = {
         "schema_version": "factory-base-source-snapshot/1",
@@ -419,7 +569,7 @@ def preview_artifacts(
                 "old_type": None,
                 "new_type": "file",
                 "old_mode": None,
-                "new_mode": 0o644,
+                "new_mode": 0o444,
                 "old_digest": None,
                 "new_digest": digest_bytes(SYNTHETIC_CANDIDATE_BYTES),
             }
@@ -480,15 +630,67 @@ def preview_artifacts(
         environment_digest=str(report["environment_digest"]),
     )
 
+    review_root = store.root / run_id / "evidence" / "review-snapshots"
+    coder_snapshot = verify_frozen_tree(
+        review_root / trusted["coder-output-snapshot"].removeprefix("sha256:"),
+        expected_digest=trusted["coder-output-snapshot"],
+    )
+    tester_snapshot = verify_frozen_tree(
+        review_root / trusted["tester-output-snapshot"].removeprefix("sha256:"),
+        expected_digest=trusted["tester-output-snapshot"],
+    )
+    generation_root = store.root / run_id / "evidence" / "generation"
+
+    def generation_blob(label: str, digest: str) -> Path:
+        return verify_frozen_blob(
+            generation_root / label / digest.removeprefix("sha256:"),
+            expected_digest=digest,
+            label=label,
+        ).payload_path
+
+    build_input_path = generation_blob(
+        "build-input", str(projection.generation_artifact_digests["build-input"])
+    )
+    pattern_catalog_path = generation_blob(
+        "pattern-catalog",
+        str(projection.generation_artifact_digests["pattern-catalog-source"]),
+    )
+    build_plan_path = generation_blob(
+        "build-plan", str(projection.generation_artifact_digests["build-plan-source"])
+    )
+    evidence_bytes = {
+        ("implementation", "artifact.py"): SYNTHETIC_CANDIDATE_BYTES,
+        ("acceptance-tests", "acceptance_test.py"): SYNTHETIC_TEST_BYTES,
+        ("build-input", "build-input.json"): build_input_path.read_bytes(),
+        ("pattern-catalog", "pattern-catalog.json"): pattern_catalog_path.read_bytes(),
+        ("build-plan", "build-plan.json"): build_plan_path.read_bytes(),
+        (
+            "acceptance-obligation-catalog",
+            "acceptance-obligation-catalog.json",
+        ): catalog_path.read_bytes(),
+        (
+            "acceptance-observations",
+            "acceptance-obligation-observations.json",
+        ): observations_bytes,
+        (
+            "candidate-change-set",
+            "candidate-change-set.json",
+        ): canonical_document_bytes(candidate_change_set),
+        (
+            "review-authority-context",
+            "review-authority-context.json",
+        ): canonical_document_bytes(authority_context),
+    }
+
     def review_reference(source: str, path: str) -> dict[str, object]:
+        data = evidence_bytes[(source, path)]
+        first_line = data.splitlines(keepends=True)[0]
         return {
             "source": source,
             "path": path,
             "start_line": 1,
             "end_line": 1,
-            "excerpt_digest": digest_obj(
-                {"seed": seed, "review_source": source, "path": path}
-            ),
+            "excerpt_digest": digest_bytes(first_line),
         }
 
     references = [
@@ -503,7 +705,6 @@ def preview_artifacts(
         review_reference(
             "acceptance-observations", "acceptance-obligation-observations.json"
         ),
-        review_reference("baseline-source", "fixture-missing-baseline.txt"),
         review_reference("candidate-change-set", "candidate-change-set.json"),
         review_reference(
             "review-authority-context", "review-authority-context.json"
@@ -541,26 +742,156 @@ def preview_artifacts(
         },
         "verdict": "CLEAN_QUALIFIED",
     }
-    verified_review = VerifiedAdversarialReview(
+    verified_review = verify_validator_adversarial_review(
+        review_report,
         subject=subject,
-        report=review_report,
-        subject_digest=digest_obj(subject),
-        report_digest=digest_obj(review_report),
+        reviewer_identity=reviewer_identity,
+        acceptance_observations=observations,
+        implementation_root=coder_snapshot.files_directory / "artifact",
+        tests_root=tester_snapshot.files_directory / "tests",
+        build_input_path=build_input_path,
+        pattern_catalog_path=pattern_catalog_path,
+        build_plan_path=build_plan_path,
+        acceptance_catalog_path=catalog_path,
+        acceptance_observations_path=observations_input,
     )
     review_artifacts = retain_validator_adversarial_review(
         store.root,
         run_id,
         verified_review,
     )
+    phase_artifacts = [
+        {
+            "artifact_id": phase,
+            "phase": phase,
+            "version": "1",
+            "source_digest": digest,
+            "human_ratifier": "human-approver",
+            "validator_ratifier": reviewer_identity,
+            "items": [
+                {
+                    "item_id": f"{phase}:fixture",
+                    "canonical_statement": f"Fixture ratified {phase}.",
+                    "supersedes": [],
+                }
+            ],
+        }
+        for phase, digest in projection.phase_artifact_digests.items()
+    ]
+    bundle = {
+        "schema_version": "factory-evidence-bundle/2",
+        "run_id": run_id,
+        "target_digest": projection.target_digest,
+        "source_digest": projection.source_digest,
+        "candidate_digest": trusted["candidate"],
+        "acceptance_tests_digest": trusted["acceptance-tests"],
+        "generation_artifacts": dict(projection.generation_artifact_digests),
+        "review_snapshots": {
+            "coder-output": trusted["coder-output-snapshot"],
+            "tester-output": trusted["tester-output-snapshot"],
+        },
+        "build_attempt": {
+            "number": projection.build_attempt_count,
+            "limit": projection.build_attempt_limit,
+        },
+        "ledger_head": projection.ledger_head,
+        "phase_artifacts": phase_artifacts,
+        "trusted_artifact_digests": dict(projection.phase_artifact_digests),
+        "claims": [],
+        "checklist_results": [
+            {
+                "id": "fixture-acceptance",
+                "passed": True,
+                "detail": "Exact fixture acceptance evidence passed.",
+                "recorded_at": 1,
+                "evidence": {
+                    "body": {"candidate_digest": trusted["candidate"]},
+                    "claimed_digest": digest_obj(
+                        {"candidate_digest": trusted["candidate"]}
+                    ),
+                },
+            }
+        ],
+        "surface_evidence": [
+            {
+                "surface_id": "fixture",
+                "criticality": "critical",
+                "oracle_adequate": True,
+                "required_evidence_ids": ["fixture-acceptance"],
+                "evidence_digests": {"fixture-acceptance": report_digest},
+            }
+        ],
+        "determinism_records": [
+            {
+                "surface_id": "fixture",
+                "criticality": "critical",
+                "deterministic": True,
+                "flake_count": 0,
+                "automatic_retry_count": 0,
+            }
+        ],
+        "lane": "capability",
+        "independence": {
+            "agents": [
+                {
+                    "role": role,
+                    "model_family": "fixture-family",
+                    "model_version": "fixture-version",
+                    "directive_version": f"{role}-fixture",
+                }
+                for role in ("coder", "tester", "validator")
+            ],
+            "shared_context": False,
+            "channel_open": False,
+            "mechanism_ids": [],
+            "claimed_tier": "stronger",
+            "derived_tier": "stronger",
+            "structural_mode": {
+                "mode": "isolated",
+                "contract_backreference": None,
+                "mutation_evidence": None,
+                "decision_package_note": "State fixture only.",
+            },
+        },
+        "monitors": [],
+        "monitor_declared_unit_count": 0,
+    }
+    bundle_digest = digest_obj(bundle)
+    envelope = {
+        "pubkey": "1" * 64,
+        "signature": "2" * 128,
+        "state": {
+            "kind": "factory-evidence-bundle",
+            "payload": json.dumps(bundle, sort_keys=True, separators=(",", ":")),
+            "payload_digest": bundle_digest,
+        },
+    }
+    envelope_bytes = canonical_document_bytes(envelope)
+    building = [
+        entry
+        for entry in store.verified_ledger_entries(run_id)
+        if entry.get("to_state") == "building"
+    ]
+    attempt_payload = building[-1]["payload"]
+    assert isinstance(attempt_payload, dict)
+    envelope_path = (
+        store.root
+        / run_id
+        / "evidence"
+        / "build-attempts"
+        / str(attempt_payload["attempt_id"])
+        / "evidence-bundle.tessera.json"
+    )
+    envelope_path.parent.mkdir(parents=True, exist_ok=True)
+    envelope_path.write_bytes(envelope_bytes)
     return {
         "candidate": trusted["candidate"],
         "acceptance-tests": trusted["acceptance-tests"],
         "acceptance-obligation-report": report_digest,
         **dict(review_artifacts),
-        "evidence-bundle": "sha256:"
-        + hashlib.sha256(f"{seed}:evidence-bundle".encode()).hexdigest(),
-        "evidence-envelope": "sha256:"
-        + hashlib.sha256(f"{seed}:evidence-envelope".encode()).hexdigest(),
+        **execution,
+        "evidence-bundle": bundle_digest,
+        "evidence-envelope": digest_bytes(envelope_bytes),
     }
 
 
