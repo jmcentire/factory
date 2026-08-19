@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/runner-invocation-diagnostic/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "invocation",
+    "returncode",
+    "termination_reason",
+    "process_peak",
+    "stdout",
+    "stderr"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-runner-invocation-diagnostic/1"},
+    "invocation": {"type": "integer", "minimum": 1, "maximum": 3},
+    "returncode": {"type": "integer"},
+    "termination_reason": {"type": "string", "minLength": 1, "maxLength": 128},
+    "process_peak": {"type": "integer", "minimum": 0},
+    "stdout": {"type": "string", "maxLength": 16384},
+    "stderr": {"type": "string", "maxLength": 16384}
+  }
+}

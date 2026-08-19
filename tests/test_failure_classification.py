@@ -46,3 +46,19 @@ def test_completed_acceptance_failure_routes_to_coder() -> None:
 
     assert capsule.owner == "coder"
     assert capsule.code == "candidate-failed-acceptance"
+
+
+def test_invocation_timeout_precedes_missing_terminal_report() -> None:
+    capsule = classify_terminal_failure(
+        final=None,
+        caller_returncode=124,
+        caller_stdout="private output",
+        caller_stderr="private output",
+        validator_result_present=False,
+        coder_receipt_present=False,
+        tester_receipt_present=False,
+        invocation_termination_reason="idle-timeout",
+    )
+
+    assert capsule.owner == "validator-harness"
+    assert capsule.code == "runner-invocation-timeout"

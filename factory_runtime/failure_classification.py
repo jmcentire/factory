@@ -37,6 +37,7 @@ def classify_terminal_failure(
     validator_result_present: bool,
     coder_receipt_present: bool,
     tester_receipt_present: bool,
+    invocation_termination_reason: str | None = None,
 ) -> FailureCapsule:
     """Classify an attempt without serialising raw lane or oracle output.
 
@@ -44,6 +45,19 @@ def classify_terminal_failure(
     them is copied into the resulting capsule.  This keeps test mechanics and
     command output out of all downstream repair briefs.
     """
+
+    if invocation_termination_reason in {"wall-timeout", "idle-timeout"}:
+        return FailureCapsule(
+            owner="validator-harness",
+            code="runner-invocation-timeout",
+            summary="The Validator-owned runner exceeded its declared invocation time limit.",
+        )
+    if invocation_termination_reason == "output-limit":
+        return FailureCapsule(
+            owner="validator-harness",
+            code="runner-invocation-output-limit",
+            summary="The Validator-owned runner exceeded its declared output limit.",
+        )
 
     final = final or {}
     status = str(final.get("status", ""))

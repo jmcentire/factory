@@ -22,6 +22,7 @@ import jsonschema
 
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
+from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
 from factory_runtime.instruction_control import validate_directive_readback
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state_admission import (
@@ -35,6 +36,7 @@ _MAX_SECRET_BYTES = 65_536
 _MAX_PROMPT_BYTES = 2_097_152
 _PROMPT_SCHEMA_VERSION = "factory-runner-prompt/3"
 _PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/2"
+_MAX_DIAGNOSTIC_STREAM_BYTES = 16_384
 
 
 class RunnerError(ValueError):
@@ -64,6 +66,22 @@ class RunnerError(ValueError):
             refusal_code=self.refusal_code,
             dependency_id=self.dependency_id,
         )
+
+
+class RunnerInvocationError(RunnerError):
+    """A failed invocation with private diagnostics and a safe disposition."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_path: Path,
+        failure_capsule: FailureCapsule,
+        model_attempts: int,
+    ) -> None:
+        super().__init__(message, model_attempts=model_attempts)
+        self.diagnostic_path = diagnostic_path
+        self.failure_capsule = failure_capsule
 
 
 @dataclass(frozen=True)
@@ -336,6 +354,23 @@ def _write_once(path: Path, content: bytes) -> None:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def _redact_diagnostic_stream(value: str, secret_values: Sequence[str]) -> str:
+    """Bound and redact a private stream before writing Validator evidence."""
+
+    redacted = value
+    for secret in secret_values:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    marker = "[TRUNCATED]"
+    raw = redacted.encode("utf-8")
+    if len(raw) <= _MAX_DIAGNOSTIC_STREAM_BYTES:
+        return redacted
+    clipped = raw[: _MAX_DIAGNOSTIC_STREAM_BYTES - len(marker)].decode(
+        "utf-8", errors="ignore"
+    )
+    return f"{clipped}{marker}"
 
 
 def _cost(manifest: RunnerManifest, input_tokens: int, output_tokens: int) -> int | None:
@@ -765,7 +800,14 @@ class HardenedModelRunner:
                 results.append(result)
                 self._enforce_meter(manifest, results)
             except RunnerError as exc:
-                raise exc.after_attempt(index) from exc
+                raise self._invocation_error(
+                    workspace=workspace,
+                    invocation=index,
+                    result=result,
+                    secret_values=tuple(secrets.values()),
+                    message=str(exc),
+                    model_attempts=max(exc.model_attempts, index),
+                ) from exc
 
         handoff = dict(results[-1].structured_output)
         handoff_bytes = json.dumps(
@@ -838,6 +880,54 @@ class HardenedModelRunner:
             + b"\n",
         )
         return handoff, receipt
+
+    @staticmethod
+    def _invocation_error(
+        *,
+        workspace: Path,
+        invocation: int,
+        result: RunnerProcessResult,
+        secret_values: Sequence[str],
+        message: str,
+        model_attempts: int,
+    ) -> RunnerInvocationError:
+        """Write only bounded, redacted output outside the model's grants."""
+
+        diagnostic = {
+            "schema_version": "factory-runner-invocation-diagnostic/1",
+            "invocation": invocation,
+            "returncode": result.returncode,
+            "termination_reason": result.termination_reason,
+            "process_peak": result.process_peak,
+            "stdout": _redact_diagnostic_stream(result.stdout, secret_values),
+            "stderr": _redact_diagnostic_stream(result.stderr, secret_values),
+        }
+        try:
+            validate_document("runner-invocation-diagnostic", diagnostic)
+        except DocumentValidationError as exc:
+            raise RunnerError(str(exc)) from exc
+        path = workspace / "validator-invocation-diagnostic.json"
+        _write_once(
+            path,
+            json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n",
+        )
+        capsule = classify_terminal_failure(
+            final={"status": "runtime-exception"},
+            caller_returncode=result.returncode,
+            caller_stdout=result.stdout,
+            caller_stderr=result.stderr,
+            validator_result_present=False,
+            coder_receipt_present=False,
+            tester_receipt_present=False,
+            invocation_termination_reason=result.termination_reason,
+        )
+        return RunnerInvocationError(
+            message,
+            diagnostic_path=path,
+            failure_capsule=capsule,
+            model_attempts=model_attempts,
+        )
 
     @staticmethod
     def _canary_prompt(
