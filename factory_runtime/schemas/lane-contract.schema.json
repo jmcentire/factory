@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/lane-contract/1",
+  "title": "Factory portable lane machine contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_id", "run_id", "attempt_id", "role", "input_artifacts", "directories", "completion_receipt_path"],
+  "properties": {
+    "schema_version": {"const": "factory-lane-contract/1"},
+    "contract_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "attempt_id": {"$ref": "#/$defs/id"},
+    "role": {"enum": ["coder", "tester", "validator"]},
+    "input_artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "directories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["work", "output", "private"],
+      "properties": {
+        "work": {"$ref": "#/$defs/path"},
+        "output": {"$ref": "#/$defs/path"},
+        "private": {"$ref": "#/$defs/path"}
+      }
+    },
+    "completion_receipt_path": {"$ref": "#/$defs/path"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "digest"],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+        "path": {"$ref": "#/$defs/path"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

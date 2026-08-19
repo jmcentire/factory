@@ -503,6 +503,8 @@ class FactoryOrchestrator:
 
         try:
             execution = loop.execute(
+                run_id=run_id,
+                attempt_id=attempt_id,
                 build_input_path=prepared.build_input_path,
                 coder_command=coder_command,
                 tester_command=tester_command,

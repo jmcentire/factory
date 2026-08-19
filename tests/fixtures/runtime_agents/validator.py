@@ -18,6 +18,12 @@ def _digest_obj(value: object) -> str:
 
 
 input_path = Path(os.environ["FACTORY_BUILD_INPUT_PATH"])
+contract_path = Path(os.environ["FACTORY_LANE_CONTRACT_PATH"])
+contract_bytes = contract_path.read_bytes()
+if _digest(contract_bytes) != os.environ["FACTORY_LANE_CONTRACT_DIGEST"]:
+    raise SystemExit("Validator received changed lane contract bytes")
+if json.loads(contract_bytes).get("role") != "validator":
+    raise SystemExit("Validator received a contract for another role")
 input_bytes = input_path.read_bytes()
 if _digest(input_bytes) != os.environ["FACTORY_BUILD_INPUT_DIGEST"]:
     raise SystemExit("Validator received the wrong build-input bytes")

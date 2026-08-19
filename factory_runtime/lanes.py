@@ -19,6 +19,7 @@ from factory_runtime.isolation import (
     IsolationQualification,
     MacOSSandbox,
 )
+from factory_runtime.lane_contract import write_lane_contract
 from factory_runtime.snapshot import FrozenTree, freeze_tree, tree_digest, verify_frozen_tree
 
 
@@ -111,6 +112,8 @@ class IsolatedBuildLoop:
     def execute(
         self,
         *,
+        run_id: str = "isolated-build-loop",
+        attempt_id: str | None = None,
         build_input_path: str | Path,
         coder_command: Sequence[str],
         tester_command: Sequence[str],
@@ -138,6 +141,7 @@ class IsolatedBuildLoop:
         if not qualification.satisfied:
             raise LaneError("isolation backend did not prove read, write, and network denial")
         source_input = Path(build_input_path)
+        lane_attempt_id = attempt_id or self.root.name
         input_bytes = source_input.read_bytes()
         expected_input_digest = digest_bytes(input_bytes)
         if (build_plan_path is None) != (pattern_catalog_path is None):
@@ -155,6 +159,8 @@ class IsolatedBuildLoop:
         coder = self._prepare_lane(
             LaneRole.CODER,
             input_bytes,
+            run_id=run_id,
+            attempt_id=lane_attempt_id,
             plan_bytes=plan_bytes,
             catalog_bytes=catalog_bytes,
             repair_brief_bytes=repair_brief_bytes,
@@ -162,6 +168,8 @@ class IsolatedBuildLoop:
         tester = self._prepare_lane(
             LaneRole.TESTER,
             input_bytes,
+            run_id=run_id,
+            attempt_id=lane_attempt_id,
             acceptance_catalog_bytes=acceptance_catalog_bytes,
         )
         coder_runners = tuple(Path(path).resolve() for path in coder_trusted_paths)
@@ -217,6 +225,8 @@ class IsolatedBuildLoop:
             plan_bytes,
             catalog_bytes,
             acceptance_catalog_bytes,
+            run_id,
+            lane_attempt_id,
         )
         return ValidationExecution(
             coder=coder_result,
@@ -232,6 +242,8 @@ class IsolatedBuildLoop:
         role: LaneRole,
         input_bytes: bytes,
         *,
+        run_id: str,
+        attempt_id: str,
         plan_bytes: bytes | None = None,
         catalog_bytes: bytes | None = None,
         acceptance_catalog_bytes: bytes | None = None,
@@ -258,7 +270,44 @@ class IsolatedBuildLoop:
             f"{role}-private",
             encoding="utf-8",
         )
+        self._write_lane_contract(lane, role, run_id=run_id, attempt_id=attempt_id)
         return lane
+
+    @staticmethod
+    def _write_lane_contract(
+        lane: Path,
+        role: LaneRole,
+        *,
+        run_id: str,
+        attempt_id: str,
+    ) -> str:
+        """Issue the runner-neutral sidecar before granting the lane its inputs."""
+
+        input_directory = lane / "input"
+        artifacts = [
+            {
+                "kind": path.stem.replace("_", "-").replace(".", "-"),
+                "path": str(path.resolve()),
+                "digest": digest_bytes(path.read_bytes()),
+            }
+            for path in sorted(input_directory.iterdir())
+            if path.is_file() and not path.is_symlink()
+        ]
+        contract_id = "lane-" + digest_bytes(
+            f"{run_id}:{attempt_id}:{role}".encode()
+        ).removeprefix("sha256:")[:32]
+        return write_lane_contract(
+            input_directory / "lane-contract.json",
+            contract_id=contract_id,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            role=role,
+            input_artifacts=artifacts,
+            work_directory=lane / "work",
+            output_directory=lane / "output",
+            private_directory=lane / "private",
+            completion_receipt_path=lane / "output" / "lane-completion.json",
+        )
 
     def _run_author(
         self,
@@ -270,18 +319,22 @@ class IsolatedBuildLoop:
         role = LaneRole(lane.name)
         build_input = lane / "input" / "build-input.json"
         output = lane / "output"
+        contract = lane / "input" / "lane-contract.json"
+        contract_digest = digest_bytes(contract.read_bytes())
         environment = {
             "FACTORY_ROLE": role,
             "FACTORY_BUILD_INPUT_PATH": str(build_input),
             "FACTORY_BUILD_INPUT_DIGEST": expected_input_digest,
             "FACTORY_OUTPUT_DIR": str(output),
+            "FACTORY_LANE_CONTRACT_PATH": str(contract),
+            "FACTORY_LANE_CONTRACT_DIGEST": contract_digest,
         }
-        readable_paths: tuple[Path, ...] = (build_input, *runners)
+        readable_paths: tuple[Path, ...] = (build_input, contract, *runners)
         if role is LaneRole.CODER:
             plan = lane / "input" / "build-plan.json"
             catalog = lane / "input" / "pattern-catalog.json"
             if plan.is_file() and catalog.is_file():
-                readable_paths = (build_input, plan, catalog, *runners)
+                readable_paths = (build_input, plan, catalog, contract, *runners)
                 environment.update(
                     {
                         "FACTORY_BUILD_PLAN_PATH": str(plan),
@@ -304,7 +357,7 @@ class IsolatedBuildLoop:
         elif role is LaneRole.TESTER:
             acceptance_catalog = lane / "input" / "acceptance-obligation-catalog.json"
             if acceptance_catalog.is_file():
-                readable_paths = (build_input, acceptance_catalog, *runners)
+                readable_paths = (build_input, acceptance_catalog, contract, *runners)
                 environment.update(
                     {
                         "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_PATH": str(acceptance_catalog),
@@ -333,6 +386,8 @@ class IsolatedBuildLoop:
         plan_bytes: bytes | None,
         catalog_bytes: bytes | None,
         acceptance_catalog_bytes: bytes | None,
+        run_id: str,
+        attempt_id: str,
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -389,6 +444,20 @@ class IsolatedBuildLoop:
         tester = verify_frozen_tree(tester.directory, expected_digest=tester.digest)
         _copy_regular_tree(coder.files_directory, implementation)
         _copy_regular_tree(tester.files_directory, tests)
+        contract_digest = self._write_lane_contract(
+            lane,
+            LaneRole.VALIDATOR,
+            run_id=run_id,
+            attempt_id=attempt_id,
+        )
+        contract = input_directory / "lane-contract.json"
+        readable_inputs.append(contract)
+        environment.update(
+            {
+                "FACTORY_LANE_CONTRACT_PATH": str(contract),
+                "FACTORY_LANE_CONTRACT_DIGEST": contract_digest,
+            }
+        )
         environment.update(
             {
                 "FACTORY_IMPLEMENTATION_DIR": str(implementation),

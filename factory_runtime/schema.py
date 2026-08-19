@@ -26,6 +26,8 @@ SCHEMA_NAMES = frozenset(
         "build-plan",
         "execution-request",
         "genesis",
+        "lane-completion-receipt",
+        "lane-contract",
         "orchestrator-projection",
         "pattern-catalog",
         "phase-artifact",
