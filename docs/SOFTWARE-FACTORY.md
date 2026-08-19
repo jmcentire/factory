@@ -941,8 +941,10 @@ Once the three phases are agreed, the loop runs.
    traces, and assertion text do not reach an automated repair context, because a suite that
    returns its internals becomes an interactive debugger the implementation is tuned against.
    Any automated retry starts clean and receives only a bare pass/fail result.
-6. On pass, the Validator verifies the mechanical evidence adversarially, confirms provenance,
-   confirms oracle adequacy, and drives the change live.
+6. On pass, the Validator first emits the host-required adversarial code-review report over the
+   same frozen subject and ratified intent, then verifies the mechanical evidence, confirms
+   provenance and oracle adequacy, and drives the change live. A green suite is evidence inside
+   that review, never a substitute for reviewing whether the code implements the core desire.
 7. **After validation passes**, unit tests are written against the now-settled implementation
    shape.
 
@@ -1697,6 +1699,25 @@ the human. **Never update a test on the grounds that it is inconvenient.**
 **Freeze before review.** Retain the exact Coder and Tester bytes independently, including
 paths and modes, before you inspect or execute them. Re-derive candidate and test addresses from
 those frozen subjects. A mutable workspace plus a hash list is not review provenance.
+
+**Complete the host-issued adversarial code review before preview.** Review the exact bound
+implementation, tests, test observations, Product/Architecture/Operational artifacts, build plan,
+pattern catalog, acceptance obligations, and applicable execution contract. Cover every code-owned
+dimension in order: intent conformance, architecture, redundancy, clarity, separation of concerns,
+test adequacy, correctness and failure behavior, and scope control. Do not average one dimension
+against another. Enumerate external inputs, dependencies, state transitions, callers, and
+consumers; give every credible failure mode a disposition and a reachable probe where it is
+mechanically testable. Passing tests do not excuse an intent miss, a wrong boundary, duplicated
+truth, unclear guarantees, or mixed ownership.
+
+Content-address every finding from its statement, consequence, dimension, severity, and exact
+cited bytes before refutation. Give each finding to a fresh stateless refutation context with the
+same immutable subject; if required refutation or any review dimension fails, times out, parses
+badly, or is skipped, the review is incomplete. After refutation, attempt to disprove the clean
+claim through the host-declared completeness checks. Emit only the closed report schema with
+`authority=review-evidence-only`; the host re-derives coverage, subject binding, finding identity,
+completeness, and verdict. A clean review is evidence for preview, never merge, release,
+deployment, or promotion authority.
 
 **Verify the mechanical evidence adversarially.** For each acceptance criterion, select a
 refutation method that could actually fail and attempt to refute rather than confirm.

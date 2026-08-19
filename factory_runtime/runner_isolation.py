@@ -33,9 +33,11 @@ from factory_runtime.runner_termination import (
     COMPLETED,
     EXIT_NONZERO,
     IDLE_LIMIT,
+    NO_ARTIFACT,
     OUTPUT_LIMIT,
     PROCESS_ESCAPE,
     PROCESS_LIMIT,
+    SUPERVISOR_ERROR,
     WALL_LIMIT,
 )
 
@@ -384,7 +386,11 @@ print(json.dumps(result, sort_keys=True))
             return process
         if output_path.is_symlink() or not output_path.is_file():
             return RunnerProcessResult(
-                **{**process.__dict__, "structured_output": {}, "termination_reason": "no-artifact"}
+                **{
+                    **process.__dict__,
+                    "structured_output": {},
+                    "termination_reason": NO_ARTIFACT,
+                }
             )
         raw = output_path.read_bytes()
         if len(raw) > limits.max_output_bytes:
@@ -527,13 +533,43 @@ print(json.dumps(result, sort_keys=True))
                 _kill_group(process.pid)
             if returncode != 0 and reason == COMPLETED:
                 reason = EXIT_NONZERO
-        except (OSError, subprocess.SubprocessError, RunnerError) as exc:
+        except Exception as exc:
             if process is not None:
-                _kill_group(process.pid)
+                try:
+                    _kill_group(process.pid)
+                except OSError:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
             attempts = 1 if counts_as_model_attempt and process is not None else 0
+            invocation_result: RunnerProcessResult | None = None
+            if counts_as_model_attempt and process is not None:
+                failure_returncode = process.poll()
+                if failure_returncode is None:
+                    try:
+                        failure_returncode = process.wait(timeout=2)
+                    except Exception:
+                        failure_returncode = -1
+                invocation_result = RunnerProcessResult(
+                    command=tuple(map(str, command)),
+                    returncode=failure_returncode,
+                    stdout=stdout.decode("utf-8", errors="replace"),
+                    stderr=(
+                        "[CAPTURE INCOMPLETE: supervisor exception after process launch]\n"
+                        + stderr.decode("utf-8", errors="replace")
+                    ),
+                    structured_output={},
+                    session_id="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    process_peak=max(process_peak, 1),
+                    termination_reason=SUPERVISOR_ERROR,
+                )
             raise RunnerError(
                 f"networked runner process failed: {exc}",
                 model_attempts=max(attempts, getattr(exc, "model_attempts", 0)),
+                invocation_result=invocation_result,
             ) from exc
         finally:
             selector.close()

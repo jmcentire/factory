@@ -89,6 +89,7 @@ def run(
 import json
 import os
 import pathlib
+import signal
 import shlex
 import sys
 
@@ -345,6 +346,22 @@ if verb == "run-model":
             json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\\n",
             encoding="utf-8",
         )
+        if os.environ.get("FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT") == "1":
+            for evidence_path in (
+                workspace / "runner-failure-receipt.json",
+                workspace / "validator-invocation-diagnostic.json",
+            ):
+                descriptor = os.open(evidence_path, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            directory_descriptor = os.open(workspace, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+            os.kill(os.getppid(), signal.SIGKILL)
         print(json.dumps({"status": "failed", "failure_receipt": receipt}))
         raise SystemExit(70)
     if os.environ.get("FACTORY_TEST_RUN_MODEL_FAIL") == "1":
@@ -4859,6 +4876,99 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
         executable_path.read_bytes()
     )
     assert "tmux-window-coder" not in resources
+
+
+def test_dispatch_exact_retry_recovers_complete_orphaned_runner_failure_once(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
+    environment["FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT"] = "1"
+
+    interrupted = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert interrupted.returncode == -signal.SIGKILL
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    retained = root / "evidence" / "runner" / "coder"
+    assert not (retained / "runner-failure-receipt.json").exists()
+
+    environment.pop("FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT")
+    recovered = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert recovered.returncode == 70, recovered.stdout + recovered.stderr
+    assert "recovered exact runner failure" in recovered.stderr
+    assert "no model or broker ran" in recovered.stderr
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    assert (retained / "runner-failure-receipt.json").is_file()
+    assert (retained / "validator-invocation-diagnostic.json").is_file()
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["runner-workspace-coder"]["status"] == "retained"
+    assert resources["lane-workspace-coder"]["status"] == "retained"
+
+    record_count = len(ResourceLedger(root, "r1").records())
+    repeated = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert repeated.returncode == 70, repeated.stdout + repeated.stderr
+    assert "recovered exact runner failure" in repeated.stderr
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    assert len(ResourceLedger(root, "r1").records()) == record_count
+
+
+@pytest.mark.parametrize("damage", ("partial-runner-evidence", "mismatched-lane"))
+def test_dispatch_crash_retry_refuses_unsafe_or_mismatched_orphan_without_model_call(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
+    environment["FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT"] = "1"
+
+    interrupted = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+    assert interrupted.returncode == -signal.SIGKILL
+
+    runner_workspace = Path(environment["FACTORY_RUNNER_WORKSPACE_ROOT"]) / "r1" / "lane-coder-g1"
+    lane_workspace = root / "workspaces" / "coder"
+    if damage == "partial-runner-evidence":
+        (runner_workspace / "validator-invocation-diagnostic.json").unlink()
+    else:
+        candidate = next(
+            path
+            for path in sorted(lane_workspace.rglob("*"))
+            if path.is_file() and ".git" not in path.parts
+        )
+        candidate.write_bytes(candidate.read_bytes() + b"\npost-crash substitution\n")
+
+    environment.pop("FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT")
+    refused = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert refused.returncode == 70, refused.stdout + refused.stderr
+    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
+    retained = root / "evidence" / "runner" / "coder"
+    assert not (retained / "runner-failure-receipt.json").exists()
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["runner-workspace-coder"]["status"] == "planned"
+    assert resources["lane-workspace-coder"]["status"] == "active"
 
 
 def test_dispatch_refuses_missing_pr2_configuration_before_model_call(tmp_path: Path) -> None:

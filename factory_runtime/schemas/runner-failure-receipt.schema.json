@@ -199,7 +199,9 @@
         "idle-limit",
         "output-limit",
         "process-escape",
-        "exit-nonzero"
+        "exit-nonzero",
+        "no-artifact",
+        "supervisor-error"
       ]
     }
   }

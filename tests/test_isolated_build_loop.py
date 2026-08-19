@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import digest_obj
+from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.acceptance_obligations import validator_execution_digests
+from factory_runtime.adversarial_review import build_validator_review_subject
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationError,
@@ -17,7 +18,12 @@ from factory_runtime.isolation import (
     MacOSSandbox,
     _interpreter_read_paths,
 )
-from factory_runtime.lanes import IsolatedBuildLoop, LaneError, temporary_build_loop_root
+from factory_runtime.lanes import (
+    IsolatedBuildLoop,
+    LaneError,
+    temporary_build_loop_root,
+)
+from factory_runtime.snapshot import tree_digest
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
 
@@ -121,6 +127,52 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
 ) -> None:
     root = temporary_build_loop_root(tmp_path)
     validator_command = (sys.executable, str(FIXTURES / "validator.py"))
+    acceptance_catalog_path = _acceptance_catalog(tmp_path, validator_command)
+    build_input = json.loads((FIXTURES / "build-input.json").read_text())
+    acceptance_catalog = json.loads(acceptance_catalog_path.read_text())
+    phases = {
+        artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
+    }
+    command_digest, configuration_digest, environment_digest = validator_execution_digests(
+        validator_command
+    )
+
+    def review_subject(_coder, _tester, coder_snapshot, tester_snapshot):
+        return build_validator_review_subject(
+            run_id="fixture-run",
+            generation=1,
+            target_digest=build_input["target_digest"],
+            target_state_digest=acceptance_catalog["target_state_digest"],
+            resolved_commit="fixture-commit",
+            resolved_tree="fixture-tree",
+            reviewer_identity="agent:validator",
+            build_input_digest=digest_obj(build_input),
+            pattern_catalog_digest=digest_obj(
+                json.loads((FIXTURES / "pattern-catalog.json").read_text())
+            ),
+            pattern_catalog_source_digest=digest_bytes(
+                (FIXTURES / "pattern-catalog.json").read_bytes()
+            ),
+            build_plan_digest=digest_obj(
+                json.loads((FIXTURES / "build-plan.json").read_text())
+            ),
+            build_plan_source_digest=digest_bytes(
+                (FIXTURES / "build-plan.json").read_bytes()
+            ),
+            phase_artifact_digests=phases,
+            acceptance_obligation_catalog_digest=digest_obj(acceptance_catalog),
+            acceptance_obligation_catalog_source_digest=digest_bytes(
+                acceptance_catalog_path.read_bytes()
+            ),
+            candidate_digest=tree_digest(coder_snapshot.files_directory / "artifact"),
+            acceptance_tests_digest=tree_digest(tester_snapshot.files_directory / "tests"),
+            coder_output_snapshot_digest=coder_snapshot.digest,
+            tester_output_snapshot_digest=tester_snapshot.digest,
+            command_digest=command_digest,
+            configuration_digest=configuration_digest,
+            environment_digest=environment_digest,
+        )
+
     result = IsolatedBuildLoop(root).execute(
         build_input_path=FIXTURES / "build-input.json",
         build_plan_path=FIXTURES / "build-plan.json",
@@ -128,10 +180,11 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
         coder_command=(sys.executable, str(FIXTURES / "coder.py")),
         tester_command=(sys.executable, str(FIXTURES / "tester.py")),
         validator_command=validator_command,
-        acceptance_catalog_path=_acceptance_catalog(tmp_path, validator_command),
+        acceptance_catalog_path=acceptance_catalog_path,
         coder_trusted_paths=(FIXTURES / "coder.py",),
         tester_trusted_paths=(FIXTURES / "tester.py",),
         validator_trusted_paths=(FIXTURES / "validator.py",),
+        before_validation=review_subject,
     )
 
     assert result.qualification.satisfied is True

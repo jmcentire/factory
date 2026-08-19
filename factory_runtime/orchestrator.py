@@ -10,6 +10,7 @@ from pathlib import Path
 
 from factory_core.correction import CorrectionRecord
 from factory_core.independence import IndependenceRecord
+from factory_core.manifest import digest_bytes
 from factory_core.monitors import Monitor
 from factory_core.provenance import ProvenanceClaim
 from factory_runtime.acceptance_obligations import (
@@ -21,6 +22,13 @@ from factory_runtime.acceptance_obligations import (
     retain_acceptance_obligation_report,
     validator_execution_digests,
     verify_and_retain_acceptance_catalog,
+)
+from factory_runtime.adversarial_review import (
+    VerifiedAdversarialReview,
+    build_validator_review_subject,
+    load_canonical_review_report,
+    retain_validator_adversarial_review,
+    verify_validator_adversarial_review,
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import (
@@ -51,6 +59,7 @@ BUILD_CHECKLIST = (
     "coder-output",
     "tester-output",
     "acceptance-tests",
+    "adversarial-review",
 )
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -70,6 +79,8 @@ class BuildOutcome:
     acceptance_report: Mapping[str, object] | None
     acceptance_report_digest: str
     resume_verification: ResumeVerification
+    adversarial_review: Mapping[str, object] | None = None
+    adversarial_review_digest: str = ""
 
     @property
     def passed(self) -> bool:
@@ -80,6 +91,8 @@ class BuildOutcome:
             and self.evidence_envelope is not None
             and self.acceptance_report is not None
             and bool(self.acceptance_report_digest)
+            and self.adversarial_review is not None
+            and bool(self.adversarial_review_digest)
             and self.projection.state == RunState.PREVIEW
         )
 
@@ -442,6 +455,7 @@ class FactoryOrchestrator:
         tests_digest = ""
         coder_snapshot_digest = ""
         tester_snapshot_digest = ""
+        review_subject: Mapping[str, object] | None = None
         journal: ChecklistJournal | None = None
 
         def enter_validation(
@@ -449,9 +463,9 @@ class FactoryOrchestrator:
             tester: LaneExecution,
             coder_snapshot: FrozenTree,
             tester_snapshot: FrozenTree,
-        ) -> None:
+        ) -> Mapping[str, object]:
             nonlocal candidate_digest, tests_digest, journal
-            nonlocal coder_snapshot_digest, tester_snapshot_digest
+            nonlocal coder_snapshot_digest, tester_snapshot_digest, review_subject
             candidate_digest = digest_artifact_tree(coder_snapshot.files_directory / "artifact")
             tests_digest = digest_artifact_tree(tester_snapshot.files_directory / "tests")
             coder_snapshot_digest = coder_snapshot.digest
@@ -487,7 +501,7 @@ class FactoryOrchestrator:
                     "snapshot_digest": tester_snapshot_digest,
                 },
             )
-            self.workflow.store.transition(
+            validation_projection = self.workflow.store.transition(
                 run_id,
                 RunState.VALIDATING,
                 actor="validator",
@@ -500,6 +514,35 @@ class FactoryOrchestrator:
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
             )
+            review_subject = build_validator_review_subject(
+                run_id=run_id,
+                generation=validation_projection.generation,
+                target_digest=validation_projection.target_digest,
+                target_state_digest=validation_projection.target_state_digest,
+                resolved_commit=str(validation_projection.target_state.get("resolved_commit", "")),
+                resolved_tree=str(validation_projection.target_state.get("resolved_tree", "")),
+                reviewer_identity=verifier_identity,
+                build_input_digest=str(prepared.artifact_digests["build-input"]),
+                pattern_catalog_digest=str(prepared.artifact_digests["pattern-catalog"]),
+                pattern_catalog_source_digest=str(
+                    prepared.artifact_digests["pattern-catalog-source"]
+                ),
+                build_plan_digest=str(prepared.artifact_digests["build-plan"]),
+                build_plan_source_digest=str(prepared.artifact_digests["build-plan-source"]),
+                phase_artifact_digests=validation_projection.phase_artifact_digests,
+                acceptance_obligation_catalog_digest=acceptance_catalog.content_digest,
+                acceptance_obligation_catalog_source_digest=digest_bytes(
+                    retained_acceptance_catalog_path.read_bytes()
+                ),
+                candidate_digest=candidate_digest,
+                acceptance_tests_digest=tests_digest,
+                coder_output_snapshot_digest=coder_snapshot_digest,
+                tester_output_snapshot_digest=tester_snapshot_digest,
+                command_digest=command_digest,
+                configuration_digest=configuration_digest,
+                environment_digest=environment_digest,
+            )
+            return review_subject
 
         try:
             execution = loop.execute(
@@ -597,9 +640,13 @@ class FactoryOrchestrator:
 
         product_acceptance_report: Mapping[str, object] | None = None
         product_acceptance_report_digest = ""
+        verified_review: VerifiedAdversarialReview | None = None
+        review_artifacts: Mapping[str, str] = {}
         try:
-            if execution.tester_snapshot is None:
-                raise OrchestrationError("Tester review snapshot is missing")
+            if execution.coder_snapshot is None or execution.tester_snapshot is None:
+                raise OrchestrationError("immutable author review snapshots are missing")
+            if review_subject is None:
+                raise OrchestrationError("Validator adversarial-review subject is missing")
             validation_projection = self.workflow.store.load(run_id)
             trusted_acceptance_evidence = {
                 "candidate": candidate_digest,
@@ -607,8 +654,11 @@ class FactoryOrchestrator:
                 "coder-output-snapshot": coder_snapshot_digest,
                 "tester-output-snapshot": tester_snapshot_digest,
             }
+            observations_path = (
+                execution.validator.output_directory / "acceptance-obligation-observations.json"
+            )
             observations = _object(
-                execution.validator.output_directory / "acceptance-obligation-observations.json",
+                observations_path,
                 label="Validator acceptance-obligation observations",
             )
             product_acceptance_report = derive_acceptance_obligation_report(
@@ -634,6 +684,74 @@ class FactoryOrchestrator:
                 run_id,
                 product_acceptance_report,
             )
+            review_report = load_canonical_review_report(
+                execution.validator.output_directory / "validator-adversarial-review.json"
+            )
+            verified_review = verify_validator_adversarial_review(
+                review_report,
+                subject=review_subject,
+                reviewer_identity=verifier_identity,
+                acceptance_observations=observations,
+                implementation_root=execution.coder_snapshot.files_directory / "artifact",
+                tests_root=execution.tester_snapshot.files_directory / "tests",
+                build_input_path=prepared.build_input_path,
+                pattern_catalog_path=prepared.pattern_catalog_path,
+                build_plan_path=prepared.build_plan_path,
+                acceptance_catalog_path=retained_acceptance_catalog_path,
+                acceptance_observations_path=observations_path,
+            )
+            review_artifacts = retain_validator_adversarial_review(
+                self.workflow.root,
+                run_id,
+                verified_review,
+            )
+            journal.record(
+                "adversarial-review",
+                passed=verified_review.passed,
+                detail=(
+                    "Validator adversarial review completed with no surviving finding"
+                    if verified_review.passed
+                    else f"Validator adversarial review returned {verified_review.verdict}"
+                ),
+                actor="validator",
+                observations={
+                    **dict(review_artifacts),
+                    "verdict": verified_review.verdict,
+                },
+            )
+            if not verified_review.passed:
+                projection = self.workflow.store.transition(
+                    run_id,
+                    RunState.BLOCKED,
+                    actor="validator",
+                    artifact_digests={
+                        "candidate": candidate_digest,
+                        "acceptance-tests": tests_digest,
+                        REPORT_ARTIFACT_KEY: product_acceptance_report_digest,
+                        **dict(review_artifacts),
+                    },
+                    payload={
+                        "reason": "validator-adversarial-review-failed",
+                        "review_verdict": verified_review.verdict,
+                        "repair_signal": "fail",
+                        "tester_identity": tester_identity,
+                    },
+                    implementer_identity=implementer_identity,
+                    verifier_identity=verifier_identity,
+                )
+                return BuildOutcome(
+                    candidate_digest=candidate_digest,
+                    tests_digest=tests_digest,
+                    execution=execution,
+                    projection=projection,
+                    evidence_report=None,
+                    evidence_envelope=None,
+                    acceptance_report=product_acceptance_report,
+                    acceptance_report_digest=product_acceptance_report_digest,
+                    resume_verification=resume,
+                    adversarial_review=verified_review.report,
+                    adversarial_review_digest=verified_review.report_digest,
+                )
             claims = _claims(
                 execution.tester_snapshot.files_directory / "evidence" / "assertions.json"
             )
@@ -662,6 +780,7 @@ class FactoryOrchestrator:
                     artifact_digests={
                         "candidate": candidate_digest,
                         "acceptance-tests": tests_digest,
+                        **dict(review_artifacts),
                     },
                     payload={
                         "reason": "mechanical-evidence-gate-failed",
@@ -685,6 +804,8 @@ class FactoryOrchestrator:
                     acceptance_report=product_acceptance_report,
                     acceptance_report_digest=product_acceptance_report_digest,
                     resume_verification=resume,
+                    adversarial_review=verified_review.report,
+                    adversarial_review_digest=verified_review.report_digest,
                 )
 
             bundle_path = attempt_root / "evidence-bundle.tessera.json"
@@ -710,6 +831,7 @@ class FactoryOrchestrator:
                     "candidate": candidate_digest,
                     "acceptance-tests": tests_digest,
                     REPORT_ARTIFACT_KEY: product_acceptance_report_digest,
+                    **dict(review_artifacts),
                     "evidence-bundle": envelope.payload_digest,
                     "evidence-envelope": envelope.envelope_digest,
                 },
@@ -747,4 +869,8 @@ class FactoryOrchestrator:
             acceptance_report=product_acceptance_report,
             acceptance_report_digest=product_acceptance_report_digest,
             resume_verification=resume,
+            adversarial_review=(verified_review.report if verified_review is not None else None),
+            adversarial_review_digest=(
+                verified_review.report_digest if verified_review is not None else ""
+            ),
         )

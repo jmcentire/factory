@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 import factory_runtime.runner as runtime_runner
+import factory_runtime.runner_failure as runtime_runner_failure
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.instruction_control import (
     canonical_document_bytes,
@@ -698,6 +699,79 @@ def test_attempt_observer_distinguishes_prelaunch_refusal_from_started_process(
     assert observations == expected_observations
 
 
+@pytest.mark.parametrize("fail_at", [0, 1])
+def test_counted_backend_exception_writes_typed_failure_receipt(
+    tmp_path: Path,
+    fail_at: int,
+) -> None:
+    backend = RefusingBackend(fail_at=fail_at, reported_attempts=1)
+    fixture = _fixture(tmp_path, backend=backend)
+
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    invocation = fail_at + 1
+    receipt = raised.value.failure_receipt
+    diagnostic = json.loads(raised.value.diagnostic_path.read_text(encoding="utf-8"))
+    assert raised.value.model_attempts == invocation
+    assert receipt["invocation"] == invocation
+    assert receipt["model_attempts"] == invocation
+    assert receipt["termination_reason"] == "supervisor-error"
+    assert len(receipt["prompt_sequence"]) == invocation
+    assert diagnostic["termination_reason"] == "supervisor-error"
+    assert "CAPTURE INCOMPLETE" in diagnostic["stderr"]
+    for index in range(1, invocation + 1):
+        prompt = fixture[5] / "input" / f"prompt-{index}.json"
+        assert receipt["prompt_sequence"][index - 1]["content_digest"] == digest_bytes(
+            prompt.read_bytes()
+        )
+
+
+def test_no_artifact_result_writes_typed_failure_receipt(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].termination_reasons[0] = "no-artifact"
+
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    assert raised.value.failure_receipt["termination_reason"] == "no-artifact"
+    diagnostic = json.loads(raised.value.diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["termination_reason"] == "no-artifact"
+
+
+def test_counted_supervisor_exception_retains_available_partial_capture(
+    tmp_path: Path,
+) -> None:
+    class PartialCaptureBackend(FakeBackend):
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            raise RunnerError(
+                "injected supervisor failure",
+                model_attempts=1,
+                invocation_result=RunnerProcessResult(
+                    command=("fixture-runner",),
+                    returncode=-1,
+                    stdout="captured stdout before supervisor failure",
+                    stderr="[CAPTURE INCOMPLETE: injected failure]\ncaptured stderr",
+                    structured_output={},
+                    session_id="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    process_peak=2,
+                    termination_reason="supervisor-error",
+                ),
+            )
+
+    fixture = _fixture(tmp_path, backend=PartialCaptureBackend())
+
+    with pytest.raises(RunnerInvocationError) as raised:
+        _dispatch(fixture)
+
+    diagnostic = json.loads(raised.value.diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["stdout"] == "captured stdout before supervisor failure"
+    assert diagnostic["stderr"].startswith("[CAPTURE INCOMPLETE: injected failure]")
+    assert diagnostic["process_peak"] == 2
+
+
 def test_failed_invocation_writes_redacted_private_diagnostics_and_safe_capsule(
     tmp_path: Path,
 ) -> None:
@@ -957,6 +1031,123 @@ def test_failure_boundary_refuses_changed_executable_snapshot(tmp_path: Path) ->
 
     with pytest.raises(RunnerFailureEvidenceError, match="primary executable digest"):
         verify_and_retain_runner_failure(**arguments)
+
+
+def test_failure_boundary_refuses_noncanonical_state_capsule_bytes(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture[1].returncodes[0] = 1
+    with pytest.raises(RunnerInvocationError):
+        _dispatch(fixture)
+    capsule_path = fixture[5] / "input" / "state-capsule.json"
+    capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+    capsule_path.write_text(json.dumps(capsule, indent=2) + "\n", encoding="utf-8")
+    arguments = _failure_boundary_arguments(
+        tmp_path,
+        fixture,
+        evidence_name="capsule-whitespace-evidence",
+    )
+
+    with pytest.raises(RunnerFailureEvidenceError, match="not canonical JSON bytes"):
+        verify_and_retain_runner_failure(**arguments)
+
+
+def test_identical_existing_byte_evidence_rejects_pathname_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = tmp_path / "run"
+    evidence_root = run_root / "evidence"
+    evidence_root.mkdir(parents=True)
+    destination = evidence_root / "failed-prompt-1.json"
+    content = b"exact retained prompt"
+    destination.write_bytes(content)
+    real_lstat = runtime_runner_failure.os.lstat
+    swapped = False
+
+    def swap_before_identity_check(path: str | Path) -> os.stat_result:
+        nonlocal swapped
+        candidate = Path(path)
+        if candidate == destination and not swapped:
+            replacement = evidence_root / "replacement"
+            replacement.write_bytes(b"mutated prompt")
+            replacement.replace(destination)
+            swapped = True
+        return real_lstat(path)
+
+    monkeypatch.setattr(runtime_runner_failure.os, "lstat", swap_before_identity_check)
+
+    with pytest.raises(RunnerFailureEvidenceError, match="changed while being retained"):
+        runtime_runner_failure._retain_once(
+            destination,
+            content,
+            run_root=run_root,
+        )
+
+
+def test_identical_existing_executable_evidence_rejects_pathname_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = tmp_path / "run"
+    evidence_root = run_root / "evidence"
+    evidence_root.mkdir(parents=True)
+    source = tmp_path / "runner-source"
+    source.write_bytes(b"exact runner executable")
+    destination = evidence_root / "runner-executable"
+    destination.write_bytes(source.read_bytes())
+    real_lstat = runtime_runner_failure.os.lstat
+    swapped = False
+
+    def swap_before_identity_check(path: str | Path) -> os.stat_result:
+        nonlocal swapped
+        candidate = Path(path)
+        if candidate == destination and not swapped:
+            replacement = evidence_root / "replacement-executable"
+            replacement.write_bytes(b"mutated executable")
+            replacement.replace(destination)
+            swapped = True
+        return real_lstat(path)
+
+    monkeypatch.setattr(runtime_runner_failure.os, "lstat", swap_before_identity_check)
+
+    with pytest.raises(RunnerFailureEvidenceError, match="changed while being verified"):
+        runtime_runner_failure._retain_existing_file(
+            destination,
+            source,
+            expected_digest=digest_bytes(source.read_bytes()),
+            expected_byte_count=len(source.read_bytes()),
+            run_root=run_root,
+        )
+
+
+def test_identical_existing_failure_evidence_is_idempotent_and_exact(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    evidence_root = run_root / "evidence"
+    evidence_root.mkdir(parents=True)
+    prompt_destination = evidence_root / "failed-prompt-1.json"
+    prompt = b"exact retained prompt"
+    executable_source = tmp_path / "runner-source"
+    executable_source.write_bytes(b"exact runner executable")
+    executable_destination = evidence_root / "runner-executable"
+
+    for _ in range(2):
+        runtime_runner_failure._retain_once(
+            prompt_destination,
+            prompt,
+            run_root=run_root,
+        )
+        runtime_runner_failure._retain_existing_file(
+            executable_destination,
+            executable_source,
+            expected_digest=digest_bytes(executable_source.read_bytes()),
+            expected_byte_count=len(executable_source.read_bytes()),
+            run_root=run_root,
+        )
+
+    assert prompt_destination.read_bytes() == prompt
+    assert executable_destination.read_bytes() == executable_source.read_bytes()
 
 
 def test_failure_boundary_refuses_workspace_outside_admitted_root(tmp_path: Path) -> None:

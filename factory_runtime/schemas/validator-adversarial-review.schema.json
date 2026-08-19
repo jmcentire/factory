@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/validator-adversarial-review/1",
+  "title": "Factory Validator adversarial code-review report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority",
+    "subject_digest",
+    "reviewer_identity",
+    "acceptance_observations_digest",
+    "dimensions",
+    "findings",
+    "completeness",
+    "verdict"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-validator-adversarial-review/1"},
+    "authority": {"const": "review-evidence-only"},
+    "subject_digest": {"$ref": "#/$defs/digest"},
+    "reviewer_identity": {"type": "string", "minLength": 1},
+    "acceptance_observations_digest": {"$ref": "#/$defs/digest"},
+    "dimensions": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension_id", "state", "summary", "evidence"],
+        "properties": {
+          "dimension_id": {"$ref": "#/$defs/dimension"},
+          "state": {"$ref": "#/$defs/state"},
+          "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "evidence": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {"$ref": "#/$defs/evidence"}
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "dimension_id",
+          "severity",
+          "statement",
+          "consequence",
+          "evidence",
+          "refutation"
+        ],
+        "properties": {
+          "finding_id": {"$ref": "#/$defs/digest"},
+          "dimension_id": {"$ref": "#/$defs/dimension"},
+          "severity": {"enum": ["blocking", "should-fix", "minor"]},
+          "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "consequence": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {"$ref": "#/$defs/evidence"}
+          },
+          "refutation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "summary"],
+            "properties": {
+              "state": {"enum": ["SURVIVES", "REFUTED", "DISPUTED"]},
+              "summary": {"type": "string", "minLength": 1, "maxLength": 4000}
+            }
+          }
+        }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "summary", "checks", "evidence"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "checks": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["check_id", "state", "summary", "evidence"],
+            "properties": {
+              "check_id": {"$ref": "#/$defs/completeness_check"},
+              "state": {"$ref": "#/$defs/state"},
+              "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "evidence": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {"$ref": "#/$defs/evidence"}
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "CLEAN_QUALIFIED",
+        "BLOCK",
+        "CHANGES_REQUESTED",
+        "INCOMPLETE",
+        "STALE",
+        "DISPUTED"
+      ]
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "dimension": {
+      "enum": [
+        "intent-conformance",
+        "architecture",
+        "redundancy",
+        "clarity",
+        "separation-of-concerns",
+        "test-adequacy",
+        "correctness-and-failure",
+        "scope-control"
+      ]
+    },
+    "state": {
+      "enum": ["COMPLETED", "CAPABILITY_FAILED", "TIMEOUT", "PARSE_FAILED", "SKIPPED", "STALE"]
+    },
+    "completeness_check": {
+      "enum": [
+        "dimension-coverage",
+        "subject-binding",
+        "test-evidence",
+        "failure-mode-coverage",
+        "change-reach",
+        "provider-completion",
+        "finding-refutation"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "path", "start_line", "end_line", "excerpt_digest"],
+      "properties": {
+        "source": {
+          "enum": [
+            "implementation",
+            "acceptance-tests",
+            "build-input",
+            "pattern-catalog",
+            "build-plan",
+            "acceptance-obligation-catalog",
+            "acceptance-observations"
+          ]
+        },
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "excerpt_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

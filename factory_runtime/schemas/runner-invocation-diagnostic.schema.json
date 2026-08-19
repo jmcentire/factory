@@ -24,7 +24,9 @@
         "idle-limit",
         "output-limit",
         "process-escape",
-        "exit-nonzero"
+        "exit-nonzero",
+        "no-artifact",
+        "supervisor-error"
       ]
     },
     "process_peak": {"type": "integer", "minimum": 0},

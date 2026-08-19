@@ -7,6 +7,14 @@ public API is still pre-1.0.
 
 ### Added
 
+- A mandatory immutable Validator adversarial-review gate before preview. A closed subject binds
+  the exact ratified intent/architecture/operations, build input, build plan, pattern catalog,
+  acceptance obligations, frozen implementation/tests and snapshots, target state, and Validator
+  execution contract. The closed report requires eight code-owned engineering lenses, exact cited
+  bytes, content-addressed findings and refutations, typed clean-claim checks, and a host-derived
+  verdict. Review remains evidence-only and grants no merge, release, deploy, or promotion
+  authority.
+
 - A closed effective-directive contract derived from externally checkpoint-bound directive and
   provisional sources, with a canonical run/generation/role scope grammar, same-scope
   qualifier-preserving supersession, future-time refusal, applicable live-candidate blocking,
@@ -47,6 +55,9 @@ public API is still pre-1.0.
   closed durable producer receipt for every pending event before the gate can clear.
 - Exact caller dispatch bytes and instruction artifacts recover idempotently after a crash between
   publications. Existing bytes are stable-read, re-derived, and reused; different bytes refuse.
+- A lane crash after a complete runner-failure receipt no longer wedges exact retry. Dispatch
+  adopts only the fully re-derived orphan failure state, retains all failure evidence without a
+  second model call, and rejects partial, mutated, unbudgeted, or wrongly scoped workspaces.
 - Runner prompt/3 executions emit `factory-runner-receipt/3`. The original receipt/2 schema remains
   immutable for historical validation and is explicitly non-executable after this cutover.
 - Runner evidence publication fsyncs the containing directory, and a diagnostic-retention failure
@@ -56,6 +67,10 @@ public API is still pre-1.0.
   re-derives and retains the exact failure receipt, private diagnostic, state capsule, canonical
   qualification, complete presented-prompt sequence, and primary/child executable snapshots,
   records their digests, retains the workspace, and executes no broker operation.
+- Counted post-launch runner failures, including missing output artifacts and supervisor errors,
+  now retain typed diagnostics and receipts. Existing failure evidence is compared and fsynced
+  through one stable descriptor, and state capsules require exact canonical bytes rather than only
+  parsed-object equality.
 
 ### Explicit boundaries
 

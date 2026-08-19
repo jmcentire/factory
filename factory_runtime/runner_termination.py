@@ -9,6 +9,8 @@ IDLE_LIMIT = "idle-limit"
 OUTPUT_LIMIT = "output-limit"
 PROCESS_ESCAPE = "process-escape"
 EXIT_NONZERO = "exit-nonzero"
+NO_ARTIFACT = "no-artifact"
+SUPERVISOR_ERROR = "supervisor-error"
 
 RUNNER_TERMINATION_REASONS = frozenset(
     {
@@ -19,5 +21,7 @@ RUNNER_TERMINATION_REASONS = frozenset(
         OUTPUT_LIMIT,
         PROCESS_ESCAPE,
         EXIT_NONZERO,
+        NO_ARTIFACT,
+        SUPERVISOR_ERROR,
     }
 )

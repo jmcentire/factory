@@ -17,6 +17,23 @@ def _digest_obj(value: object) -> str:
     return _digest(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
+def _canonical(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _evidence(source: str, path: str, file_path: Path) -> dict[str, object]:
+    lines = file_path.read_bytes().splitlines(keepends=True)
+    if not lines:
+        raise SystemExit(f"review evidence is empty: {file_path}")
+    return {
+        "source": source,
+        "path": path,
+        "start_line": 1,
+        "end_line": len(lines),
+        "excerpt_digest": _digest(b"".join(lines)),
+    }
+
+
 input_path = Path(os.environ["FACTORY_BUILD_INPUT_PATH"])
 input_bytes = input_path.read_bytes()
 if _digest(input_bytes) != os.environ["FACTORY_BUILD_INPUT_DIGEST"]:
@@ -55,6 +72,13 @@ if any(trigger[key] != value for key, value in execution_digests.items()):
 
 implementation = Path(os.environ["FACTORY_IMPLEMENTATION_DIR"])
 tests = Path(os.environ["FACTORY_TEST_DIR"])
+review_subject_path = Path(os.environ["FACTORY_VALIDATOR_REVIEW_SUBJECT_PATH"])
+review_subject_bytes = review_subject_path.read_bytes()
+if _digest(review_subject_bytes) != os.environ[
+    "FACTORY_VALIDATOR_REVIEW_SUBJECT_SOURCE_DIGEST"
+]:
+    raise SystemExit("Validator received a stale adversarial-review subject")
+review_subject = json.loads(review_subject_bytes)
 assertions = json.loads((tests / "evidence" / "assertions.json").read_text(encoding="utf-8"))
 product = next(
     artifact
@@ -140,22 +164,87 @@ for obligation in trigger["obligations"]:
             "effect_digest": _digest_obj(effect_body),
         }
     )
-(output / "acceptance-obligation-observations.json").write_text(
-    json.dumps(
-        {
-            "schema_version": "factory-acceptance-obligation-observations/1",
-            "run_id": acceptance_catalog["run_id"],
-            "generation": acceptance_catalog["generation"],
-            "catalog_digest": os.environ["FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_DIGEST"],
-            "trigger_id": trigger["trigger_id"],
-            "candidate_digest": trusted_evidence["candidate"],
-            "acceptance_tests_digest": trusted_evidence["acceptance-tests"],
-            **execution_digests,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "results": results,
-        },
-        sort_keys=True,
-    ),
-    encoding="utf-8",
+observations = {
+    "schema_version": "factory-acceptance-obligation-observations/1",
+    "run_id": acceptance_catalog["run_id"],
+    "generation": acceptance_catalog["generation"],
+    "catalog_digest": os.environ["FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_DIGEST"],
+    "trigger_id": trigger["trigger_id"],
+    "candidate_digest": trusted_evidence["candidate"],
+    "acceptance_tests_digest": trusted_evidence["acceptance-tests"],
+    **execution_digests,
+    "started_at": started_at,
+    "finished_at": finished_at,
+    "results": results,
+}
+observations_path = output / "acceptance-obligation-observations.json"
+observations_path.write_bytes(_canonical(observations))
+
+implementation_ref = _evidence(
+    "implementation", "calculator.py", implementation / "artifact" / "calculator.py"
 )
+tests_ref = _evidence(
+    "acceptance-tests", "acceptance_test.py", tests / "tests" / "acceptance_test.py"
+)
+build_input_ref = _evidence("build-input", "build-input.json", input_path)
+pattern_catalog_ref = _evidence(
+    "pattern-catalog",
+    "pattern-catalog.json",
+    Path(os.environ["FACTORY_PATTERN_CATALOG_PATH"]),
+)
+build_plan_ref = _evidence(
+    "build-plan", "build-plan.json", Path(os.environ["FACTORY_BUILD_PLAN_PATH"])
+)
+acceptance_catalog_ref = _evidence(
+    "acceptance-obligation-catalog",
+    "acceptance-obligation-catalog.json",
+    Path(os.environ["FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_PATH"]),
+)
+observations_ref = _evidence(
+    "acceptance-observations",
+    "acceptance-obligation-observations.json",
+    observations_path,
+)
+dimension_evidence = {
+    "intent-conformance": [build_input_ref, build_plan_ref, implementation_ref],
+    "architecture": [build_input_ref, pattern_catalog_ref, implementation_ref],
+    "redundancy": [implementation_ref],
+    "clarity": [implementation_ref],
+    "separation-of-concerns": [implementation_ref, tests_ref],
+    "test-adequacy": [tests_ref, observations_ref],
+    "correctness-and-failure": [implementation_ref, tests_ref, observations_ref],
+    "scope-control": [build_input_ref, acceptance_catalog_ref, implementation_ref],
+}
+review = {
+    "schema_version": "factory-validator-adversarial-review/1",
+    "authority": "review-evidence-only",
+    "subject_digest": _digest_obj(review_subject),
+    "reviewer_identity": review_subject["reviewer_identity"],
+    "acceptance_observations_digest": _digest_obj(observations),
+    "dimensions": [
+        {
+            "dimension_id": dimension_id,
+            "state": "COMPLETED",
+            "summary": f"Synthetic review completed for {dimension_id}.",
+            "evidence": dimension_evidence[dimension_id],
+        }
+        for dimension_id in review_subject["protocol"]["required_dimensions"]
+    ],
+    "findings": [],
+    "completeness": {
+        "state": "COMPLETED",
+        "summary": "The synthetic clean claim was challenged against every bound input.",
+        "checks": [
+            {
+                "check_id": check_id,
+                "state": "COMPLETED",
+                "summary": f"Synthetic clean-claim check completed for {check_id}.",
+                "evidence": [build_input_ref, observations_ref],
+            }
+            for check_id in review_subject["protocol"]["required_completeness_checks"]
+        ],
+        "evidence": [build_input_ref, implementation_ref, tests_ref, observations_ref],
+    },
+    "verdict": "CLEAN_QUALIFIED",
+}
+(output / "validator-adversarial-review.json").write_bytes(_canonical(review))

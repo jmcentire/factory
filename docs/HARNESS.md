@@ -299,6 +299,18 @@ Testing/Monitoring item. Any change to the
 run, target, catalog, build input, or phase artifacts invalidates it. Coder and Validator receive
 this IR; Tester receives only the common ratified build input.
 
+Validation now includes a mandatory adversarial code review over the same immutable evidence, not
+an optional instruction to "look carefully." Before the Validator runs, the host issues a closed
+review subject binding the frozen implementation/tests and snapshots, all three ratified phase
+artifacts, build input, plan, pattern catalog, acceptance obligations, target state, and Validator
+execution contract. The Validator's canonical report must cover intent, architecture, redundancy,
+clarity, separation of concerns, test adequacy, correctness/failure, and scope; cite exact retained
+line bytes; content-address findings before refutation; and complete every host-declared clean-claim
+check. The host re-derives the subject, cited evidence, completeness, finding identities, and
+verdict. Anything stale, incomplete, disputed, blocking, or still surviving stops
+`VALIDATING -> PREVIEW`. `CLEAN_QUALIFIED` is evidence only and cannot authorize merge, release,
+deployment, or promotion.
+
 The result is judged by agreed behavior and evidence, not generated-code aesthetics. `regenerate`
 keeps a complete rewrite ordinary; `brownfield` supports a deliberately scoped correction. The
 target ABI and plan both bound authoring attempts, and the ledger will not raise the ceiling after

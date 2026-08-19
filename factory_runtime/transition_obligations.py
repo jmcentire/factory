@@ -115,6 +115,12 @@ _DESTINATION_OBLIGATIONS: Mapping[str, tuple[tuple[str, str, str], ...]] = {
     ),
     "preview": (
         (
+            "validator-adversarial-review",
+            "validator-adversarial-review-membership-check",
+            "Preview requires a complete immutable-subject code review over intent, tests, and "
+            "the code-owned architecture and quality dimensions.",
+        ),
+        (
             "validator-evidence",
             "validator-evidence-membership-check",
             "Preview requires the exact candidate, tests, evidence bundle, and Validator envelope.",
@@ -285,6 +291,8 @@ def require_transition_inputs(
             "candidate",
             "acceptance-tests",
             "acceptance-obligation-report",
+            "validator-review-subject",
+            "validator-adversarial-review",
             "evidence-bundle",
             "evidence-envelope",
         )
@@ -458,6 +466,11 @@ def _verify_obligation(
                 "evidence-bundle",
                 "evidence-envelope",
             ),
+        )
+    elif verifier_id == "validator-adversarial-review-membership-check":
+        passed = _require_digests(
+            supplied,
+            ("validator-review-subject", "validator-adversarial-review"),
         )
     elif verifier_id == "human-identity-candidate-binding-check":
         passed = (

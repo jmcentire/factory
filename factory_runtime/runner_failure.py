@@ -62,7 +62,12 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, i
     )
 
 
-def _digest_regular_file(path: Path, *, label: str) -> tuple[str, int]:
+def _digest_regular_file(
+    path: Path,
+    *,
+    label: str,
+    sync: bool = False,
+) -> tuple[str, int]:
     descriptor = -1
     try:
         descriptor = os.open(
@@ -85,6 +90,8 @@ def _digest_regular_file(path: Path, *, label: str) -> tuple[str, int]:
                 break
             hasher.update(chunk)
             byte_count += len(chunk)
+        if sync:
+            os.fsync(descriptor)
         after = os.fstat(descriptor)
         installed = os.lstat(path)
         if (
@@ -95,6 +102,53 @@ def _digest_regular_file(path: Path, *, label: str) -> tuple[str, int]:
         ):
             raise RunnerFailureEvidenceError(f"{label} changed while being verified")
         return "sha256:" + hasher.hexdigest(), byte_count
+    except OSError as exc:
+        raise RunnerFailureEvidenceError(f"{label} is unavailable: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _require_exact_regular_bytes_and_fsync(
+    path: Path,
+    content: bytes,
+    *,
+    label: str,
+) -> None:
+    """Compare and sync one installed inode without reopening its pathname."""
+
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RunnerFailureEvidenceError(f"{label} is not regular")
+        raw = bytearray()
+        maximum = len(content)
+        while len(raw) <= maximum:
+            chunk = os.read(descriptor, min(1024 * 1024, maximum + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        installed = os.lstat(path)
+        if (
+            _file_identity(before) != _file_identity(after)
+            or (installed.st_dev, installed.st_ino) != (before.st_dev, before.st_ino)
+            or stat.S_ISLNK(installed.st_mode)
+        ):
+            raise RunnerFailureEvidenceError(f"{label} changed while being retained")
+        if bytes(raw) != content or before.st_size != len(content):
+            raise RunnerFailureEvidenceError(
+                f"{label} differs from the verified invocation"
+            )
     except OSError as exc:
         raise RunnerFailureEvidenceError(f"{label} is unavailable: {exc}") from exc
     finally:
@@ -180,6 +234,7 @@ def _retain_existing_file(
         actual_digest, actual_byte_count = _digest_regular_file(
             destination,
             label=f"retained {destination.name}",
+            sync=True,
         )
         _require_equal(
             actual_digest,
@@ -191,16 +246,6 @@ def _retain_existing_file(
             expected_byte_count,
             label=f"retained {destination.name} byte count",
         )
-        destination_fd = os.open(
-            destination,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
-        )
-        try:
-            os.fsync(destination_fd)
-        finally:
-            os.close(destination_fd)
         fsync_directory_chain(destination.parent, through=run_root)
     except OSError as exc:
         raise RunnerFailureEvidenceError(
@@ -248,25 +293,12 @@ def _retain_once(destination: Path, content: bytes, *, run_root: Path) -> None:
             os.link(pending, destination, follow_symlinks=False)
             published = True
         except FileExistsError:
-            existing = _read(destination, label=f"retained {destination.name}")
-            if existing != content:
-                raise RunnerFailureEvidenceError(
-                    f"retained {destination.name} differs from the verified invocation"
-                ) from None
-            existing_fd = os.open(
-                destination,
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0),
-            )
-            try:
-                if not stat.S_ISREG(os.fstat(existing_fd).st_mode):
-                    raise RunnerFailureEvidenceError(
-                        f"retained {destination.name} is not regular"
-                    )
-                os.fsync(existing_fd)
-            finally:
-                os.close(existing_fd)
+            pass
+        _require_exact_regular_bytes_and_fsync(
+            destination,
+            content,
+            label=f"retained {destination.name}",
+        )
         fsync_directory_chain(destination.parent, through=run_root)
     finally:
         if descriptor >= 0:
@@ -351,6 +383,14 @@ def verify_and_retain_runner_failure(
     manifest_document = _object(manifest_raw, label="runner manifest")
     validate_document("runner-failure-receipt", receipt)
     validate_document("runner-invocation-diagnostic", diagnostic)
+    canonical_state_capsule = (
+        json.dumps(state_capsule, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    if state_capsule_raw != canonical_state_capsule:
+        raise RunnerFailureEvidenceError(
+            "runner state capsule is not canonical JSON bytes"
+        )
     verify_state_capsule(
         state_capsule,
         expected_purpose="lane-dispatch",

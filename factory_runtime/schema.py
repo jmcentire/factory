@@ -53,6 +53,8 @@ SCHEMA_NAMES = frozenset(
         "test-change-authorization",
         "transition-obligation-report",
         "transition-obligation-set",
+        "validator-adversarial-review",
+        "validator-review-subject",
     }
 )
 

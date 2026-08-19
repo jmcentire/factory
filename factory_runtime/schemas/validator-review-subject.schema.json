@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/validator-review-subject/1",
+  "title": "Factory Validator adversarial-review subject",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "run_id",
+    "generation",
+    "target_digest",
+    "target_state_digest",
+    "resolved_commit",
+    "resolved_tree",
+    "reviewer_identity",
+    "artifacts",
+    "validator_execution"
+  ],
+  "properties": {
+    "schema_version": {"const": "factory-validator-review-subject/1"},
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_id",
+        "protocol_digest",
+        "report_schema_version",
+        "required_dimensions",
+        "required_completeness_checks"
+      ],
+      "properties": {
+        "protocol_id": {"const": "factory-validator-adversarial-review/1"},
+        "protocol_digest": {"$ref": "#/$defs/digest"},
+        "report_schema_version": {"const": "factory-validator-adversarial-review/1"},
+        "required_dimensions": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/dimension"}
+        },
+        "required_completeness_checks": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/completeness_check"}
+        }
+      }
+    },
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "generation": {"type": "integer", "minimum": 1},
+    "target_digest": {"$ref": "#/$defs/digest"},
+    "target_state_digest": {"$ref": "#/$defs/digest"},
+    "resolved_commit": {"type": "string", "minLength": 1},
+    "resolved_tree": {"type": "string", "minLength": 1},
+    "reviewer_identity": {"type": "string", "minLength": 1},
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build-input",
+        "pattern-catalog",
+        "pattern-catalog-source",
+        "build-plan",
+        "build-plan-source",
+        "product-specification",
+        "architecture",
+        "operational-maturity",
+        "acceptance-obligation-catalog",
+        "acceptance-obligation-catalog-source",
+        "candidate",
+        "acceptance-tests",
+        "coder-output-snapshot",
+        "tester-output-snapshot"
+      ],
+      "properties": {
+        "build-input": {"$ref": "#/$defs/digest"},
+        "pattern-catalog": {"$ref": "#/$defs/digest"},
+        "pattern-catalog-source": {"$ref": "#/$defs/digest"},
+        "build-plan": {"$ref": "#/$defs/digest"},
+        "build-plan-source": {"$ref": "#/$defs/digest"},
+        "product-specification": {"$ref": "#/$defs/digest"},
+        "architecture": {"$ref": "#/$defs/digest"},
+        "operational-maturity": {"$ref": "#/$defs/digest"},
+        "acceptance-obligation-catalog": {"$ref": "#/$defs/digest"},
+        "acceptance-obligation-catalog-source": {"$ref": "#/$defs/digest"},
+        "candidate": {"$ref": "#/$defs/digest"},
+        "acceptance-tests": {"$ref": "#/$defs/digest"},
+        "coder-output-snapshot": {"$ref": "#/$defs/digest"},
+        "tester-output-snapshot": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "validator_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_digest", "configuration_digest", "environment_digest"],
+      "properties": {
+        "command_digest": {"$ref": "#/$defs/digest"},
+        "configuration_digest": {"$ref": "#/$defs/digest"},
+        "environment_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "dimension": {
+      "enum": [
+        "intent-conformance",
+        "architecture",
+        "redundancy",
+        "clarity",
+        "separation-of-concerns",
+        "test-adequacy",
+        "correctness-and-failure",
+        "scope-control"
+      ]
+    },
+    "completeness_check": {
+      "enum": [
+        "dimension-coverage",
+        "subject-binding",
+        "test-evidence",
+        "failure-mode-coverage",
+        "change-reach",
+        "provider-completion",
+        "finding-refutation"
+      ]
+    }
+  }
+}

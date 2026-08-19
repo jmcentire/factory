@@ -26,7 +26,7 @@ from factory_core.provenance import PhaseArtifact
 from factory_runtime.durability import fsync_directory
 from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
 from factory_runtime.instruction_control import validate_directive_readback
-from factory_runtime.runner_termination import COMPLETED
+from factory_runtime.runner_termination import COMPLETED, SUPERVISOR_ERROR
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state_admission import (
     StateAdmissionError,
@@ -52,6 +52,7 @@ class RunnerError(ValueError):
         model_attempts: int = 0,
         refusal_code: str = "PRE_MODEL_REFUSAL",
         dependency_id: str = "",
+        invocation_result: RunnerProcessResult | None = None,
     ) -> None:
         super().__init__(message)
         if model_attempts < 0:
@@ -59,6 +60,7 @@ class RunnerError(ValueError):
         self.model_attempts = model_attempts
         self.refusal_code = refusal_code
         self.dependency_id = dependency_id
+        self.invocation_result = invocation_result
 
     def after_attempt(self, attempt: int) -> RunnerError:
         """Return the same refusal classified with its real model-call count."""
@@ -68,6 +70,7 @@ class RunnerError(ValueError):
             model_attempts=max(self.model_attempts, attempt),
             refusal_code=self.refusal_code,
             dependency_id=self.dependency_id,
+            invocation_result=self.invocation_result,
         )
 
 
@@ -884,14 +887,109 @@ class HardenedModelRunner:
                     limits=attempt_limits,
                 )
             except RunnerError as exc:
-                attempts = (index - 1) + min(exc.model_attempts, 1)
+                current_attempts = min(exc.model_attempts, 1)
+                attempts = (index - 1) + current_attempts
                 if attempt_observer is not None and attempts:
                     attempt_observer(attempts)
+                if current_attempts:
+                    result = exc.invocation_result or RunnerProcessResult(
+                        command=tuple(map(str, command)),
+                        returncode=-1,
+                        stdout="",
+                        stderr=(
+                            "[CAPTURE INCOMPLETE: runner backend failed after the model "
+                            "attempt began]"
+                        ),
+                        structured_output={},
+                        session_id="",
+                        input_tokens=0,
+                        output_tokens=0,
+                        process_peak=1,
+                        termination_reason=SUPERVISOR_ERROR,
+                    )
+                    raise self._invocation_error(
+                        workspace=workspace,
+                        run_id=run_id,
+                        generation=generation,
+                        receipt_id=receipt_id,
+                        invocation=index,
+                        result=result,
+                        secret_values=tuple(secrets.values()),
+                        message=str(exc),
+                        model_attempts=attempts,
+                        manifest=manifest,
+                        manifest_bytes=manifest_bytes,
+                        projection_digest=projection_digest,
+                        task_digest=task_digest,
+                        state_capsule_digest=state_capsule_digest,
+                        target_state_digest=target_state_digest,
+                        run_ledger_head=run_ledger_head,
+                        resume_checkpoint_digest=resume_checkpoint_digest,
+                        broker_registry_source_digest=broker_registry_source_digest,
+                        qualification=qualification,
+                        continuity_nonce_digest=digest_obj(
+                            {"continuity_nonce": continuity_nonce}
+                        ),
+                        prompt_sequence=prompt_sequence[:index],
+                        executable_snapshot=executable_snapshot.evidence(
+                            workspace=workspace
+                        ),
+                        child_executable_snapshots=[
+                            item.evidence(workspace=workspace)
+                            for item in child_executable_snapshots
+                        ],
+                        failed_at=self._clock(),
+                    ) from exc
                 raise RunnerError(str(exc), model_attempts=attempts) from exc
             except (OSError, ValueError) as exc:
                 if attempt_observer is not None:
                     attempt_observer(index)
-                raise RunnerError(str(exc), model_attempts=index) from exc
+                result = RunnerProcessResult(
+                    command=tuple(map(str, command)),
+                    returncode=-1,
+                    stdout="",
+                    stderr=(
+                        "[CAPTURE INCOMPLETE: runner backend raised after invocation "
+                        "admission]"
+                    ),
+                    structured_output={},
+                    session_id="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    process_peak=1,
+                    termination_reason=SUPERVISOR_ERROR,
+                )
+                raise self._invocation_error(
+                    workspace=workspace,
+                    run_id=run_id,
+                    generation=generation,
+                    receipt_id=receipt_id,
+                    invocation=index,
+                    result=result,
+                    secret_values=tuple(secrets.values()),
+                    message=str(exc),
+                    model_attempts=index,
+                    manifest=manifest,
+                    manifest_bytes=manifest_bytes,
+                    projection_digest=projection_digest,
+                    task_digest=task_digest,
+                    state_capsule_digest=state_capsule_digest,
+                    target_state_digest=target_state_digest,
+                    run_ledger_head=run_ledger_head,
+                    resume_checkpoint_digest=resume_checkpoint_digest,
+                    broker_registry_source_digest=broker_registry_source_digest,
+                    qualification=qualification,
+                    continuity_nonce_digest=digest_obj(
+                        {"continuity_nonce": continuity_nonce}
+                    ),
+                    prompt_sequence=prompt_sequence[:index],
+                    executable_snapshot=executable_snapshot.evidence(workspace=workspace),
+                    child_executable_snapshots=[
+                        item.evidence(workspace=workspace)
+                        for item in child_executable_snapshots
+                    ],
+                    failed_at=self._clock(),
+                ) from exc
             if attempt_observer is not None:
                 attempt_observer(index)
             try:

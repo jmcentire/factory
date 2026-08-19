@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,6 +14,7 @@ from typing import Protocol
 
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.acceptance_obligations import validator_execution_digests
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationQualification,
@@ -123,7 +124,9 @@ class IsolatedBuildLoop:
         acceptance_catalog_path: str | Path | None = None,
         review_snapshot_store: str | Path | None = None,
         repair_brief_bytes: bytes | None = None,
-        before_validation: Callable[[LaneExecution, LaneExecution, FrozenTree, FrozenTree], None]
+        before_validation: Callable[
+            [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
+        ]
         | None = None,
     ) -> ValidationExecution:
         """Execute one clean-context attempt; lane internals never cross the boundary."""
@@ -200,13 +203,16 @@ class IsolatedBuildLoop:
         snapshot_store = Path(review_snapshot_store or (self.root / "review-snapshots"))
         coder_snapshot = freeze_tree(coder_result.output_directory, snapshot_store)
         tester_snapshot = freeze_tree(tester_result.output_directory, snapshot_store)
+        review_subject: Mapping[str, object] | None = None
         if before_validation is not None:
-            before_validation(
+            review_subject = before_validation(
                 coder_result,
                 tester_result,
                 coder_snapshot,
                 tester_snapshot,
             )
+        if review_subject is None:
+            raise LaneError("Validator execution requires an immutable adversarial-review subject")
         validator_result = self._run_validator(
             coder_snapshot,
             tester_snapshot,
@@ -217,6 +223,7 @@ class IsolatedBuildLoop:
             plan_bytes,
             catalog_bytes,
             acceptance_catalog_bytes,
+            canonical_document_bytes(review_subject),
         )
         return ValidationExecution(
             coder=coder_result,
@@ -333,6 +340,7 @@ class IsolatedBuildLoop:
         plan_bytes: bytes | None,
         catalog_bytes: bytes | None,
         acceptance_catalog_bytes: bytes | None,
+        review_subject_bytes: bytes,
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -383,6 +391,17 @@ class IsolatedBuildLoop:
                     "FACTORY_ACCEPTANCE_OBLIGATION_CATALOG_DIGEST": digest_obj(acceptance_document),
                 }
             )
+        review_subject = input_directory / "validator-review-subject.json"
+        review_subject.write_bytes(review_subject_bytes)
+        readable_inputs.append(review_subject)
+        environment.update(
+            {
+                "FACTORY_VALIDATOR_REVIEW_SUBJECT_PATH": str(review_subject),
+                "FACTORY_VALIDATOR_REVIEW_SUBJECT_SOURCE_DIGEST": digest_bytes(
+                    review_subject_bytes
+                ),
+            }
+        )
         implementation = input_directory / "implementation"
         tests = input_directory / "tests"
         coder = verify_frozen_tree(coder.directory, expected_digest=coder.digest)

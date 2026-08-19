@@ -362,6 +362,10 @@ def preview_artifacts(
         "candidate": trusted["candidate"],
         "acceptance-tests": trusted["acceptance-tests"],
         "acceptance-obligation-report": report_digest,
+        "validator-review-subject": "sha256:"
+        + hashlib.sha256(f"{seed}:validator-review-subject".encode()).hexdigest(),
+        "validator-adversarial-review": "sha256:"
+        + hashlib.sha256(f"{seed}:validator-adversarial-review".encode()).hexdigest(),
         "evidence-bundle": "sha256:"
         + hashlib.sha256(f"{seed}:evidence-bundle".encode()).hexdigest(),
         "evidence-envelope": "sha256:"
