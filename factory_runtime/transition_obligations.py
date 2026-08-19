@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import digest_obj
+from factory_runtime.durability import DurabilityError, fsync_directory, fsync_directory_chain
 from factory_runtime.schema import DocumentValidationError, validate_document
 
 SET_KEY = "transition-obligation-set"
@@ -680,16 +682,10 @@ def _read_regular_bytes(path: Path, *, label: str) -> bytes:
 
 
 def _sync_directory(path: Path) -> None:
-    descriptor = os.open(
-        path,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
-    )
     try:
-        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise TransitionObligationError(f"obligation evidence path is not a directory: {path}")
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        fsync_directory(path)
+    except DurabilityError as exc:
+        raise TransitionObligationError(str(exc)) from exc
 
 
 def _sync_evidence_directories(path: Path) -> None:
@@ -758,27 +754,50 @@ def _sync_identical_evidence(path: Path, content: bytes) -> bool:
 
 def _write_once_or_identical(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor, temporary = tempfile.mkstemp(prefix=".obligation-", dir=path.parent)
+    installed_identity: tuple[int, int] | None = None
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError as exc:
-        if not _sync_identical_evidence(path, content):
-            raise TransitionObligationError(
-                "obligation evidence address contains different bytes"
-            ) from exc
-        return
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise TransitionObligationError("obligation evidence destination is not regular")
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = -1
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        _sync_evidence_directories(path)
+        source = os.lstat(temporary)
+        if not stat.S_ISREG(source.st_mode):
+            raise TransitionObligationError("obligation evidence temporary is not regular")
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError as exc:
+            if not _sync_identical_evidence(path, content):
+                raise TransitionObligationError(
+                    "obligation evidence address contains different bytes"
+                ) from exc
+            return
+        installed = os.lstat(path)
+        installed_identity = (installed.st_dev, installed.st_ino)
+        if installed_identity != (source.st_dev, source.st_ino):
+            raise TransitionObligationError("installed obligation evidence is not the staged inode")
+        try:
+            _sync_evidence_directories(path)
+        except (OSError, TransitionObligationError):
+            try:
+                current = os.lstat(path)
+                if (current.st_dev, current.st_ino) == installed_identity:
+                    os.unlink(path)
+                    try:
+                        _sync_directory(path.parent)
+                    except TransitionObligationError:
+                        pass
+            except OSError:
+                pass
+            raise
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def retain_transition_obligations(
@@ -798,6 +817,10 @@ def retain_transition_obligations(
         root / f"{report_digest.removeprefix('sha256:')}.report.json",
         _canonical_bytes(report_document),
     )
+    try:
+        fsync_directory_chain(root, through=Path(run_dir))
+    except DurabilityError as exc:
+        raise TransitionObligationError(str(exc)) from exc
     return set_digest, report_digest
 
 

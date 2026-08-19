@@ -166,28 +166,36 @@ def _object_source(tmp_path: Path) -> Path:
     return source
 
 
-def test_write_once_fsyncs_an_identical_preinstalled_file_and_parent(
+def test_write_once_fsyncs_identical_evidence_through_durable_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    evidence = tmp_path / "evidence" / "repair.tessera.json"
-    evidence.parent.mkdir()
+    durable_root = tmp_path / "runs"
+    evidence = durable_root / "run-1" / "evidence" / "repair-briefs" / "repair.tessera.json"
+    evidence.parent.mkdir(parents=True)
     content = b'{"signed":"brief"}\n'
     evidence.write_bytes(content)
     real_fsync = os.fsync
-    synced_types: list[str] = []
+    synced: list[tuple[str, int]] = []
 
     def track_fsync(descriptor: int) -> None:
-        mode = os.fstat(descriptor).st_mode
-        synced_types.append("file" if stat.S_ISREG(mode) else "directory")
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
         real_fsync(descriptor)
 
     monkeypatch.setattr(workflow_module.os, "fsync", track_fsync)
 
-    workflow_module._write_once(evidence, content)
+    workflow_module._write_once(evidence, content, durable_root=durable_root)
 
     assert evidence.read_bytes() == content
-    assert synced_types == ["file", "directory"]
+    assert ("file", evidence.stat().st_ino) in synced
+    for directory in (
+        evidence.parent,
+        evidence.parent.parent,
+        evidence.parent.parent.parent,
+        durable_root,
+    ):
+        assert ("directory", directory.stat().st_ino) in synced
 
 
 def _resolution_request(tmp_path: Path) -> tuple[Path, dict[str, Any]]:

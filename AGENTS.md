@@ -18,7 +18,7 @@ fail-closed; `make ship` runs it first.
 See `CLAUDE.md` "Layout". In short:
 `factory_core/{manifest,evidence,checklist,criticality,promotion,provenance,build_plan,test_disposition,tool_policy,target,adapters,roles}.py`,
 the executable boundary under
-`factory_runtime/{state,schema,tessera,authority,workflow,generation,snapshot,isolation,lanes,transition_obligations,acceptance_obligations,test_change_authority,resume,runner,runner_isolation,projection_bundle,broker,evidence_plane,orchestrator,cli}.py`,
+`factory_runtime/{state,schema,durability,tessera,authority,workflow,generation,snapshot,isolation,lanes,transition_obligations,acceptance_obligations,test_change_authority,resume,runner,runner_isolation,projection_bundle,broker,evidence_plane,orchestrator,cli}.py`,
 the guards in `scripts/`, tests in `tests/`, and the synthetic empty target under
 `tests/fixtures/synthetic_target/`.
 

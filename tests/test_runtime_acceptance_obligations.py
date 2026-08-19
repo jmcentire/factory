@@ -56,6 +56,35 @@ def test_identical_acceptance_evidence_is_fsynced_before_reuse(
     assert ("directory", path.parent.parent.stat().st_ino) in synced
 
 
+def test_first_use_acceptance_report_fsyncs_evidence_chain_through_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    report = {"catalog_digest": DIGEST_A, "satisfied": True}
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(obligations_module.os, "fsync", track_fsync)
+
+    obligations_module.retain_acceptance_obligation_report(tmp_path, "run-1", report)
+    digest_dir = run_dir / "evidence" / "acceptance-obligation-reports" / ("a" * 64)
+
+    for directory in (
+        digest_dir,
+        digest_dir.parent,
+        digest_dir.parent.parent,
+        run_dir,
+    ):
+        assert ("directory", directory.stat().st_ino) in synced
+
+
 def _catalog_document() -> dict[str, object]:
     return {
         "schema_version": "factory-acceptance-obligation-catalog/1",

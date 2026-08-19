@@ -22,6 +22,7 @@ from factory_runtime.acceptance_obligations import (
     validator_execution_digests,
     verify_and_retain_acceptance_catalog,
 )
+from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
     DeterminismRecord,
@@ -693,6 +694,10 @@ class FactoryOrchestrator:
                 key_path=verifier_key_path,
                 output_path=bundle_path,
             )
+            try:
+                fsync_directory_chain(bundle_path.parent, through=self.workflow.root)
+            except DurabilityError as exc:
+                raise OrchestrationError(str(exc)) from exc
             if envelope.public_key != verifier.public_key:
                 raise OrchestrationError(
                     "evidence bundle signer does not own the Validator verifier identity"

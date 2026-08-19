@@ -180,10 +180,12 @@ Ledger durability is qualified only on a local POSIX filesystem that enforces `O
 are not qualified by PR1. Filesystems or mount modes that do not make directory entries durable
 under `fsync` are likewise unqualified; PR1 does not claim stronger power-loss semantics than the
 host filesystem actually provides. A transition never outruns the evidence it cites: new Tessera
-envelopes are stable-read and fsynced through the exact installed inode and containing directory,
-while an idempotent identical evidence or authority bundle fsyncs every exact inode, its final
-directory, and the content-addressed parent before ledger append. A surviving `.lock` file is
-treated as evidence of an interrupted append,
+envelopes are stable-read and fsynced through the exact installed inode and containing directory;
+the ledger caller then fsyncs every remaining parent through its known durable run/root boundary.
+An idempotent identical evidence or authority bundle likewise fsyncs every exact inode and the
+complete directory chain before ledger append. Transition-obligation files stage in a private
+same-directory temporary and publish with a no-replace hard link, so a failed write cannot poison
+the canonical address. A surviving `.lock` file is treated as evidence of an interrupted append,
 not timed away: recovery requires proving no writer remains, preserving the lock bytes, verifying
 the existing chain, and an explicit operator decision before removing it. Automated stale-lock
 recovery is intentionally absent until that recovery ceremony is itself executable and receipted.

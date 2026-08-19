@@ -499,3 +499,5 @@ def test_identical_authority_bundle_is_fsynced_before_reuse(
     assert ("file", (final / "authorization.json").stat().st_ino) in synced
     assert ("directory", final.stat().st_ino) in synced
     assert ("directory", final.parent.stat().st_ino) in synced
+    assert ("directory", final.parent.parent.stat().st_ino) in synced
+    assert ("directory", tmp_path.stat().st_ino) in synced

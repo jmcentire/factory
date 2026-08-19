@@ -47,7 +47,8 @@ construction — the purity guard will (and must) reject it.
 - `factory_core/roles.py` — capability/role model schema (grants are per-target data).
 - `factory_runtime/state.py` — persisted lifecycle ledger, checked projection, frozen generation
   tuple, and bounded-attempt enforcement.
-- `factory_runtime/tessera.py` / `authority.py` — real Tessera CLI and external authority.
+- `factory_runtime/durability.py` / `tessera.py` / `authority.py` — local-POSIX evidence
+  durability, real Tessera CLI, and external authority.
 - `factory_runtime/workflow.py` — authorized intake and invariant-document ratification.
 - `factory_runtime/generation.py` / `snapshot.py` — target/phase/build-plan readiness and retained
   exact generation/review bytes.

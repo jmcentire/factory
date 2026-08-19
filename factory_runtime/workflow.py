@@ -31,6 +31,7 @@ from factory_runtime.authority import (
     VerifiedReceipt,
     verify_receipt,
 )
+from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
 from factory_runtime.target_state import (
@@ -166,7 +167,21 @@ def _sync_identical_evidence(path: Path, content: bytes) -> bool:
     return True
 
 
-def _write_once(path: Path, content: bytes) -> None:
+def _sync_evidence_chain(path: Path, durable_root: Path | None) -> None:
+    if durable_root is None:
+        return
+    try:
+        fsync_directory_chain(path.parent, through=durable_root)
+    except DurabilityError as exc:
+        raise WorkflowError(str(exc)) from exc
+
+
+def _write_once(
+    path: Path,
+    content: bytes,
+    *,
+    durable_root: Path | None = None,
+) -> None:
     """Atomically create immutable evidence, accepting only an identical prior write.
 
     The final install uses a same-filesystem hard link, whose no-replace behavior closes the
@@ -177,6 +192,7 @@ def _write_once(path: Path, content: bytes) -> None:
         raise WorkflowError(f"refusing symlink evidence path: {path}")
     if path.exists():
         if _sync_identical_evidence(path, content):
+            _sync_evidence_chain(path, durable_root)
             return
         raise WorkflowError(f"refusing to replace non-identical evidence: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,8 +205,10 @@ def _write_once(path: Path, content: bytes) -> None:
         try:
             os.link(temporary, path)
             _fsync_directory(path.parent)
+            _sync_evidence_chain(path, durable_root)
         except FileExistsError:
             if _sync_identical_evidence(path, content):
+                _sync_evidence_chain(path, durable_root)
                 return
             raise WorkflowError(f"refusing to replace non-identical evidence: {path}") from None
     finally:
@@ -398,11 +416,20 @@ class FactoryWorkflow:
         manifest_bytes = Path(manifest_path).read_bytes()
         if digest_bytes(manifest_bytes) != manifest.source_digest:
             raise WorkflowError("target manifest changed before evidence persistence")
-        _write_once(evidence_dir / "target-manifest.toml", manifest_bytes)
-        _write_once(evidence_dir / "target-resolution-request.json", _canonical_bytes(request))
+        _write_once(
+            evidence_dir / "target-manifest.toml",
+            manifest_bytes,
+            durable_root=self.root,
+        )
+        _write_once(
+            evidence_dir / "target-resolution-request.json",
+            _canonical_bytes(request),
+            durable_root=self.root,
+        )
         _write_once(
             evidence_dir / "target-resolution-receipt.tessera.json",
             _verified_envelope_bytes(receipt),
+            durable_root=self.root,
         )
         return self.store.create(
             run_id,
@@ -493,7 +520,11 @@ class FactoryWorkflow:
             )
         except TargetResolutionError as exc:
             raise WorkflowError(str(exc)) from exc
-        _write_once(evidence_dir / "target-state.json", _canonical_bytes(target_state))
+        _write_once(
+            evidence_dir / "target-state.json",
+            _canonical_bytes(target_state),
+            durable_root=self.root,
+        )
         return self.store.record_target_state(
             run_id,
             target_state=target_state,
@@ -571,10 +602,15 @@ class FactoryWorkflow:
             )
 
         evidence_dir = self.root / run_id / "evidence" / "intake"
-        _write_once(evidence_dir / "execution-request.json", _canonical_bytes(request))
+        _write_once(
+            evidence_dir / "execution-request.json",
+            _canonical_bytes(request),
+            durable_root=self.root,
+        )
         _write_once(
             evidence_dir / "execution-receipt.tessera.json",
             _verified_envelope_bytes(receipt),
+            durable_root=self.root,
         )
         return self.store.authorize_intake(
             run_id,
@@ -687,7 +723,11 @@ class FactoryWorkflow:
 
         directory = self.root / run_id / "evidence" / "repair-briefs"
         stem = envelope.payload_digest.removeprefix("sha256:")
-        _write_once(directory / f"{stem}.tessera.json", _verified_tessera_bytes(envelope))
+        _write_once(
+            directory / f"{stem}.tessera.json",
+            _verified_tessera_bytes(envelope),
+            durable_root=self.root,
+        )
         return self.store.transition(
             run_id,
             RunState.BLOCKED,
@@ -906,14 +946,20 @@ class FactoryWorkflow:
             / artifact.phase
             / artifact_digest.removeprefix("sha256:")
         )
-        _write_once(directory / "artifact.json", _canonical_bytes(raw_artifact))
+        _write_once(
+            directory / "artifact.json",
+            _canonical_bytes(raw_artifact),
+            durable_root=self.root,
+        )
         _write_once(
             directory / "human-receipt.tessera.json",
             _verified_envelope_bytes(human_receipt),
+            durable_root=self.root,
         )
         _write_once(
             directory / "validator-receipt.tessera.json",
             _verified_envelope_bytes(validator_receipt),
+            durable_root=self.root,
         )
 
         projection = self.store.transition(

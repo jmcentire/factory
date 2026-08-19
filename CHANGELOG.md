@@ -33,8 +33,10 @@ public API is still pre-1.0.
   test digests are re-derived from the blocked ledger, and every intent backreference resolves
   against the retained ratified phase artifacts.
 - Signed Tessera envelopes and idempotently reused obligation/authority evidence are stable-read
-  and fsynced as exact regular inodes with their final directory entries before a durable ledger
-  transition may cite them. Concurrent identical writers cannot outrun evidence durability.
+  and fsynced as exact regular inodes, then every containing directory is fsynced through the
+  known durable run/root boundary before a ledger transition may cite them. Transition-obligation
+  files stage privately and publish by no-replace hard link, so failed or concurrent writes cannot
+  expose a partial canonical address or outrun evidence durability.
 
 ### Explicit boundaries
 

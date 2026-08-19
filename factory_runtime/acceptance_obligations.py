@@ -37,6 +37,7 @@ from factory_runtime.authority import (
     VerifiedReceipt,
     verify_receipt,
 )
+from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunState, RunStore
 from factory_runtime.tessera import TesseraCli
@@ -522,6 +523,10 @@ def verify_and_retain_acceptance_catalog(
         directory / "validator-receipt.tessera.json",
         validator_envelope_bytes,
     )
+    try:
+        fsync_directory_chain(directory, through=root / run_id)
+    except DurabilityError as exc:
+        raise AcceptanceObligationError(str(exc)) from exc
     return StoredAcceptanceCatalog(catalog, human_receipt, validator_receipt, directory)
 
 
@@ -835,6 +840,10 @@ def retain_acceptance_obligation_report(
     _write_once_or_identical(
         root / f"{digest.removeprefix('sha256:')}.json", _canonical_bytes(report)
     )
+    try:
+        fsync_directory_chain(root, through=Path(runs_root) / run_id)
+    except DurabilityError as exc:
+        raise AcceptanceObligationError(str(exc)) from exc
     return digest
 
 

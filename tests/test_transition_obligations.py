@@ -59,6 +59,74 @@ def test_identical_evidence_is_fsynced_with_final_directory_and_parent(
     assert ("directory", path.parent.parent.stat().st_ino) in synced
 
 
+def test_first_use_retention_fsyncs_the_evidence_chain_through_the_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    set_document = {"schema_version": "set/fixture", "selector_id": "fixture"}
+    report_document = {"schema_version": "report/fixture", "satisfied": True}
+    real_fsync = os.fsync
+    synced: list[tuple[str, int]] = []
+
+    def track_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        synced.append(("file" if stat.S_ISREG(metadata.st_mode) else "directory", metadata.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(obligations_module.os, "fsync", track_fsync)
+
+    set_digest, _ = obligations_module.retain_transition_obligations(
+        run_dir,
+        set_document,
+        report_document,
+    )
+    digest_dir = (
+        run_dir / "evidence" / "transition-obligations" / set_digest.removeprefix("sha256:")
+    )
+
+    for directory in (
+        digest_dir,
+        digest_dir.parent,
+        digest_dir.parent.parent,
+        run_dir,
+    ):
+        assert ("directory", directory.stat().st_ino) in synced
+
+
+@pytest.mark.parametrize("fail_kind", ["file", "directory"])
+def test_failed_first_publication_does_not_poison_the_canonical_address(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_kind: str,
+) -> None:
+    path = tmp_path / "transition-obligations" / ("a" * 64) / "set.json"
+    content = b'{"set":"exact"}\n'
+    real_fsync = os.fsync
+    failed = False
+
+    def fail_once(descriptor: int) -> None:
+        nonlocal failed
+        mode = os.fstat(descriptor).st_mode
+        kind = "file" if stat.S_ISREG(mode) else "directory"
+        if not failed and kind == fail_kind:
+            failed = True
+            raise OSError(f"injected {fail_kind} fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(obligations_module.os, "fsync", fail_once)
+
+    with pytest.raises((OSError, TransitionObligationError), match="injected|fsync"):
+        obligations_module._write_once_or_identical(path, content)
+
+    assert not path.exists()
+    assert list(path.parent.glob(".obligation-*")) == []
+    monkeypatch.setattr(obligations_module.os, "fsync", real_fsync)
+    obligations_module._write_once_or_identical(path, content)
+    assert path.read_bytes() == content
+
+
 class _Clock:
     def __init__(self) -> None:
         self.value = 100

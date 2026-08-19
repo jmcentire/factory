@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import factory_runtime.orchestrator as orchestrator_module
 from factory_core.build_plan import (
     BuildPlan,
     BuildStep,
@@ -133,9 +134,18 @@ def test_real_tessera_signs_validates_and_detects_tampering(tmp_path: Path) -> N
 )
 def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evidence(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binary = _binary()
     cli = TesseraCli((str(binary),))
+    real_sync_chain = orchestrator_module.fsync_directory_chain
+    preview_syncs: list[tuple[Path, Path]] = []
+
+    def track_sync_chain(start: str | Path, *, through: str | Path) -> None:
+        preview_syncs.append((Path(start), Path(through)))
+        real_sync_chain(start, through=through)
+
+    monkeypatch.setattr(orchestrator_module, "fsync_directory_chain", track_sync_chain)
     now = int(time.time())
     root_key = tmp_path / "root.hex"
     validator_key = tmp_path / "validator.hex"
@@ -855,6 +865,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     final_attempt_root = (
         workflow.root / "synthetic-run" / "evidence" / "build-attempts" / "attempt-1"
     )
+    assert (final_attempt_root, workflow.root) in preview_syncs
     coder_evidence = json.loads(
         (final_attempt_root / "coder" / "output" / "evidence" / "lane-evidence.json").read_text(
             encoding="utf-8"

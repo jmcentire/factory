@@ -33,6 +33,7 @@ from factory_runtime.authority import (
     VerifiedReceipt,
     verify_receipt,
 )
+from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import (
@@ -262,6 +263,13 @@ def _remove_pending_bundle(directory: Path, names: Sequence[str]) -> None:
         pass
 
 
+def _sync_bundle_chain(directory: Path, *, run_dir: Path) -> None:
+    try:
+        fsync_directory_chain(directory, through=run_dir)
+    except DurabilityError as exc:
+        raise TestChangeAuthorityError(str(exc)) from exc
+
+
 def _retain_bundle_atomically(
     *,
     run_dir: Path,
@@ -273,6 +281,7 @@ def _retain_bundle_atomically(
     parent = final_directory.parent
     _require_private_directory(parent, label="test-change authority parent")
     if _sync_identical_bundle(final_directory, files):
+        _sync_bundle_chain(final_directory, run_dir=run_dir)
         return
     if final_directory.exists() or final_directory.is_symlink():
         raise TestChangeAuthorityError(
@@ -296,11 +305,13 @@ def _retain_bundle_atomically(
             installed = True
         except OSError as exc:
             if _sync_identical_bundle(final_directory, files):
+                _sync_bundle_chain(final_directory, run_dir=run_dir)
                 return
             raise TestChangeAuthorityError(
                 "could not atomically install test-change authority bundle"
             ) from exc
         _sync_directory(parent)
+        _sync_bundle_chain(final_directory, run_dir=run_dir)
     finally:
         if not installed:
             _remove_pending_bundle(pending, names)
