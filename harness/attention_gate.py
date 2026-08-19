@@ -3,8 +3,8 @@
 
 The attention channel has one ordering question: did a blocking event become durable before or
 after a lane dispatch was admitted?  Every in-tree producer and consumer takes the same run-local
-lock.  Dispatch checks both applicable blocking files and publishes its no-replace guard while
-holding that lock, making the guard publication the ordering point rather than a comment about one.
+lock.  Dispatch checks both applicable blocking files and acquires its crash-released role mutex
+while holding that lock, making lock acquisition the ordering point rather than a comment about one.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import pathlib
@@ -33,6 +34,8 @@ _DISPATCHER_CLASSES = frozenset(
 )
 _CLASS = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_EVENT_BYTES = 16_384
+_MAX_BLOCKING_BYTES = 1_048_576
+_MAX_LEDGER_LINE_BYTES = 65_536
 
 
 class AttentionGateError(RuntimeError):
@@ -173,25 +176,204 @@ def validate_blocking_event(event: object) -> dict[str, object]:
 
 def _append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    row = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     descriptor = os.open(
         path,
-        os.O_WRONLY
+        os.O_RDWR
         | os.O_CREAT
         | os.O_APPEND
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0),
         0o600,
     )
-    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise AttentionGateError(f"attention event sink is not regular: {path}")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        start = metadata.st_size
+        # events.jsonl predates this closed writer and may end in an interrupted legacy fragment.
+        # Preserve those bytes as their own (invalid, ignored) row rather than concatenating the
+        # new closed receipt onto them.
+        payload = (b"\n" if start and os.pread(descriptor, 1, start - 1) != b"\n" else b"") + row
+        written = 0
+        try:
+            while written < len(payload):
+                count = os.write(descriptor, payload[written:])
+                if count < 1:
+                    raise OSError("attention event append made no progress")
+                written += count
+            os.fsync(descriptor)
+        except OSError:
+            # The shared attention lock excludes every supported writer/consumer while this
+            # canonical inode is repaired. A retry can therefore inspect either the prior exact
+            # prefix or the complete new row, never an abandoned partial JSON record.
+            os.ftruncate(descriptor, start)
+            os.fsync(descriptor)
+            raise
+    finally:
         os.close(descriptor)
-        raise AttentionGateError(f"attention event sink is not regular: {path}")
-    os.fchmod(descriptor, 0o600)
-    with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        stream.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
     _fsync_directory(path.parent)
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _event_digest(event: Mapping[str, object]) -> str:
+    return "sha256:" + hashlib.sha256(_canonical(event).encode("utf-8")).hexdigest()
+
+
+def _read_jsonl(path: pathlib.Path, *, maximum_bytes: int | None = None) -> list[dict[str, object]]:
+    """Stable-read one regular JSONL sink while cooperating appenders are locked out."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except FileNotFoundError:
+        return []
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AttentionGateError(f"attention event sink is not regular: {path}")
+        if maximum_bytes is not None and opened.st_size > maximum_bytes:
+            raise AttentionGateError(f"attention event sink exceeds its byte ceiling: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = -1
+            fcntl.flock(stream, fcntl.LOCK_SH)
+            rows: list[dict[str, object]] = []
+            for number, line in enumerate(stream, 1):
+                if len(line.encode("utf-8")) > _MAX_LEDGER_LINE_BYTES:
+                    raise AttentionGateError(
+                        f"attention event row {number} exceeds its byte ceiling: {path}"
+                    )
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise AttentionGateError(
+                        f"attention event row {number} is not JSON: {path}"
+                    ) from exc
+                if not isinstance(row, dict):
+                    raise AttentionGateError(
+                        f"attention event row {number} is not an object: {path}"
+                    )
+                rows.append(row)
+            installed = os.lstat(path)
+            if stat.S_ISLNK(installed.st_mode) or (
+                installed.st_dev,
+                installed.st_ino,
+            ) != (opened.st_dev, opened.st_ino):
+                raise AttentionGateError(f"attention event sink changed while read: {path}")
+            return rows
+    except UnicodeDecodeError as exc:
+        raise AttentionGateError(f"attention event sink is not UTF-8: {path}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _event_state(
+    root: pathlib.Path,
+    lane: str,
+    admitted: Mapping[str, object],
+) -> tuple[int, int, int]:
+    """Return exact blocker, write-receipt, and consume-receipt counts."""
+
+    canonical = _canonical(admitted)
+    blocker_count = 0
+    for row in _read_jsonl(
+        root / "lanes" / f"{lane}.blocking",
+        maximum_bytes=_MAX_BLOCKING_BYTES,
+    ):
+        validated = validate_blocking_event(row)
+        if _canonical(validated) == canonical:
+            blocker_count += 1
+    digest = _event_digest(admitted)
+    written_count, consumed_count = _receipt_counts(
+        root / "events.jsonl",
+        lane=lane,
+        canonical_event=canonical,
+        event_digest=digest,
+    )
+    if max(blocker_count, written_count, consumed_count) > 1:
+        raise AttentionGateError("blocking event identity is duplicated")
+    if consumed_count and not written_count:
+        raise AttentionGateError("blocking event was consumed without a write receipt")
+    if written_count and not blocker_count and not consumed_count:
+        raise AttentionGateError("blocking event write receipt has no pending or consumed subject")
+    return blocker_count, written_count, consumed_count
+
+
+def _receipt_counts(
+    path: pathlib.Path,
+    *,
+    lane: str,
+    canonical_event: str,
+    event_digest: str,
+) -> tuple[int, int]:
+    """Count only closed attention receipts in the heterogeneous legacy event stream.
+
+    This shared ledger intentionally admits unrelated historical event shapes and bounded-tail
+    readers tolerate an interrupted final legacy fragment.  Those rows cannot grant idempotence:
+    only a complete small object with the exact lane and event identity is counted.
+    """
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except FileNotFoundError:
+        return 0, 0
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AttentionGateError(f"attention event sink is not regular: {path}")
+        written = 0
+        consumed = 0
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            fcntl.flock(stream, fcntl.LOCK_SH)
+            for raw in stream:
+                if len(raw) > _MAX_LEDGER_LINE_BYTES:
+                    continue
+                try:
+                    candidate = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(candidate, dict) or candidate.get("lane") != lane:
+                    continue
+                if (
+                    candidate.get("kind") == "blocking_written"
+                    and _canonical(candidate.get("event")) == canonical_event
+                ):
+                    written += 1
+                if (
+                    candidate.get("kind") == "blocking_consumed"
+                    and candidate.get("event_digest") == event_digest
+                ):
+                    consumed += 1
+            installed = os.lstat(path)
+            if stat.S_ISLNK(installed.st_mode) or (
+                installed.st_dev,
+                installed.st_ino,
+            ) != (opened.st_dev, opened.st_ino):
+                raise AttentionGateError(f"attention event sink changed while read: {path}")
+        return written, consumed
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def append_blocking_event(
@@ -205,16 +387,21 @@ def append_blocking_event(
     admitted = validate_blocking_event(dict(event))
     lock_fd = acquire_attention_lock(root)
     try:
-        _append_jsonl(root / "lanes" / f"{lane}.blocking", admitted)
-        _append_jsonl(
-            root / "events.jsonl",
-            {
-                "ts": admitted["ts"],
-                "kind": "blocking_written",
-                "lane": lane,
-                "event": admitted,
-            },
-        )
+        blocker_count, written_count, consumed_count = _event_state(root, lane, admitted)
+        if consumed_count:
+            return
+        if not blocker_count:
+            _append_jsonl(root / "lanes" / f"{lane}.blocking", admitted)
+        if not written_count:
+            _append_jsonl(
+                root / "events.jsonl",
+                {
+                    "ts": admitted["ts"],
+                    "kind": "blocking_written",
+                    "lane": lane,
+                    "event": admitted,
+                },
+            )
     finally:
         os.close(lock_fd)
 
@@ -238,35 +425,55 @@ def _file_has_bytes(path: pathlib.Path) -> bool:
         os.close(descriptor)
 
 
-def _publish_guard(root: pathlib.Path, role: str, pid: int) -> pathlib.Path:
-    guard = root / f"dispatch-{role}.guard"
+def check_lane_admission(root: pathlib.Path, lane: str) -> None:
+    """Linearize a legacy lane start against the same producer/consumer lock."""
+
+    root = pathlib.Path(root)
+    if lane not in _LANES:
+        raise AttentionGateError("invalid lane admission identity")
+    lock_fd = acquire_attention_lock(root)
+    try:
+        candidates = [root / "lanes" / f"{lane}.blocking"]
+        if lane in _DISPATCH_ROLES:
+            candidates.insert(0, root / "lanes" / "validator.blocking")
+        pending = tuple(path for path in dict.fromkeys(candidates) if _file_has_bytes(path))
+        if pending:
+            raise BlockingEventPending(pending)
+    finally:
+        os.close(lock_fd)
+
+
+def _open_dispatch_lock(root: pathlib.Path, role: str) -> int:
+    lock_path = root / "lanes" / f".dispatch-{role}.lock"
     descriptor = os.open(
-        guard,
-        os.O_WRONLY
+        lock_path,
+        os.O_RDWR
         | os.O_CREAT
-        | os.O_EXCL
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0),
         0o600,
     )
     try:
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = -1
-            stream.write(f"pid={pid}\n".encode("ascii"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        _fsync_directory(root)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    return guard
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise AttentionGateError("role dispatch lock is not a regular file")
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        _fsync_directory(lock_path.parent)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AttentionGateError("role dispatch is already active") from exc
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
 
 
-def admit_dispatch(root: pathlib.Path, role: str, *, pid: int) -> pathlib.Path:
-    """Check blockers and publish the role guard at one serialized ordering point."""
+def acquire_dispatch_lock(root: pathlib.Path, role: str) -> int:
+    """Check blockers and acquire a crash-released role mutex at one ordering point."""
 
     root = pathlib.Path(root)
-    if role not in _DISPATCH_ROLES or pid < 1:
+    if role not in _DISPATCH_ROLES:
         raise AttentionGateError("invalid dispatch admission identity")
     lock_fd = acquire_attention_lock(root)
     try:
@@ -280,24 +487,62 @@ def admit_dispatch(root: pathlib.Path, role: str, *, pid: int) -> pathlib.Path:
         )
         if pending:
             raise BlockingEventPending(pending)
-        try:
-            return _publish_guard(root, role, pid)
-        except FileExistsError as exc:
-            raise AttentionGateError("role dispatch is concurrent or interrupted") from exc
+        return _open_dispatch_lock(root, role)
     finally:
         os.close(lock_fd)
+
+
+def verify_dispatch_lock(root: pathlib.Path, role: str, descriptor: int) -> None:
+    """Prove the recursive shell inherited the exact locked role inode."""
+
+    if role not in _DISPATCH_ROLES or descriptor < 3:
+        raise AttentionGateError("invalid inherited dispatch lock")
+    lock_path = pathlib.Path(root) / "lanes" / f".dispatch-{role}.lock"
+    opened = os.fstat(descriptor)
+    installed = os.lstat(lock_path)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or stat.S_ISLNK(installed.st_mode)
+        or (opened.st_dev, opened.st_ino) != (installed.st_dev, installed.st_ino)
+    ):
+        raise AttentionGateError("inherited dispatch lock differs from its canonical inode")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        raise AttentionGateError("inherited dispatch lock is not owned by this invocation") from exc
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    admit = subparsers.add_parser("admit")
-    admit.add_argument("--root", type=pathlib.Path, required=True)
-    admit.add_argument("--role", choices=sorted(_DISPATCH_ROLES), required=True)
-    admit.add_argument("--pid", type=int, required=True)
+    hold = subparsers.add_parser("hold")
+    hold.add_argument("--root", type=pathlib.Path, required=True)
+    hold.add_argument("--role", choices=sorted(_DISPATCH_ROLES), required=True)
+    hold.add_argument("command_args", nargs=argparse.REMAINDER)
+    verify = subparsers.add_parser("verify-held")
+    verify.add_argument("--root", type=pathlib.Path, required=True)
+    verify.add_argument("--role", choices=sorted(_DISPATCH_ROLES), required=True)
+    verify.add_argument("--fd", type=int, required=True)
+    check = subparsers.add_parser("check")
+    check.add_argument("--root", type=pathlib.Path, required=True)
+    check.add_argument("--lane", choices=sorted(_LANES), required=True)
     arguments = parser.parse_args()
     try:
-        guard = admit_dispatch(arguments.root, arguments.role, pid=arguments.pid)
+        if arguments.command == "check":
+            check_lane_admission(arguments.root, arguments.lane)
+        elif arguments.command == "verify-held":
+            verify_dispatch_lock(arguments.root, arguments.role, arguments.fd)
+        else:
+            command = list(arguments.command_args)
+            if command[:1] == ["--"]:
+                command = command[1:]
+            if not command:
+                raise AttentionGateError("dispatch lock holder has no command")
+            dispatch_fd = acquire_dispatch_lock(arguments.root, arguments.role)
+            os.set_inheritable(dispatch_fd, True)
+            environment = dict(os.environ)
+            environment["FACTORY_DISPATCH_LOCK_FD"] = str(dispatch_fd)
+            os.execvpe(command[0], command, environment)
     except BlockingEventPending as exc:
         print("blocking event pending — disposition before dispatching:", file=sys.stderr)
         for path in exc.paths:
@@ -306,7 +551,6 @@ def main() -> int:
     except (AttentionGateError, OSError) as exc:
         print(f"attention admission refused: {exc}", file=sys.stderr)
         return 70
-    print(guard)
     return 0
 
 

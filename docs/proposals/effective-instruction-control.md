@@ -150,9 +150,11 @@ release the gate. The orchestrator may narrow or stop the
 next task through this attention gate; it may not rewrite a directive, amend a phase artifact,
 grant a capability, or advance state.
 
-The no-replace role-dispatch guard is the admission linearization point. A blocking append before
-that marker is observed and refuses before dispatch bytes are frozen; a blocking append after it
-applies to the next dispatch and cannot interrupt or mutate the already admitted invocation. An
+Acquiring the crash-released role-dispatch mutex under the shared attention lock is the admission
+linearization point. A blocking append before that acquisition is observed and refuses before
+dispatch bytes are frozen; a blocking append after it applies to the next dispatch and cannot
+interrupt or mutate the already admitted invocation. Process death releases the mutex, so exact
+retained inputs remain retryable without an operator deleting a stale marker. An
 unavailable Validator leaves the run blocked and emits an out-of-band human escalation;
 elapsed time never fabricates a human disposition or silently proceeds. A Validator may refute an
 untrusted advisory finding with evidence because the orchestrator has no judging authority; a

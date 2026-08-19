@@ -14,7 +14,25 @@ founder-only — appends the founder didn't sign fail verification. Live rulings
 enter through the provisional side chain (provisional.jsonl): agent-appendable,
 transcript-cited, TTL'd, settled later by signed ratify/refuse entries.
 """
-import argparse, datetime, hashlib, json, os, pathlib, subprocess, sys
+import argparse
+import contextlib
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import subprocess
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from factory_runtime.directive_scope import DirectiveScopeError, parse_directive_scope
+from factory_runtime.durability import fsync_directory
+from factory_runtime.instruction_control import (
+    InstructionControlError,
+    validate_directive_sources,
+)
 
 LEDGER = pathlib.Path(os.environ.get("DIRECTIVE_LEDGER", "DIRECTIVES/ledger.jsonl"))
 PROV = LEDGER.with_name("provisional.jsonl")
@@ -22,6 +40,88 @@ GENESIS = "0" * 64
 
 def canon(d): return json.dumps(d, sort_keys=True, separators=(",", ":"))
 def ehash(body): return hashlib.sha256(canon(body).encode()).hexdigest()
+
+def chain_bytes(entries):
+    return b"".join((canon(entry) + "\n").encode("utf-8") for entry in entries)
+
+def valid_scope(value):
+    try:
+        parse_directive_scope(value)
+    except DirectiveScopeError as exc:
+        sys.exit(f"invalid directive scope: {exc}")
+    return value
+
+def validate_candidate(signed, provisional):
+    try:
+        validate_directive_sources(
+            ledger_bytes=chain_bytes(signed),
+            provisional_bytes=chain_bytes(provisional),
+        )
+    except InstructionControlError as exc:
+        sys.exit(f"{exc.code}: {exc}")
+
+@contextlib.contextmanager
+def mutation_lock():
+    LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = LEDGER.parent / ".directive.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            sys.exit("directive mutation lock is not a regular file")
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        fsync_directory(LEDGER.parent)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+def ensure_file(path):
+    descriptor = os.open(
+        path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            sys.exit(f"directive chain is not a regular file: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    fsync_directory(path.parent)
+
+def append_line(path, body):
+    payload = (canon(body) + "\n").encode("utf-8")
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    start = 0
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            sys.exit(f"directive chain is not a regular file: {path}")
+        start = metadata.st_size
+        written = 0
+        try:
+            while written < len(payload):
+                count = os.write(descriptor, payload[written:])
+                if count < 1:
+                    raise OSError("directive append made no progress")
+                written += count
+        except OSError:
+            os.ftruncate(descriptor, start)
+            os.fsync(descriptor)
+            raise
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    fsync_directory(path.parent)
 
 def load(required=False):
     if not LEDGER.exists():
@@ -54,6 +154,7 @@ def verify(sigs=False, emit=True, required=True):
         if bodyp.get("prev_hash") != prevp: sys.exit(f"{p.get('id')}: provisional chain broken")
         if ehash(bodyp) != p.get("hash"): sys.exit(f"{p.get('id')}: provisional altered")
         prevp = p["hash"]
+    validate_candidate(entries, provisional)
     if sigs and not (LEDGER.parent / ".git").exists():
         sys.exit("signature verification requested but directive source is not a Git repository")
     if sigs:
@@ -67,15 +168,17 @@ def verify(sigs=False, emit=True, required=True):
 
 def write(body):
     body["hash"] = ehash(body)
-    LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    PROV.touch(exist_ok=True)
-    with open(LEDGER, "a") as f: f.write(canon(body) + "\n")
+    entries = load()
+    provisional = loadp()
+    validate_candidate([*entries, body], provisional)
+    ensure_file(PROV)
+    append_line(LEDGER, body)
     print(body["id"], body["hash"][:12])
 
 def new_body(entries, args, supersedes=None, dispositions=None, quals=None):
     return {"id": f"D-{len(entries)+1:04d}",
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-            "scope": args.scope, "text": args.text,
+            "scope": valid_scope(args.scope), "text": args.text,
             "qualifiers": quals if quals is not None else (args.qualifier or []),
             "supersedes": supersedes, "dispositions": dispositions,
             "prev_hash": entries[-1]["hash"] if entries else GENESIS}
@@ -88,6 +191,9 @@ def cmd_supersede(args):
     if not parent: sys.exit(f"no such directive: {args.parent}")
     if any(e.get("supersedes") == args.parent for e in entries):
         sys.exit(f"{args.parent} already superseded")
+    valid_scope(args.scope)
+    if args.scope != parent["scope"]:
+        sys.exit("supersession refused — replacement scope must exactly match its parent")
     disp = {}
     for s in args.set or []:
         parts = s.split("::", 2)
@@ -110,15 +216,16 @@ def cmd_provisional(args):
     now = datetime.datetime.now(datetime.timezone.utc)
     body = {"id": f"P-{len(entries)+1:04d}",
             "ts": now.isoformat(timespec="seconds"),
-            "scope": args.scope, "text": args.text,
+            "scope": valid_scope(args.scope), "text": args.text,
             "qualifiers": args.qualifier or [],
             "cite": args.cite,   # transcript file:line:uuid:line-sha256
             "expires": (now + datetime.timedelta(hours=args.ttl_hours)).isoformat(timespec="seconds"),
             "prev_hash": entries[-1]["hash"] if entries else GENESIS}
     body["hash"] = ehash(body)
-    PROV.parent.mkdir(parents=True, exist_ok=True)
-    LEDGER.touch(exist_ok=True)
-    with open(PROV, "a") as f: f.write(canon(body) + "\n")
+    signed = load()
+    validate_candidate(signed, [*entries, body])
+    ensure_file(LEDGER)
+    append_line(PROV, body)
     print(body["id"], body["hash"][:12], "expires", body["expires"])
 
 def cmd_ratify(args):
@@ -186,4 +293,9 @@ if __name__ == "__main__":
     ac = sub.add_parser("active"); ac.add_argument("--since", default=None)
     ac.set_defaults(f=cmd_active)
     sh = sub.add_parser("show"); sh.add_argument("id"); sh.set_defaults(f=cmd_show)
-    args = p.parse_args(); args.f(args)
+    args = p.parse_args()
+    if args.cmd in {"append", "supersede", "provisional", "ratify"}:
+        with mutation_lock():
+            args.f(args)
+    else:
+        args.f(args)

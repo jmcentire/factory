@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -368,6 +369,69 @@ def test_supersession_with_dispositions_carries_qualifiers(tmp_path: Path) -> No
     active = dl(tmp_path, "active")
     assert "poll hourly" in active.stdout and "to tend them" in active.stdout
     assert "poll the lanes" not in active.stdout  # superseded parent is dead
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("append", "--scope", "role=codre", "--text", "invalid signed scope"),
+        (
+            "provisional",
+            "--scope",
+            "generation=01",
+            "--text",
+            "invalid provisional scope",
+            "--cite",
+            "transcript.jsonl:1:uuid:deadbeef",
+        ),
+    ],
+)
+def test_directive_writers_reject_invalid_scope_without_mutating_either_chain(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    directives = tmp_path / "DIRECTIVES"
+    ledger = directives / "ledger.jsonl"
+    provisional = directives / "provisional.jsonl"
+    before = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (ledger, provisional)
+    }
+
+    result = dl(tmp_path, *arguments)
+
+    after = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (ledger, provisional)
+    }
+    assert result.returncode != 0
+    assert "invalid directive scope" in result.stderr
+    assert after == before
+
+
+def test_directive_supersession_cannot_change_scope_or_mutate_chains(
+    tmp_path: Path,
+) -> None:
+    added = dl(tmp_path, "append", "--scope", "global", "--text", "global rule")
+    assert added.returncode == 0, added.stderr
+    directives = tmp_path / "DIRECTIVES"
+    ledger = directives / "ledger.jsonl"
+    provisional = directives / "provisional.jsonl"
+    before = {path: path.read_bytes() for path in (ledger, provisional)}
+
+    result = dl(
+        tmp_path,
+        "supersede",
+        "D-0001",
+        "--scope",
+        "role=coder",
+        "--text",
+        "narrowed rule",
+    )
+
+    assert result.returncode != 0
+    assert "must exactly match its parent" in result.stderr
+    assert {path: path.read_bytes() for path in (ledger, provisional)} == before
 
 
 def test_provisional_refusal_reclassifies_as_agent_originated(tmp_path: Path) -> None:
@@ -3074,6 +3138,43 @@ def test_lane_env_proceeds_when_blocking_event_absent(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
 
 
+def test_legacy_lane_admission_and_event_production_share_one_ordering_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    root.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+    original_check = mod._file_has_bytes  # type: ignore[attr-defined]
+
+    def paused_check(path: Path) -> bool:
+        result = original_check(path)
+        entered.set()
+        assert release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(mod, "_file_has_bytes", paused_check)
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        admitted = pool.submit(mod.check_lane_admission, root, "validator")
+        assert entered.wait(timeout=5)
+        appended = pool.submit(mod.append_blocking_event, root, "validator", event)
+        time.sleep(0.05)
+        assert not appended.done(), "producer must wait behind legacy admission"
+        release.set()
+        admitted.result(timeout=5)
+        appended.result(timeout=5)
+
+    with pytest.raises(mod.BlockingEventPending):  # type: ignore[attr-defined]
+        mod.check_lane_admission(root, "validator")
+
+
 # --------------------------------------------------------------------------
 # consume_block.sh — the off-ramp that keeps a blocking event from wedging
 # --------------------------------------------------------------------------
@@ -3493,34 +3594,120 @@ def test_attention_lock_orders_overlapping_producer_after_dispatch_admission(
     root.mkdir()
     entered = threading.Event()
     release = threading.Event()
-    original_publish = mod._publish_guard  # type: ignore[attr-defined]
+    original_open = mod._open_dispatch_lock  # type: ignore[attr-defined]
 
-    def paused_publish(root_path: Path, role: str, pid: int) -> Path:
+    def paused_open(root_path: Path, role: str) -> int:
         entered.set()
         assert release.wait(timeout=5)
-        return original_publish(root_path, role, pid)
+        return original_open(root_path, role)
 
-    monkeypatch.setattr(mod, "_publish_guard", paused_publish)
+    monkeypatch.setattr(mod, "_open_dispatch_lock", paused_open)
     event = {
         "ts": "2026-08-19T12:00:00+00:00",
         "class": "stall",
         "evidence": "coder quiet 30m",
     }
     with ThreadPoolExecutor(max_workers=2) as pool:
-        admitted = pool.submit(mod.admit_dispatch, root, "coder", pid=1234)
+        admitted = pool.submit(mod.acquire_dispatch_lock, root, "coder")
         assert entered.wait(timeout=5)
         appended = pool.submit(mod.append_blocking_event, root, "coder", event)
         time.sleep(0.05)
         assert not appended.done(), "producer must wait behind the admission ordering point"
         release.set()
-        guard = admitted.result(timeout=5)
+        dispatch_fd = admitted.result(timeout=5)
         appended.result(timeout=5)
 
-    assert guard.is_file()
+    os.close(dispatch_fd)
     assert (root / "lanes" / "coder.blocking").stat().st_size > 0
-    guard.unlink()
     with pytest.raises(mod.BlockingEventPending):  # type: ignore[attr-defined]
-        mod.admit_dispatch(root, "coder", pid=1235)
+        mod.acquire_dispatch_lock(root, "coder")
+
+
+@pytest.mark.parametrize("receipt_was_written", [False, True])
+def test_blocking_event_exact_retry_recovers_receipt_crash_without_duplicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_was_written: bool,
+) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    root.mkdir()
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "coder quiet 30m",
+    }
+    original_append = mod._append_jsonl  # type: ignore[attr-defined]
+    calls = 0
+
+    def fail_receipt(path: Path, body: Mapping[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if receipt_was_written:
+                original_append(path, body)
+            raise OSError("injected receipt crash")
+        original_append(path, body)
+
+    monkeypatch.setattr(mod, "_append_jsonl", fail_receipt)
+    with pytest.raises(OSError, match="injected receipt crash"):
+        mod.append_blocking_event(root, "coder", event)
+    monkeypatch.setattr(mod, "_append_jsonl", original_append)
+
+    mod.append_blocking_event(root, "coder", event)
+
+    blocking = read_chain(root / "lanes" / "coder.blocking")
+    written = [
+        row
+        for row in read_chain(root / "events.jsonl")
+        if row.get("kind") == "blocking_written" and row.get("lane") == "coder"
+    ]
+    assert blocking == [event]
+    assert len(written) == 1
+
+
+def test_blocking_event_partial_append_rolls_back_and_exact_retry_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    root.mkdir()
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "coder quiet 30m",
+    }
+    original_write = mod.os.write  # type: ignore[attr-defined]
+    calls = 0
+
+    def interrupted_write(descriptor: int, payload: bytes) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return original_write(descriptor, payload[:7])
+        if calls == 2:
+            raise OSError("injected partial event append")
+        return original_write(descriptor, payload)
+
+    monkeypatch.setattr(mod.os, "write", interrupted_write)  # type: ignore[attr-defined]
+    with pytest.raises(OSError, match="injected partial event append"):
+        mod.append_blocking_event(root, "coder", event)
+    monkeypatch.setattr(mod.os, "write", original_write)  # type: ignore[attr-defined]
+
+    blocker = root / "lanes" / "coder.blocking"
+    assert blocker.read_bytes() == b""
+
+    mod.append_blocking_event(root, "coder", event)
+
+    assert read_chain(blocker) == [event]
+    assert len(
+        [
+            row
+            for row in read_chain(root / "events.jsonl")
+            if row.get("kind") == "blocking_written" and row.get("lane") == "coder"
+        ]
+    ) == 1
 
 
 @pytest.mark.parametrize("retained_publications", [1, 2, 3, 4])
@@ -3590,6 +3777,57 @@ def test_dispatch_exact_retry_recovers_after_partial_instruction_publication(
     assert recovered.returncode == 0, recovered.stdout + recovered.stderr
     assert retained_dispatch.read_bytes() == dispatch.read_bytes()
     assert all(path.is_file() for path in publications)
+
+
+def test_dispatch_sigkill_releases_role_lock_and_exact_retry_recovers(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    environment = _dispatch_env(stub, root)
+    marker = tmp_path / "killed-after-instruction-publication"
+    delegate = tmp_path / "kill-dispatch-parent.py"
+    delegate.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, signal, subprocess, sys\n"
+        "marker = pathlib.Path(os.environ['FACTORY_TEST_KILL_MARKER'])\n"
+        "if sys.argv[1:2] == ['prepare-lane-dispatch'] and not marker.exists():\n"
+        "    completed = subprocess.run(\n"
+        "        [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]]\n"
+        "    )\n"
+        "    if completed.returncode != 0: raise SystemExit(completed.returncode)\n"
+        "    marker.write_text('published before SIGKILL\\n', encoding='utf-8')\n"
+        "    os.kill(os.getppid(), signal.SIGKILL)\n"
+        "    raise SystemExit(70)\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    delegate.chmod(0o755)
+    environment.update(
+        {
+            "FACTORY_CLI": str(delegate),
+            "FACTORY_TEST_KILL_MARKER": str(marker),
+        }
+    )
+    command = [
+        "bash",
+        str(HARNESS / "dispatch_lane.sh"),
+        "r1",
+        "coder",
+        "--dispatch",
+        str(dispatch),
+    ]
+
+    killed = run(command, cwd, environment)
+
+    assert killed.returncode != 0
+    assert marker.is_file()
+    retained_dispatch = root / "dispatch-inputs" / "coder.json"
+    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
+
+    recovered = run(command, cwd, environment)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
 
 
 # --------------------------------------------------------------------------

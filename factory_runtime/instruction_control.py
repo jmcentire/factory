@@ -17,6 +17,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.directive_scope import (
+    DIRECTIVE_ROLES,
+    DirectiveScopeError,
+    directive_scope_applies,
+    parse_directive_scope,
+    valid_directive_run_id,
+)
 from factory_runtime.schema import DocumentValidationError, validate_document
 
 GENESIS_HASH = "0" * 64
@@ -30,9 +37,7 @@ MAX_DOCTRINE_BYTES = 1_048_576
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _SIGNED_ID = re.compile(r"^D-[0-9]{4}$")
 _PROVISIONAL_ID = re.compile(r"^P-[0-9]{4}$")
-_ROLES = frozenset({"coder", "tester", "validator", "orchestrator"})
 _ROLE_TITLES = {"coder": "Coder", "tester": "Tester", "validator": "Validator"}
-_SCOPE_KEY_ORDER = ("run", "generation", "role")
 
 
 class InstructionControlError(ValueError):
@@ -94,37 +99,15 @@ def _scope_applies(scope: object, *, run_id: str, generation: int, role: str) ->
     values, noncanonical integers, and unsupported roles refuse instead of becoming broad scope.
     """
 
-    value = _bounded_text(scope, label="directive scope")
-    if value in {"global", "run"}:
-        return True
-    selectors: dict[str, str] = {}
-    parts = value.split(";")
-    for part in parts:
-        key, separator, selected = part.partition("=")
-        if not separator or not selected or key in selectors or key not in _SCOPE_KEY_ORDER:
-            raise InstructionControlError("INVALID_SCOPE", f"unknown directive scope: {value!r}")
-        selectors[key] = selected
-    canonical_keys = [key for key in _SCOPE_KEY_ORDER if key in selectors]
-    if [part.partition("=")[0] for part in parts] != canonical_keys:
-        raise InstructionControlError("INVALID_SCOPE", f"noncanonical directive scope: {value!r}")
-    if "run" in selectors and not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", selectors["run"]
-    ):
-        raise InstructionControlError("INVALID_SCOPE", f"invalid run directive scope: {value!r}")
-    if "generation" in selectors and not re.fullmatch(r"[1-9][0-9]*", selectors["generation"]):
-        raise InstructionControlError(
-            "INVALID_SCOPE", f"invalid generation directive scope: {value!r}"
+    try:
+        return directive_scope_applies(
+            scope,
+            run_id=run_id,
+            generation=generation,
+            role=role,
         )
-    if "role" in selectors and selectors["role"] not in _ROLES:
-        raise InstructionControlError("INVALID_SCOPE", f"invalid role directive scope: {value!r}")
-    return (
-        ("run" not in selectors or selectors["run"] == run_id)
-        and (
-            "generation" not in selectors
-            or int(selectors["generation"]) == generation
-        )
-        and ("role" not in selectors or selectors["role"] == role)
-    )
+    except DirectiveScopeError as exc:
+        raise InstructionControlError("INVALID_SCOPE", str(exc)) from exc
 
 
 def _parse_jsonl(raw: bytes, *, label: str) -> list[dict[str, Any]]:
@@ -214,7 +197,10 @@ def _validate_provisional(entries: Sequence[dict[str, Any]]) -> dict[str, dict[s
             raise InstructionControlError(
                 "INVALID_PROVISIONAL", f"{identifier} does not expire after creation"
             )
-        _bounded_text(entry["scope"], label=f"{identifier} scope")
+        try:
+            parse_directive_scope(entry["scope"])
+        except DirectiveScopeError as exc:
+            raise InstructionControlError("INVALID_SCOPE", str(exc)) from exc
         _bounded_text(entry["text"], label=f"{identifier} text")
         _bounded_text(entry["cite"], label=f"{identifier} citation")
         _qualifiers(entry["qualifiers"], label=identifier)
@@ -248,7 +234,10 @@ def _validate_signed(
                 "INVALID_DIRECTIVE", f"{identifier or 'directive'} has unknown fields"
             )
         _timestamp(entry["ts"], label=identifier)
-        _bounded_text(entry["scope"], label=f"{identifier} scope")
+        try:
+            parse_directive_scope(entry["scope"])
+        except DirectiveScopeError as exc:
+            raise InstructionControlError("INVALID_SCOPE", str(exc)) from exc
         _bounded_text(entry["text"], label=f"{identifier} text")
         qualifiers = _qualifiers(entry["qualifiers"], label=identifier)
         parent_id = entry["supersedes"]
@@ -352,26 +341,16 @@ def _head(entries: Sequence[Mapping[str, Any]]) -> str:
     return f"sha256:{value}"
 
 
-def derive_effective_directive_contract(
-    *,
+def _validated_sources(
     ledger_bytes: bytes,
     provisional_bytes: bytes,
-    run_id: str,
-    generation: int,
-    role: str,
-    evaluated_at: int,
-) -> dict[str, Any]:
-    """Derive the exact active directives or refuse lower-trust ambiguity.
-
-    The external checkpoint proves which source bytes the run admitted. It does not, by
-    itself, prove the human identity that authored those bytes; signer authentication remains
-    a separate ceremony/boundary and must not be implied by this derived record.
-    """
-
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
-        raise InstructionControlError("INVALID_SCOPE", "run id is invalid")
-    if generation < 1 or role not in _ROLES or evaluated_at < 1:
-        raise InstructionControlError("INVALID_SCOPE", "instruction contract scope is invalid")
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, str],
+    set[str],
+]:
     signed_entries = _parse_jsonl(ledger_bytes, label="directive ledger")
     provisional_entries = _parse_jsonl(provisional_bytes, label="provisional directive chain")
     _verify_hash_chain(
@@ -388,6 +367,39 @@ def derive_effective_directive_contract(
     )
     provisional = _validate_provisional(provisional_entries)
     successor, settled = _validate_signed(signed_entries, provisional)
+    return signed_entries, provisional_entries, provisional, successor, settled
+
+
+def validate_directive_sources(*, ledger_bytes: bytes, provisional_bytes: bytes) -> None:
+    """Validate complete prospective chains without selecting an invocation."""
+
+    _validated_sources(ledger_bytes, provisional_bytes)
+
+
+def derive_effective_directive_contract(
+    *,
+    ledger_bytes: bytes,
+    provisional_bytes: bytes,
+    run_id: str,
+    generation: int,
+    role: str,
+    evaluated_at: int,
+) -> dict[str, Any]:
+    """Derive the exact active directives or refuse lower-trust ambiguity.
+
+    The external checkpoint proves which source bytes the run admitted. It does not, by
+    itself, prove the human identity that authored those bytes; signer authentication remains
+    a separate ceremony/boundary and must not be implied by this derived record.
+    """
+
+    if not valid_directive_run_id(run_id):
+        raise InstructionControlError("INVALID_SCOPE", "run id is invalid")
+    if generation < 1 or role not in DIRECTIVE_ROLES or evaluated_at < 1:
+        raise InstructionControlError("INVALID_SCOPE", "instruction contract scope is invalid")
+    signed_entries, provisional_entries, provisional, successor, settled = _validated_sources(
+        ledger_bytes,
+        provisional_bytes,
+    )
     at = dt.datetime.fromtimestamp(evaluated_at, tz=dt.UTC)
     provisional_applies = {
         identifier: _scope_applies(

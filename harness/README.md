@@ -69,13 +69,16 @@ names a consuming project:
 ## Scripts (control number from docs/HARNESS.md)
 
 - `directive.py` — control 1/1a: verbatim hash-chained ledger, qualifier-preserving
-  supersession, provisional side chain, `verify --sigs`.
+  same-scope supersession, provisional side chain, one shared closed run/generation/role grammar,
+  prospective whole-chain validation, serialized durable writers, and `verify --sigs`.
 - `consume_block.sh` — exact-subject typed disposition of advisory/stall events; it copies the
   supplied run-owned evidence into a content-addressed run artifact before receipting and release.
   A read, stale subject digest, unretained digest string, or acknowledgement cannot clear the gate.
-- `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses HALT
-  and stale grounding. Model dispatch uses the stronger `factory run-model` boundary, which also
-  removes profile inheritance, qualifies Seatbelt, constrains process trees, and receipts config.
+- `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses HALT,
+  stale grounding, and an applicable blocker through the same serialized attention-admission
+  protocol as supported producers. Model dispatch uses the stronger `factory run-model` boundary,
+  which also removes profile inheritance, qualifies Seatbelt, constrains process trees, and
+  receipts config.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
 - `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.

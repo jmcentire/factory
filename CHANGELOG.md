@@ -23,12 +23,19 @@ public API is still pre-1.0.
 - Orchestrator directive selection no longer accepts ambient paths, malformed chains, missing
   sources, or an empty-list fallback. Lane dispatch no longer accepts a bare
   `interpretation_confirmed: true` substring.
+- Supported signed and provisional directive writers now share the runtime's closed scope grammar,
+  validate the complete prospective chains before publishing, serialize mutations, and forbid a
+  supersession from changing its parent's scope. Invalid input leaves both directive chains
+  unchanged instead of permanently poisoning their append-only history.
 - Dispatcher and orchestrator event writers, the disposition consumer, and dispatch admission now
-  share one run-local attention lock. The blocker check and no-replace dispatch guard publication
-  form one ordering point: earlier events deny this invocation; later events gate the next one.
+  share one run-local attention lock. The blocker check and acquisition of a crash-released role
+  mutex form one ordering point: earlier events deny this invocation; later events gate the next
+  one. Legacy `lane_env.sh` admission uses the same serialized check.
 - Blocking events use closed producer shapes. Their disposition receipts and containing directory
   are durable before the blocker is truncated, so malformed evidence and first-use crash windows
   cannot silently clear the gate.
+- Exact blocking-event retries repair an interrupted event/receipt publication without duplicating
+  the event, and partial JSONL appends roll back before the shared lock is released.
 - Exact caller dispatch bytes and instruction artifacts recover idempotently after a crash between
   publications. Existing bytes are stable-read, re-derived, and reused; different bytes refuse.
 - Runner prompt/3 executions emit `factory-runner-receipt/3`. The original receipt/2 schema remains

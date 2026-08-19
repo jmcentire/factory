@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Dispatch one qualified model lane from the exact externally anchored Stage-E target-state.
 set -euo pipefail
+ORIGINAL_ARGS=("$@")
 
 RUN="${1:?usage: dispatch_lane.sh <run> <coder|tester> --dispatch <file> [--runs <path>] [--agent <name>]}"
 ROLE="${2:?role}"
@@ -46,22 +47,16 @@ if any(doc.get(key) != value for key, value in expected.items()):
 PY
 [ -s "$ROOT/grounded" ] || fail "run has no grounding marker; run ground.sh with checked context"
 
-# The shared attention lock makes the no-replace role guard the dispatch-admission ordering point.
-# Every in-tree blocking producer and the disposition consumer takes that same lock. An event made
-# durable first refuses this invocation; an event made durable after the guard belongs to the next
-# dispatch and never mutates an already admitted task.
-DISPATCH_GUARD="$ROOT/dispatch-$ROLE.guard"
-set +e
-ATTENTION_ADMISSION="$(python3 "$D/attention_gate.py" admit \
-  --root "$ROOT" --role "$ROLE" --pid "$$" 2>&1)"
-ATTENTION_RC=$?
-set -e
-if [ "$ATTENTION_RC" -eq 81 ]; then
-  printf '%s\n' "$ATTENTION_ADMISSION" >&2
-  exit 81
+# The first process acquires a crash-released fcntl role mutex while holding the shared attention
+# lock, then execs this script recursively with that descriptor inherited. A durable event before
+# that ordering point refuses this invocation; one after it gates the next. SIGKILL closes the last
+# descriptor automatically, so exact retained inputs remain retryable without stale guard cleanup.
+if [ -z "${FACTORY_DISPATCH_LOCK_FD:-}" ]; then
+  exec python3 "$D/attention_gate.py" hold --root "$ROOT" --role "$ROLE" -- \
+    bash "$0" "${ORIGINAL_ARGS[@]}"
 fi
-[ "$ATTENTION_RC" -eq 0 ] || fail "attention admission failed: $ATTENTION_ADMISSION"
-trap 'rm -f "$DISPATCH_GUARD"' EXIT
+python3 "$D/attention_gate.py" verify-held --root "$ROOT" --role "$ROLE" \
+  --fd "$FACTORY_DISPATCH_LOCK_FD" >/dev/null || fail "inherited dispatch lock is invalid"
 
 [ -n "$DISPATCH_IN" ] && [ -s "$DISPATCH_IN" ] && [ ! -L "$DISPATCH_IN" ] || \
   fail "empty, missing, or symlinked --dispatch file"

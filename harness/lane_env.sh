@@ -6,6 +6,7 @@
 set -euo pipefail
 H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
 GROUND_ROOT="${HARNESS_RUN_ROOT:-$H}"
+D="$(cd "$(dirname "$0")" && pwd -P)"
 [ -e "$H/HALT" ] && { echo "HALT: $(head -1 "$H/HALT")" >&2; exit 75; }
 if [ ! -e "$GROUND_ROOT/grounded" ] || [ -n "$(find "$GROUND_ROOT/grounded" -mmin +"${HARNESS_MAX_GROUND_MIN:-360}" 2>/dev/null)" ]; then
   echo "not grounded: run harness/ground.sh (re-derive state from disk, not memory)" >&2
@@ -21,13 +22,8 @@ fi
 # Gated on HARNESS_RUN/HARNESS_LANE so standalone use (no run context) is
 # unaffected; the caller sets these when launching a lane under a run.
 if [ -n "${HARNESS_RUN:-}" ] && [ -n "${HARNESS_LANE:-}" ]; then
-  BF="${HARNESS_RUN_ROOT:-$H/runs/$HARNESS_RUN}/lanes/$HARNESS_LANE.blocking"
-  if [ -s "$BF" ]; then
-    echo "blocking event pending for lane '$HARNESS_LANE' (run $HARNESS_RUN):" >&2
-    head -3 "$BF" | sed 's/^/  /' >&2
-    echo "consume and clear $BF before this lane can start new work." >&2
-    exit 81
-  fi
+  RUN_ROOT="${HARNESS_RUN_ROOT:-$H/runs/$HARNESS_RUN}"
+  python3 "$D/attention_gate.py" check --root "$RUN_ROOT" --lane "$HARNESS_LANE" >/dev/null
 fi
 MANIFEST="${1:?usage: lane_env.sh <env-manifest> -- <cmd> [args...]}"; shift
 [ "${1:-}" = "--" ] && shift

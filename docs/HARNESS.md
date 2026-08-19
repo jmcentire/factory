@@ -386,7 +386,7 @@ dependency-free (bash + python3 + git):
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
-  applicable blockers and publishes the no-replace role guard as one admission ordering point;
+  applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
   verifies/appends the dispatch chain; requires a role-specific Kindex primer and externally
   checkpoint-bound structural qualification report; then invokes the qualified model runner and
