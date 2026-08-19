@@ -1,0 +1,5 @@
+# The published sdist is an installation source, not a partial repository snapshot.
+# Repository tests depend on fixtures, harness programs, scripts, and doctrine files that are
+# intentionally outside the Python distribution. Shipping only their Python modules makes the
+# archive look testable while guaranteeing collection failures.
+prune tests

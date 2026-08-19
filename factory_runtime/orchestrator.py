@@ -25,11 +25,13 @@ from factory_runtime.acceptance_obligations import (
 )
 from factory_runtime.adversarial_review import (
     VerifiedAdversarialReview,
+    build_review_authority_context,
     build_validator_review_subject,
     load_canonical_review_report,
     retain_validator_adversarial_review,
     verify_validator_adversarial_review,
 )
+from factory_runtime.candidate_diff import CandidateDiffError, build_candidate_review_context
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
@@ -47,8 +49,12 @@ from factory_runtime.lanes import (
 from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
+from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
 from factory_runtime.tessera import VerifiedEnvelope
 from factory_runtime.test_change_authority import (
+    HUMAN_RECEIPT_KEY,
+    TEST_CHANGE_AUTHORIZATION_KEY,
+    VALIDATOR_RECEIPT_KEY,
     TestChangeAuthorityError,
     verify_and_retain_test_change_authorization,
 )
@@ -355,6 +361,7 @@ class FactoryOrchestrator:
             )
         test_change_artifacts: dict[str, str] = {}
         test_change_nonces: list[str] = []
+        test_change_directory: Path | None = None
         if changed_test_ids:
             assert test_change_authorization_path is not None
             assert test_change_human_receipt_path is not None
@@ -375,6 +382,7 @@ class FactoryOrchestrator:
                 raise OrchestrationError(str(exc)) from exc
             test_change_artifacts = dict(stored_test_change.artifact_digests)
             test_change_nonces = list(stored_test_change.authority_nonces)
+            test_change_directory = stored_test_change.directory
 
         retained_acceptance_catalog_path = (
             self.workflow.root
@@ -385,7 +393,8 @@ class FactoryOrchestrator:
             / "catalog.json"
         )
         command_digest, configuration_digest, environment_digest = validator_execution_digests(
-            validator_command
+            validator_command,
+            trusted_paths=validator_trusted_paths,
         )
         trigger = acceptance_catalog.select("validating", "preview")
         expected_execution = {
@@ -514,6 +523,57 @@ class FactoryOrchestrator:
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
             )
+            try:
+                base_source_snapshot, candidate_change_set = build_candidate_review_context(
+                    target_state=validation_projection.target_state,
+                    candidate_root=coder_snapshot.files_directory / "artifact",
+                    candidate_digest=candidate_digest,
+                    construction_mode=prepared.plan.construction_mode,
+                )
+                checkpoint_bytes = read_stable_regular_bytes(
+                    resume_checkpoint_path,
+                    label="Validator review resume checkpoint",
+                    max_bytes=4 * 1024 * 1024,
+                )
+                configuration_sources = {
+                    name: read_stable_regular_bytes(
+                        source,
+                        label=f"Validator review configuration source {name!r}",
+                        max_bytes=4 * 1024 * 1024,
+                    )
+                    for name, source in sorted(resume_configuration_sources.items())
+                }
+                test_change_sources: dict[str, bytes] = {}
+                if test_change_directory is not None:
+                    test_change_sources = {
+                        TEST_CHANGE_AUTHORIZATION_KEY: read_stable_regular_bytes(
+                            test_change_directory / "authorization.json",
+                            label="retained test-change authorization",
+                            max_bytes=4 * 1024 * 1024,
+                        ),
+                        HUMAN_RECEIPT_KEY: read_stable_regular_bytes(
+                            test_change_directory / "human-receipt.tessera.json",
+                            label="retained human test-change receipt",
+                            max_bytes=4 * 1024 * 1024,
+                        ),
+                        VALIDATOR_RECEIPT_KEY: read_stable_regular_bytes(
+                            test_change_directory / "validator-receipt.tessera.json",
+                            label="retained Validator test-change receipt",
+                            max_bytes=4 * 1024 * 1024,
+                        ),
+                    }
+                authority_context = build_review_authority_context(
+                    resume_checkpoint_digest=resume.checkpoint_digest,
+                    resume_checkpoint_source_digest=resume.checkpoint_source_digest,
+                    resume_checkpoint_bytes=checkpoint_bytes,
+                    configuration_sources=configuration_sources,
+                    expected_configuration_digests=resume.configuration_digests,
+                    changed_existing_tests=changed_test_ids,
+                    test_change_artifacts=test_change_artifacts,
+                    test_change_sources=test_change_sources,
+                )
+            except (CandidateDiffError, StateAdmissionError) as exc:
+                raise OrchestrationError(str(exc)) from exc
             review_subject = build_validator_review_subject(
                 run_id=run_id,
                 generation=validation_projection.generation,
@@ -522,6 +582,9 @@ class FactoryOrchestrator:
                 resolved_commit=str(validation_projection.target_state.get("resolved_commit", "")),
                 resolved_tree=str(validation_projection.target_state.get("resolved_tree", "")),
                 reviewer_identity=verifier_identity,
+                base_source_snapshot=base_source_snapshot,
+                candidate_change_set=candidate_change_set,
+                authority_context=authority_context,
                 build_input_digest=str(prepared.artifact_digests["build-input"]),
                 pattern_catalog_digest=str(prepared.artifact_digests["pattern-catalog"]),
                 pattern_catalog_source_digest=str(

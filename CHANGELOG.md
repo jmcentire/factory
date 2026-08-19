@@ -8,12 +8,14 @@ public API is still pre-1.0.
 ### Added
 
 - A mandatory immutable Validator adversarial-review gate before preview. A closed subject binds
-  the exact ratified intent/architecture/operations, build input, build plan, pattern catalog,
-  acceptance obligations, frozen implementation/tests and snapshots, target state, and Validator
-  execution contract. The closed report requires eight code-owned engineering lenses, exact cited
-  bytes, content-addressed findings and refutations, typed clean-claim checks, and a host-derived
-  verdict. Review remains evidence-only and grants no merge, release, deploy, or promotion
-  authority.
+  the complete bounded Git-object baseline, canonical candidate change set, exact ratified
+  intent/architecture/operations, build input, build plan, pattern catalog, acceptance obligations,
+  frozen implementation/tests and snapshots, resume checkpoint, configuration and exceptional
+  test-change authority, target state, and frozen Validator executable identity. The closed report
+  requires eight code-owned engineering lenses, exact cited bytes, content-addressed findings,
+  typed clean-claim checks, and a host-derived verdict. The `/1` protocol grants no self-refutation
+  authority: every emitted finding prevents a clean verdict. Review remains evidence-only and
+  grants no merge, release, deploy, or promotion authority.
 
 - A closed effective-directive contract derived from externally checkpoint-bound directive and
   provisional sources, with a canonical run/generation/role scope grammar, same-scope
@@ -71,6 +73,9 @@ public API is still pre-1.0.
   now retain typed diagnostics and receipts. Existing failure evidence is compared and fsynced
   through one stable descriptor, and state capsules require exact canonical bytes rather than only
   parsed-object equality.
+- Release CI now builds and inspects both wheel and sdist, installs and smokes each artifact outside
+  the source checkout, requires every runtime schema and CLI entry point, preserves the historical
+  runner-receipt/2 bytes, and excludes the incomplete repository test tree from published sdists.
 
 ### Explicit boundaries
 

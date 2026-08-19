@@ -44,6 +44,29 @@ jobs:
       - name: Run deterministic Factory gate
         run: make ship
 
+      - name: Build and inspect published artifacts
+        run: |
+          python -m build --sdist --wheel --outdir "$RUNNER_TEMP/factory-dist"
+          python scripts/check_distribution.py --dist-dir "$RUNNER_TEMP/factory-dist"
+
+      - name: Smoke the installed wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/factory-wheel-venv"
+          "$RUNNER_TEMP/factory-wheel-venv/bin/python" -m pip install \
+            "$RUNNER_TEMP/factory-dist"/factory_core-*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/factory-wheel-venv/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/smoke_installed_distribution.py"
+
+      - name: Build and smoke from the sdist
+        run: |
+          python -m venv "$RUNNER_TEMP/factory-sdist-venv"
+          "$RUNNER_TEMP/factory-sdist-venv/bin/python" -m pip install \
+            "$RUNNER_TEMP/factory-dist"/factory_core-*.tar.gz
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/factory-sdist-venv/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/smoke_installed_distribution.py"
+
       - name: Build pinned Tessera
         working-directory: tessera
         run: cargo build --release -p tessera

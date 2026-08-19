@@ -36,6 +36,7 @@ from tests.conftest import (
     generation_artifacts,
     preview_artifacts,
     ratification_receipts,
+    synthetic_candidate_digest,
     terminalize_run_resources,
     validation_artifacts,
 )
@@ -45,7 +46,7 @@ SOURCE = "sha256:" + ("2" * 64)
 PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
-CANDIDATE = "sha256:" + ("a" * 64)
+CANDIDATE = synthetic_candidate_digest()
 OTHER_CANDIDATE = "sha256:" + ("b" * 64)
 
 
@@ -101,6 +102,7 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        verifier_identity="validator",
     )
     return store
 

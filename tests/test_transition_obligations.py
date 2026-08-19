@@ -23,6 +23,7 @@ from tests.conftest import (
     generation_artifacts,
     ratification_receipts,
     standin_test_change_authorization_artifacts,
+    synthetic_candidate_digest,
     validation_artifacts,
 )
 
@@ -31,7 +32,7 @@ SOURCE = "sha256:" + ("2" * 64)
 PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
-CANDIDATE = "sha256:" + ("a" * 64)
+CANDIDATE = synthetic_candidate_digest()
 
 
 def test_identical_evidence_is_fsynced_with_final_directory_and_parent(

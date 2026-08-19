@@ -302,12 +302,15 @@ this IR; Tester receives only the common ratified build input.
 Validation now includes a mandatory adversarial code review over the same immutable evidence, not
 an optional instruction to "look carefully." Before the Validator runs, the host issues a closed
 review subject binding the frozen implementation/tests and snapshots, all three ratified phase
-artifacts, build input, plan, pattern catalog, acceptance obligations, target state, and Validator
-execution contract. The Validator's canonical report must cover intent, architecture, redundancy,
-clarity, separation of concerns, test adequacy, correctness/failure, and scope; cite exact retained
-line bytes; content-address findings before refutation; and complete every host-declared clean-claim
-check. The host re-derives the subject, cited evidence, completeness, finding identities, and
-verdict. Anything stale, incomplete, disputed, blocking, or still surviving stops
+artifacts, complete bounded Git-object baseline and canonical candidate change set, build input,
+plan, pattern catalog, acceptance obligations, resume checkpoint, configuration and exceptional
+test-change authority, target state, and frozen Validator executable identity. The Validator's
+canonical report must cover intent, architecture, redundancy, clarity, separation of concerns,
+test adequacy, correctness/failure, and scope; cite exact retained line bytes; content-address every
+finding; and complete every host-declared clean-claim check. The `/1` report cannot self-refute:
+every emitted finding survives and prevents a clean verdict. The host re-derives the subject,
+cited evidence, completeness, finding identities, and verdict. Anything stale, incomplete,
+blocking, or found stops
 `VALIDATING -> PREVIEW`. `CLEAN_QUALIFIED` is evidence only and cannot authorize merge, release,
 deployment, or promotion.
 
@@ -319,9 +322,10 @@ not another self-authorized specification round. Existing tests remain immutable
 signed authority uniquely supersedes the old same-phase behavior and a separately trusted human
 ruling binds the exact assertion (or frozen family) and exact signed replacement statement.
 The runtime binds the construction mode today; mechanical `brownfield` path/surface-ceiling
-enforcement against the produced candidate remains unwired, so the label itself is not scope
-evidence. A legitimate target-ABI change starts a new authorized run rather than bypassing drift
-detection inside an existing run.
+enforcement against the produced candidate remains unwired. The adversarial review therefore
+fails closed as `INCOMPLETE` for `brownfield`; only `regenerate` currently supplies a complete
+baseline-to-candidate change set that can advance to preview. A legitimate target-ABI change starts
+a new authorized run rather than bypassing drift detection inside an existing run.
 
 ## The human surface
 

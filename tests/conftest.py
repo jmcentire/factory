@@ -19,6 +19,26 @@ if str(REPO_ROOT) not in sys.path:
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SYNTHETIC_TARGET = FIXTURES / "synthetic_target" / "target.toml"
+EMPTY_GIT_TREE_SHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+SYNTHETIC_CANDIDATE_BYTES = b"fixture candidate\n"
+
+
+def synthetic_candidate_digest() -> str:
+    """Address the one-file candidate used by state-machine review fixtures."""
+
+    from factory_core.manifest import digest_bytes, digest_obj
+
+    return digest_obj(
+        {
+            "files": [
+                {
+                    "path": "artifact.py",
+                    "mode": 0o644,
+                    "digest": digest_bytes(SYNTHETIC_CANDIDATE_BYTES),
+                }
+            ]
+        }
+    )
 
 
 def ratification_receipts(phase: str) -> dict[str, str]:
@@ -132,7 +152,7 @@ def acceptance_catalog_artifacts(
     store: Any,
     *,
     run_id: str = "run-1",
-    command: tuple[str, ...] = ("fixture-validator",),
+    command: tuple[str, ...] | None = None,
 ) -> dict[str, str]:
     """Retain a real minimal catalog for state-machine tests that later enter preview.
 
@@ -148,7 +168,10 @@ def acceptance_catalog_artifacts(
     )
 
     projection = store.load(run_id)
-    command_digest, configuration_digest, environment_digest = validator_execution_digests(command)
+    selected_command = command or (sys.executable,)
+    command_digest, configuration_digest, environment_digest = validator_execution_digests(
+        selected_command
+    )
     assertion_digest = digest_obj(
         {"test_id": "fixture-acceptance", "expectation": "fixture passes"}
     )
@@ -254,14 +277,23 @@ def preview_artifacts(
     *,
     run_id: str = "run-1",
     candidate: str | None = None,
+    reviewer_identity: str = "validator",
 ) -> dict[str, str]:
-    """Retain and address a freshly re-derived acceptance report for preview."""
+    """Retain freshly re-derived acceptance and adversarial-review evidence for preview."""
 
-    from factory_core.manifest import digest_obj
+    from factory_core.manifest import digest_bytes, digest_obj
     from factory_runtime.acceptance_obligations import (
         AcceptanceObligationCatalog,
         derive_acceptance_obligation_report,
         retain_acceptance_obligation_report,
+    )
+    from factory_runtime.adversarial_review import (
+        REQUIRED_COMPLETENESS_CHECKS,
+        REQUIRED_REVIEW_DIMENSIONS,
+        VerifiedAdversarialReview,
+        build_review_authority_context,
+        build_validator_review_subject,
+        retain_validator_adversarial_review,
     )
 
     projection = store.load(run_id)
@@ -358,14 +390,173 @@ def preview_artifacts(
         trusted_evidence_digests=trusted,
     )
     report_digest = retain_acceptance_obligation_report(store.root, run_id, report)
+    catalog_source_digest = digest_bytes(catalog_path.read_bytes())
+    snapshot_body = {
+        "schema_version": "factory-base-source-snapshot/1",
+        "resolved_commit": str(projection.target_state["resolved_commit"]),
+        "resolved_tree": str(projection.target_state["resolved_tree"]),
+        "hash_algorithm": "sha1",
+        "subpath": "",
+        "files": [],
+    }
+    base_source_snapshot = {
+        **snapshot_body,
+        "snapshot_digest": digest_obj(snapshot_body),
+    }
+    change_body = {
+        "schema_version": "factory-candidate-change-set/1",
+        "resolved_commit": str(projection.target_state["resolved_commit"]),
+        "resolved_tree": str(projection.target_state["resolved_tree"]),
+        "subpath": "",
+        "construction_mode": "regenerate",
+        "baseline_snapshot_digest": base_source_snapshot["snapshot_digest"],
+        "candidate_digest": trusted["candidate"],
+        "changed_path_digest": digest_obj(["artifact.py"]),
+        "changes": [
+            {
+                "path": "artifact.py",
+                "kind": "added",
+                "old_type": None,
+                "new_type": "file",
+                "old_mode": None,
+                "new_mode": 0o644,
+                "old_digest": None,
+                "new_digest": digest_bytes(SYNTHETIC_CANDIDATE_BYTES),
+            }
+        ],
+    }
+    candidate_change_set = {
+        **change_body,
+        "change_set_digest": digest_obj(change_body),
+    }
+    checkpoint = {"run_id": run_id, "seed": seed}
+    checkpoint_bytes = (
+        json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    configuration_bytes = b'{"fixture":true}\n'
+    authority_context = build_review_authority_context(
+        resume_checkpoint_digest=digest_obj(checkpoint),
+        resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+        resume_checkpoint_bytes=checkpoint_bytes,
+        configuration_sources={"state-fixture": configuration_bytes},
+        expected_configuration_digests={
+            "state-fixture": digest_bytes(configuration_bytes)
+        },
+        changed_existing_tests=(),
+        test_change_artifacts={},
+        test_change_sources={},
+    )
+    subject = build_validator_review_subject(
+        run_id=run_id,
+        generation=projection.generation,
+        target_digest=projection.target_digest,
+        target_state_digest=projection.target_state_digest,
+        resolved_commit=str(projection.target_state["resolved_commit"]),
+        resolved_tree=str(projection.target_state["resolved_tree"]),
+        reviewer_identity=reviewer_identity,
+        base_source_snapshot=base_source_snapshot,
+        candidate_change_set=candidate_change_set,
+        authority_context=authority_context,
+        build_input_digest=str(projection.generation_artifact_digests["build-input"]),
+        pattern_catalog_digest=str(
+            projection.generation_artifact_digests["pattern-catalog"]
+        ),
+        pattern_catalog_source_digest=str(
+            projection.generation_artifact_digests["pattern-catalog-source"]
+        ),
+        build_plan_digest=str(projection.generation_artifact_digests["build-plan"]),
+        build_plan_source_digest=str(
+            projection.generation_artifact_digests["build-plan-source"]
+        ),
+        phase_artifact_digests=projection.phase_artifact_digests,
+        acceptance_obligation_catalog_digest=catalog.content_digest,
+        acceptance_obligation_catalog_source_digest=catalog_source_digest,
+        candidate_digest=trusted["candidate"],
+        acceptance_tests_digest=trusted["acceptance-tests"],
+        coder_output_snapshot_digest=trusted["coder-output-snapshot"],
+        tester_output_snapshot_digest=trusted["tester-output-snapshot"],
+        command_digest=str(report["command_digest"]),
+        configuration_digest=str(report["configuration_digest"]),
+        environment_digest=str(report["environment_digest"]),
+    )
+
+    def review_reference(source: str, path: str) -> dict[str, object]:
+        return {
+            "source": source,
+            "path": path,
+            "start_line": 1,
+            "end_line": 1,
+            "excerpt_digest": digest_obj(
+                {"seed": seed, "review_source": source, "path": path}
+            ),
+        }
+
+    references = [
+        review_reference("implementation", "artifact.py"),
+        review_reference("acceptance-tests", "acceptance_test.py"),
+        review_reference("build-input", "build-input.json"),
+        review_reference("pattern-catalog", "pattern-catalog.json"),
+        review_reference("build-plan", "build-plan.json"),
+        review_reference(
+            "acceptance-obligation-catalog", "acceptance-obligation-catalog.json"
+        ),
+        review_reference(
+            "acceptance-observations", "acceptance-obligation-observations.json"
+        ),
+        review_reference("baseline-source", "fixture-missing-baseline.txt"),
+        review_reference("candidate-change-set", "candidate-change-set.json"),
+        review_reference(
+            "review-authority-context", "review-authority-context.json"
+        ),
+    ]
+    review_report = {
+        "schema_version": "factory-validator-adversarial-review/1",
+        "authority": "review-evidence-only",
+        "subject_digest": digest_obj(subject),
+        "reviewer_identity": reviewer_identity,
+        "acceptance_observations_digest": str(report["observations_digest"]),
+        "dimensions": [
+            {
+                "dimension_id": dimension,
+                "state": "COMPLETED",
+                "summary": f"Fixture completed {dimension}.",
+                "evidence": [references[0]],
+            }
+            for dimension in REQUIRED_REVIEW_DIMENSIONS
+        ],
+        "findings": [],
+        "completeness": {
+            "state": "COMPLETED",
+            "summary": "Fixture completed the independent clean-claim challenge.",
+            "checks": [
+                {
+                    "check_id": check_id,
+                    "state": "COMPLETED",
+                    "summary": f"Fixture completed {check_id}.",
+                    "evidence": [references[2]],
+                }
+                for check_id in REQUIRED_COMPLETENESS_CHECKS
+            ],
+            "evidence": references,
+        },
+        "verdict": "CLEAN_QUALIFIED",
+    }
+    verified_review = VerifiedAdversarialReview(
+        subject=subject,
+        report=review_report,
+        subject_digest=digest_obj(subject),
+        report_digest=digest_obj(review_report),
+    )
+    review_artifacts = retain_validator_adversarial_review(
+        store.root,
+        run_id,
+        verified_review,
+    )
     return {
         "candidate": trusted["candidate"],
         "acceptance-tests": trusted["acceptance-tests"],
         "acceptance-obligation-report": report_digest,
-        "validator-review-subject": "sha256:"
-        + hashlib.sha256(f"{seed}:validator-review-subject".encode()).hexdigest(),
-        "validator-adversarial-review": "sha256:"
-        + hashlib.sha256(f"{seed}:validator-adversarial-review".encode()).hexdigest(),
+        **dict(review_artifacts),
         "evidence-bundle": "sha256:"
         + hashlib.sha256(f"{seed}:evidence-bundle".encode()).hexdigest(),
         "evidence-envelope": "sha256:"
@@ -428,7 +619,7 @@ def create_intake_run(
         "observed_ref_object": commit,
         "peeled_object": commit,
         "resolved_commit": commit,
-        "resolved_tree": hashlib.sha256(f"{run_id}:tree".encode()).hexdigest()[:40],
+        "resolved_tree": EMPTY_GIT_TREE_SHA1,
         "control_root": str(run_dir),
         "object_store": str(run_dir / "target" / "objects.git"),
         "source_root": str(source_root),

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -57,7 +58,7 @@ TRUSTED_EVIDENCE_IDS = frozenset(
     }
 )
 _VALIDATOR_ENVIRONMENT_CONTRACT = {
-    "schema_version": "factory-validator-environment/1",
+    "schema_version": "factory-validator-environment/2",
     "ambient_environment": "closed",
     "network": "denied",
     "read_scope": [
@@ -67,41 +68,355 @@ _VALIDATOR_ENVIRONMENT_CONTRACT = {
         "acceptance-obligation-catalog",
         "coder-output-snapshot",
         "tester-output-snapshot",
-        "trusted-runner-paths",
+        "validator-execution-snapshot",
     ],
     "write_scope": ["validator-work", "validator-output"],
 }
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MAX_VALIDATOR_EXECUTION_FILES = 4096
+_MAX_VALIDATOR_EXECUTION_BYTES = 128 * 1024 * 1024
 
 
 class AcceptanceObligationError(ValueError):
     """A target acceptance obligation could not be authorized or proved."""
 
 
-def validator_execution_digests(command: Sequence[str]) -> tuple[str, str, str]:
-    """Return the exact command, runner configuration, and closed-environment addresses.
+@dataclass(frozen=True)
+class ValidatorExecutionFile:
+    """One exact file captured for a deterministic Validator execution snapshot."""
 
-    These values are ratified in the catalog before authoring.  The caller cannot describe a
-    friendlier environment than the runtime actually supplies: the environment contract is
-    code-owned, while the command bytes remain an explicit human decision.
+    snapshot_path: str
+    content: bytes
+    mode: int
+
+
+@dataclass(frozen=True)
+class ValidatorExecutionCapture:
+    """Exact Validator executable/input bytes plus their path-and-byte-bound manifest."""
+
+    document: Mapping[str, Any]
+    files: tuple[ValidatorExecutionFile, ...]
+
+    @property
+    def identity_digest(self) -> str:
+        return digest_obj(dict(self.document))
+
+    @property
+    def command_digest(self) -> str:
+        # The command address is the canonical manifest address itself. Catalogs, review
+        # subjects, and attempt evidence therefore share one directly recoverable identity.
+        return self.identity_digest
+
+    @property
+    def configuration_digest(self) -> str:
+        return digest_obj(
+            {
+                "schema_version": "factory-validator-configuration/2",
+                "runner": "isolated-build-loop/2",
+                "command_digest": self.command_digest,
+                "execution_identity_digest": self.identity_digest,
+                "snapshot_tree_digest": self.document["snapshot_tree_digest"],
+            }
+        )
+
+    @property
+    def environment_digest(self) -> str:
+        return digest_obj(_VALIDATOR_ENVIRONMENT_CONTRACT)
+
+    @property
+    def digests(self) -> tuple[str, str, str]:
+        return self.command_digest, self.configuration_digest, self.environment_digest
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _capture_regular_file(path: Path, *, label: str) -> tuple[bytes, int]:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise AcceptanceObligationError(f"{label} is not a regular file")
+        chunks: list[bytes] = []
+        byte_count = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            byte_count += len(chunk)
+            if byte_count > _MAX_VALIDATOR_EXECUTION_BYTES:
+                raise AcceptanceObligationError("Validator execution inputs exceed the byte limit")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        installed = os.lstat(path)
+        if (
+            _file_identity(before) != _file_identity(after)
+            or stat.S_ISLNK(installed.st_mode)
+            or (installed.st_dev, installed.st_ino) != (after.st_dev, after.st_ino)
+        ):
+            raise AcceptanceObligationError(f"{label} changed while it was captured")
+        return b"".join(chunks), stat.S_IMODE(after.st_mode)
+    except OSError as exc:
+        raise AcceptanceObligationError(f"{label} is unavailable: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _resolve_executable(value: str) -> tuple[str, Path]:
+    candidate = Path(value)
+    selected = value
+    if not candidate.is_absolute() and candidate.parent == Path("."):
+        selected = shutil.which(value) or ""
+        if not selected:
+            raise AcceptanceObligationError(f"Validator executable is unavailable: {value}")
+        candidate = Path(selected)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise AcceptanceObligationError(
+            f"Validator executable is unavailable: {value}: {exc}"
+        ) from exc
+    return selected, resolved
+
+
+def _capture_input(
+    *,
+    input_id: str,
+    declared_path: str,
+    source: Path,
+    roles: Sequence[str],
+) -> tuple[dict[str, Any], list[ValidatorExecutionFile]]:
+    snapshot_root = f"inputs/{input_id}"
+    files: list[ValidatorExecutionFile] = []
+    rows: list[dict[str, Any]] = []
+    input_byte_count = 0
+    if source.is_symlink():
+        raise AcceptanceObligationError(f"Validator execution input is a symlink: {declared_path}")
+    if source.is_file():
+        content, mode = _capture_regular_file(source, label=f"Validator input {declared_path}")
+        local_path = "payload"
+        files.append(ValidatorExecutionFile(f"{snapshot_root}/{local_path}", content, mode))
+        input_byte_count = len(content)
+        rows.append(
+            {
+                "path": local_path,
+                "mode": mode,
+                "byte_count": len(content),
+                "content_digest": digest_bytes(content),
+            }
+        )
+        kind = "file"
+    elif source.is_dir():
+        root_before = os.lstat(source)
+        if not stat.S_ISDIR(root_before.st_mode):
+            raise AcceptanceObligationError(
+                f"Validator execution input is not a real directory: {declared_path}"
+            )
+        kind = "directory"
+        for path in sorted(source.rglob("*")):
+            relative = path.relative_to(source).as_posix()
+            if path.is_symlink():
+                raise AcceptanceObligationError(
+                    f"Validator execution input contains a symlink: {declared_path}/{relative}"
+                )
+            if path.is_dir():
+                continue
+            content, mode = _capture_regular_file(
+                path,
+                label=f"Validator input {declared_path}/{relative}",
+            )
+            files.append(
+                ValidatorExecutionFile(f"{snapshot_root}/{relative}", content, mode)
+            )
+            input_byte_count += len(content)
+            if input_byte_count > _MAX_VALIDATOR_EXECUTION_BYTES:
+                raise AcceptanceObligationError("Validator execution inputs exceed the byte limit")
+            rows.append(
+                {
+                    "path": relative,
+                    "mode": mode,
+                    "byte_count": len(content),
+                    "content_digest": digest_bytes(content),
+                }
+            )
+            if len(files) > _MAX_VALIDATOR_EXECUTION_FILES:
+                raise AcceptanceObligationError("Validator execution inputs exceed the file limit")
+        root_after = os.lstat(source)
+        if _file_identity(root_before) != _file_identity(root_after):
+            raise AcceptanceObligationError(
+                f"Validator execution input changed while it was captured: {declared_path}"
+            )
+        if not rows:
+            raise AcceptanceObligationError(
+                f"Validator execution input directory is empty: {declared_path}"
+            )
+    else:
+        raise AcceptanceObligationError(
+            f"Validator execution input is not a regular file or directory: {declared_path}"
+        )
+    identity_rows = [
+        {
+            "path": row["path"],
+            "mode": row["mode"],
+            "byte_count": row["byte_count"],
+            "content_digest": row["content_digest"],
+        }
+        for row in rows
+    ]
+    return (
+        {
+            "input_id": input_id,
+            "roles": sorted(set(roles)),
+            "declared_path": declared_path,
+            "resolved_path": str(source),
+            "kind": kind,
+            "snapshot_path": snapshot_root,
+            "tree_digest": digest_obj({"files": identity_rows}),
+            "files": identity_rows,
+        },
+        files,
+    )
+
+
+def capture_validator_execution(
+    command: Sequence[str],
+    *,
+    trusted_paths: Sequence[str | Path] = (),
+) -> ValidatorExecutionCapture:
+    """Capture the exact executable and trusted inputs behind one Validator argv.
+
+    The returned bytes are the sole source used to construct an attempt-local frozen snapshot.
+    Reopening the mutable source path for launch would break this contract.
     """
 
     argv = [str(part) for part in command]
     if not argv or any(not part for part in argv):
         raise AcceptanceObligationError("Validator command cannot be empty")
-    command_digest = digest_obj({"argv": argv})
-    configuration_digest = digest_obj(
+    _, executable = _resolve_executable(argv[0])
+    declared: list[tuple[str, Path, set[str]]] = [
+        (argv[0], executable, {"primary-executable"})
+    ]
+    seen = {executable}
+    for raw_path in trusted_paths:
+        declared_path = os.fspath(raw_path)
+        try:
+            resolved = Path(raw_path).resolve(strict=True)
+        except OSError as exc:
+            raise AcceptanceObligationError(
+                f"Validator trusted input is unavailable: {declared_path}: {exc}"
+            ) from exc
+        if resolved in seen:
+            for _, existing, roles in declared:
+                if existing == resolved:
+                    roles.add("trusted-runner-input")
+                    break
+            continue
+        seen.add(resolved)
+        declared.append((declared_path, resolved, {"trusted-runner-input"}))
+    declared[1:] = sorted(declared[1:], key=lambda item: (str(item[1]), item[0]))
+
+    inputs: list[dict[str, Any]] = []
+    captured_files: list[ValidatorExecutionFile] = []
+    source_to_input: dict[Path, dict[str, Any]] = {}
+    captured_byte_count = 0
+    for index, (declared_path, source, roles) in enumerate(declared):
+        input_document, input_files = _capture_input(
+            input_id=f"input-{index:03d}",
+            declared_path=declared_path,
+            source=source,
+            roles=tuple(roles),
+        )
+        inputs.append(input_document)
+        captured_byte_count += sum(len(item.content) for item in input_files)
+        if captured_byte_count > _MAX_VALIDATOR_EXECUTION_BYTES:
+            raise AcceptanceObligationError("Validator execution inputs exceed the byte limit")
+        if len(captured_files) + len(input_files) > _MAX_VALIDATOR_EXECUTION_FILES:
+            raise AcceptanceObligationError("Validator execution inputs exceed the file limit")
+        captured_files.extend(input_files)
+        source_to_input[source] = input_document
+    bindings: list[dict[str, Any]] = [
         {
-            "schema_version": "factory-validator-configuration/1",
-            "runner": "isolated-build-loop/1",
-            "command_digest": command_digest,
+            "argv_index": 0,
+            "input_id": inputs[0]["input_id"],
+            "relative_path": "payload",
         }
+    ]
+    for index, value in enumerate(argv[1:], start=1):
+        candidate = Path(value)
+        if not candidate.is_absolute() and not candidate.exists():
+            continue
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise AcceptanceObligationError(
+                f"Validator command path is unavailable: {value}: {exc}"
+            ) from exc
+        bound_input = source_to_input.get(resolved)
+        if bound_input is None:
+            raise AcceptanceObligationError(
+                f"Validator command path is not an admitted trusted input: {value}"
+            )
+        bindings.append(
+            {
+                "argv_index": index,
+                "input_id": bound_input["input_id"],
+                "relative_path": "payload" if bound_input["kind"] == "file" else "",
+            }
+        )
+
+    snapshot_rows = sorted(
+        (
+            {
+                "path": item.snapshot_path,
+                "mode": item.mode,
+                "digest": digest_bytes(item.content),
+            }
+            for item in captured_files
+        ),
+        key=lambda row: str(row["path"]),
     )
-    return (
-        command_digest,
-        configuration_digest,
-        digest_obj(_VALIDATOR_ENVIRONMENT_CONTRACT),
-    )
+    document = {
+        "schema_version": "factory-validator-execution-identity/1",
+        "argv": argv,
+        "path_bindings": bindings,
+        "trusted_input_ids": [
+            item["input_id"] for item in inputs if "trusted-runner-input" in item["roles"]
+        ],
+        "inputs": inputs,
+        "snapshot_tree_digest": digest_obj({"files": snapshot_rows}),
+    }
+    return ValidatorExecutionCapture(document, tuple(captured_files))
+
+
+def validator_execution_digests(
+    command: Sequence[str],
+    *,
+    trusted_paths: Sequence[str | Path] = (),
+) -> tuple[str, str, str]:
+    """Return byte-bound command, runner-configuration, and environment addresses.
+
+    These values are ratified in the catalog before authoring.  The caller cannot describe a
+    friendlier environment than the runtime actually supplies: the environment contract is
+    code-owned, while exact executable and trusted-input bytes remain an explicit human decision.
+    """
+
+    return capture_validator_execution(command, trusted_paths=trusted_paths).digests
 
 
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
@@ -927,6 +1242,9 @@ __all__ = [
     "RATIFY_ACTION",
     "REPORT_ARTIFACT_KEY",
     "StoredAcceptanceCatalog",
+    "ValidatorExecutionCapture",
+    "ValidatorExecutionFile",
+    "capture_validator_execution",
     "derive_acceptance_obligation_report",
     "load_retained_acceptance_catalog",
     "retain_acceptance_obligation_report",

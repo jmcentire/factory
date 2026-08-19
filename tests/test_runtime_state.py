@@ -9,12 +9,14 @@ import pytest
 from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy, digest_obj
 from factory_runtime.state import RunState, RunStateError, RunStore
 from tests.conftest import (
+    EMPTY_GIT_TREE_SHA1,
     acceptance_catalog_artifacts,
     build_payload,
     ci_artifacts,
     generation_artifacts,
     preview_artifacts,
     ratification_receipts,
+    synthetic_candidate_digest,
     terminalize_run_resources,
     validation_artifacts,
 )
@@ -26,7 +28,7 @@ RESOURCE_HEAD = "sha256:" + ("7" * 64)
 PRODUCT = "sha256:" + ("3" * 64)
 ARCHITECTURE = "sha256:" + ("4" * 64)
 OPERATIONS = "sha256:" + ("5" * 64)
-CANDIDATE = "sha256:" + ("a" * 64)
+CANDIDATE = synthetic_candidate_digest()
 
 
 class _Clock:
@@ -59,7 +61,7 @@ def _target_state(store: RunStore) -> dict[str, object]:
         "observed_ref_object": "b" * 40,
         "peeled_object": "b" * 40,
         "resolved_commit": "b" * 40,
-        "resolved_tree": "c" * 40,
+        "resolved_tree": EMPTY_GIT_TREE_SHA1,
         "control_root": str(run_dir),
         "object_store": str(run_dir / "target" / "objects.git"),
         "source_root": str(source_root),
@@ -330,6 +332,7 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        verifier_identity="validator",
     )
 
     # The two anchor states carry authority. This previously walked them with nothing but
@@ -362,6 +365,77 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
     }
 
 
+def test_preview_refuses_missing_retained_adversarial_review(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    artifacts = preview_artifacts(store, candidate=CANDIDATE)
+    retained_report = (
+        tmp_path
+        / "run-1"
+        / "evidence"
+        / "validator-adversarial-reviews"
+        / artifacts["validator-review-subject"].removeprefix("sha256:")
+        / f"{artifacts['validator-adversarial-review'].removeprefix('sha256:')}.json"
+    )
+    retained_report.unlink()
+
+    with pytest.raises(RunStateError, match="adversarial review is invalid"):
+        store.transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="validator",
+            artifact_digests=artifacts,
+            verifier_identity="validator",
+        )
+
+    assert store.load("run-1").state == RunState.VALIDATING
+
+
+def test_replay_refuses_tampered_retained_adversarial_review(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+    )
+    artifacts = preview_artifacts(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1",
+        RunState.PREVIEW,
+        actor="validator",
+        artifact_digests=artifacts,
+        verifier_identity="validator",
+    )
+    retained_subject = (
+        tmp_path
+        / "run-1"
+        / "evidence"
+        / "validator-adversarial-reviews"
+        / artifacts["validator-review-subject"].removeprefix("sha256:")
+        / "subject.json"
+    )
+    retained_subject.write_bytes(b"{}\n")
+
+    with pytest.raises(RunStateError, match="adversarial review is invalid"):
+        RunStore(tmp_path, clock=_Clock()).load("run-1")
+
+
 def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> None:
     from factory_runtime.resources import ResourceLedger
 
@@ -382,6 +456,7 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
         RunState.PREVIEW,
         actor="validator",
         artifact_digests=preview_artifacts(store, candidate=CANDIDATE),
+        verifier_identity="validator",
     )
     store.transition(
         "run-1",
@@ -440,6 +515,7 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
         RunState.PREVIEW,
         actor="other-validator",
         artifact_digests=preview_artifacts(store, "stale", candidate=CANDIDATE),
+        verifier_identity="validator",
     )
     monkeypatch.setattr(store, "load", lambda _run_id: stale)
 

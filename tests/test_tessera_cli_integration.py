@@ -541,7 +541,8 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     tester_command = (sys.executable, str(RUNTIME_FIXTURES / "tester.py"))
     validator_command = (sys.executable, str(RUNTIME_FIXTURES / "validator.py"))
     command_digest, configuration_digest, environment_digest = validator_execution_digests(
-        validator_command
+        validator_command,
+        trusted_paths=(RUNTIME_FIXTURES / "validator.py",),
     )
     examples = (
         ("AC-1", 2, 3, 5),

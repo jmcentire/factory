@@ -1212,6 +1212,11 @@ class RunStore:
                     "candidate",
                     "acceptance-tests",
                     ACCEPTANCE_OBLIGATION_REPORT_KEY,
+                    "validator-review-subject",
+                    "validator-adversarial-review",
+                    "base-source-snapshot",
+                    "candidate-change-set",
+                    "validator-review-authority-context",
                     "evidence-bundle",
                     "evidence-envelope",
                 ),
@@ -1237,13 +1242,24 @@ class RunStore:
                     raise RunStateError(
                         f"{destination} changes {key} after immutable validation began"
                     )
+            review_evidence = {
+                **trusted_evidence,
+                **{
+                    key: supplied[key]
+                    for key in (
+                        "base-source-snapshot",
+                        "candidate-change-set",
+                        "validator-review-authority-context",
+                    )
+                },
+            }
             try:
                 from factory_runtime.acceptance_obligations import (
                     AcceptanceObligationError,
                     verify_retained_acceptance_obligation_report,
                 )
 
-                verify_retained_acceptance_obligation_report(
+                acceptance_report = verify_retained_acceptance_obligation_report(
                     self._run_dir(run_id),
                     catalog_digest=next_acceptance_catalog_digest,
                     report_digest=supplied[ACCEPTANCE_OBLIGATION_REPORT_KEY],
@@ -1259,9 +1275,35 @@ class RunStore:
                     acceptance_tests_digest=supplied["acceptance-tests"],
                     trusted_evidence_digests=trusted_evidence,
                 )
+                from factory_runtime.adversarial_review import (
+                    AdversarialReviewError,
+                    verify_retained_validator_adversarial_review,
+                )
+
+                verify_retained_validator_adversarial_review(
+                    self._run_dir(run_id),
+                    subject_digest=supplied["validator-review-subject"],
+                    report_digest=supplied["validator-adversarial-review"],
+                    run_id=run_id,
+                    generation=current.generation,
+                    target_digest=current.target_digest,
+                    target_state_digest=current.target_state_digest,
+                    resolved_commit=str(current.target_state.get("resolved_commit", "")),
+                    resolved_tree=str(current.target_state.get("resolved_tree", "")),
+                    reviewer_identity=verifier_identity,
+                    generation_artifact_digests=current.generation_artifact_digests,
+                    phase_artifact_digests=phases,
+                    acceptance_obligation_catalog_digest=next_acceptance_catalog_digest,
+                    acceptance_report=acceptance_report,
+                    trusted_evidence_digests=review_evidence,
+                )
             except AcceptanceObligationError as exc:
                 raise RunStateError(
                     f"{destination} acceptance-obligation report is invalid: {exc}"
+                ) from exc
+            except AdversarialReviewError as exc:
+                raise RunStateError(
+                    f"{destination} Validator adversarial review is invalid: {exc}"
                 ) from exc
 
         generation = dict(current.generation_artifact_digests)
@@ -1957,6 +1999,11 @@ class RunStore:
                             "candidate",
                             "acceptance-tests",
                             ACCEPTANCE_OBLIGATION_REPORT_KEY,
+                            "validator-review-subject",
+                            "validator-adversarial-review",
+                            "base-source-snapshot",
+                            "candidate-change-set",
+                            "validator-review-authority-context",
                             "evidence-bundle",
                             "evidence-envelope",
                         ),
@@ -1971,13 +2018,24 @@ class RunStore:
                             raise RunStateError(
                                 f"ledger entry {index} preview changes {key} after validation"
                             )
+                    review_evidence = {
+                        **validation_evidence,
+                        **{
+                            key: str(digests[key])
+                            for key in (
+                                "base-source-snapshot",
+                                "candidate-change-set",
+                                "validator-review-authority-context",
+                            )
+                        },
+                    }
                     try:
                         from factory_runtime.acceptance_obligations import (
                             AcceptanceObligationError,
                             verify_retained_acceptance_obligation_report,
                         )
 
-                        verify_retained_acceptance_obligation_report(
+                        acceptance_report = verify_retained_acceptance_obligation_report(
                             self._run_dir(run_id),
                             catalog_digest=acceptance_obligation_catalog_digest,
                             report_digest=str(digests[ACCEPTANCE_OBLIGATION_REPORT_KEY]),
@@ -1993,9 +2051,38 @@ class RunStore:
                             acceptance_tests_digest=str(digests["acceptance-tests"]),
                             trusted_evidence_digests=validation_evidence,
                         )
+                        from factory_runtime.adversarial_review import (
+                            AdversarialReviewError,
+                            verify_retained_validator_adversarial_review,
+                        )
+
+                        verify_retained_validator_adversarial_review(
+                            self._run_dir(run_id),
+                            subject_digest=str(digests["validator-review-subject"]),
+                            report_digest=str(digests["validator-adversarial-review"]),
+                            run_id=run_id,
+                            generation=generation,
+                            target_digest=target_digest,
+                            target_state_digest=target_state_digest,
+                            resolved_commit=str(target_state.get("resolved_commit", "")),
+                            resolved_tree=str(target_state.get("resolved_tree", "")),
+                            reviewer_identity=str(record.get("verifier_identity", "")),
+                            generation_artifact_digests=generation_artifacts,
+                            phase_artifact_digests=phase_artifacts,
+                            acceptance_obligation_catalog_digest=(
+                                acceptance_obligation_catalog_digest
+                            ),
+                            acceptance_report=acceptance_report,
+                            trusted_evidence_digests=review_evidence,
+                        )
                     except AcceptanceObligationError as exc:
                         raise RunStateError(
                             f"ledger entry {index} preview acceptance-obligation report is "
+                            f"invalid: {exc}"
+                        ) from exc
+                    except AdversarialReviewError as exc:
+                        raise RunStateError(
+                            f"ledger entry {index} preview Validator adversarial review is "
                             f"invalid: {exc}"
                         ) from exc
                 elif destination is RunState.SPECIFICATION_DEFECT:

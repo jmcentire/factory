@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from importlib.resources import files
 from typing import Any
 
 import jsonschema
@@ -15,6 +17,19 @@ from factory_runtime.schema import (
 )
 
 DIGEST = "sha256:" + ("a" * 64)
+RUNNER_RECEIPT_V2_SCHEMA_SHA256 = (
+    "6e3a432425e2b79395c7c7cfdb59b3f09ba0b6b24daf0c952637e71f055f8e7c"
+)
+
+
+def test_runner_receipt_v2_schema_keeps_its_exact_published_bytes() -> None:
+    historical_schema = files("factory_runtime.schemas").joinpath(
+        "runner-receipt-v2.schema.json"
+    )
+
+    assert hashlib.sha256(historical_schema.read_bytes()).hexdigest() == (
+        RUNNER_RECEIPT_V2_SCHEMA_SHA256
+    )
 
 
 def _phase(phase: str, artifact_id: str) -> dict[str, Any]:

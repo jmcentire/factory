@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -13,14 +14,29 @@ from pathlib import Path
 from typing import Protocol
 
 from factory_core.manifest import digest_bytes, digest_obj
-from factory_runtime.acceptance_obligations import validator_execution_digests
+from factory_runtime.acceptance_obligations import (
+    AcceptanceObligationCatalog,
+    AcceptanceObligationError,
+    ValidatorExecutionCapture,
+    capture_validator_execution,
+)
 from factory_runtime.adversarial_review import canonical_document_bytes
+from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationQualification,
     MacOSSandbox,
 )
-from factory_runtime.snapshot import FrozenTree, freeze_tree, tree_digest, verify_frozen_tree
+from factory_runtime.snapshot import (
+    FrozenBlob,
+    FrozenTree,
+    SnapshotError,
+    freeze_blob,
+    freeze_tree,
+    tree_digest,
+    verify_frozen_blob,
+    verify_frozen_tree,
+)
 
 
 class LaneError(RuntimeError):
@@ -76,6 +92,131 @@ class ValidationExecution:
         """The only verdict safe to return to an automated Coder retry."""
 
         return "pass" if self.passed else "fail"
+
+
+@dataclass(frozen=True)
+class FrozenValidatorExecution:
+    """Attempt-local immutable Validator executable and trusted-input snapshot."""
+
+    capture: ValidatorExecutionCapture
+    tree: FrozenTree
+    manifest: FrozenBlob
+    command: tuple[str, ...]
+    readable_paths: tuple[Path, ...]
+
+
+def _canonical_json(document: Mapping[str, object]) -> bytes:
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def freeze_validator_execution(
+    root: str | Path,
+    command: Sequence[str],
+    trusted_paths: Sequence[str | Path] = (),
+) -> FrozenValidatorExecution:
+    """Capture once, freeze under the attempt, and rewrite argv to only those frozen bytes."""
+
+    destination = Path(root)
+    if destination.exists():
+        raise LaneError(f"refusing to reuse Validator execution snapshot root: {destination}")
+    destination.mkdir(parents=True)
+    staging = Path(tempfile.mkdtemp(prefix=".validator-execution-", dir=destination))
+    try:
+        capture = capture_validator_execution(command, trusted_paths=trusted_paths)
+        for item in capture.files:
+            target = staging / item.snapshot_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(
+                target,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                item.mode,
+            )
+            try:
+                view = memoryview(item.content)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise LaneError("short write while freezing Validator execution input")
+                    view = view[written:]
+                os.fsync(descriptor)
+                os.fchmod(descriptor, item.mode)
+            finally:
+                os.close(descriptor)
+        tree = freeze_tree(staging, destination / "trees")
+        expected_tree_digest = str(capture.document["snapshot_tree_digest"])
+        if tree.digest != expected_tree_digest:
+            raise LaneError("Validator execution snapshot differs from its captured identity")
+        manifest_bytes = _canonical_json(dict(capture.document))
+        manifest = freeze_blob(
+            destination / "manifests",
+            label="validator-execution-manifest",
+            data=manifest_bytes,
+        )
+        if manifest.digest != capture.command_digest:
+            raise LaneError("Validator command address differs from its frozen manifest")
+    except (AcceptanceObligationError, SnapshotError, OSError) as exc:
+        raise LaneError(f"Validator execution could not be frozen: {exc}") from exc
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+    inputs = {
+        str(item["input_id"]): item for item in capture.document["inputs"]
+    }
+    frozen_command = [str(part) for part in capture.document["argv"]]
+    for binding in capture.document["path_bindings"]:
+        input_document = inputs[str(binding["input_id"])]
+        selected = tree.files_directory / str(input_document["snapshot_path"])
+        relative = str(binding["relative_path"])
+        if relative:
+            selected /= relative
+        frozen_command[int(binding["argv_index"])] = str(selected)
+    readable_paths = tuple(
+        (
+            tree.files_directory / str(item["snapshot_path"]) / "payload"
+            if item["kind"] == "file"
+            else tree.files_directory / str(item["snapshot_path"])
+        )
+        for item in capture.document["inputs"]
+    )
+    frozen = FrozenValidatorExecution(
+        capture,
+        tree,
+        manifest,
+        tuple(frozen_command),
+        readable_paths,
+    )
+    _verify_frozen_validator_execution(frozen)
+    try:
+        fsync_directory_chain(tree.directory, through=destination.parent)
+        fsync_directory_chain(manifest.directory, through=destination.parent)
+    except DurabilityError as exc:
+        raise LaneError(str(exc)) from exc
+    return frozen
+
+
+def _verify_frozen_validator_execution(
+    frozen: FrozenValidatorExecution,
+) -> FrozenValidatorExecution:
+    try:
+        tree = verify_frozen_tree(frozen.tree.directory, expected_digest=frozen.tree.digest)
+        manifest = verify_frozen_blob(
+            frozen.manifest.directory,
+            expected_digest=frozen.manifest.digest,
+            label="validator-execution-manifest",
+        )
+        manifest_bytes = manifest.payload_path.read_bytes()
+        if manifest_bytes != _canonical_json(dict(frozen.capture.document)):
+            raise LaneError("Validator execution manifest differs from its captured identity")
+        if tree.digest != frozen.capture.document["snapshot_tree_digest"]:
+            raise LaneError("Validator execution tree differs from its captured identity")
+    except (SnapshotError, OSError) as exc:
+        raise LaneError(f"Validator execution snapshot is invalid: {exc}") from exc
+    return frozen
 
 
 def _copy_regular_tree(source: Path, destination: Path) -> None:
@@ -154,6 +295,33 @@ class IsolatedBuildLoop:
             if acceptance_catalog_path is not None
             else None
         )
+        if acceptance_catalog_bytes is None:
+            raise LaneError("Validator execution requires a ratified acceptance catalog")
+        try:
+            acceptance_document = json.loads(acceptance_catalog_bytes)
+            if not isinstance(acceptance_document, Mapping):
+                raise LaneError("acceptance-obligation catalog must be an object")
+            acceptance_catalog = AcceptanceObligationCatalog.from_dict(acceptance_document)
+            trigger = acceptance_catalog.select("validating", "preview")
+            frozen_validator = freeze_validator_execution(
+                self.root / "validator-execution",
+                validator_command,
+                validator_trusted_paths,
+            )
+        except (json.JSONDecodeError, AcceptanceObligationError) as exc:
+            raise LaneError(f"Validator execution contract is invalid: {exc}") from exc
+        actual_execution = dict(
+            zip(
+                ("command_digest", "configuration_digest", "environment_digest"),
+                frozen_validator.capture.digests,
+                strict=True,
+            )
+        )
+        for field, actual in actual_execution.items():
+            if trigger[field] != actual:
+                raise LaneError(
+                    f"ratified acceptance catalog does not authorize frozen Validator {field}"
+                )
 
         coder = self._prepare_lane(
             LaneRole.CODER,
@@ -169,7 +337,6 @@ class IsolatedBuildLoop:
         )
         coder_runners = tuple(Path(path).resolve() for path in coder_trusted_paths)
         tester_runners = tuple(Path(path).resolve() for path in tester_trusted_paths)
-        validator_runners = tuple(Path(path).resolve() for path in validator_trusted_paths)
         with ThreadPoolExecutor(max_workers=2) as executor:
             coder_future = executor.submit(
                 self._run_author,
@@ -213,11 +380,15 @@ class IsolatedBuildLoop:
             )
         if review_subject is None:
             raise LaneError("Validator execution requires an immutable adversarial-review subject")
+        execution_subject = review_subject.get("validator_execution")
+        if execution_subject != actual_execution:
+            raise LaneError(
+                "Validator adversarial-review subject does not bind the frozen execution identity"
+            )
         validator_result = self._run_validator(
             coder_snapshot,
             tester_snapshot,
-            validator_command,
-            validator_runners,
+            frozen_validator,
             input_bytes,
             expected_input_digest,
             plan_bytes,
@@ -333,8 +504,7 @@ class IsolatedBuildLoop:
         self,
         coder: FrozenTree,
         tester: FrozenTree,
-        command: Sequence[str],
-        runners: Sequence[Path],
+        validator_execution: FrozenValidatorExecution,
         input_bytes: bytes,
         expected_input_digest: str,
         plan_bytes: bytes | None,
@@ -418,20 +588,34 @@ class IsolatedBuildLoop:
                 "FACTORY_TESTER_OUTPUT_SNAPSHOT_DIGEST": tester.digest,
             }
         )
-        command_digest, configuration_digest, environment_digest = validator_execution_digests(
-            command
+        validator_execution = _verify_frozen_validator_execution(validator_execution)
+        command_digest, configuration_digest, environment_digest = (
+            validator_execution.capture.digests
         )
         environment.update(
             {
                 "FACTORY_VALIDATOR_COMMAND_DIGEST": command_digest,
                 "FACTORY_VALIDATOR_CONFIGURATION_DIGEST": configuration_digest,
                 "FACTORY_VALIDATOR_ENVIRONMENT_DIGEST": environment_digest,
+                "FACTORY_VALIDATOR_EXECUTION_IDENTITY_DIGEST": (
+                    validator_execution.capture.identity_digest
+                ),
+                "FACTORY_VALIDATOR_EXECUTION_MANIFEST_PATH": str(
+                    validator_execution.manifest.payload_path
+                ),
+                "FACTORY_VALIDATOR_EXECUTION_SNAPSHOT_DIGEST": validator_execution.tree.digest,
             }
         )
         process = self.sandbox.run(
-            command,
+            validator_execution.command,
             cwd=work,
-            readable_paths=(*readable_inputs, implementation, tests, *runners),
+            readable_paths=(
+                *readable_inputs,
+                implementation,
+                tests,
+                validator_execution.manifest.payload_path,
+                *validator_execution.readable_paths,
+            ),
             writable_paths=(work, output),
             environment=environment,
         )

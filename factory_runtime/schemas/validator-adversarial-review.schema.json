@@ -53,8 +53,7 @@
           "severity",
           "statement",
           "consequence",
-          "evidence",
-          "refutation"
+          "evidence"
         ],
         "properties": {
           "finding_id": {"$ref": "#/$defs/digest"},
@@ -67,15 +66,6 @@
             "minItems": 1,
             "maxItems": 32,
             "items": {"$ref": "#/$defs/evidence"}
-          },
-          "refutation": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["state", "summary"],
-            "properties": {
-              "state": {"enum": ["SURVIVES", "REFUTED", "DISPUTED"]},
-              "summary": {"type": "string", "minLength": 1, "maxLength": 4000}
-            }
           }
         }
       }
@@ -149,8 +139,8 @@
         "test-evidence",
         "failure-mode-coverage",
         "change-reach",
-        "provider-completion",
-        "finding-refutation"
+        "authority-context",
+        "clean-claim-challenge"
       ]
     },
     "evidence": {
@@ -166,7 +156,10 @@
             "pattern-catalog",
             "build-plan",
             "acceptance-obligation-catalog",
-            "acceptance-observations"
+            "acceptance-observations",
+            "baseline-source",
+            "candidate-change-set",
+            "review-authority-context"
           ]
         },
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},

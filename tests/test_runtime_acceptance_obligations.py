@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -21,7 +22,7 @@ DIGEST_A = "sha256:" + ("a" * 64)
 DIGEST_B = "sha256:" + ("b" * 64)
 DIGEST_C = "sha256:" + ("c" * 64)
 DIGEST_D = "sha256:" + ("d" * 64)
-COMMAND = ("validator", "--exact")
+COMMAND = (sys.executable, "--exact")
 COMMAND_DIGEST, CONFIGURATION_DIGEST, ENVIRONMENT_DIGEST = validator_execution_digests(COMMAND)
 PHASES = {
     "product-specification": "sha256:" + ("1" * 64),
@@ -54,6 +55,39 @@ def test_identical_acceptance_evidence_is_fsynced_before_reuse(
     assert ("file", path.stat().st_ino) in synced
     assert ("directory", path.parent.stat().st_ino) in synced
     assert ("directory", path.parent.parent.stat().st_ino) in synced
+
+
+def test_validator_execution_identity_changes_when_same_path_bytes_are_replaced(
+    tmp_path: Path,
+) -> None:
+    runner = tmp_path / "validator.py"
+    runner.write_text("print('ratified')\n", encoding="utf-8")
+    command = (sys.executable, str(runner))
+
+    first = validator_execution_digests(command, trusted_paths=(runner,))
+    replacement = tmp_path / "replacement.py"
+    replacement.write_text("print('substituted')\n", encoding="utf-8")
+    replacement.replace(runner)
+    second = validator_execution_digests(command, trusted_paths=(runner,))
+
+    assert first[0] != second[0]
+    assert first[1] != second[1]
+    assert first[2] == second[2]
+
+
+def test_validator_execution_identity_binds_trusted_input_tree_bytes(tmp_path: Path) -> None:
+    trusted = tmp_path / "validator-runtime"
+    trusted.mkdir()
+    module = trusted / "review_policy.py"
+    module.write_text("POLICY = 'ratified'\n", encoding="utf-8")
+    command = (sys.executable, "-c", "raise SystemExit(0)")
+
+    first = validator_execution_digests(command, trusted_paths=(trusted,))
+    module.write_text("POLICY = 'substituted'\n", encoding="utf-8")
+    second = validator_execution_digests(command, trusted_paths=(trusted,))
+
+    assert first[0] != second[0]
+    assert first[1] != second[1]
 
 
 def test_first_use_acceptance_report_fsyncs_evidence_chain_through_run(

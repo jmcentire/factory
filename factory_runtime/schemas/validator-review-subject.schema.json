@@ -14,6 +14,9 @@
     "resolved_commit",
     "resolved_tree",
     "reviewer_identity",
+    "base_source_snapshot",
+    "candidate_change_set",
+    "authority_context",
     "artifacts",
     "validator_execution"
   ],
@@ -56,6 +59,9 @@
     "resolved_commit": {"type": "string", "minLength": 1},
     "resolved_tree": {"type": "string", "minLength": 1},
     "reviewer_identity": {"type": "string", "minLength": 1},
+    "base_source_snapshot": {"$ref": "#/$defs/base_source_snapshot"},
+    "candidate_change_set": {"$ref": "#/$defs/candidate_change_set"},
+    "authority_context": {"$ref": "#/$defs/authority_context"},
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
@@ -73,7 +79,10 @@
         "candidate",
         "acceptance-tests",
         "coder-output-snapshot",
-        "tester-output-snapshot"
+        "tester-output-snapshot",
+        "base-source-snapshot",
+        "candidate-change-set",
+        "validator-review-authority-context"
       ],
       "properties": {
         "build-input": {"$ref": "#/$defs/digest"},
@@ -89,7 +98,10 @@
         "candidate": {"$ref": "#/$defs/digest"},
         "acceptance-tests": {"$ref": "#/$defs/digest"},
         "coder-output-snapshot": {"$ref": "#/$defs/digest"},
-        "tester-output-snapshot": {"$ref": "#/$defs/digest"}
+        "tester-output-snapshot": {"$ref": "#/$defs/digest"},
+        "base-source-snapshot": {"$ref": "#/$defs/digest"},
+        "candidate-change-set": {"$ref": "#/$defs/digest"},
+        "validator-review-authority-context": {"$ref": "#/$defs/digest"}
       }
     },
     "validator_execution": {
@@ -105,6 +117,188 @@
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "nullable_digest": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/digest"}
+      ]
+    },
+    "content_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "declared_digest",
+        "content_digest",
+        "content_base64",
+        "content_utf8"
+      ],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "declared_digest": {"$ref": "#/$defs/digest"},
+        "content_digest": {"$ref": "#/$defs/digest"},
+        "content_base64": {"type": "string", "maxLength": 2097152},
+        "content_utf8": {"type": ["string", "null"], "maxLength": 1200000}
+      }
+    },
+    "base_source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "resolved_commit",
+        "resolved_tree",
+        "hash_algorithm",
+        "subpath",
+        "files",
+        "snapshot_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-base-source-snapshot/1"},
+        "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "hash_algorithm": {"enum": ["sha1", "sha256"]},
+        "subpath": {"type": "string", "maxLength": 4096},
+        "snapshot_digest": {"$ref": "#/$defs/digest"},
+        "files": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "entry_type",
+              "git_mode",
+              "mode",
+              "object_id",
+              "content_digest",
+              "content_base64",
+              "content_utf8"
+            ],
+            "properties": {
+              "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+              "entry_type": {"enum": ["file", "symlink", "gitlink"]},
+              "git_mode": {"enum": ["100644", "100755", "120000", "160000"]},
+              "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+              "object_id": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+              "content_digest": {"$ref": "#/$defs/digest"},
+              "content_base64": {"type": "string", "maxLength": 2097152},
+              "content_utf8": {"type": ["string", "null"], "maxLength": 524288}
+            }
+          }
+        }
+      }
+    },
+    "candidate_change_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "resolved_commit",
+        "resolved_tree",
+        "subpath",
+        "construction_mode",
+        "baseline_snapshot_digest",
+        "candidate_digest",
+        "changed_path_digest",
+        "changes",
+        "change_set_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-candidate-change-set/1"},
+        "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "subpath": {"type": "string", "maxLength": 4096},
+        "construction_mode": {"const": "regenerate"},
+        "baseline_snapshot_digest": {"$ref": "#/$defs/digest"},
+        "candidate_digest": {"$ref": "#/$defs/digest"},
+        "changed_path_digest": {"$ref": "#/$defs/digest"},
+        "change_set_digest": {"$ref": "#/$defs/digest"},
+        "changes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "kind",
+              "old_type",
+              "new_type",
+              "old_mode",
+              "new_mode",
+              "old_digest",
+              "new_digest"
+            ],
+            "properties": {
+              "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+              "kind": {
+                "enum": ["added", "modified", "deleted", "mode-changed", "type-changed"]
+              },
+              "old_type": {"type": ["string", "null"]},
+              "new_type": {"type": ["string", "null"]},
+              "old_mode": {"type": ["integer", "null"], "minimum": 0, "maximum": 511},
+              "new_mode": {"type": ["integer", "null"], "minimum": 0, "maximum": 511},
+              "old_digest": {"$ref": "#/$defs/nullable_digest"},
+              "new_digest": {"$ref": "#/$defs/nullable_digest"}
+            }
+          }
+        }
+      }
+    },
+    "authority_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "resume_checkpoint_digest",
+        "resume_checkpoint_source_digest",
+        "resume_checkpoint",
+        "configuration_sources",
+        "changed_existing_tests",
+        "test_change_artifacts",
+        "test_change_sources",
+        "review_instruction_contract"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-validator-review-authority-context/1"},
+        "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
+        "resume_checkpoint_source_digest": {"$ref": "#/$defs/digest"},
+        "resume_checkpoint": {"$ref": "#/$defs/content_entry"},
+        "configuration_sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/content_entry"}
+        },
+        "changed_existing_tests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "test_change_artifacts": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        },
+        "test_change_sources": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/content_entry"}
+        },
+        "review_instruction_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["protocol_digest", "instructions_digest", "instructions"],
+          "properties": {
+            "protocol_digest": {"$ref": "#/$defs/digest"},
+            "instructions_digest": {"$ref": "#/$defs/digest"},
+            "instructions": {"type": "string", "minLength": 1, "maxLength": 65536}
+          }
+        }
+      }
+    },
     "dimension": {
       "enum": [
         "intent-conformance",
@@ -124,8 +318,8 @@
         "test-evidence",
         "failure-mode-coverage",
         "change-reach",
-        "provider-completion",
-        "finding-refutation"
+        "authority-context",
+        "clean-claim-challenge"
       ]
     }
   }

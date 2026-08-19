@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,7 +11,11 @@ import pytest
 
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.acceptance_obligations import validator_execution_digests
-from factory_runtime.adversarial_review import build_validator_review_subject
+from factory_runtime.adversarial_review import (
+    build_review_authority_context,
+    build_validator_review_subject,
+)
+from factory_runtime.candidate_diff import build_candidate_review_context
 from factory_runtime.isolation import (
     IsolatedProcessResult,
     IsolationError,
@@ -28,13 +33,26 @@ from factory_runtime.snapshot import tree_digest
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
 
 
-def _acceptance_catalog(tmp_path: Path, validator_command: tuple[str, ...]) -> Path:
+def _git(arguments: Sequence[str], *, cwd: Path | None = None) -> str:
+    result = subprocess.run(
+        ["git", *arguments], cwd=cwd, capture_output=True, check=False, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def _acceptance_catalog(
+    tmp_path: Path,
+    validator_command: tuple[str, ...],
+    validator_trusted_paths: tuple[Path, ...],
+) -> Path:
     build_input = json.loads((FIXTURES / "build-input.json").read_text())
     phases = {
         artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
     }
     command_digest, configuration_digest, environment_digest = validator_execution_digests(
-        validator_command
+        validator_command,
+        trusted_paths=validator_trusted_paths,
     )
     examples = (("AC-1", 2, 3, 5), ("AC-2", -7, 4, -3))
     document = {
@@ -120,6 +138,54 @@ class _UnqualifiedBackend:
         raise AssertionError("an unqualified backend must never launch a lane")
 
 
+class _RecordingQualifiedBackend:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.validator_script_bytes = b""
+        self.validator_environment: dict[str, str] = {}
+
+    def qualify(self, root: str | Path) -> IsolationQualification:
+        return IsolationQualification(
+            backend="recording-qualified-test-backend",
+            read_denied=True,
+            write_denied=True,
+            network_denied=True,
+        )
+
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: dict[str, str] | None = None,
+    ) -> IsolatedProcessResult:
+        del cwd, readable_paths, writable_paths
+        values = dict(environment or {})
+        role = values["FACTORY_ROLE"]
+        output = Path(values["FACTORY_OUTPUT_DIR"])
+        if role == "coder":
+            artifact = output / "artifact"
+            artifact.mkdir()
+            (artifact / "candidate.py").write_text("value = 1\n", encoding="utf-8")
+        elif role == "tester":
+            tests = output / "tests"
+            tests.mkdir()
+            (tests / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+        else:
+            selected = tuple(str(part) for part in command)
+            self.commands.append(selected)
+            self.validator_script_bytes = Path(selected[1]).read_bytes()
+            self.validator_environment = values
+        return IsolatedProcessResult(
+            command=tuple(str(part) for part in command),
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
 @pytest.mark.isolation_integration
 def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
@@ -127,25 +193,85 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
 ) -> None:
     root = temporary_build_loop_root(tmp_path)
     validator_command = (sys.executable, str(FIXTURES / "validator.py"))
-    acceptance_catalog_path = _acceptance_catalog(tmp_path, validator_command)
+    validator_trusted_paths = (FIXTURES / "validator.py",)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+    )
     build_input = json.loads((FIXTURES / "build-input.json").read_text())
     acceptance_catalog = json.loads(acceptance_catalog_path.read_text())
     phases = {
         artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
     }
     command_digest, configuration_digest, environment_digest = validator_execution_digests(
-        validator_command
+        validator_command,
+        trusted_paths=validator_trusted_paths,
+    )
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+    _git(("init", "-q"), cwd=baseline)
+    (baseline / "calculator.py").write_text(
+        "def add(left, right):\n    return left - right\n", encoding="utf-8"
+    )
+    _git(("add", "."), cwd=baseline)
+    _git(
+        (
+            "-c",
+            "user.name=Factory Test",
+            "-c",
+            "user.email=factory@example.test",
+            "commit",
+            "-qm",
+            "baseline",
+        ),
+        cwd=baseline,
+    )
+    resolved_commit = _git(("rev-parse", "HEAD"), cwd=baseline)
+    resolved_tree = _git(("rev-parse", "HEAD^{tree}"), cwd=baseline)
+    object_store = tmp_path / "objects.git"
+    _git(("clone", "-q", "--bare", str(baseline), str(object_store)))
+    checkpoint = {"run_id": "fixture-run", "checkpoint": "integration"}
+    checkpoint_bytes = (
+        json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    authority_context = build_review_authority_context(
+        resume_checkpoint_digest=digest_obj(checkpoint),
+        resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+        resume_checkpoint_bytes=checkpoint_bytes,
+        configuration_sources={"acceptance-catalog": acceptance_catalog_path.read_bytes()},
+        expected_configuration_digests={
+            "acceptance-catalog": digest_bytes(acceptance_catalog_path.read_bytes())
+        },
+        changed_existing_tests=(),
+        test_change_artifacts={},
+        test_change_sources={},
     )
 
     def review_subject(_coder, _tester, coder_snapshot, tester_snapshot):
+        candidate_digest = tree_digest(coder_snapshot.files_directory / "artifact")
+        base_source_snapshot, candidate_change_set = build_candidate_review_context(
+            target_state={
+                "object_store": str(object_store),
+                "resolved_commit": resolved_commit,
+                "resolved_tree": resolved_tree,
+                "subpath": "",
+            },
+            candidate_root=coder_snapshot.files_directory / "artifact",
+            candidate_digest=candidate_digest,
+            construction_mode="regenerate",
+        )
         return build_validator_review_subject(
             run_id="fixture-run",
             generation=1,
             target_digest=build_input["target_digest"],
             target_state_digest=acceptance_catalog["target_state_digest"],
-            resolved_commit="fixture-commit",
-            resolved_tree="fixture-tree",
+            resolved_commit=resolved_commit,
+            resolved_tree=resolved_tree,
             reviewer_identity="agent:validator",
+            base_source_snapshot=base_source_snapshot,
+            candidate_change_set=candidate_change_set,
+            authority_context=authority_context,
             build_input_digest=digest_obj(build_input),
             pattern_catalog_digest=digest_obj(
                 json.loads((FIXTURES / "pattern-catalog.json").read_text())
@@ -164,7 +290,7 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
             acceptance_obligation_catalog_source_digest=digest_bytes(
                 acceptance_catalog_path.read_bytes()
             ),
-            candidate_digest=tree_digest(coder_snapshot.files_directory / "artifact"),
+            candidate_digest=candidate_digest,
             acceptance_tests_digest=tree_digest(tester_snapshot.files_directory / "tests"),
             coder_output_snapshot_digest=coder_snapshot.digest,
             tester_output_snapshot_digest=tester_snapshot.digest,
@@ -183,7 +309,7 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
         acceptance_catalog_path=acceptance_catalog_path,
         coder_trusted_paths=(FIXTURES / "coder.py",),
         tester_trusted_paths=(FIXTURES / "tester.py",),
-        validator_trusted_paths=(FIXTURES / "validator.py",),
+        validator_trusted_paths=validator_trusted_paths,
         before_validation=review_subject,
     )
 
@@ -205,6 +331,92 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
         "criteria": ["AC-1", "AC-2"],
         "passed": True,
     }
+
+
+def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: Path) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    ratified_bytes = b"print('ratified validator')\n"
+    validator.write_bytes(ratified_bytes)
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command,
+        trusted_paths=validator_trusted_paths,
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+    backend = _RecordingQualifiedBackend()
+
+    def review_subject(_coder, _tester, _coder_snapshot, _tester_snapshot):
+        validator.write_bytes(b"print('substituted validator')\n")
+        return {"validator_execution": expected_execution}
+
+    result = IsolatedBuildLoop(root, sandbox=backend).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+        tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=acceptance_catalog_path,
+        coder_trusted_paths=(FIXTURES / "coder.py",),
+        tester_trusted_paths=(FIXTURES / "tester.py",),
+        validator_trusted_paths=validator_trusted_paths,
+        before_validation=review_subject,
+    )
+
+    assert result.passed is True
+    assert len(backend.commands) == 1
+    frozen_command = backend.commands[0]
+    assert Path(frozen_command[0]).is_relative_to(root / "validator-execution")
+    assert Path(frozen_command[1]).is_relative_to(root / "validator-execution")
+    assert backend.validator_script_bytes == ratified_bytes
+    assert validator.read_bytes() != ratified_bytes
+    assert backend.validator_environment["FACTORY_VALIDATOR_COMMAND_DIGEST"] == (
+        execution_digests[0]
+    )
+    frozen_manifest = Path(
+        backend.validator_environment["FACTORY_VALIDATOR_EXECUTION_MANIFEST_PATH"]
+    )
+    assert frozen_manifest.is_relative_to(root / "validator-execution")
+    assert digest_bytes(frozen_manifest.read_bytes()) == execution_digests[0]
+
+
+def test_validator_launch_refuses_same_path_mutation_before_snapshot(tmp_path: Path) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    validator.write_text("print('ratified validator')\n", encoding="utf-8")
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+    )
+    validator.write_text("print('substituted validator')\n", encoding="utf-8")
+    backend = _RecordingQualifiedBackend()
+
+    with pytest.raises(LaneError, match="does not authorize frozen Validator command_digest"):
+        IsolatedBuildLoop(root, sandbox=backend).execute(
+            build_input_path=FIXTURES / "build-input.json",
+            coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+            tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+            validator_command=validator_command,
+            acceptance_catalog_path=acceptance_catalog_path,
+            validator_trusted_paths=validator_trusted_paths,
+            before_validation=lambda *_: {},
+        )
+
+    assert backend.commands == []
 
 
 def test_interpreter_read_paths_cover_the_running_interpreter() -> None:

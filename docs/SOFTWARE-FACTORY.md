@@ -1711,10 +1711,10 @@ mechanically testable. Passing tests do not excuse an intent miss, a wrong bound
 truth, unclear guarantees, or mixed ownership.
 
 Content-address every finding from its statement, consequence, dimension, severity, and exact
-cited bytes before refutation. Give each finding to a fresh stateless refutation context with the
-same immutable subject; if required refutation or any review dimension fails, times out, parses
-badly, or is skipped, the review is incomplete. After refutation, attempt to disprove the clean
-claim through the host-declared completeness checks. Emit only the closed report schema with
+cited bytes. The current executable `/1` protocol grants no self-refutation authority: every
+emitted finding survives and prevents a clean verdict. Independent fresh-context refutation is a
+separate post-run evidence activity until the host dispatches and receipts it explicitly. Attempt
+to disprove the clean claim through the host-declared completeness checks. Emit only the closed report schema with
 `authority=review-evidence-only`; the host re-derives coverage, subject binding, finding identity,
 completeness, and verdict. A clean review is evidence for preview, never merge, release,
 deployment, or promotion authority.

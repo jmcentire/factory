@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -25,6 +26,19 @@ def _evidence(source: str, path: str, file_path: Path) -> dict[str, object]:
     lines = file_path.read_bytes().splitlines(keepends=True)
     if not lines:
         raise SystemExit(f"review evidence is empty: {file_path}")
+    return {
+        "source": source,
+        "path": path,
+        "start_line": 1,
+        "end_line": len(lines),
+        "excerpt_digest": _digest(b"".join(lines)),
+    }
+
+
+def _evidence_data(source: str, path: str, data: bytes) -> dict[str, object]:
+    lines = data.splitlines(keepends=True)
+    if not lines:
+        raise SystemExit(f"review evidence is empty: {source}:{path}")
     return {
         "source": source,
         "path": path,
@@ -205,6 +219,22 @@ observations_ref = _evidence(
     "acceptance-obligation-observations.json",
     observations_path,
 )
+baseline_entry = review_subject["base_source_snapshot"]["files"][0]
+baseline_ref = _evidence_data(
+    "baseline-source",
+    baseline_entry["path"],
+    base64.b64decode(baseline_entry["content_base64"]),
+)
+change_set_ref = _evidence_data(
+    "candidate-change-set",
+    "candidate-change-set.json",
+    _canonical(review_subject["candidate_change_set"]),
+)
+authority_ref = _evidence_data(
+    "review-authority-context",
+    "review-authority-context.json",
+    _canonical(review_subject["authority_context"]),
+)
 dimension_evidence = {
     "intent-conformance": [build_input_ref, build_plan_ref, implementation_ref],
     "architecture": [build_input_ref, pattern_catalog_ref, implementation_ref],
@@ -243,7 +273,18 @@ review = {
             }
             for check_id in review_subject["protocol"]["required_completeness_checks"]
         ],
-        "evidence": [build_input_ref, implementation_ref, tests_ref, observations_ref],
+        "evidence": [
+            build_input_ref,
+            implementation_ref,
+            tests_ref,
+            observations_ref,
+            pattern_catalog_ref,
+            build_plan_ref,
+            acceptance_catalog_ref,
+            baseline_ref,
+            change_set_ref,
+            authority_ref,
+        ],
     },
     "verdict": "CLEAN_QUALIFIED",
 }

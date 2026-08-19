@@ -114,10 +114,12 @@ single exact ruling names the assertion (or frozen family) and expected change, 
 human and a distinct enrolled Validator independently sign that ruling.
 
 The runtime currently binds the selected construction mode but does not yet derive and enforce a
-`brownfield` changed-path/surface ceiling against the produced candidate; that remains a target
-execution/promotion seam, so the mode label alone proves no scope conformance. A target ABI is
-immutable within a run. An intentional ABI change starts a newly authorized run rather than being
-accepted as benign drift inside the old one.
+`brownfield` changed-path/surface ceiling against the produced candidate. The mandatory Validator
+review therefore fails closed as `INCOMPLETE` for `brownfield`; `regenerate` is the only mode whose
+complete baseline-to-candidate change set can currently advance to preview. The broader brownfield
+ceiling remains a target execution/promotion seam, so the mode label alone proves no scope
+conformance. A target ABI is immutable within a run. An intentional ABI change starts a newly
+authorized run rather than being accepted as benign drift inside the old one.
 
 ### Authorized-change bootstrap path
 

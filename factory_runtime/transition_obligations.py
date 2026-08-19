@@ -470,7 +470,13 @@ def _verify_obligation(
     elif verifier_id == "validator-adversarial-review-membership-check":
         passed = _require_digests(
             supplied,
-            ("validator-review-subject", "validator-adversarial-review"),
+            (
+                "validator-review-subject",
+                "validator-adversarial-review",
+                "base-source-snapshot",
+                "candidate-change-set",
+                "validator-review-authority-context",
+            ),
         )
     elif verifier_id == "human-identity-candidate-binding-check":
         passed = (
