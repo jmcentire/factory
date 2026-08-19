@@ -37,6 +37,9 @@ public API is still pre-1.0.
   known durable run/root boundary before a ledger transition may cite them. Transition-obligation
   files stage privately and publish by no-replace hard link, so failed or concurrent writes cannot
   expose a partial canonical address or outrun evidence durability.
+- A valid canonical Repair Brief left by a crash before ledger admission is authenticated against
+  the causal Validator, exact payload, canonical address, and authorized retry before its missing
+  event is admitted. Existing malformed, wrong-key, wrong-subject, or non-canonical files deny.
 
 ### Explicit boundaries
 

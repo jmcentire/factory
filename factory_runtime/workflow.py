@@ -874,6 +874,90 @@ class FactoryWorkflow:
             raise WorkflowError("recorded repair brief has repeated or unresolved authority")
         return VerifiedRepairBrief(envelope=envelope, content=exact_bytes)
 
+    def recover_or_verify_repair_brief(
+        self,
+        run_id: str,
+        *,
+        envelope_path: str | Path,
+        validator_identity: str,
+        expected_attempt_id: str,
+    ) -> VerifiedRepairBrief:
+        """Resume from either a ledgered brief or an authenticated pre-ledger orphan.
+
+        The canonical envelope is published before its BLOCKED-to-BLOCKED authority event.  If
+        the process stops in that narrow window, this method revalidates the exact canonical
+        bytes against the causal Validator and admits the previously unledgered event.  It never
+        treats an orphan file as authority by itself.
+        """
+
+        entries = self.store.verified_ledger_entries(run_id)
+        latest_payload = entries[-1].get("payload") if entries else None
+        if isinstance(latest_payload, Mapping) and latest_payload.get("reason") == (
+            "repair-brief-recorded"
+        ):
+            return self.verify_recorded_repair_brief(
+                run_id,
+                envelope_path=envelope_path,
+                validator_identity=validator_identity,
+                expected_attempt_id=expected_attempt_id,
+            )
+
+        path = Path(envelope_path)
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise WorkflowError(f"repair recovery envelope is unreadable: {exc}") from exc
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_REPAIR_BRIEF_BYTES:
+            raise WorkflowError(
+                "repair recovery envelope is not regular or exceeds its byte ceiling"
+            )
+        current = self.store.load(run_id)
+        if current.state != RunState.BLOCKED:
+            raise WorkflowError("repair recovery requires a blocked run")
+        principal = self.policy.principal(validator_identity)
+        if principal is None or principal.kind != "agent":
+            raise WorkflowError("repair recovery signer must be an enrolled Validator agent")
+        try:
+            envelope = self.tessera.verify_json(
+                path,
+                trusted_public_keys=(principal.public_key,),
+                expected_kind="factory-repair-brief",
+            )
+            validate_document("repair-brief", envelope.payload)
+        except (TesseraVerificationError, DocumentValidationError) as exc:
+            raise WorkflowError(str(exc)) from exc
+        exact_bytes = _verified_tessera_bytes(envelope)
+        if len(exact_bytes) > _MAX_REPAIR_BRIEF_BYTES:
+            raise WorkflowError("repair recovery envelope exceeds its byte ceiling")
+        canonical = (
+            self.root
+            / run_id
+            / "evidence"
+            / "repair-briefs"
+            / f"{envelope.payload_digest.removeprefix('sha256:')}.tessera.json"
+        )
+        try:
+            if path.resolve(strict=True) != canonical.resolve(strict=True):
+                raise WorkflowError("repair recovery path is not the canonical evidence address")
+        except OSError as exc:
+            raise WorkflowError(f"repair recovery canonical path is unreadable: {exc}") from exc
+        if envelope.payload.get("authorized_attempt_id") != expected_attempt_id:
+            raise WorkflowError("repair recovery envelope authorizes a different next attempt")
+
+        self.record_repair_brief(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+            brief_digest=envelope.payload_digest,
+            envelope=envelope,
+            validator_identity=validator_identity,
+        )
+        return self.verify_recorded_repair_brief(
+            run_id,
+            envelope_path=path,
+            validator_identity=validator_identity,
+            expected_attempt_id=expected_attempt_id,
+        )
+
     def ratify_phase(
         self,
         run_id: str,

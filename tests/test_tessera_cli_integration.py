@@ -842,17 +842,50 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
             )
         return plan
 
-    result = repair_supervisor.run(
+    record_repair_brief = workflow.record_repair_brief
+
+    def crash_after_envelope_publication(*args: object, **kwargs: object):
+        if kwargs.get("validator_identity") == "agent:validator":
+            raise WorkflowError("injected crash after repair envelope publication")
+        return record_repair_brief(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "record_repair_brief", crash_after_envelope_publication)
+    with pytest.raises(WorkflowError, match="injected crash"):
+        repair_supervisor.run(
+            "synthetic-run",
+            initial_attempt_id="attempt-failed",
+            next_attempt_id=lambda _index: "attempt-1",
+            attempt_runner=run_attempt,
+            validator_diagnose=diagnose_failed_attempt,
+        )
+
+    orphaned_envelopes = tuple(
+        (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob("*.tessera.json")
+    )
+    assert len(orphaned_envelopes) == 1
+    assert workflow.store.load("synthetic-run").state == RunState.BLOCKED
+
+    monkeypatch.setattr(workflow, "record_repair_brief", record_repair_brief)
+    recovery_supervisor = RepairSupervisor(
+        workflow,
+        validator_identity="agent:validator",
+        validator_key_path=validator_key,
+        policy=RepairPolicy(max_attempts=1, max_elapsed_seconds=120),
+    )
+    result = recovery_supervisor.run(
         "synthetic-run",
-        initial_attempt_id="attempt-failed",
-        next_attempt_id=lambda _index: "attempt-1",
+        initial_attempt_id="attempt-1",
+        next_attempt_id=lambda _index: "unused-attempt",
         attempt_runner=run_attempt,
-        validator_diagnose=diagnose_failed_attempt,
+        validator_diagnose=lambda *_args, **_kwargs: pytest.fail(
+            "a recovered brief must make the retry pass without another diagnosis"
+        ),
+        initial_repair_brief_path=orphaned_envelopes[0],
     )
     assert attempted[0] == ("attempt-failed", None)
     assert attempted[1][0] == "attempt-1"
     assert attempted[1][1] == result.repair_brief_paths[0]
-    assert result.attempts_run == 2
+    assert result.attempts_run == 1
     assert result.terminal_reason == "preview"
     assert result.projection.state == RunState.PREVIEW
     outcome = attempt_outcomes[-1]

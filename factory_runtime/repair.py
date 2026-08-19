@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from factory_core.provenance import IntentBackreference
 from factory_runtime.orchestrator import BuildOutcome
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState
+from factory_runtime.tessera import TesseraVerificationError, VerifiedEnvelope
 from factory_runtime.workflow import FactoryWorkflow, WorkflowError
 
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -265,7 +267,7 @@ class RepairSupervisor:
         signatures: set[str] = set()
         if initial_repair_brief_path is not None:
             try:
-                verified = self.workflow.verify_recorded_repair_brief(
+                verified = self.workflow.recover_or_verify_repair_brief(
                     run_id,
                     envelope_path=initial_repair_brief_path,
                     validator_identity=self.validator_identity,
@@ -302,9 +304,7 @@ class RepairSupervisor:
                             "infrastructure-blocked:launch-failure-after-attempt-admission",
                         )
                     if self._elapsed(started):
-                        return self._terminal(
-                            run_id, attempts_run, briefs, "repair-budget-elapsed"
-                        )
+                        return self._terminal(run_id, attempts_run, briefs, "repair-budget-elapsed")
                     if launch_repairs >= self.policy.max_validator_launch_repairs:
                         return self._terminal(
                             run_id,
@@ -322,9 +322,7 @@ class RepairSupervisor:
                         # relaunch of the same signed attempt, not a new candidate attempt.
                         continue
                 disposition = (
-                    "user-action-required"
-                    if exc.user_action_required
-                    else "infrastructure-blocked"
+                    "user-action-required" if exc.user_action_required else "infrastructure-blocked"
                 )
                 return self._terminal(run_id, attempts_run, briefs, f"{disposition}:{exc}")
             if self._elapsed(started):
@@ -368,9 +366,7 @@ class RepairSupervisor:
             candidate_digest = str(digests.get("candidate", ""))
             oracle_digest = str(digests.get("acceptance-tests", ""))
             if not candidate_digest or not oracle_digest:
-                return self._terminal(
-                    run_id, attempts_run, briefs, "repair-subject-unavailable"
-                )
+                return self._terminal(run_id, attempts_run, briefs, "repair-subject-unavailable")
             if (
                 candidate_digest != outcome.candidate_digest
                 or oracle_digest != outcome.tests_digest
@@ -394,9 +390,7 @@ class RepairSupervisor:
                     phase_artifact_digests=current.phase_artifact_digests,
                 )
                 if self._elapsed(started):
-                    return self._terminal(
-                        run_id, attempts_run, briefs, "repair-budget-elapsed"
-                    )
+                    return self._terminal(run_id, attempts_run, briefs, "repair-budget-elapsed")
                 if escalated_plan.failure_signature == plan.failure_signature:
                     raise RepairSupervisorError(
                         "repeat escalation must supply a distinct failure strategy signature"
@@ -424,14 +418,7 @@ class RepairSupervisor:
                 plan=plan,
             )
             envelope_path = self._brief_path(run_id, brief.digest)
-            envelope = self.workflow.tessera.wrap_json(
-                brief.document(),
-                kind="factory-repair-brief",
-                key_path=self.validator_key_path,
-                output_path=envelope_path,
-            )
-            if envelope.path.lstat().st_size > _MAX_REPAIR_BRIEF_BYTES:
-                raise RepairSupervisorError("signed repair brief exceeds its byte ceiling")
+            envelope = self._sign_or_reuse_repair_brief(brief, envelope_path)
             self.workflow.record_repair_brief(
                 run_id,
                 expected_ledger_head=brief.predecessor_ledger_head,
@@ -447,6 +434,83 @@ class RepairSupervisor:
     def _brief_path(self, run_id: str, digest: str) -> Path:
         stem = digest.removeprefix("sha256:")
         return self.workflow.root / run_id / "evidence" / "repair-briefs" / f"{stem}.tessera.json"
+
+    def _sign_or_reuse_repair_brief(
+        self,
+        brief: RepairBrief,
+        envelope_path: Path,
+    ) -> VerifiedEnvelope:
+        """Create the canonical envelope or authenticate an exact pre-ledger orphan.
+
+        Tessera publication and ledger admission are deliberately separate durable steps.  A
+        crash between them can therefore leave a valid canonical envelope with no authority
+        event.  Replaying that exact operation must verify and reuse the signed bytes rather
+        than overwrite them or permanently wedge the repair campaign.
+        """
+
+        principal = self.workflow.policy.principal(self.validator_identity)
+        if principal is None or principal.kind != "agent":
+            raise RepairSupervisorError("repair signer must be an enrolled Validator agent")
+        if envelope_path.exists() or envelope_path.is_symlink():
+            return self._verify_reusable_repair_brief(
+                envelope_path,
+                brief=brief,
+                public_key=principal.public_key,
+            )
+        try:
+            envelope = self.workflow.tessera.wrap_json(
+                brief.document(),
+                kind="factory-repair-brief",
+                key_path=self.validator_key_path,
+                output_path=envelope_path,
+            )
+        except TesseraVerificationError as signing_error:
+            # Another identical supervisor may have won the no-replace publication race.
+            if not envelope_path.exists() and not envelope_path.is_symlink():
+                raise RepairSupervisorError(str(signing_error)) from signing_error
+            return self._verify_reusable_repair_brief(
+                envelope_path,
+                brief=brief,
+                public_key=principal.public_key,
+            )
+        if envelope.public_key != principal.public_key:
+            raise RepairSupervisorError("signed repair brief does not use the Validator key")
+        self._require_regular_bounded_envelope(envelope.path)
+        return envelope
+
+    def _verify_reusable_repair_brief(
+        self,
+        envelope_path: Path,
+        *,
+        brief: RepairBrief,
+        public_key: str,
+    ) -> VerifiedEnvelope:
+        self._require_regular_bounded_envelope(envelope_path)
+        try:
+            envelope = self.workflow.tessera.verify_json(
+                envelope_path,
+                trusted_public_keys=(public_key,),
+                expected_kind="factory-repair-brief",
+                expected_payload_digest=brief.digest,
+            )
+        except TesseraVerificationError as exc:
+            raise RepairSupervisorError(
+                f"existing repair envelope is not an exact authenticated orphan: {exc}"
+            ) from exc
+        if envelope.public_key != public_key:
+            raise RepairSupervisorError("existing repair envelope uses a different Validator key")
+        return envelope
+
+    @staticmethod
+    def _require_regular_bounded_envelope(path: Path) -> None:
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise RepairSupervisorError(f"signed repair brief is unreadable: {exc}") from exc
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_REPAIR_BRIEF_BYTES:
+            raise RepairSupervisorError(
+                "signed repair brief is not regular or exceeds its byte ceiling"
+            )
 
     def _elapsed(self, started: float) -> bool:
         """Observed campaign ceiling; the attempt runner owns its hard per-call ceiling."""

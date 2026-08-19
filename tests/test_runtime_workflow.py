@@ -198,6 +198,33 @@ def test_write_once_fsyncs_identical_evidence_through_durable_root(
         assert ("directory", directory.stat().st_ino) in synced
 
 
+def test_write_once_recovers_an_exact_canonical_file_after_chain_sync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable_root = tmp_path / "runs"
+    evidence = durable_root / "run-1" / "evidence" / "repair-briefs" / "repair.tessera.json"
+    content = b'{"signed":"brief"}\n'
+    real_sync_chain = workflow_module.fsync_directory_chain
+    failed = False
+
+    def fail_once(start: str | Path, *, through: str | Path) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise workflow_module.DurabilityError("injected ancestor sync failure")
+        real_sync_chain(start, through=through)
+
+    monkeypatch.setattr(workflow_module, "fsync_directory_chain", fail_once)
+
+    with pytest.raises(WorkflowError, match="injected ancestor sync failure"):
+        workflow_module._write_once(evidence, content, durable_root=durable_root)
+
+    assert evidence.read_bytes() == content
+    workflow_module._write_once(evidence, content, durable_root=durable_root)
+    assert evidence.read_bytes() == content
+
+
 def _resolution_request(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     manifest = load_target_manifest(SYNTHETIC_TARGET)
     request = {
