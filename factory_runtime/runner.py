@@ -778,7 +778,7 @@ class HardenedModelRunner:
         output_tokens = sum(result.output_tokens for result in results)
         cost = _cost(manifest, input_tokens, output_tokens)
         document = {
-            "schema_version": "factory-runner-receipt/2",
+            "schema_version": "factory-runner-receipt/3",
             "receipt_id": receipt_id,
             "run_id": run_id,
             "generation": generation,

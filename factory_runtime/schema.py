@@ -39,6 +39,7 @@ SCHEMA_NAMES = frozenset(
         "runner-output",
         "runner-projection",
         "runner-receipt",
+        "runner-receipt-v2",
         "state-dependency-capsule",
         "state-admission-refusal",
         "state-admission-refusal-v1",
@@ -84,7 +85,10 @@ def _schema_registry() -> Registry[Any]:
 def validate_document(name: str, document: Mapping[str, Any]) -> None:
     """Validate a document and report every structural defect in stable order."""
 
-    schema = load_schema(name)
+    selected_name = name
+    if name == "runner-receipt" and document.get("schema_version") == "factory-runner-receipt/2":
+        selected_name = "runner-receipt-v2"
+    schema = load_schema(selected_name)
     validator = jsonschema.Draft202012Validator(schema, registry=_schema_registry())
     errors = sorted(
         validator.iter_errors(document),

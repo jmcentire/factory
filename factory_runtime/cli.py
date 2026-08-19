@@ -1466,11 +1466,19 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         if projection_state.ledger_head != resume.current_run_ledger_head:
             raise ValueError("run ledger changed after external resume verification")
         retained_runner_receipt = _read_object(arguments.runner_receipt)
-        if retained_runner_receipt.get("schema_version") == "factory-runner-receipt/1":
+        runner_receipt_version = retained_runner_receipt.get("schema_version")
+        if runner_receipt_version == "factory-runner-receipt/1":
             raise ValueError(
                 "legacy runner receipt cannot execute after state-capsule cutover; "
-                "explicitly abandon the legacy run and start a v2 run from a new verified "
+                "explicitly abandon the legacy run and start a v3 run from a new verified "
                 "checkpoint"
+            )
+        if runner_receipt_version == "factory-runner-receipt/2":
+            validate_document("runner-receipt", retained_runner_receipt)
+            raise ValueError(
+                "historical v2 runner receipt validates only against its original prompt/2 "
+                "contract and cannot execute after effective-instruction cutover; start a v3 "
+                "run from a new verified checkpoint"
             )
         validate_document("runner-receipt", retained_runner_receipt)
         expected_receipt = {

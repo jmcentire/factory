@@ -52,16 +52,20 @@ esac
   echo "consume_block: a retained disposition evidence file is required" >&2; exit 64;
 }
 ROOT="${HARNESS_RUN_ROOT:-${HARNESS_DIR:-.factory}/runs/$RUN}"
+D="$(cd "$(dirname "$0")" && pwd -P)"
 BF="$ROOT/lanes/$LANE.blocking"
 EV="$ROOT/events.jsonl"
 [ -s "$BF" ] || { echo "no blocking event pending for $LANE" >&2; exit 0; }
 n=$(python3 - "$BF" "$EV" "$ROOT" "$LANE" "$DISPOSITION" "$REASON" \
-  "$SUBJECT_DIGEST" "$EVIDENCE_FILE" "$EVIDENCE_DIGEST" <<'PY'
+  "$SUBJECT_DIGEST" "$EVIDENCE_FILE" "$EVIDENCE_DIGEST" "$D" <<'PY'
 import datetime, fcntl, hashlib, json, os, pathlib, secrets, stat, sys
 
 blocking_path, events_path = map(pathlib.Path, sys.argv[1:3])
 root = pathlib.Path(sys.argv[3])
-lane, disposition, reason, subject_digest, evidence_file, evidence_digest = sys.argv[4:]
+lane, disposition, reason, subject_digest, evidence_file, evidence_digest = sys.argv[4:10]
+harness_root = pathlib.Path(sys.argv[10])
+sys.path.insert(0, str(harness_root))
+from attention_gate import AttentionGateError, acquire_attention_lock, validate_blocking_event
 
 MAX_BLOCKING_BYTES = 1_048_576
 MAX_EVIDENCE_BYTES = 1_048_576
@@ -197,6 +201,7 @@ try:
 except (FileNotFoundError, OSError, ValueError) as exc:
     raise SystemExit("disposition evidence must be an existing file under the run root") from exc
 
+attention_fd = acquire_attention_lock(root)
 blocking_flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 blocking_fd = os.open(blocking_path, blocking_flags)
 if not stat.S_ISREG(os.fstat(blocking_fd).st_mode):
@@ -225,7 +230,10 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
             raise SystemExit(f"blocking event {number} is not JSON: {exc}") from exc
         if not isinstance(event, dict):
             raise SystemExit(f"blocking event {number} is not an object")
-        events.append(event)
+        try:
+            events.append(validate_blocking_event(event))
+        except AttentionGateError as exc:
+            raise SystemExit(f"blocking event {number} is invalid: {exc}") from exc
     if not events:
         raise SystemExit("blocking source contains no events")
     event_digests = [
@@ -282,6 +290,15 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
             sink.write(canonical({"ts": timestamp, **stable}) + "\n")
         sink.flush()
         os.fsync(sink.fileno())
+    # The receipt pathname must be durable before the gate can be cleared. Otherwise a crash on
+    # first use could preserve the fsynced truncation while losing the newly created ledger entry.
+    event_directory = open_directory(events_path.parent)
+    try:
+        os.fsync(event_directory)
+    finally:
+        os.close(event_directory)
+    if os.environ.get("FACTORY_TEST_CONSUME_CRASH_AFTER_RECEIPT_SYNC") == "1":
+        raise SystemExit("injected crash after durable receipt and before gate clear")
     blocking.seek(0)
     blocking.truncate(0)
     blocking.flush()
@@ -296,6 +313,7 @@ for directory_path in dict.fromkeys((blocking_path.parent, events_path.parent)):
         os.fsync(directory)
     finally:
         os.close(directory)
+os.close(attention_fd)
 print(len(events))
 PY
 )

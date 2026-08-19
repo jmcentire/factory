@@ -46,40 +46,160 @@ if any(doc.get(key) != value for key, value in expected.items()):
 PY
 [ -s "$ROOT/grounded" ] || fail "run has no grounding marker; run ground.sh with checked context"
 
-# The no-replace role guard is the dispatch-admission linearization point. A blocking event whose
-# append precedes this marker is observed below and refuses before caller bytes are frozen. An
-# event appended after the marker belongs to the next dispatch; advisory attention never interrupts
-# an already admitted model invocation or mutates its task.
+# The shared attention lock makes the no-replace role guard the dispatch-admission ordering point.
+# Every in-tree blocking producer and the disposition consumer takes that same lock. An event made
+# durable first refuses this invocation; an event made durable after the guard belongs to the next
+# dispatch and never mutates an already admitted task.
 DISPATCH_GUARD="$ROOT/dispatch-$ROLE.guard"
-if ! ( set -o noclobber; printf 'pid=%s\n' "$$" > "$DISPATCH_GUARD" ) 2>/dev/null; then
-  fail "role dispatch is concurrent or interrupted"
+set +e
+ATTENTION_ADMISSION="$(python3 "$D/attention_gate.py" admit \
+  --root "$ROOT" --role "$ROLE" --pid "$$" 2>&1)"
+ATTENTION_RC=$?
+set -e
+if [ "$ATTENTION_RC" -eq 81 ]; then
+  printf '%s\n' "$ATTENTION_ADMISSION" >&2
+  exit 81
 fi
+[ "$ATTENTION_RC" -eq 0 ] || fail "attention admission failed: $ATTENTION_ADMISSION"
 trap 'rm -f "$DISPATCH_GUARD"' EXIT
-for blocking in "$ROOT/lanes/validator.blocking" "$ROOT/lanes/$ROLE.blocking"; do
-  if [ -s "$blocking" ]; then
-    echo "blocking event pending — disposition before dispatching:" >&2
-    head -3 "$blocking" | sed 's/^/  /' >&2
-    exit 81
-  fi
-done
 
 [ -n "$DISPATCH_IN" ] && [ -s "$DISPATCH_IN" ] && [ ! -L "$DISPATCH_IN" ] || \
   fail "empty, missing, or symlinked --dispatch file"
 
 # Retain the exact dispatch bytes before evaluating them. A later edit to the caller's file
-# cannot change what the lane receives or what the receipt hashes.
-mkdir -p "$ROOT/dispatch-inputs"
+# cannot change what the lane receives or what the receipt hashes. Exact retained bytes are an
+# idempotent crash-recovery point; different bytes at the same role address refuse.
 DISPATCH="$ROOT/dispatch-inputs/$ROLE.json"
-python3 - "$DISPATCH_IN" "$DISPATCH" <<'PY' || fail "dispatch bytes could not be frozen"
-import os, pathlib, sys
-source, destination = map(pathlib.Path, sys.argv[1:])
-if source.is_symlink() or not source.is_file():
-    raise SystemExit(1)
-raw = source.read_bytes()
-flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-fd = os.open(destination, flags, 0o600)
-with os.fdopen(fd, "wb") as stream:
-    stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+python3 - "$ROOT" "$DISPATCH_IN" "$DISPATCH" <<'PY' || fail "dispatch bytes could not be frozen"
+import os
+import pathlib
+import secrets
+import stat
+import sys
+
+root, source, destination = map(pathlib.Path, sys.argv[1:])
+maximum = 4_194_304
+
+def identity(metadata):
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+def open_directory(path):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise SystemExit("unsafe dispatch directory")
+    return descriptor
+
+def sync_directory(path):
+    descriptor = open_directory(path)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+def ensure_directory_chain(parent, base):
+    current = base
+    for component in parent.relative_to(base).parts:
+        parent_fd = open_directory(current)
+        child = current / component
+        try:
+            try:
+                os.mkdir(child, 0o700)
+            except FileExistsError:
+                pass
+            child_fd = open_directory(child)
+            try:
+                os.fsync(child_fd)
+                os.fsync(parent_fd)
+            finally:
+                os.close(child_fd)
+        finally:
+            os.close(parent_fd)
+        current = child
+
+def stable_regular(path, label):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise SystemExit(f"{label} is not regular")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            raw = stream.read(maximum + 1)
+            after = os.fstat(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not raw or len(raw) > maximum or identity(before) != identity(after):
+        raise SystemExit(f"{label} is empty, oversized, or changed during admission")
+    return raw
+
+raw = stable_regular(source, "dispatch source")
+ensure_directory_chain(destination.parent, root)
+pending = destination.parent / f".pending-{os.getpid()}-{secrets.token_hex(8)}"
+pending_fd = -1
+try:
+    try:
+        existing = stable_regular(destination, "retained dispatch")
+    except FileNotFoundError:
+        pending_fd = os.open(
+            pending,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        with os.fdopen(pending_fd, "wb") as stream:
+            pending_fd = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(pending, destination, follow_symlinks=False)
+        except FileExistsError:
+            existing = stable_regular(destination, "retained dispatch")
+            if existing != raw:
+                raise SystemExit("retained dispatch address contains different bytes")
+    else:
+        if existing != raw:
+            raise SystemExit("retained dispatch address contains different bytes")
+    retained_fd = os.open(
+        destination,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(retained_fd).st_mode):
+            raise SystemExit("retained dispatch is not regular")
+        os.fsync(retained_fd)
+    finally:
+        os.close(retained_fd)
+    sync_directory(destination.parent)
+finally:
+    if pending_fd >= 0:
+        os.close(pending_fd)
+    try:
+        os.unlink(pending)
+    except FileNotFoundError:
+        pass
+    sync_directory(destination.parent)
 PY
 
 need() { [ -s "$ART/$1" ] && [ ! -L "$ART/$1" ] || fail "missing signed artifact: $ART/$1"; }

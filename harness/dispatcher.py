@@ -33,6 +33,7 @@ from collections.abc import Mapping
 _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
+from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
 from legacy_abandonment import (  # noqa: E402 - load the adjacent harness module
     LegacyAbandonmentError,
     verify_legacy_abandonment,
@@ -367,18 +368,11 @@ class Dispatcher:
         precondition rather than injecting it mid-reasoning. Append-only: a lane
         may accumulate several events; lane_env refuses to start while any remain.
         """
-        bf = self.root / "lanes" / f"{lane}.blocking"
-        bf.parent.mkdir(parents=True, exist_ok=True)
         ts = now()
         payload = {"ts": ts, "class": cls, "evidence": evidence[:200]}
-        append_jsonl(bf, payload)
-        # Receipt the WRITE so a silent clear is visible by its absence: a
-        # blocking_written record with no matching blocking_consumed means the
-        # file was rm'd/truncated without consume_block.sh, not consumed.
-        append_jsonl(
-            self.events,
-            {"ts": ts, "kind": "blocking_written", "lane": lane, "event": payload},
-        )
+        # The shared attention lock orders this append against disposition and dispatch
+        # admission. The paired write receipt remains inside that serialized producer call.
+        append_blocking_event(self.root, lane, payload)
 
     def check_validator_failure_modes(self, fresh: str) -> None:
         """The Orchestrator's charter, detected deterministically, judged on wake:

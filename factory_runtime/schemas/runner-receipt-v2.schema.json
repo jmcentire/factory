@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/runner-receipt/3",
-  "title": "Factory hardened runner execution receipt",
+  "$id": "factory://schemas/runner-receipt/2",
+  "title": "Factory hardened runner execution receipt v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -51,7 +51,7 @@
     "finished_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-runner-receipt/3"},
+    "schema_version": {"const": "factory-runner-receipt/2"},
     "receipt_id": {"$ref": "#/$defs/id"},
     "run_id": {"$ref": "#/$defs/id"},
     "generation": {"type": "integer", "minimum": 1},
@@ -70,8 +70,8 @@
     "state_capsule_digest": {"$ref": "#/$defs/digest"},
     "projection_digest": {"$ref": "#/$defs/digest"},
     "task_digest": {"$ref": "#/$defs/digest"},
-    "prompt_schema_version": {"const": "factory-runner-prompt/3"},
-    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/2"},
+    "prompt_schema_version": {"const": "factory-runner-prompt/2"},
+    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/1"},
     "prompt_sequence": {
       "type": "array",
       "minItems": 3,
@@ -102,7 +102,12 @@
     "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
     "broker_registry_source_digest": {"$ref": "#/$defs/digest"},
     "billing_key_name": {"$ref": "#/$defs/env_name"},
-    "secret_names": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/env_name"}},
+    "secret_names": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/env_name"}
+    },
     "network_mode": {"const": "unrestricted-outbound"},
     "qualification_digest": {"$ref": "#/$defs/digest"},
     "canary_session_id": {"type": "string", "minLength": 1},

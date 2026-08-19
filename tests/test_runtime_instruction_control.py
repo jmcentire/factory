@@ -45,11 +45,12 @@ def _signed(
     dispositions: dict[str, Any] | None = None,
     qualifiers: list[str] | None = None,
     verdict: tuple[str, dict[str, str]] | None = None,
+    scope: str = "run",
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "id": f"D-{len(entries) + 1:04d}",
         "ts": "2026-08-19T12:00:00+00:00",
-        "scope": "run",
+        "scope": scope,
         "text": text,
         "qualifiers": qualifiers or [],
         "supersedes": supersedes,
@@ -61,11 +62,13 @@ def _signed(
     return {**body, "hash": _hash(body)}
 
 
-def _provisional(entries: list[dict[str, Any]], *, expires: str) -> dict[str, Any]:
+def _provisional(
+    entries: list[dict[str, Any]], *, expires: str, scope: str = "run"
+) -> dict[str, Any]:
     body = {
         "id": f"P-{len(entries) + 1:04d}",
         "ts": "2026-08-19T12:00:00+00:00",
-        "scope": "run",
+        "scope": scope,
         "text": "candidate ruling",
         "qualifiers": [],
         "cite": "transcript:1:event:sha256",
@@ -238,6 +241,88 @@ def test_explicit_supersession_selects_only_successor() -> None:
     assert [item["text"] for item in contract["directives"]] == ["new"]
 
 
+def test_scope_selection_is_closed_role_run_and_generation_specific() -> None:
+    entries: list[dict[str, Any]] = []
+    entries.append(_signed(entries, text="global", scope="global"))
+    entries.append(_signed(entries, text="coder", scope="role=coder"))
+    entries.append(_signed(entries, text="tester", scope="role=tester"))
+    entries.append(
+        _signed(
+            entries,
+            text="this invocation",
+            scope="run=run-1;generation=2;role=coder",
+        )
+    )
+    entries.append(
+        _signed(
+            entries,
+            text="another run",
+            scope="run=run-2;generation=2;role=coder",
+        )
+    )
+
+    contract = _contract(_lines(entries))
+
+    assert [item["text"] for item in contract["directives"]] == [
+        "global",
+        "coder",
+        "this invocation",
+    ]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "orchestrator-only",
+        "role=unknown",
+        "generation=02",
+        "role=coder;run=run-1",
+        "run=run-1;unknown=value",
+    ],
+)
+def test_unknown_or_noncanonical_scope_refuses(scope: str) -> None:
+    entries: list[dict[str, Any]] = []
+    entries.append(_signed(entries, text="must not become broad", scope=scope))
+
+    with pytest.raises(InstructionControlError) as failure:
+        _contract(_lines(entries))
+
+    assert failure.value.code == "INVALID_SCOPE"
+
+
+def test_scope_change_during_supersession_refuses() -> None:
+    entries: list[dict[str, Any]] = []
+    entries.append(_signed(entries, text="global", scope="global"))
+    entries.append(
+        _signed(
+            entries,
+            text="coder replacement",
+            scope="role=coder",
+            supersedes="D-0001",
+            dispositions={},
+        )
+    )
+
+    with pytest.raises(InstructionControlError, match="changes scope"):
+        _contract(_lines(entries))
+
+
+def test_inapplicable_provisional_does_not_block_another_role() -> None:
+    provisional: list[dict[str, Any]] = []
+    provisional.append(
+        _provisional(
+            provisional,
+            expires="2026-12-31T00:00:00+00:00",
+            scope="role=tester",
+        )
+    )
+
+    contract = _contract(provisional=_lines(provisional))
+
+    assert contract["directives"] == []
+    assert contract["provisional"]["entry_count"] == 1
+
+
 def test_live_unsettled_provisional_blocks_instead_of_becoming_instruction() -> None:
     provisional: list[dict[str, Any]] = []
     provisional.append(_provisional(provisional, expires="2026-12-31T00:00:00+00:00"))
@@ -280,9 +365,15 @@ def test_role_contract_compiles_exact_shared_and_role_sections() -> None:
     verify_role_contract(coder, doctrine_bytes=doctrine, expected_role="coder")
 
 
-def test_readback_binds_exact_scope_membership_quote_and_ambiguity() -> None:
+def test_readback_binds_exact_scope_membership_quote_qualifiers_and_ambiguity() -> None:
     entries: list[dict[str, Any]] = []
-    entries.append(_signed(entries, text="Do not alter migrations"))
+    entries.append(
+        _signed(
+            entries,
+            text="Do not alter migrations",
+            qualifiers=["unless the ratified architecture explicitly requires one"],
+        )
+    )
     contract = _contract(_lines(entries))
     readback = {
         "schema_version": "factory-directive-readback/1",
@@ -302,6 +393,17 @@ def test_readback_binds_exact_scope_membership_quote_and_ambiguity() -> None:
                 "source_quote": "Do not alter migrations",
                 "operational_consequence": "Return a specification question instead.",
                 "ambiguity": "none",
+                "qualifier_readback": [
+                    {
+                        "source_quote": (
+                            "unless the ratified architecture explicitly requires one"
+                        ),
+                        "operational_consequence": (
+                            "Treat only that exact architecture statement as the exception."
+                        ),
+                        "ambiguity": "none",
+                    }
+                ],
             }
         ],
     }
@@ -323,6 +425,35 @@ def test_readback_binds_exact_scope_membership_quote_and_ambiguity() -> None:
             expected_role="coder",
         )
     assert failure.value.code == "READBACK_AMBIGUOUS"
+
+    readback["directives"][0]["ambiguity"] = "none"
+    readback["directives"][0]["qualifier_readback"] = []
+    with pytest.raises(InstructionControlError) as failure:
+        validate_directive_readback(
+            readback,
+            contract=contract,
+            expected_run_id="run-1",
+            expected_generation=2,
+            expected_role="coder",
+        )
+    assert failure.value.code == "READBACK_QUALIFIER_MISMATCH"
+
+    readback["directives"][0]["qualifier_readback"] = [
+        {
+            "source_quote": "unless a migration seems useful",
+            "operational_consequence": "Treat it as an exception.",
+            "ambiguity": "none",
+        }
+    ]
+    with pytest.raises(InstructionControlError) as failure:
+        validate_directive_readback(
+            readback,
+            contract=contract,
+            expected_run_id="run-1",
+            expected_generation=2,
+            expected_role="coder",
+        )
+    assert failure.value.code == "READBACK_QUALIFIER_MISMATCH"
 
 
 def test_structured_lane_dispatch_replaces_substring_confirmation() -> None:
@@ -346,6 +477,7 @@ def test_structured_lane_dispatch_replaces_substring_confirmation() -> None:
                 "source_quote": "Do not alter migrations",
                 "operational_consequence": "Return an explicit question.",
                 "ambiguity": "none",
+                "qualifier_readback": [],
             }
         ],
         "task": "Implement the authorized behavior.",

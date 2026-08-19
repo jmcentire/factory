@@ -15,7 +15,7 @@
     "role": {"enum": ["coder", "tester", "validator", "orchestrator"]},
     "evaluated_at": {"type": "integer", "minimum": 1},
     "selection_policy": {
-      "const": "all-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
+      "const": "applicable-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
     },
     "verification_mode": {"const": "externally-checkpoint-bound-hash-chain"},
     "ledger": {"$ref": "#/$defs/source"},
@@ -57,7 +57,10 @@
       ],
       "properties": {
         "directive_id": {"type": "string", "pattern": "^D-[0-9]{4}$"},
-        "scope": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "scope": {
+          "type": "string",
+          "pattern": "^(global|run|((run=[A-Za-z0-9][A-Za-z0-9._-]{0,127})(;generation=[1-9][0-9]*)?(;role=(coder|tester|validator|orchestrator))?|generation=[1-9][0-9]*(;role=(coder|tester|validator|orchestrator))?|role=(coder|tester|validator|orchestrator)))$"
+        },
         "text": {"type": "string", "minLength": 1, "maxLength": 16384},
         "qualifiers": {
           "type": "array", "maxItems": 64, "uniqueItems": true,

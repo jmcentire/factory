@@ -38,9 +38,26 @@
     "readback": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["directive_id", "source_quote", "operational_consequence", "ambiguity"],
+      "required": [
+        "directive_id", "source_quote", "operational_consequence", "ambiguity",
+        "qualifier_readback"
+      ],
       "properties": {
         "directive_id": {"type": "string", "pattern": "^D-[0-9]{4}$"},
+        "source_quote": {"$ref": "#/$defs/boundedText"},
+        "operational_consequence": {"$ref": "#/$defs/boundedText"},
+        "ambiguity": {"enum": ["none", "unresolved"]},
+        "qualifier_readback": {
+          "type": "array", "maxItems": 64,
+          "items": {"$ref": "#/$defs/qualifierReadback"}
+        }
+      }
+    },
+    "qualifierReadback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_quote", "operational_consequence", "ambiguity"],
+      "properties": {
         "source_quote": {"$ref": "#/$defs/boundedText"},
         "operational_consequence": {"$ref": "#/$defs/boundedText"},
         "ambiguity": {"enum": ["none", "unresolved"]}

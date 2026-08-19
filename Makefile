@@ -134,11 +134,11 @@ test-tessera: check-python ## run the real Tessera CLI integration proof
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \
-		harness/dispatcher.py harness/supervise_advisory.py
+		harness/attention_gate.py harness/dispatcher.py harness/supervise_advisory.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
-		harness/dispatcher.py harness/supervise_advisory.py
+		harness/attention_gate.py harness/dispatcher.py harness/supervise_advisory.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py

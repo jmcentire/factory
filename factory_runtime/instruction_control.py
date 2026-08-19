@@ -32,6 +32,7 @@ _SIGNED_ID = re.compile(r"^D-[0-9]{4}$")
 _PROVISIONAL_ID = re.compile(r"^P-[0-9]{4}$")
 _ROLES = frozenset({"coder", "tester", "validator", "orchestrator"})
 _ROLE_TITLES = {"coder": "Coder", "tester": "Tester", "validator": "Validator"}
+_SCOPE_KEY_ORDER = ("run", "generation", "role")
 
 
 class InstructionControlError(ValueError):
@@ -82,6 +83,48 @@ def _qualifiers(value: object, *, label: str) -> list[str]:
     if len(set(result)) != len(result):
         raise InstructionControlError("DUPLICATE_QUALIFIER", f"{label} repeats a qualifier")
     return result
+
+
+def _scope_applies(scope: object, *, run_id: str, generation: int, role: str) -> bool:
+    """Resolve the closed directive-scope grammar against one invocation.
+
+    `global` applies everywhere and legacy `run` means every invocation in the externally bound
+    run. Narrow scopes are canonical semicolon-separated key/value pairs in run, generation,
+    role order, for example `run=R1;generation=2;role=coder`. Unknown keys, reordering, empty
+    values, noncanonical integers, and unsupported roles refuse instead of becoming broad scope.
+    """
+
+    value = _bounded_text(scope, label="directive scope")
+    if value in {"global", "run"}:
+        return True
+    selectors: dict[str, str] = {}
+    parts = value.split(";")
+    for part in parts:
+        key, separator, selected = part.partition("=")
+        if not separator or not selected or key in selectors or key not in _SCOPE_KEY_ORDER:
+            raise InstructionControlError("INVALID_SCOPE", f"unknown directive scope: {value!r}")
+        selectors[key] = selected
+    canonical_keys = [key for key in _SCOPE_KEY_ORDER if key in selectors]
+    if [part.partition("=")[0] for part in parts] != canonical_keys:
+        raise InstructionControlError("INVALID_SCOPE", f"noncanonical directive scope: {value!r}")
+    if "run" in selectors and not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", selectors["run"]
+    ):
+        raise InstructionControlError("INVALID_SCOPE", f"invalid run directive scope: {value!r}")
+    if "generation" in selectors and not re.fullmatch(r"[1-9][0-9]*", selectors["generation"]):
+        raise InstructionControlError(
+            "INVALID_SCOPE", f"invalid generation directive scope: {value!r}"
+        )
+    if "role" in selectors and selectors["role"] not in _ROLES:
+        raise InstructionControlError("INVALID_SCOPE", f"invalid role directive scope: {value!r}")
+    return (
+        ("run" not in selectors or selectors["run"] == run_id)
+        and (
+            "generation" not in selectors
+            or int(selectors["generation"]) == generation
+        )
+        and ("role" not in selectors or selectors["role"] == role)
+    )
 
 
 def _parse_jsonl(raw: bytes, *, label: str) -> list[dict[str, Any]]:
@@ -228,6 +271,11 @@ def _validate_signed(
                 raise InstructionControlError(
                     "INVALID_SUPERSESSION", f"{identifier} has no qualifier dispositions"
                 )
+            if entry["scope"] != by_id[parent_id]["scope"]:
+                raise InstructionControlError(
+                    "INVALID_SUPERSESSION",
+                    f"{identifier} changes scope while superseding {parent_id}",
+                )
             parent_qualifiers = list(by_id[parent_id]["qualifiers"])
             if set(dispositions) != set(parent_qualifiers):
                 raise InstructionControlError(
@@ -290,6 +338,10 @@ def _validate_signed(
                 raise InstructionControlError(
                     "INVALID_SETTLEMENT", f"{identifier} settlement changes qualifiers"
                 )
+            if entry["scope"] != source["scope"]:
+                raise InstructionControlError(
+                    "INVALID_SETTLEMENT", f"{identifier} settlement changes scope"
+                )
             settled.add(provisional_id)
         by_id[identifier] = entry
     return successor, settled
@@ -337,10 +389,26 @@ def derive_effective_directive_contract(
     provisional = _validate_provisional(provisional_entries)
     successor, settled = _validate_signed(signed_entries, provisional)
     at = dt.datetime.fromtimestamp(evaluated_at, tz=dt.UTC)
+    provisional_applies = {
+        identifier: _scope_applies(
+            entry["scope"], run_id=run_id, generation=generation, role=role
+        )
+        for identifier, entry in provisional.items()
+    }
+    signed_applies = {
+        str(entry["id"]): _scope_applies(
+            entry["scope"], run_id=run_id, generation=generation, role=role
+        )
+        for entry in signed_entries
+    }
     live_provisional = [
         identifier
         for identifier, entry in provisional.items()
-        if identifier not in settled and _timestamp(entry["expires"], label=identifier) > at
+        if (
+            identifier not in settled
+            and provisional_applies[identifier]
+            and _timestamp(entry["expires"], label=identifier) > at
+        )
     ]
     if live_provisional:
         raise InstructionControlError(
@@ -351,7 +419,7 @@ def derive_effective_directive_contract(
     directives: list[dict[str, Any]] = []
     for entry in signed_entries:
         identifier = str(entry["id"])
-        if identifier in successor or "refuses" in entry:
+        if identifier in successor or "refuses" in entry or not signed_applies[identifier]:
             continue
         directives.append(
             {
@@ -370,7 +438,7 @@ def derive_effective_directive_contract(
         "role": role,
         "evaluated_at": evaluated_at,
         "selection_policy": (
-            "all-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
+            "applicable-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
         ),
         "verification_mode": "externally-checkpoint-bound-hash-chain",
         "ledger": {
@@ -552,6 +620,18 @@ def validate_directive_readback(
         if readback["ambiguity"] != "none":
             raise InstructionControlError(
                 "READBACK_AMBIGUOUS", f"{source['directive_id']} remains ambiguous"
+            )
+        qualifier_readbacks = list(readback["qualifier_readback"])
+        source_qualifiers = list(source["qualifiers"])
+        if [item["source_quote"] for item in qualifier_readbacks] != source_qualifiers:
+            raise InstructionControlError(
+                "READBACK_QUALIFIER_MISMATCH",
+                f"readback qualifiers differ for {source['directive_id']}",
+            )
+        if any(item["ambiguity"] != "none" for item in qualifier_readbacks):
+            raise InstructionControlError(
+                "READBACK_AMBIGUOUS",
+                f"a qualifier for {source['directive_id']} remains ambiguous",
             )
 
 

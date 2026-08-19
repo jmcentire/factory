@@ -8,9 +8,10 @@ public API is still pre-1.0.
 ### Added
 
 - A closed effective-directive contract derived from externally checkpoint-bound directive and
-  provisional sources, with qualifier-preserving supersession, future-time refusal, live-candidate
-  blocking, structured per-directive readback, and one compiled role contract admitted through
-  every lane state capsule and prompt.
+  provisional sources, with a canonical run/generation/role scope grammar, same-scope
+  qualifier-preserving supersession, future-time refusal, applicable live-candidate blocking,
+  structured per-directive and per-qualifier readback, and one compiled role contract admitted
+  through every lane state capsule and prompt.
 - Exact-subject advisory dispositions. Clearing a blocking event now requires a typed consequence,
   bounded reason, and exact evidence bytes copied into a content-addressed run artifact before the
   event is receipted and the dispatch gate is durably released.
@@ -20,10 +21,16 @@ public API is still pre-1.0.
 - Orchestrator directive selection no longer accepts ambient paths, malformed chains, missing
   sources, or an empty-list fallback. Lane dispatch no longer accepts a bare
   `interpretation_confirmed: true` substring.
-- Dispatcher event writers now participate in the same locked, fsynced JSONL protocol as the
-  disposition consumer, preventing a newly appended blocking event from racing a gate release.
-- Instruction artifacts recover idempotently after a crash between publications: an existing
-  effective contract is re-derived against the exact sources and reused, never overwritten.
+- Dispatcher and orchestrator event writers, the disposition consumer, and dispatch admission now
+  share one run-local attention lock. The blocker check and no-replace dispatch guard publication
+  form one ordering point: earlier events deny this invocation; later events gate the next one.
+- Blocking events use closed producer shapes. Their disposition receipts and containing directory
+  are durable before the blocker is truncated, so malformed evidence and first-use crash windows
+  cannot silently clear the gate.
+- Exact caller dispatch bytes and instruction artifacts recover idempotently after a crash between
+  publications. Existing bytes are stable-read, re-derived, and reused; different bytes refuse.
+- Runner prompt/3 executions emit `factory-runner-receipt/3`. The original receipt/2 schema remains
+  immutable for historical validation and is explicitly non-executable after this cutover.
 
 ### Explicit boundaries
 

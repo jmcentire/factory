@@ -493,7 +493,7 @@ mkdir -p "$ROOT/lanes"
 ORCH_STATUS="$(python3 - \
   "$ORCH_OUT_FILE" "$ORCH_ERR_FILE" "$ORCH_PROMPT_FILE" "$ORCH_PRESENTED_INPUT_FILE" \
   "$ORCH_SUPERVISOR_RECEIPT" "$ORCH_RC" "$ROOT" "$WAKE_ID" "$ORCH_AGENT" \
-  "$ORCH_OUTPUT_MODE" <<'PY'
+  "$ORCH_OUTPUT_MODE" "$D" <<'PY'
 import datetime
 import fcntl
 import hashlib
@@ -510,6 +510,10 @@ stdout_path, stderr_path, prompt_path, input_path, supervisor_receipt_path = map
 returncode = int(sys.argv[6])
 root = pathlib.Path(sys.argv[7])
 wake, agent, output_mode = sys.argv[8:11]
+harness_root = pathlib.Path(sys.argv[11])
+sys.path.insert(0, str(harness_root))
+from attention_gate import append_blocking_event
+
 limit = 65_536
 
 def read_bounded(path: pathlib.Path, max_bytes: int = limit) -> tuple[bytes, bool]:
@@ -784,16 +788,7 @@ else:
     }
 event["trust_class"] = "untrusted-advisory"
 event["effect_route"] = "validator-blocking-only"
-append_jsonl(root / "lanes" / "validator.blocking", event)
-append_jsonl(
-    root / "events.jsonl",
-    {
-        "ts": timestamp,
-        "kind": "blocking_written",
-        "lane": "validator",
-        "event": event,
-    },
-)
+append_blocking_event(root, "validator", event)
 print(status)
 PY
 )"

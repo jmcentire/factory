@@ -91,7 +91,7 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Function | Owner | Mechanism |
 |---|---|---|
 | Authority (what was said) | **Directive ledger** + Tessera | Append-only hash-chained JSONL of verbatim founder text; hardware-signed git commits (agent verifies, cannot sign); qualifier-preserving supersession. Chess genesis holds run-level authorization logic under the root signature. |
-| Effective instructions (what this invocation receives) | **factory_runtime instruction control** | External resume configuration binds exact ledger, provisional-chain, and role-doctrine bytes. Runtime verifies both chains, blocks live unsettled candidates, derives one bounded role-specific contract, requires an exact structured readback, and binds all three through the capsule and prompt. Checkpoint binding proves selected bytes, not signer identity or semantic comprehension. |
+| Effective instructions (what this invocation receives) | **factory_runtime instruction control** | External resume configuration binds exact ledger, provisional-chain, and role-doctrine bytes. Runtime verifies both chains, resolves a closed canonical run/generation/role scope, blocks applicable live unsettled candidates, derives one bounded role-specific contract, requires exact directive and qualifier readback, and binds all three through the capsule and prompt. Unknown scope and cross-scope supersession refuse. Checkpoint binding proves selected bytes, not signer identity or semantic comprehension. |
 | Identity (who acts) | **Signet** | Per-lane principals from the enrollment registry (deliverable 8); short-lived scoped tokens, per-hop; deny-wins resolution. "The Tester cannot read the Coder's channel" becomes an ACL fact. |
 | Policy (what a token may do) | **SPL** (jmcentire/agent-safe) | Total, gas-metered evaluation in-token at the tool boundary; sealed attenuation; expressions are approval rules, so human-signed under I8, never agent-authored into force. |
 | State (what is true now) | **factory_runtime** RunState + **Chess** anchors | Per settled decisions: machine evidence chained in the factory_core ledger; anchor transitions (`*-ratified`, `human-approved`, `promoted`) carry Chess move records — prev/new state hash, actor key, signature over all four, re-execution at the anchor; anchors carry the ledger head digest only. |
@@ -203,10 +203,12 @@ history cannot be rewritten by expiry.
 **2. Structured readback gate.** Corrective instructions carry a diagnosis and a remedy; agents
 latch onto the remedy and satisfy it in ways that worsen the diagnosis. Before work starts, a
 closed lane-dispatch document must bind the exact run, generation, role, and every effective
-directive id, with a source quote, operational consequence, and ambiguity state. Any missing id,
+directive id, with its source quote, every qualifier source quote in source order, operational
+consequences, and ambiguity states. Any missing id or qualifier, altered quote, unknown scope,
 wrong scope tuple, or unresolved ambiguity blocks before model use. The runtime adds the exact
-effective-contract digest. This is exact translation evidence with no author-identity claim, not proof that the model
-understood or will obey it; observable obligations and effect gates still judge behavior.
+effective-contract digest. This is exact translation evidence with no author-identity claim, not
+proof that the model understood or will obey it; observable obligations and effect gates still
+judge behavior.
 
 **3. Positive-control receipts.** Four wrong conclusions in one day, each a correct answer
 to a too-narrow query. An absence claim ("this is dead code," "no CI exists," "the role has
@@ -363,9 +365,11 @@ dependency-free (bash + python3 + git):
   (`--sigs` requires signature-clean git history), `provisional`/`ratify` for the
   live-ruling bridge (control 1a), and verified `active` inspection. Runtime consumers derive
   their own closed effective contract rather than trusting this human-readable listing.
-- `harness/consume_block.sh` — locks the exact pending subject, requires a typed disposition,
-  retains and hashes the run-owned evidence bytes, receipts every event, and only then durably
-  releases the dispatch gate.
+- `harness/attention_gate.py` — validates the closed producer-event shapes and owns the shared
+  run-local lock that orders blocking-event production, disposition, and dispatch admission.
+- `harness/consume_block.sh` — locks the exact pending subject, rejects malformed producer events,
+  requires a typed disposition, retains and hashes the run-owned evidence bytes, and fsyncs the
+  receipt plus its parent before durably releasing the dispatch gate.
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
   a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.
@@ -381,10 +385,12 @@ dependency-free (bash + python3 + git):
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
-- `harness/dispatch_lane.sh` — re-derives target-state, freezes dispatch bytes, mints the declared
-  asymmetric projection, verifies/appends the dispatch chain, requires a role-specific Kindex
-  primer and externally checkpoint-bound structural qualification report, then invokes the
-  qualified model runner and typed broker. Ambient gap flags cannot bypass either precondition.
+- `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
+  applicable blockers and publishes the no-replace role guard as one admission ordering point;
+  durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
+  verifies/appends the dispatch chain; requires a role-specific Kindex primer and externally
+  checkpoint-bound structural qualification report; then invokes the qualified model runner and
+  typed broker. Ambient gap flags cannot bypass either precondition.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
   Append-only sources are read as stable bounded suffixes rather than rejected when their full

@@ -27,6 +27,7 @@ from factory_runtime.runner import (
     RunnerQualification,
 )
 from factory_runtime.runner_isolation import MacOSNetworkedRunner
+from factory_runtime.schema import validate_document
 from factory_runtime.state_admission import derive_state_capsule, profile_digest
 
 
@@ -398,6 +399,7 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert receipt.document["network_mode"] == "unrestricted-outbound"
     assert receipt.document["meter_semantics"] == "observed-post-call"
     assert (workspace / "output" / "runner-receipt.json").is_file()
+    assert receipt.document["schema_version"] == "factory-runner-receipt/3"
     assert receipt.document["prompt_schema_version"] == "factory-runner-prompt/3"
     assert (
         receipt.document["prompt_assembler_version"]
@@ -441,6 +443,20 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert task_prompt["control"]["role_contract"]["role"] == "coder"
     assert task_prompt["data"]["effective_directives"]["directives"] == []
     assert task_prompt["data"]["directive_readback"]["semantic_clearance"] is False
+
+
+def test_runner_receipt_v2_keeps_its_historical_prompt_identity(tmp_path: Path) -> None:
+    _, receipt = _dispatch(_fixture(tmp_path))
+    historical = json.loads(json.dumps(receipt.document))
+    historical["schema_version"] = "factory-runner-receipt/2"
+    historical["prompt_schema_version"] = "factory-runner-prompt/2"
+    historical["prompt_assembler_version"] = "factory-runner-prompt-assembler/1"
+
+    validate_document("runner-receipt", historical)
+
+    historical["prompt_schema_version"] = "factory-runner-prompt/3"
+    with pytest.raises(ValueError, match="factory-runner-prompt/2"):
+        validate_document("runner-receipt", historical)
 
 
 def test_runner_freezes_caller_owned_capsule_before_backend_activity(

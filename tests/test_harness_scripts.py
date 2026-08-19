@@ -17,6 +17,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1236,6 +1237,16 @@ def load_dispatcher() -> object:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("dispatcher", HARNESS / "dispatcher.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_attention_gate() -> object:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("attention_gate", HARNESS / "attention_gate.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -3077,8 +3088,29 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     (root / "lanes").mkdir(parents=True)
     blocking = root / "lanes" / "validator.blocking"
     blocking.write_text(
-        '{"class":"stall","evidence":"validator quiet 30m"}\n'
-        '{"class":"orchestrator_response","response":"x"}\n'
+        json.dumps(
+            {
+                "ts": "2026-08-19T12:00:00+00:00",
+                "class": "stall",
+                "evidence": "validator quiet 30m",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-08-19T12:00:01+00:00",
+                "class": "orchestrator_response",
+                "response": "wakes/wake-1.response.md",
+                "wake": "wake-1",
+                "trust_class": "untrusted-advisory",
+                "effect_route": "validator-blocking-only",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
     )
     evidence = root / "disposition-proof.txt"
     evidence.write_text("The narrowed task excludes the disputed surface.\n", encoding="utf-8")
@@ -3115,6 +3147,66 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     retained = root / events[0]["disposition_evidence_id"]
     assert retained.read_bytes() == evidence.read_bytes()
     assert all(e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in events)
+
+
+def test_consume_block_durably_receipts_before_clearing_gate(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rA-crash"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "validator quiet 30m",
+    }
+    blocking.write_text(
+        json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("The stalled lane was stopped.\n", encoding="utf-8")
+    arguments = [
+        "bash",
+        str(HARNESS / "consume_block.sh"),
+        "rA-crash",
+        "validator",
+        "--disposition",
+        "stop",
+        "--reason",
+        "The stalled lane was stopped before another dispatch.",
+        "--subject-digest",
+        "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+        "--evidence-file",
+        str(evidence),
+        "--evidence-digest",
+        "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+    ]
+
+    interrupted = run(
+        arguments,
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "FACTORY_TEST_CONSUME_CRASH_AFTER_RECEIPT_SYNC": "1",
+        },
+    )
+
+    assert interrupted.returncode != 0
+    assert "after durable receipt" in interrupted.stderr
+    assert blocking.stat().st_size > 0
+    assert [item["kind"] for item in read_chain(root / "events.jsonl")] == [
+        "blocking_consumed"
+    ]
+
+    recovered = run(
+        arguments,
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    assert blocking.read_bytes() == b""
+    assert [item["kind"] for item in read_chain(root / "events.jsonl")] == [
+        "blocking_consumed"
+    ]
 
 
 def test_consume_block_noop_when_empty(tmp_path: Path) -> None:
@@ -3197,6 +3289,41 @@ def test_consume_block_refuses_non_event_bytes_without_clearing(tmp_path: Path) 
     assert blocking.read_text(encoding="utf-8") == " \n"
 
 
+def test_consume_block_refuses_unknown_object_without_clearing(tmp_path: Path) -> None:
+    root = tmp_path / ".harness" / "runs" / "rC-object"
+    (root / "lanes").mkdir(parents=True)
+    blocking = root / "lanes" / "validator.blocking"
+    blocking.write_text("{}\n", encoding="utf-8")
+    evidence = root / "disposition-proof.txt"
+    evidence.write_text("An unknown object is not producer evidence.\n", encoding="utf-8")
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "consume_block.sh"),
+            "rC-object",
+            "validator",
+            "--disposition",
+            "refute",
+            "--reason",
+            "Unknown objects cannot clear the attention gate.",
+            "--subject-digest",
+            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
+            "--evidence-file",
+            str(evidence),
+            "--evidence-digest",
+            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        ],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+
+    assert result.returncode != 0
+    assert "invalid class" in result.stderr
+    assert blocking.read_text(encoding="utf-8") == "{}\n"
+    assert not (root / "events.jsonl").exists()
+
+
 def test_consume_block_refuses_stale_subject_without_clearing(tmp_path: Path) -> None:
     root = tmp_path / ".harness" / "runs" / "rD"
     (root / "lanes").mkdir(parents=True)
@@ -3261,7 +3388,21 @@ def test_disposition_releases_same_unpublished_dispatch(tmp_path: Path) -> None:
     cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
     (root / "lanes").mkdir(parents=True)
     blocking = root / "lanes" / "validator.blocking"
-    blocking.write_text('{"class":"orchestrator_response","response":"narrow"}\n')
+    blocking.write_text(
+        json.dumps(
+            {
+                "ts": "2026-08-19T12:00:00+00:00",
+                "class": "orchestrator_response",
+                "response": "wakes/wake-1.response.md",
+                "wake": "wake-1",
+                "trust_class": "untrusted-advisory",
+                "effect_route": "validator-blocking-only",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
     environment = _dispatch_env(stub, root)
 
     refused = run(
@@ -3341,6 +3482,114 @@ def test_blocking_append_after_admission_marker_applies_to_next_dispatch(
     )
     assert next_dispatch.returncode == 81
     assert "blocking event pending" in next_dispatch.stderr
+
+
+def test_attention_lock_orders_overlapping_producer_after_dispatch_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_attention_gate()
+    root = tmp_path / "run"
+    root.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+    original_publish = mod._publish_guard  # type: ignore[attr-defined]
+
+    def paused_publish(root_path: Path, role: str, pid: int) -> Path:
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_publish(root_path, role, pid)
+
+    monkeypatch.setattr(mod, "_publish_guard", paused_publish)
+    event = {
+        "ts": "2026-08-19T12:00:00+00:00",
+        "class": "stall",
+        "evidence": "coder quiet 30m",
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        admitted = pool.submit(mod.admit_dispatch, root, "coder", pid=1234)
+        assert entered.wait(timeout=5)
+        appended = pool.submit(mod.append_blocking_event, root, "coder", event)
+        time.sleep(0.05)
+        assert not appended.done(), "producer must wait behind the admission ordering point"
+        release.set()
+        guard = admitted.result(timeout=5)
+        appended.result(timeout=5)
+
+    assert guard.is_file()
+    assert (root / "lanes" / "coder.blocking").stat().st_size > 0
+    guard.unlink()
+    with pytest.raises(mod.BlockingEventPending):  # type: ignore[attr-defined]
+        mod.admit_dispatch(root, "coder", pid=1235)
+
+
+@pytest.mark.parametrize("retained_publications", [1, 2, 3, 4])
+def test_dispatch_exact_retry_recovers_after_partial_instruction_publication(
+    tmp_path: Path,
+    retained_publications: int,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
+    environment = _dispatch_env(stub, root)
+    marker = tmp_path / f"partial-{retained_publications}.marker"
+    delegate = tmp_path / f"partial-{retained_publications}.py"
+    delegate.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, subprocess, sys\n"
+        "def argument(name): return pathlib.Path(sys.argv[sys.argv.index(name) + 1])\n"
+        "marker = pathlib.Path(os.environ['FACTORY_TEST_PARTIAL_MARKER'])\n"
+        "if sys.argv[1:2] == ['prepare-lane-dispatch'] and not marker.exists():\n"
+        "    result = subprocess.run(\n"
+        "        [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]]\n"
+        "    )\n"
+        "    if result.returncode != 0: raise SystemExit(result.returncode)\n"
+        "    outputs = [argument('--effective-directives-output'), "
+        "argument('--role-contract-output'), argument('--readback-output'), "
+        "argument('--task-output')]\n"
+        "    retain = int(os.environ['FACTORY_TEST_PARTIAL_RETAIN_COUNT'])\n"
+        "    for path in outputs[retain:]: path.unlink()\n"
+        "    marker.write_text('injected after publication\\n', encoding='utf-8')\n"
+        "    raise SystemExit(70)\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    delegate.chmod(0o755)
+    environment.update(
+        {
+            "FACTORY_CLI": str(delegate),
+            "FACTORY_TEST_PARTIAL_MARKER": str(marker),
+            "FACTORY_TEST_PARTIAL_RETAIN_COUNT": str(retained_publications),
+        }
+    )
+    command = [
+        "bash",
+        str(HARNESS / "dispatch_lane.sh"),
+        "r1",
+        "coder",
+        "--dispatch",
+        str(dispatch),
+    ]
+
+    interrupted = run(command, cwd, environment)
+
+    assert interrupted.returncode == 70
+    retained_dispatch = root / "dispatch-inputs" / "coder.json"
+    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
+    instruction_root = root / "instruction-inputs" / "coder-g1"
+    publications = [
+        instruction_root / "effective-directives.json",
+        instruction_root / "role-contract.json",
+        instruction_root / "directive-readback.json",
+        instruction_root / "task.txt",
+    ]
+    assert [path.exists() for path in publications] == [
+        index < retained_publications for index in range(4)
+    ]
+
+    recovered = run(command, cwd, environment)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
+    assert all(path.is_file() for path in publications)
 
 
 # --------------------------------------------------------------------------
