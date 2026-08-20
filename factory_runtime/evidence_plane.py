@@ -58,6 +58,87 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 EVIDENCE_VERIFICATION_RECEIPT_VERSION = "factory-evidence-verification-receipt/1"
 TESSERA_EVIDENCE_VERIFIER_ID = "factory-tessera-evidence-verifier/1"
+PREVIEW_VALIDATED_ARTIFACT_KEYS = (
+    "acceptance-obligation-report",
+    "validator-review-subject",
+    "validator-adversarial-review",
+    "base-source-snapshot",
+    "candidate-change-set",
+    "validator-review-authority-context",
+    "validator-review-observations-source",
+    "validator-execution-manifest",
+    "validator-execution-configuration",
+    "validator-execution-environment",
+    "validator-execution-snapshot",
+)
+PREVIEW_ADMISSION_ARTIFACT_KEYS = (
+    "candidate",
+    "acceptance-tests",
+    "coder-output-snapshot",
+    "tester-output-snapshot",
+    *PREVIEW_VALIDATED_ARTIFACT_KEYS,
+)
+
+
+def build_preview_admission(
+    *,
+    run_schema_version: str,
+    run_id: str,
+    generation: int,
+    validating_ledger_head: str,
+    authority_genesis_digest: str,
+    implementer_identity: str,
+    tester_identity: str,
+    verifier_identity: str,
+    artifact_digests: Mapping[str, str],
+) -> dict[str, Any]:
+    """Build the exact non-circular PREVIEW subject authenticated by the Validator."""
+
+    if run_schema_version != "factory-run/5":
+        raise EvidencePlaneError("preview admission subject requires factory-run/5")
+    if not _ATTEMPT_ID.fullmatch(run_id):
+        raise EvidencePlaneError("preview admission subject has an invalid run id")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise EvidencePlaneError("preview admission subject has an invalid generation")
+    for label, value in (
+        ("validating ledger head", validating_ledger_head),
+        ("authority genesis digest", authority_genesis_digest),
+    ):
+        if not _DIGEST.fullmatch(value):
+            raise EvidencePlaneError(f"preview admission {label} is not a content address")
+    identities = {
+        "implementer": implementer_identity.strip(),
+        "tester": tester_identity.strip(),
+        "verifier": verifier_identity.strip(),
+    }
+    if any(not identity for identity in identities.values()) or len(set(identities.values())) != 3:
+        raise EvidencePlaneError(
+            "preview admission requires distinct Coder, Tester, and Validator identities"
+        )
+    supplied = dict(artifact_digests)
+    if set(supplied) != set(PREVIEW_ADMISSION_ARTIFACT_KEYS):
+        missing = sorted(set(PREVIEW_ADMISSION_ARTIFACT_KEYS) - set(supplied))
+        extra = sorted(set(supplied) - set(PREVIEW_ADMISSION_ARTIFACT_KEYS))
+        raise EvidencePlaneError(
+            "preview admission artifact map is incomplete or open: "
+            f"missing={missing}, extra={extra}"
+        )
+    for key, value in supplied.items():
+        if not _DIGEST.fullmatch(value):
+            raise EvidencePlaneError(
+                f"preview admission artifact {key!r} is not a content address"
+            )
+    return {
+        "run_schema_version": run_schema_version,
+        "run_id": run_id,
+        "generation": generation,
+        "source": "validating",
+        "destination": "preview",
+        "validating_ledger_head": validating_ledger_head,
+        "authority_genesis_digest": authority_genesis_digest,
+        "identities": identities,
+        "artifact_digests": {key: supplied[key] for key in PREVIEW_ADMISSION_ARTIFACT_KEYS},
+    }
 
 
 @dataclass(frozen=True)
@@ -218,6 +299,7 @@ def verify_retained_evidence_bundle(
     attempt_number: int,
     attempt_limit: int,
     validating_ledger_head: str,
+    expected_preview_admission: Mapping[str, Any] | None,
     verifier_identity: str,
     authority_genesis_digest: str,
     verifier: EvidenceEnvelopeVerifier,
@@ -270,6 +352,14 @@ def verify_retained_evidence_bundle(
         "build_attempt": {"number": attempt_number, "limit": attempt_limit},
         "ledger_head": validating_ledger_head,
     }
+    schema_version = payload.get("schema_version")
+    if expected_preview_admission is None:
+        if schema_version != "factory-evidence-bundle/2":
+            raise EvidencePlaneError("released run/4 replay requires evidence bundle/2")
+    else:
+        if schema_version != "factory-evidence-bundle/3":
+            raise EvidencePlaneError("factory-run/5 PREVIEW requires evidence bundle/3")
+        expected["preview_admission"] = dict(expected_preview_admission)
     for field, expected_value in expected.items():
         if payload.get(field) != expected_value:
             raise EvidencePlaneError(
@@ -452,6 +542,7 @@ class EvidenceBundleAssembler:
         determinism_records: Sequence[DeterminismRecord],
         lane: str,
         independence: IndependenceRecord,
+        validated_artifact_digests: Mapping[str, str],
         monitors: Sequence[Monitor] = (),
         monitor_declared_unit_count: int = 0,
         correction: CorrectionRecord | None = None,
@@ -481,6 +572,11 @@ class EvidenceBundleAssembler:
         if not coder_snapshot_digest or not tester_snapshot_digest:
             raise EvidencePlaneError(
                 "validating transition has no immutable review snapshot digests"
+            )
+        validated_artifacts = dict(validated_artifact_digests)
+        if set(validated_artifacts) != set(PREVIEW_VALIDATED_ARTIFACT_KEYS):
+            raise EvidencePlaneError(
+                "evidence bundle requires the complete closed set of PREVIEW validation artifacts"
             )
         review_root = self.runs_root / run_id / "evidence" / "review-snapshots"
         try:
@@ -548,8 +644,35 @@ class EvidenceBundleAssembler:
         blocking = tuple(dict.fromkeys((*evidence_binding_issues, *blocking, *record_blocking)))
         gates = tuple(dict.fromkeys((*gates, *record_gates)))
         reports = tuple(dict.fromkeys((*reports, *record_reports)))
+        ledger_entries = self.store.verified_ledger_entries(run_id)
+        genesis_artifacts = ledger_entries[0].get("artifact_digests")
+        validating_entry = ledger_entries[-1]
+        validating_payload = validating_entry.get("payload")
+        if not isinstance(genesis_artifacts, Mapping) or not isinstance(
+            validating_payload, Mapping
+        ):
+            raise EvidencePlaneError(
+                "evidence bundle cannot derive authority or validating identities"
+            )
+        preview_admission = build_preview_admission(
+            run_schema_version=projection.schema_version,
+            run_id=run_id,
+            generation=projection.generation,
+            validating_ledger_head=projection.ledger_head,
+            authority_genesis_digest=str(genesis_artifacts.get("authority-genesis", "")),
+            implementer_identity=str(validating_entry.get("implementer_identity", "")),
+            tester_identity=str(validating_payload.get("tester_identity", "")),
+            verifier_identity=str(validating_entry.get("verifier_identity", "")),
+            artifact_digests={
+                "candidate": candidate_digest,
+                "acceptance-tests": acceptance_tests_digest,
+                "coder-output-snapshot": coder_snapshot_digest,
+                "tester-output-snapshot": tester_snapshot_digest,
+                **validated_artifacts,
+            },
+        )
         document = {
-            "schema_version": "factory-evidence-bundle/2",
+            "schema_version": "factory-evidence-bundle/3",
             "run_id": run_id,
             "lane": lane,
             "target_digest": projection.target_digest,
@@ -568,6 +691,7 @@ class EvidenceBundleAssembler:
             "ledger_head": projection.ledger_head,
             "phase_artifacts": [artifact.body() for artifact in artifacts],
             "trusted_artifact_digests": trusted,
+            "preview_admission": preview_admission,
             "claims": [claim.to_dict() for claim in claims],
             "checklist_results": [result.to_dict() for result in checklist_results],
             "surface_evidence": [record.to_dict() for record in surface_rows],

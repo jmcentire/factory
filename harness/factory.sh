@@ -165,7 +165,7 @@ FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
   "$D/ground.sh" --run "$RUN" --runs "$FACTORY_RUNS_ROOT"
 
 resource_event() {
-  $FACTORY_CLI record-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+  factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
     --resource-id tmux-session --resource-type tmux-session --identifier "$RUN" \
     --creator-action harness-ignition --ownership run-owned \
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \

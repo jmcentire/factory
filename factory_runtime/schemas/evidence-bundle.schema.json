@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/evidence-bundle/2",
-  "title": "Factory change evidence bundle",
+  "$id": "factory://schemas/evidence-bundle/3",
+  "title": "Factory change evidence bundle with authenticated validation artifacts",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,6 +17,7 @@
     "ledger_head",
     "phase_artifacts",
     "trusted_artifact_digests",
+    "preview_admission",
     "claims",
     "checklist_results",
     "surface_evidence",
@@ -26,597 +27,98 @@
     "monitors"
   ],
   "properties": {
-    "schema_version": {
-      "const": "factory-evidence-bundle/2"
-    },
-    "run_id": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-    },
-    "target_digest": {
-      "$ref": "#/$defs/digest"
-    },
-    "source_digest": {
-      "$ref": "#/$defs/digest"
-    },
-    "candidate_digest": {
-      "$ref": "#/$defs/digest"
-    },
-    "acceptance_tests_digest": {
-      "$ref": "#/$defs/digest"
-    },
-    "generation_artifacts": {
+    "schema_version": {"const": "factory-evidence-bundle/3"},
+    "run_id": {"$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"},
+    "target_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+    "source_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+    "candidate_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+    "acceptance_tests_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+    "generation_artifacts": {"$ref": "factory://schemas/evidence-bundle/2#/properties/generation_artifacts"},
+    "review_snapshots": {"$ref": "factory://schemas/evidence-bundle/2#/properties/review_snapshots"},
+    "build_attempt": {"$ref": "factory://schemas/evidence-bundle/2#/properties/build_attempt"},
+    "ledger_head": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+    "phase_artifacts": {"$ref": "factory://schemas/evidence-bundle/2#/properties/phase_artifacts"},
+    "trusted_artifact_digests": {"$ref": "factory://schemas/evidence-bundle/2#/properties/trusted_artifact_digests"},
+    "preview_admission": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "target-manifest-source",
-        "pattern-catalog",
-        "pattern-catalog-source",
-        "build-plan",
-        "build-plan-source",
-        "build-input",
-        "generation-readiness"
+        "run_schema_version",
+        "run_id",
+        "generation",
+        "source",
+        "destination",
+        "validating_ledger_head",
+        "authority_genesis_digest",
+        "identities",
+        "artifact_digests"
       ],
       "properties": {
-        "target-manifest-source": {"$ref": "#/$defs/digest"},
-        "pattern-catalog": {"$ref": "#/$defs/digest"},
-        "pattern-catalog-source": {"$ref": "#/$defs/digest"},
-        "build-plan": {"$ref": "#/$defs/digest"},
-        "build-plan-source": {"$ref": "#/$defs/digest"},
-        "build-input": {"$ref": "#/$defs/digest"},
-        "generation-readiness": {"$ref": "#/$defs/digest"}
-      }
-    },
-    "review_snapshots": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["coder-output", "tester-output"],
-      "properties": {
-        "coder-output": {"$ref": "#/$defs/digest"},
-        "tester-output": {"$ref": "#/$defs/digest"}
-      }
-    },
-    "build_attempt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["number", "limit"],
-      "properties": {
-        "number": {"type": "integer", "minimum": 1},
-        "limit": {"type": "integer", "minimum": 1}
-      }
-    },
-    "ledger_head": {
-      "$ref": "#/$defs/digest"
-    },
-    "phase_artifacts": {
-      "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
-      "items": {
-        "$ref": "factory://schemas/phase-artifact/1"
-      }
-    },
-    "trusted_artifact_digests": {
-      "type": "object",
-      "minProperties": 3,
-      "additionalProperties": {
-        "$ref": "#/$defs/digest"
-      }
-    },
-    "claims": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "claim_id",
-          "kind",
-          "backreference"
-        ],
-        "properties": {
-          "claim_id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "kind": {
-            "enum": [
-              "requirement",
-              "constraint",
-              "task",
-              "test-assertion",
-              "monitor"
-            ]
-          },
-          "backreference": {
-            "$ref": "#/$defs/backreference"
-          }
-        }
-      }
-    },
-    "checklist_results": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/checklist_result"
-      }
-    },
-    "surface_evidence": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/surface_evidence"
-      }
-    },
-    "determinism_records": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/determinism_record"
-      }
-    },
-    "lane": {
-      "enum": [
-        "capability",
-        "correction"
-      ]
-    },
-    "independence": {
-      "$ref": "#/$defs/independence"
-    },
-    "monitors": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/monitor"
-      }
-    },
-    "monitor_declared_unit_count": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "correction": {
-      "$ref": "#/$defs/correction"
-    }
-  },
-  "$defs": {
-    "digest": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "integrity": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "body",
-        "claimed_digest"
-      ],
-      "properties": {
-        "body": {
-          "type": "object"
-        },
-        "claimed_digest": {
-          "$ref": "#/$defs/digest"
-        }
-      }
-    },
-    "checklist_result": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "passed",
-        "detail",
-        "recorded_at",
-        "evidence"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "passed": {
-          "type": "boolean"
-        },
-        "detail": {
-          "type": "string"
-        },
-        "recorded_at": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "evidence": {
-          "$ref": "#/$defs/integrity"
-        }
-      }
-    },
-    "surface_evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "surface_id",
-        "criticality",
-        "oracle_adequate",
-        "required_evidence_ids",
-        "evidence_digests"
-      ],
-      "properties": {
-        "surface_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "criticality": {
-          "enum": [
-            "critical",
-            "standard",
-            "cosmetic"
-          ]
-        },
-        "oracle_adequate": {
-          "type": "boolean"
-        },
-        "required_evidence_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "evidence_digests": {
+        "run_schema_version": {"const": "factory-run/5"},
+        "run_id": {"$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"},
+        "generation": {"type": "integer", "minimum": 1},
+        "source": {"const": "validating"},
+        "destination": {"const": "preview"},
+        "validating_ledger_head": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+        "authority_genesis_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+        "identities": {
           "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/digest"
-          }
-        }
-      }
-    },
-    "determinism_record": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "surface_id",
-        "criticality",
-        "deterministic",
-        "flake_count",
-        "automatic_retry_count"
-      ],
-      "properties": {
-        "surface_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "criticality": {
-          "enum": [
-            "critical",
-            "standard",
-            "cosmetic"
-          ]
-        },
-        "deterministic": {
-          "type": "boolean"
-        },
-        "flake_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "automatic_retry_count": {
-          "type": "integer",
-          "minimum": 0
-        }
-      }
-    },
-    "backreference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "artifact_id",
-        "artifact_digest",
-        "item_id",
-        "intent_digest"
-      ],
-      "properties": {
-        "artifact_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "artifact_digest": {
-          "$ref": "#/$defs/digest"
-        },
-        "item_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "intent_digest": {
-          "$ref": "#/$defs/digest"
-        }
-      }
-    },
-    "independence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "agents",
-        "shared_context",
-        "channel_open",
-        "mechanism_ids",
-        "claimed_tier",
-        "structural_mode",
-        "derived_tier"
-      ],
-      "properties": {
-        "agents": {
-          "type": "array",
-          "minItems": 3,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "role",
-              "model_family",
-              "model_version",
-              "directive_version"
-            ],
-            "properties": {
-              "role": {
-                "enum": [
-                  "coder",
-                  "tester",
-                  "validator"
-                ]
-              },
-              "model_family": {
-                "type": "string",
-                "minLength": 1
-              },
-              "model_version": {
-                "type": "string",
-                "minLength": 1
-              },
-              "directive_version": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
+          "additionalProperties": false,
+          "required": ["implementer", "tester", "verifier"],
+          "properties": {
+            "implementer": {"type": "string", "minLength": 1},
+            "tester": {"type": "string", "minLength": 1},
+            "verifier": {"type": "string", "minLength": 1}
           }
         },
-        "shared_context": {
-          "type": "boolean"
-        },
-        "channel_open": {
-          "type": "boolean"
-        },
-        "mechanism_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "claimed_tier": {
-          "enum": [
-            "weakest",
-            "weak",
-            "moderate",
-            "stronger",
-            "strongest"
-          ]
-        },
-        "derived_tier": {
-          "enum": [
-            "weakest",
-            "weak",
-            "moderate",
-            "stronger",
-            "strongest"
-          ]
-        },
-        "structural_mode": {
+        "artifact_digests": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "mode",
-            "contract_backreference",
-            "mutation_evidence",
-            "decision_package_note"
+            "candidate",
+            "acceptance-tests",
+            "coder-output-snapshot",
+            "tester-output-snapshot",
+            "acceptance-obligation-report",
+            "validator-review-subject",
+            "validator-adversarial-review",
+            "base-source-snapshot",
+            "candidate-change-set",
+            "validator-review-authority-context",
+            "validator-review-observations-source",
+            "validator-execution-manifest",
+            "validator-execution-configuration",
+            "validator-execution-environment",
+            "validator-execution-snapshot"
           ],
           "properties": {
-            "mode": {
-              "enum": [
-                "isolated",
-                "implementation-informed"
-              ]
-            },
-            "contract_backreference": {
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/backreference"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "mutation_evidence": {
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/integrity"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "decision_package_note": {
-              "type": "string"
-            }
+            "candidate": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "acceptance-tests": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "coder-output-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "tester-output-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "acceptance-obligation-report": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-review-subject": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-adversarial-review": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "base-source-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "candidate-change-set": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-review-authority-context": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-review-observations-source": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-execution-manifest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-execution-configuration": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-execution-environment": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+            "validator-execution-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"}
           }
         }
       }
     },
-    "monitor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "monitor_id",
-        "surface_id",
-        "derivation",
-        "authorship",
-        "author_identity",
-        "backreference",
-        "actionable_conclusion",
-        "notifies_human",
-        "fix_references"
-      ],
-      "properties": {
-        "monitor_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "surface_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "derivation": {
-          "const": "specification"
-        },
-        "authorship": {
-          "enum": [
-            "human",
-            "generated"
-          ]
-        },
-        "author_identity": {
-          "type": "string"
-        },
-        "backreference": {
-          "$ref": "#/$defs/backreference"
-        },
-        "actionable_conclusion": {
-          "type": "string"
-        },
-        "notifies_human": {
-          "type": "boolean"
-        },
-        "fix_references": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      }
-    },
-    "correction": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "defect_id",
-        "baseline_available",
-        "controls",
-        "reproduction"
-      ],
-      "properties": {
-        "defect_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "baseline_available": {
-          "type": "boolean"
-        },
-        "controls": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "test_id",
-              "declared_role",
-              "baseline_result",
-              "failure_relation"
-            ],
-            "properties": {
-              "test_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "declared_role": {
-                "enum": [
-                  "red-now",
-                  "green-now"
-                ]
-              },
-              "baseline_result": {
-                "enum": [
-                  "failed",
-                  "passed"
-                ]
-              },
-              "failure_relation": {
-                "enum": [
-                  "",
-                  "defect",
-                  "unrelated"
-                ]
-              }
-            }
-          }
-        },
-        "reproduction": {
-          "oneOf": [
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "defect_id",
-                "result",
-                "environment_id",
-                "disposable_environment",
-                "recorded_before_repair",
-                "impossibility_condition",
-                "evidence"
-              ],
-              "properties": {
-                "defect_id": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "result": {
-                  "enum": [
-                    "reproduced",
-                    "not-reproduced",
-                    "impossible"
-                  ]
-                },
-                "environment_id": {
-                  "type": "string"
-                },
-                "disposable_environment": {
-                  "type": "boolean"
-                },
-                "recorded_before_repair": {
-                  "type": "boolean"
-                },
-                "impossibility_condition": {
-                  "type": "string"
-                },
-                "evidence": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/$defs/integrity"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              }
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    }
+    "claims": {"$ref": "factory://schemas/evidence-bundle/2#/properties/claims"},
+    "checklist_results": {"$ref": "factory://schemas/evidence-bundle/2#/properties/checklist_results"},
+    "surface_evidence": {"$ref": "factory://schemas/evidence-bundle/2#/properties/surface_evidence"},
+    "determinism_records": {"$ref": "factory://schemas/evidence-bundle/2#/properties/determinism_records"},
+    "lane": {"$ref": "factory://schemas/evidence-bundle/2#/properties/lane"},
+    "independence": {"$ref": "factory://schemas/evidence-bundle/2#/properties/independence"},
+    "monitors": {"$ref": "factory://schemas/evidence-bundle/2#/properties/monitors"},
+    "monitor_declared_unit_count": {"$ref": "factory://schemas/evidence-bundle/2#/properties/monitor_declared_unit_count"},
+    "correction": {"$ref": "factory://schemas/evidence-bundle/2#/properties/correction"}
   }
 }

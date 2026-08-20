@@ -265,7 +265,37 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
     resolved_tree = _git(("rev-parse", "HEAD^{tree}"), cwd=baseline)
     object_store = tmp_path / "objects.git"
     _git(("clone", "-q", "--bare", str(baseline), str(object_store)))
-    checkpoint = {"run_id": "fixture-run", "checkpoint": "integration"}
+    verbatim_request = "Implement integer addition and verify positive and negative examples."
+    execution_request = {
+        "schema_version": "factory-execution-request/1",
+        "request_id": "fixture-request",
+        "run_id": "fixture-run",
+        "repository_id": "fixture-repository",
+        "generation": 1,
+        "target_manifest_digest": build_input["target_digest"],
+        "target_state_digest": acceptance_catalog["target_state_digest"],
+        "resolved_commit": resolved_commit,
+        "proposed_by": "human:founder",
+        "verbatim_request": verbatim_request,
+        "verbatim_request_digest": digest_bytes(verbatim_request.encode("utf-8")),
+        "requested_outcome": "The calculator returns mathematical integer sums.",
+        "surfaces": [
+            {
+                "surface_id": "calculator",
+                "proposed_criticality": "critical",
+                "reason": "The public calculator behavior is the requested outcome.",
+            }
+        ],
+        "created_at": 1,
+    }
+    execution_request_bytes = (
+        json.dumps(execution_request, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    checkpoint = {
+        "run_id": "fixture-run",
+        "checkpoint": "integration",
+        "execution_request_digest": digest_obj(execution_request),
+    }
     checkpoint_bytes = (
         json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
@@ -306,6 +336,8 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
             base_source_snapshot=base_source_snapshot,
             candidate_change_set=candidate_change_set,
             authority_context=authority_context,
+            execution_request_bytes=execution_request_bytes,
+            build_input=build_input,
             build_input_digest=digest_obj(build_input),
             pattern_catalog_digest=digest_obj(
                 json.loads((FIXTURES / "pattern-catalog.json").read_text())
@@ -313,12 +345,8 @@ def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
             pattern_catalog_source_digest=digest_bytes(
                 (FIXTURES / "pattern-catalog.json").read_bytes()
             ),
-            build_plan_digest=digest_obj(
-                json.loads((FIXTURES / "build-plan.json").read_text())
-            ),
-            build_plan_source_digest=digest_bytes(
-                (FIXTURES / "build-plan.json").read_bytes()
-            ),
+            build_plan_digest=digest_obj(json.loads((FIXTURES / "build-plan.json").read_text())),
+            build_plan_source_digest=digest_bytes((FIXTURES / "build-plan.json").read_bytes()),
             phase_artifact_digests=phases,
             acceptance_obligation_catalog_digest=digest_obj(acceptance_catalog),
             acceptance_obligation_catalog_source_digest=digest_bytes(
@@ -415,8 +443,8 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     assert frozen_command[1] == "-"
     assert backend.validator_script_bytes == ratified_bytes
     assert validator.read_bytes() != ratified_bytes
-    assert backend.validator_environment["FACTORY_VALIDATOR_COMMAND_DIGEST"] == (
-        execution_digests[0]
+    assert (
+        backend.validator_environment["FACTORY_VALIDATOR_COMMAND_DIGEST"] == (execution_digests[0])
     )
     frozen_manifest = Path(
         backend.validator_environment["FACTORY_VALIDATOR_EXECUTION_MANIFEST_PATH"]

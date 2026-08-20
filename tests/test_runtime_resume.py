@@ -7,14 +7,15 @@ from typing import Any
 
 import pytest
 
+import factory_runtime.resume as resume_module
 from factory_core.manifest import digest_obj
-from factory_runtime.authority import load_genesis
+from factory_runtime.authority import AuthorityPolicy, load_genesis
 from factory_runtime.resume import (
     ResumeVerificationError,
     derive_resume_checkpoint,
     verify_resume_checkpoint,
 )
-from factory_runtime.state import RunState
+from factory_runtime.state import RunState, RunStateError
 from factory_runtime.workflow import FactoryWorkflow
 from tests.conftest import SYNTHETIC_TARGET, ratification_receipts
 from tests.test_runtime_workflow import (
@@ -234,6 +235,63 @@ def test_checkpoint_reverifies_authority_and_allows_only_append_only_extension(
     )
     assert extended.current_run_ledger_length == result.current_run_ledger_length + 1
     assert extended.anchored_run_ledger_head == result.anchored_run_ledger_head
+
+
+def test_bound_state_replay_constructs_an_authenticated_evidence_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = AuthorityPolicy(
+        repository_id="factory",
+        policy_id="factory-authority/1",
+        root_public_key=ROOT_KEY,
+        principals={},
+        bootstrap_enabled=False,
+        bootstrap_scope=frozenset(),
+        genesis_digest="sha256:" + ("a" * 64),
+    )
+
+    class _Genesis:
+        payload_digest = policy.genesis_digest
+        envelope_digest = "sha256:" + ("b" * 64)
+
+    class _VerifierTessera:
+        def verify_json(self, *_args: object, **_kwargs: object) -> _Genesis:
+            return _Genesis()
+
+    observed: list[object] = []
+
+    class _StoppingStore:
+        def __init__(
+            self,
+            _root: str | Path,
+            *,
+            preview_evidence_verifier: object,
+        ) -> None:
+            observed.append(preview_evidence_verifier)
+
+        def load(self, _run_id: str) -> object:
+            raise RunStateError("stop after verifier construction")
+
+    tessera = _VerifierTessera()
+    monkeypatch.setattr(resume_module, "load_genesis", lambda *_args, **_kwargs: policy)
+    monkeypatch.setattr(resume_module, "RunStore", _StoppingStore)
+
+    with pytest.raises(ResumeVerificationError, match="stop after verifier construction"):
+        resume_module._derive_bound_state(
+            tmp_path,
+            "run-1",
+            genesis_path=tmp_path / "genesis.tessera.json",
+            trusted_root_public_key=ROOT_KEY,
+            tessera=tessera,  # type: ignore[arg-type]
+            configuration_sources={"runner": tmp_path / "runner.json"},
+        )
+
+    assert len(observed) == 1
+    verifier = observed[0]
+    assert isinstance(verifier, resume_module.TesseraEvidenceEnvelopeVerifier)
+    assert verifier._tessera is tessera
+    assert verifier._policy is policy
 
 
 def test_checkpoint_binds_independently_expected_acceptance_catalog(tmp_path: Path) -> None:

@@ -30,7 +30,7 @@ FACTORY_CLI="${FACTORY_CLI:-factory}"
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
-$FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null
 
 RESOURCES=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN")
 CANDIDATE=$(printf '%s' "$RESOURCES" | python3 -c '
@@ -76,7 +76,7 @@ print(json.dumps({
 PY
 )
 resource_event() {
-  $FACTORY_CLI record-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+  factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
     --resource-id "$RESOURCE_ID" --resource-type endgame-worktree --identifier "$FRESH" \
     --creator-action endgame --ownership run-owned --baseline-json '{"absent_at_plan":true}' \
     --disposition-json "$1" --evidence-json "$EVIDENCE" --status "$2" \
@@ -125,7 +125,7 @@ else
 fi
 
 say "== exact-subject and run-owned-resource hygiene =="
-$FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null || FAILED=1
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || FAILED=1
 if [ -n "$(git -C "$FRESH" status --porcelain --untracked-files=all)" ]; then
   say "   endgame checkout changed while judging; evidence no longer names one subject"
   FAILED=1
@@ -146,7 +146,7 @@ while IFS=$'\t' read -r resource_id resource_type identifier; do
   case "$resource_type" in
     object-store|source-worktree|endgame-worktree)
       if [ -d "$identifier" ] && [ ! -L "$identifier" ]; then
-        $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+        factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
           --resource-id "$resource_id" --status retained \
           --reason "verified path retained for exact-target/endgame reproducibility" \
           --residue true --evidence-json "$EVIDENCE" --actor endgame-validator >/dev/null || \
@@ -159,7 +159,7 @@ while IFS=$'\t' read -r resource_id resource_type identifier; do
     lane-workspace)
       if [ "$resource_id" = "$CANDIDATE_RESOURCE" ] && \
          [ -d "$identifier" ] && [ ! -L "$identifier" ]; then
-        $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+        factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
           --resource-id "$resource_id" --status retained \
           --reason "accepted candidate workspace retained for inspection" --residue true \
           --evidence-json "$EVIDENCE" --actor endgame-validator >/dev/null || FAILED=1
@@ -177,7 +177,7 @@ while IFS=$'\t' read -r resource_id resource_type identifier; do
         say "   $resource_id: tmux resource is still live; close it before Gate L"
         FAILED=1
       else
-        $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+        factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
           --resource-id "$resource_id" --status disposed \
           --reason "tmux target mechanically absent at endgame" --residue false \
           --evidence-json "$EVIDENCE" --actor endgame-validator >/dev/null || FAILED=1

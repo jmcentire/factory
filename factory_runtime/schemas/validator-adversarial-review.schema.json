@@ -11,6 +11,11 @@
     "reviewer_identity",
     "acceptance_observations_digest",
     "dimensions",
+    "requirement_dispositions",
+    "architecture_dispositions",
+    "operational_maturity_dispositions",
+    "failure_mode_probes",
+    "clean_claim_challenges",
     "findings",
     "completeness",
     "verdict"
@@ -40,6 +45,34 @@
           }
         }
       }
+    },
+    "requirement_dispositions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/item_disposition"}
+    },
+    "architecture_dispositions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/item_disposition"}
+    },
+    "operational_maturity_dispositions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/item_disposition"}
+    },
+    "failure_mode_probes": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {"$ref": "#/$defs/failure_mode_probe"}
+    },
+    "clean_claim_challenges": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {"$ref": "#/$defs/clean_claim_challenge"}
     },
     "findings": {
       "type": "array",
@@ -116,6 +149,7 @@
     }
   },
   "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "dimension": {
       "enum": [
@@ -143,6 +177,145 @@
         "clean-claim-challenge"
       ]
     },
+    "intent_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_digest", "item_id", "intent_digest"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "intent_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "item_disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "artifact_digest",
+        "item_id",
+        "intent_digest",
+        "disposition",
+        "summary",
+        "evidence",
+        "finding_ids"
+      ],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "intent_digest": {"$ref": "#/$defs/digest"},
+        "disposition": {"enum": ["CONFORMS", "VIOLATES", "UNRESOLVED"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "finding_ids": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "failure_mode_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probe_id",
+        "obligation_id",
+        "verifier_id",
+        "effect_digest",
+        "test_result",
+        "failure_mode",
+        "attempt",
+        "expected_result",
+        "observed_result",
+        "outcome",
+        "evidence",
+        "finding_ids"
+      ],
+      "properties": {
+        "probe_id": {"$ref": "#/$defs/digest"},
+        "obligation_id": {"$ref": "#/$defs/id"},
+        "verifier_id": {
+          "enum": [
+            "validator-test-execution-v1",
+            "validator-artifact-rehash-v1",
+            "validator-exact-value-v1"
+          ]
+        },
+        "effect_digest": {"$ref": "#/$defs/digest"},
+        "test_result": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["test_id", "assertion_digest", "output_digest"],
+              "properties": {
+                "test_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "assertion_digest": {"$ref": "#/$defs/digest"},
+                "output_digest": {"$ref": "#/$defs/digest"}
+              }
+            }
+          ]
+        },
+        "failure_mode": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "attempt": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "expected_result": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "observed_result": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "outcome": {"enum": ["PASSED", "FAILED", "INCONCLUSIVE"]},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "finding_ids": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "clean_claim_challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_id",
+        "hypothesis",
+        "attempt",
+        "observed_result",
+        "outcome",
+        "evidence",
+        "finding_ids"
+      ],
+      "properties": {
+        "challenge_id": {"$ref": "#/$defs/digest"},
+        "hypothesis": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "attempt": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "observed_result": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "outcome": {"enum": ["REFUTED", "CONFIRMED", "INCONCLUSIVE"]},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "finding_ids": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
     "evidence": {
       "type": "object",
       "additionalProperties": false,
@@ -159,7 +332,8 @@
             "acceptance-observations",
             "baseline-source",
             "candidate-change-set",
-            "review-authority-context"
+            "review-authority-context",
+            "operator-intent"
           ]
         },
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},

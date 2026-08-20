@@ -60,6 +60,7 @@ from factory_core.provenance import (
 from factory_core.target import load_target_manifest
 from factory_runtime.durability import DurabilityError
 from factory_runtime.evidence_plane import (
+    PREVIEW_VALIDATED_ARTIFACT_KEYS,
     ChecklistJournal,
     DeterminismRecord,
     EvidenceBundleAssembler,
@@ -300,6 +301,7 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
         },
         payload={"tester_identity": "tester"},
         implementer_identity="coder",
+        verifier_identity="validator",
     )
     return store, artifacts
 
@@ -497,6 +499,10 @@ def _records(artifacts: Sequence[PhaseArtifact], **overrides: Any) -> dict[str, 
         "independence": _independence(),
         "monitors": (_monitor(artifacts),),
         "policy": _policy(),
+        "validated_artifact_digests": {
+            key: digest_obj({"validated-artifact": key})
+            for key in PREVIEW_VALIDATED_ARTIFACT_KEYS
+        },
     }
     values.update(overrides)
     return values

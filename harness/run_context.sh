@@ -13,8 +13,10 @@ factory_verify_resume_anchor() {
   local config_manifest="${FACTORY_RESUME_CONFIG_MANIFEST:-}"
   local predecessors="${FACTORY_RESUME_ACCEPTED_PREDECESSORS:-}"
   local tessera="${FACTORY_TESSERA_BIN:-tessera}"
-  declare -ga FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
-  declare -ga FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
+  # These assignments are intentionally global: later helpers consume the exact verified argv
+  # vectors.  Avoid `declare -g`, which macOS's system Bash 3.2 does not implement.
+  FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
+  FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
 
   [ -f "$checkpoint" ] && [ ! -L "$checkpoint" ] || {
     echo "Factory resume checkpoint is not an externally supplied regular file" >&2
@@ -72,9 +74,52 @@ factory_verify_resume_anchor() {
     --checkpoint "$checkpoint" --checkpoint-digest "$checkpoint_digest" \
     --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera" \
     "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
-    "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}" >/dev/null || return $?
+    "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]+"${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}"}" \
+    >/dev/null || return $?
   FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST="$checkpoint_digest"
   export FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST
+}
+
+factory_verify_target_state() {
+  local run="${1:?run id required}"
+  local runs="${2:?runs root required}"
+  local cli="${FACTORY_CLI:-factory}"
+  $cli verify-target-state --runs "$runs" --run-id "$run" \
+    --genesis "${FACTORY_GENESIS:-}" \
+    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
+    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
+}
+
+factory_verify_execution_request() {
+  local run="${1:?run id required}"
+  local runs="${2:?runs root required}"
+  local task_file="${3:-}"
+  local cli="${FACTORY_CLI:-factory}"
+  local task_args=()
+  if [ -n "$task_file" ]; then
+    task_args=(--task-file "$task_file")
+  fi
+  $cli verify-execution-request --runs "$runs" --run-id "$run" \
+    "${task_args[@]+"${task_args[@]}"}" \
+    --genesis "${FACTORY_GENESIS:-}" \
+    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
+    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
+}
+
+factory_record_resource() {
+  local cli="${FACTORY_CLI:-factory}"
+  $cli record-resource "$@" \
+    --genesis "${FACTORY_GENESIS:-}" \
+    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
+    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
+}
+
+factory_disposition_resource() {
+  local cli="${FACTORY_CLI:-factory}"
+  $cli disposition-resource "$@" \
+    --genesis "${FACTORY_GENESIS:-}" \
+    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
+    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
 }
 
 factory_config_source_path() {
@@ -124,8 +169,8 @@ factory_load_context() {
   status="$($cli status --runs "$runs" --run-id "$run" \
     --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera")" || return $?
 
-  local values=()
-  mapfile -t values < <(
+  local context_values
+  context_values="$(
     printf '%s' "$status" | python3 -c '
 import json, pathlib, sys
 expected_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
@@ -158,12 +203,16 @@ if any("\n" in value or "\r" in value for value in fields):
     raise SystemExit("run context fields may not contain newlines")
 print("\n".join(fields))
 ' "$root"
-  )
+  )" || return $?
+  local values=()
+  while IFS= read -r value; do
+    values[${#values[@]}]="$value"
+  done <<< "$context_values"
   [ "${#values[@]}" -eq 11 ] || {
     echo "Factory projection could not produce a complete execution context" >&2
     return 70
   }
-  $cli verify-target-state --runs "$runs" --run-id "$run" >/dev/null || return $?
+  factory_verify_target_state "$run" "$runs" >/dev/null || return $?
   # Stage-E request bytes are retained separately from the lifecycle ledger, so re-derive their
   # digest against the unique intake entry on every harness read. Once ignition metadata exists,
   # TASK.md must also be the exact signed verbatim request; no consumer may trust the neighboring
@@ -173,10 +222,10 @@ print("\n".join(fields))
       echo "Factory task artifact is missing or a symlink: $root/TASK.md" >&2
       return 70
     }
-    $cli verify-execution-request --runs "$runs" --run-id "$run" \
-      --task-file "$root/TASK.md" >/dev/null || return $?
+    factory_verify_execution_request "$run" "$runs" "$root/TASK.md" \
+      >/dev/null || return $?
   else
-    $cli verify-execution-request --runs "$runs" --run-id "$run" >/dev/null || return $?
+    factory_verify_execution_request "$run" "$runs" >/dev/null || return $?
   fi
 
   FACTORY_RUNS_ROOT="$runs"

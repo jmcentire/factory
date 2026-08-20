@@ -88,9 +88,7 @@ implementation = Path(os.environ["FACTORY_IMPLEMENTATION_DIR"])
 tests = Path(os.environ["FACTORY_TEST_DIR"])
 review_subject_path = Path(os.environ["FACTORY_VALIDATOR_REVIEW_SUBJECT_PATH"])
 review_subject_bytes = review_subject_path.read_bytes()
-if _digest(review_subject_bytes) != os.environ[
-    "FACTORY_VALIDATOR_REVIEW_SUBJECT_SOURCE_DIGEST"
-]:
+if _digest(review_subject_bytes) != os.environ["FACTORY_VALIDATOR_REVIEW_SUBJECT_SOURCE_DIGEST"]:
     raise SystemExit("Validator received a stale adversarial-review subject")
 review_subject = json.loads(review_subject_bytes)
 assertions = json.loads((tests / "evidence" / "assertions.json").read_text(encoding="utf-8"))
@@ -235,8 +233,18 @@ authority_ref = _evidence_data(
     "review-authority-context.json",
     _canonical(review_subject["authority_context"]),
 )
+operator_intent_ref = _evidence_data(
+    "operator-intent",
+    "execution-request.json",
+    base64.b64decode(review_subject["operator_intent"]["execution_request"]["content_base64"]),
+)
 dimension_evidence = {
-    "intent-conformance": [build_input_ref, build_plan_ref, implementation_ref],
+    "intent-conformance": [
+        operator_intent_ref,
+        build_input_ref,
+        build_plan_ref,
+        implementation_ref,
+    ],
     "architecture": [build_input_ref, pattern_catalog_ref, implementation_ref],
     "redundancy": [implementation_ref],
     "clarity": [implementation_ref],
@@ -244,6 +252,63 @@ dimension_evidence = {
     "test-adequacy": [tests_ref, observations_ref],
     "correctness-and-failure": [implementation_ref, tests_ref, observations_ref],
     "scope-control": [build_input_ref, acceptance_catalog_ref, implementation_ref],
+}
+requirement_dispositions = [
+    {
+        **target,
+        "disposition": "CONFORMS",
+        "summary": "The candidate and retained oracle satisfy this Product requirement.",
+        "evidence": [build_input_ref, implementation_ref, observations_ref],
+        "finding_ids": [],
+    }
+    for target in review_subject["review_targets"]["requirements"]
+]
+architecture_dispositions = [
+    {
+        **target,
+        "disposition": "CONFORMS",
+        "summary": "The candidate change preserves this ratified Architecture boundary.",
+        "evidence": [build_input_ref, change_set_ref, implementation_ref],
+        "finding_ids": [],
+    }
+    for target in review_subject["review_targets"]["architecture_items"]
+]
+operational_maturity_dispositions = [
+    {
+        **target,
+        "disposition": "CONFORMS",
+        "summary": "The exact tests and Validator observations satisfy this maturity item.",
+        "evidence": [build_input_ref, tests_ref, observations_ref],
+        "finding_ids": [],
+    }
+    for target in review_subject["review_targets"]["operational_maturity_items"]
+]
+observed_effect = results[0]
+observed_test = observed_effect["test_results"][0]
+probe_body = {
+    "obligation_id": observed_effect["obligation_id"],
+    "verifier_id": observed_effect["verifier_id"],
+    "effect_digest": observed_effect["effect_digest"],
+    "test_result": {
+        "test_id": observed_test["test_id"],
+        "assertion_digest": observed_test["assertion_digest"],
+        "output_digest": observed_test["output_digest"],
+    },
+    "failure_mode": "The implementation could retain subtraction behavior for positive inputs.",
+    "attempt": "Execute the exact positive-addition acceptance assertion.",
+    "expected_result": "The assertion observes the mathematical sum.",
+    "observed_result": "The bound Validator result records a successful execution.",
+    "outcome": "PASSED",
+    "evidence": [tests_ref, observations_ref],
+    "finding_ids": [],
+}
+challenge_body = {
+    "hypothesis": "The candidate does not implement the operator-authorized addition outcome.",
+    "attempt": "Compare exact Stage-E intent with the complete candidate and change set.",
+    "observed_result": "The implementation replaces subtraction with addition.",
+    "outcome": "REFUTED",
+    "evidence": [operator_intent_ref, implementation_ref, change_set_ref],
+    "finding_ids": [],
 }
 review = {
     "schema_version": "factory-validator-adversarial-review/1",
@@ -260,6 +325,11 @@ review = {
         }
         for dimension_id in review_subject["protocol"]["required_dimensions"]
     ],
+    "requirement_dispositions": requirement_dispositions,
+    "architecture_dispositions": architecture_dispositions,
+    "operational_maturity_dispositions": operational_maturity_dispositions,
+    "failure_mode_probes": [{"probe_id": _digest_obj(probe_body), **probe_body}],
+    "clean_claim_challenges": [{"challenge_id": _digest_obj(challenge_body), **challenge_body}],
     "findings": [],
     "completeness": {
         "state": "COMPLETED",
@@ -284,6 +354,7 @@ review = {
             baseline_ref,
             change_set_ref,
             authority_ref,
+            operator_intent_ref,
         ],
     },
     "verdict": "CLEAN_QUALIFIED",

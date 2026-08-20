@@ -9,9 +9,10 @@ public API is still pre-1.0.
 
 - A mandatory immutable Validator adversarial-review gate before preview. A closed subject binds
   the complete bounded Git-object baseline, canonical candidate change set, exact ratified
-  intent/architecture/operations, build input, build plan, pattern catalog, acceptance obligations,
-  frozen implementation/tests and snapshots, resume checkpoint, configuration and exceptional
-  test-change authority, target state, and frozen Validator execution identity. Validator source
+  intent/architecture/operations, the exact Stage-E operator request, build input, build plan,
+  pattern catalog, acceptance obligations, frozen implementation/tests and snapshots, resume
+  checkpoint, configuration and exceptional test-change authority, target state, and frozen
+  Validator execution identity. Validator source
   is constrained to one admitted Python file and streamed from the exact captured bytes rather
   than reopened through a mutable pathname; the Factory Python installation is the explicit host
   runtime TCB, and the retained execution snapshot is reverified after the process exits. The
@@ -19,13 +20,17 @@ public API is still pre-1.0.
   source-directory import path, no interpreter flags, and no additional path-bound arguments into
   the ratified Validator configuration and environment identities. The closed report
   requires eight code-owned engineering lenses, exact cited bytes, content-addressed findings,
-  typed clean-claim checks, and a host-derived verdict. The `/1` protocol grants no self-refutation
-  authority: every emitted finding prevents a clean verdict. Review remains evidence-only and
+  an exact ordered disposition for every Product, Architecture, and Operational Maturity item,
+  concrete clean-claim challenges, and failure probes covering every acceptance-observation
+  effect. The host re-derives coverage and verdict; the `/1` protocol grants no self-refutation
+  authority, so every emitted finding prevents a clean verdict. Review remains evidence-only and
   grants no merge, release, deploy, or promotion authority.
 - PREVIEW admission and every ledger replay now require an explicit Tessera verifier bound to the
   active founder-anchored genesis and the recorded Validator identity. The state store derives a
   versioned verification receipt from the exact retained envelope; shaped signatures, wrong keys,
-  caller-supplied receipts, and unanchored `status`/projection rebuilds fail closed.
+  caller-supplied receipts, and unanchored `status`/projection rebuilds fail closed. Evidence
+  bundle `/3` authenticates one exact non-circular PREVIEW admission subject, including every
+  retained review, execution, authority, candidate, and test artifact consumed by the transition.
 - New lifecycles use `factory-run/5`, which versions the immutable review/execution tuple and
   cryptographic verification receipt instead of silently changing the released `/4` contract.
   Released v0.3 `/4` ledgers retain their exact historical transition-obligation and validation
@@ -94,7 +99,13 @@ public API is still pre-1.0.
 - Generation blobs and Coder/Tester review trees now require a caller-declared durable run boundary.
   New and idempotently reused snapshots fsync exact contents, internal directory entries, the
   published content address, and every ancestor through that boundary before a ledger transition
-  may cite them.
+  may cite them. Content-address publication is serialized per address and exact `0700` crash
+  orphans are descriptor-verified, sealed, and resynchronized on retry; malformed or substituted
+  writable destinations remain preserved for forensics and fail closed.
+- Resume, status, execution-request verification, endgame, and promotion shell paths reopen
+  post-PREVIEW runs with the same externally pinned genesis, root key, and Tessera verifier rather
+  than falling back to an unauthenticated structural replay. Post-PREVIEW resource mutations are
+  covered by the real-Tessera integration proof.
 
 ### Explicit boundaries
 

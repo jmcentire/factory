@@ -84,7 +84,7 @@ def test_evidence_bundle_resolves_the_phase_artifact_schema() -> None:
     trusted = {phase["artifact_id"]: digest_obj(phase) for phase in phases}
     item = phases[0]["items"][0]
     document = {
-        "schema_version": "factory-evidence-bundle/2",
+        "schema_version": "factory-evidence-bundle/3",
         "run_id": "run-1",
         "target_digest": DIGEST,
         "source_digest": DIGEST,
@@ -107,6 +107,40 @@ def test_evidence_bundle_resolves_the_phase_artifact_schema() -> None:
         "ledger_head": DIGEST,
         "phase_artifacts": phases,
         "trusted_artifact_digests": trusted,
+        "preview_admission": {
+            "run_schema_version": "factory-run/5",
+            "run_id": "run-1",
+            "generation": 1,
+            "source": "validating",
+            "destination": "preview",
+            "validating_ledger_head": DIGEST,
+            "authority_genesis_digest": DIGEST,
+            "identities": {
+                "implementer": "coder",
+                "tester": "tester",
+                "verifier": "validator",
+            },
+            "artifact_digests": {
+                key: DIGEST
+                for key in (
+                    "candidate",
+                    "acceptance-tests",
+                    "coder-output-snapshot",
+                    "tester-output-snapshot",
+                    "acceptance-obligation-report",
+                    "validator-review-subject",
+                    "validator-adversarial-review",
+                    "base-source-snapshot",
+                    "candidate-change-set",
+                    "validator-review-authority-context",
+                    "validator-review-observations-source",
+                    "validator-execution-manifest",
+                    "validator-execution-configuration",
+                    "validator-execution-environment",
+                    "validator-execution-snapshot",
+                )
+            },
+        },
         "claims": [
             {
                 "claim_id": "acceptance:1",
@@ -222,7 +256,9 @@ def test_the_bundle_schema_refuses_a_diff_derived_monitor_and_an_unrecorded_tier
         "notifies_human": True,
         "fix_references": [],
     }
-    schema = load_schema("evidence-bundle")
+    # Bundle/3 intentionally reuses the byte-preserved bundle/2 definitions by canonical
+    # reference; inspect that shared definition resource directly.
+    schema = load_schema("evidence-bundle-v2")
     monitor_schema = schema["$defs"]["monitor"]
     independence_schema = schema["$defs"]["independence"]
 

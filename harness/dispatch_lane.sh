@@ -274,13 +274,13 @@ PRIMER_SRC="$ART/primer.$ROLE.md"
 [ -s "$PRIMER_SRC" ] && [ ! -L "$PRIMER_SRC" ] || \
   fail "no kindex primer at $PRIMER_SRC (Gate C; role-specific)"
 
-$FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null || \
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
   fail "target-state changed before projection"
 
 resource_event() {
   local resource_id="$1" resource_type="$2" identifier="$3" status="$4"
   local disposition="$5" evidence="$6"
-  $FACTORY_CLI record-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+  factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
     --resource-id "$resource_id" --resource-type "$resource_type" --identifier "$identifier" \
     --creator-action lane-dispatch --ownership run-owned \
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$disposition" \
@@ -718,7 +718,7 @@ PY
     RUNNER_RECOVERY_ACTION=retain
   fi
   if [ "$RUNNER_RECOVERY_ACTION" = retain ]; then
-    $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+    factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
       --resource-id "$RUNNER_RESOURCE_ID" --status retained \
       --reason "qualified runner failed before shell retention; exact evidence recovered" \
       --residue true --evidence-json "$FAILURE_EVIDENCE" \
@@ -748,7 +748,7 @@ else:
 PY
   ) || fail "lane workspace resource history could not be recovered"
   if [ "$LANE_RECOVERY_ACTION" = retain ]; then
-    $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+    factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
       --resource-id "$WORKSPACE_ID" --status retained \
       --reason "failed runner lane projection retained after exact crash recovery" \
       --residue true --evidence-json "$EVIDENCE" --actor lane-dispatch >/dev/null || \
@@ -765,7 +765,7 @@ resource_event "$RUNNER_RESOURCE_ID" runner-workspace "$RUNNER_WS" planned '{}' 
 runner_retain() {
   local reason="$1"
   if [ -e "$RUNNER_WS" ] || [ -L "$RUNNER_WS" ]; then
-    $FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+    factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
       --resource-id "$RUNNER_RESOURCE_ID" --status retained --reason "$reason" \
       --residue true --evidence-json "$EVIDENCE" --actor lane-dispatch >/dev/null
   else
@@ -806,7 +806,8 @@ $FACTORY_CLI run-model --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --role "$ROLE
   --genesis "$FACTORY_GENESIS" --root-public-key "$FACTORY_ROOT_PUBLIC_KEY" \
   --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}" \
   "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
-  "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}" >/dev/null
+  "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]+"${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}"}" \
+  >/dev/null
 RUN_RC=$?
 set -e
 if [ "$RUN_RC" -ne 0 ]; then
@@ -945,7 +946,8 @@ $FACTORY_CLI execute-broker-handoff --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" 
   --genesis "$FACTORY_GENESIS" --root-public-key "$FACTORY_ROOT_PUBLIC_KEY" \
   --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}" \
   "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
-  "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}" >/dev/null
+  "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]+"${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}"}" \
+  >/dev/null
 BROKER_RC=$?
 set -e
 if [ "$BROKER_RC" -ne 0 ]; then
@@ -1088,7 +1090,7 @@ PY
 append_dispatch_receipt || fail "dispatch receipt chain is invalid"
 runner_retain "qualified runner completed; immutable evidence retained" || \
   fail "completed runner workspace retention could not be recorded"
-$FACTORY_CLI disposition-resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+factory_disposition_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
   --resource-id "$WORKSPACE_ID" --status retained \
   --reason "typed broker outputs and lane projection retained" --residue true \
   --evidence-json "$EVIDENCE" --actor lane-dispatch >/dev/null

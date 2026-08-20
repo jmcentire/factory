@@ -17,6 +17,8 @@
     "base_source_snapshot",
     "candidate_change_set",
     "authority_context",
+    "operator_intent",
+    "review_targets",
     "artifacts",
     "validator_execution"
   ],
@@ -62,6 +64,32 @@
     "base_source_snapshot": {"$ref": "#/$defs/base_source_snapshot"},
     "candidate_change_set": {"$ref": "#/$defs/candidate_change_set"},
     "authority_context": {"$ref": "#/$defs/authority_context"},
+    "operator_intent": {"$ref": "#/$defs/operator_intent"},
+    "review_targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements", "architecture_items", "operational_maturity_items"],
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/intent_reference"}
+        },
+        "architecture_items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/intent_reference"}
+        },
+        "operational_maturity_items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/intent_reference"}
+        }
+      }
+    },
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
@@ -139,6 +167,33 @@
         "content_digest": {"$ref": "#/$defs/digest"},
         "content_base64": {"type": "string", "maxLength": 2097152},
         "content_utf8": {"type": ["string", "null"], "maxLength": 1200000}
+      }
+    },
+    "operator_intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "execution_request_digest",
+        "execution_request_source_digest",
+        "execution_request"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-validator-operator-intent/1"},
+        "execution_request_digest": {"$ref": "#/$defs/digest"},
+        "execution_request_source_digest": {"$ref": "#/$defs/digest"},
+        "execution_request": {"$ref": "#/$defs/content_entry"}
+      }
+    },
+    "intent_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_digest", "item_id", "intent_digest"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "intent_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "base_source_snapshot": {

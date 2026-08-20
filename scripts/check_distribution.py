@@ -16,9 +16,14 @@ from pathlib import Path, PurePosixPath
 HISTORICAL_RUNNER_RECEIPT_V2_SHA256 = (
     "6e3a432425e2b79395c7c7cfdb59b3f09ba0b6b24daf0c952637e71f055f8e7c"
 )
+HISTORICAL_EVIDENCE_BUNDLE_V2_SHA256 = (
+    "59417cac8d6d546573aea2d6ce49242d0096fa49e37f636418fc6ec8788d64c0"
+)
 REQUIRED_PACKAGE_FILES = (
     "factory_core/__init__.py",
     "factory_runtime/__init__.py",
+    "factory_runtime/schemas/evidence-bundle-v2.schema.json",
+    "factory_runtime/schemas/evidence-bundle.schema.json",
     "factory_runtime/schemas/runner-receipt-v2.schema.json",
     "factory_runtime/schemas/runner-receipt.schema.json",
     "factory_runtime/schemas/validator-adversarial-review.schema.json",
@@ -54,17 +59,21 @@ def _metadata_version(raw: bytes, *, label: str) -> str:
     return version
 
 
-def _verify_schema_bytes(data: bytes, *, label: str) -> None:
+def _verify_schema_bytes(
+    data: bytes,
+    *,
+    label: str,
+    expected_sha256: str,
+    expected_schema_id: str,
+) -> None:
     actual = hashlib.sha256(data).hexdigest()
-    if actual != HISTORICAL_RUNNER_RECEIPT_V2_SHA256:
-        raise DistributionError(
-            f"{label} changed historical runner-receipt/2 bytes: {actual}"
-        )
+    if actual != expected_sha256:
+        raise DistributionError(f"{label} changed historical schema bytes: {actual}")
     try:
         schema = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise DistributionError(f"{label} is not JSON: {exc}") from exc
-    if schema.get("$id") != "factory://schemas/runner-receipt/2":
+    if schema.get("$id") != expected_schema_id:
         raise DistributionError(f"{label} has the wrong canonical schema id")
 
 
@@ -94,6 +103,14 @@ def inspect_wheel(path: Path, *, version: str) -> None:
         _verify_schema_bytes(
             archive.read("factory_runtime/schemas/runner-receipt-v2.schema.json"),
             label="wheel historical runner schema",
+            expected_sha256=HISTORICAL_RUNNER_RECEIPT_V2_SHA256,
+            expected_schema_id="factory://schemas/runner-receipt/2",
+        )
+        _verify_schema_bytes(
+            archive.read("factory_runtime/schemas/evidence-bundle-v2.schema.json"),
+            label="wheel historical evidence-bundle schema",
+            expected_sha256=HISTORICAL_EVIDENCE_BUNDLE_V2_SHA256,
+            expected_schema_id="factory://schemas/evidence-bundle/2",
         )
 
 
@@ -139,7 +156,25 @@ def inspect_sdist(path: Path, *, version: str) -> None:
         schema_stream = archive.extractfile(schema_member)
         if schema_stream is None:
             raise DistributionError("sdist historical runner schema is unreadable")
-        _verify_schema_bytes(schema_stream.read(), label="sdist historical runner schema")
+        _verify_schema_bytes(
+            schema_stream.read(),
+            label="sdist historical runner schema",
+            expected_sha256=HISTORICAL_RUNNER_RECEIPT_V2_SHA256,
+            expected_schema_id="factory://schemas/runner-receipt/2",
+        )
+
+        evidence_schema_member = archive.getmember(
+            f"{root}/factory_runtime/schemas/evidence-bundle-v2.schema.json"
+        )
+        evidence_schema_stream = archive.extractfile(evidence_schema_member)
+        if evidence_schema_stream is None:
+            raise DistributionError("sdist historical evidence-bundle schema is unreadable")
+        _verify_schema_bytes(
+            evidence_schema_stream.read(),
+            label="sdist historical evidence-bundle schema",
+            expected_sha256=HISTORICAL_EVIDENCE_BUNDLE_V2_SHA256,
+            expected_schema_id="factory://schemas/evidence-bundle/2",
+        )
 
 
 def main() -> int:

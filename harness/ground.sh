@@ -39,7 +39,7 @@ echo "== 1/6 directive ledger =="
 
 echo "== 2/6 repository ground truth =="
 if [ -n "$RUN" ]; then
-  $FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null
+  factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null
   echo "target-state = $FACTORY_TARGET_STATE_DIGEST"
   echo "commit       = $FACTORY_BASE_COMMIT"
   echo "source_root  = $FACTORY_SOURCE_ROOT"
@@ -91,7 +91,7 @@ fi
 # Recheck after every external audit. The marker says the same immutable checkout survived the
 # full grounding window; it is not a timestamp asserted over a target verified only at entry.
 if [ -n "$RUN" ]; then
-  $FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null
+  factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null
   factory_verify_resume_anchor "$RUN" "$FACTORY_RUNS_ROOT"
 fi
 python3 - "$MARKER" <<'PY'

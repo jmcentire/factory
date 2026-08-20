@@ -33,6 +33,7 @@ from tests.conftest import (
     build_payload,
     ci_artifacts,
     create_intake_run,
+    fixture_phase_artifact_digests,
     fixture_preview_evidence_verifier,
     preview_artifacts,
     ratification_receipts,
@@ -44,9 +45,10 @@ from tests.conftest import (
 
 TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
-PRODUCT = "sha256:" + ("3" * 64)
-ARCHITECTURE = "sha256:" + ("4" * 64)
-OPERATIONS = "sha256:" + ("5" * 64)
+_PHASE_DIGESTS = fixture_phase_artifact_digests()
+PRODUCT = _PHASE_DIGESTS["product-specification"]
+ARCHITECTURE = _PHASE_DIGESTS["architecture"]
+OPERATIONS = _PHASE_DIGESTS["operational-maturity"]
 CANDIDATE = synthetic_candidate_digest()
 OTHER_CANDIDATE = "sha256:" + ("b" * 64)
 
@@ -89,9 +91,7 @@ def _run_at_preview(tmp_path: Path) -> RunStore:
         RunState.BUILDING,
         actor="validator",
         artifact_digests={
-            **retained_generation_artifacts(
-                store, include_acceptance_catalog=False
-            ),
+            **retained_generation_artifacts(store, include_acceptance_catalog=False),
             **acceptance_catalog_artifacts(store),
         },
         payload=build_payload(),
@@ -297,7 +297,9 @@ def test_specification_defect_invalidates_prior_candidate_approval(tmp_path: Pat
             tmp_path,
             clock=_Clock(),
             preview_evidence_verifier=fixture_preview_evidence_verifier(),
-        ).load("run-1").approved_candidate_digest
+        )
+        .load("run-1")
+        .approved_candidate_digest
         == ""
     )
 

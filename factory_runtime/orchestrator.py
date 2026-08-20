@@ -550,6 +550,11 @@ class FactoryOrchestrator:
                     label="Validator review resume checkpoint",
                     max_bytes=4 * 1024 * 1024,
                 )
+                execution_request_bytes = read_stable_regular_bytes(
+                    self.workflow.root / run_id / "evidence" / "intake" / "execution-request.json",
+                    label="Validator review Stage-E execution request",
+                    max_bytes=4 * 1024 * 1024,
+                )
                 configuration_sources = {
                     name: read_stable_regular_bytes(
                         source,
@@ -600,6 +605,8 @@ class FactoryOrchestrator:
                 base_source_snapshot=base_source_snapshot,
                 candidate_change_set=candidate_change_set,
                 authority_context=authority_context,
+                execution_request_bytes=execution_request_bytes,
+                build_input=prepared.build_input,
                 build_input_digest=str(prepared.artifact_digests["build-input"]),
                 pattern_catalog_digest=str(prepared.artifact_digests["pattern-catalog"]),
                 pattern_catalog_source_digest=str(
@@ -844,6 +851,14 @@ class FactoryOrchestrator:
                 determinism_records=determinism_records,
                 lane=lane,
                 independence=independence,
+                validated_artifact_digests={
+                    REPORT_ARTIFACT_KEY: product_acceptance_report_digest,
+                    **dict(review_artifacts),
+                    "validator-execution-manifest": command_digest,
+                    "validator-execution-configuration": configuration_digest,
+                    "validator-execution-environment": environment_digest,
+                    "validator-execution-snapshot": validator_execution_snapshot_digest,
+                },
                 monitors=monitors,
                 monitor_declared_unit_count=monitor_declared_unit_count,
                 correction=correction,

@@ -63,8 +63,12 @@ EXCLUDE_TEXT=$(read_paths coder-exclude) || exit $?
 INCLUDE_TEXT=$(read_paths tester-include) || exit $?
 EXCLUDES=()
 INCLUDES=()
-[ -z "$EXCLUDE_TEXT" ] || mapfile -t EXCLUDES <<<"$EXCLUDE_TEXT"
-[ -z "$INCLUDE_TEXT" ] || mapfile -t INCLUDES <<<"$INCLUDE_TEXT"
+if [ -n "$EXCLUDE_TEXT" ]; then
+  while IFS= read -r path; do EXCLUDES+=("$path"); done <<<"$EXCLUDE_TEXT"
+fi
+if [ -n "$INCLUDE_TEXT" ]; then
+  while IFS= read -r path; do INCLUDES+=("$path"); done <<<"$INCLUDE_TEXT"
+fi
 if [ "$ROLE" = tester ] && [ "${#INCLUDES[@]}" -eq 0 ]; then
   echo "refusing: no tester projection declared in $CONF (tester-include: <path> lines)." >&2
   echo "An undeclared oracle view is a contamination vector, not a default." >&2

@@ -137,6 +137,83 @@ def ratification_receipts(phase: str) -> dict[str, str]:
     }
 
 
+def fixture_phase_artifacts() -> dict[str, dict[str, Any]]:
+    """Canonical phase authority used by store-level end-to-end fixtures."""
+
+    from factory_core.manifest import digest_obj
+
+    statements = {
+        "product-specification": "The fixture product exposes its requested behavior.",
+        "architecture": "The fixture uses one focused implementation boundary.",
+        "operational-maturity": "A retained acceptance oracle verifies the fixture behavior.",
+    }
+    return {
+        phase: {
+            "artifact_id": f"fixture-{phase}",
+            "phase": phase,
+            "version": "1",
+            "source_digest": digest_obj({"fixture-phase-source": phase}),
+            "human_ratifier": "human-approver",
+            "validator_ratifier": "validator",
+            "items": [
+                {
+                    "item_id": f"{phase}:fixture",
+                    "canonical_statement": statement,
+                    "supersedes": [],
+                }
+            ],
+        }
+        for phase, statement in statements.items()
+    }
+
+
+def fixture_phase_artifact_digests() -> dict[str, str]:
+    from factory_core.manifest import digest_obj
+
+    return {phase: digest_obj(document) for phase, document in fixture_phase_artifacts().items()}
+
+
+def retain_fixture_execution_request(
+    store: Any,
+    *,
+    run_id: str,
+    target_digest: str,
+) -> str:
+    """Retain one canonical Stage-E request and return its semantic address."""
+
+    from factory_core.manifest import digest_bytes, digest_obj
+
+    projection = store.load(run_id)
+    verbatim_request = "Build the exact ratified fixture behavior and prove it."
+    request = {
+        "schema_version": "factory-execution-request/1",
+        "request_id": f"{run_id}-fixture-request",
+        "run_id": run_id,
+        "repository_id": str(projection.target_state["repository_id"]),
+        "generation": projection.generation,
+        "target_manifest_digest": target_digest,
+        "target_state_digest": projection.target_state_digest,
+        "resolved_commit": str(projection.target_state["resolved_commit"]),
+        "proposed_by": "human-approver",
+        "verbatim_request": verbatim_request,
+        "verbatim_request_digest": digest_bytes(verbatim_request.encode("utf-8")),
+        "requested_outcome": "The fixture behavior is implemented and acceptance-tested.",
+        "surfaces": [
+            {
+                "surface_id": "fixture",
+                "proposed_criticality": "critical",
+                "reason": "It is the sole requested fixture behavior.",
+            }
+        ],
+        "created_at": 1,
+    }
+    request_bytes = (json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    destination = store.root / run_id / "evidence" / "intake" / "execution-request.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(request_bytes)
+    return digest_obj(request)
+
+
 def standin_test_change_authorization_artifacts(seed: str = "default") -> dict[str, str]:
     """Stand-in artifact and dual receipts for RunStore admissibility tests."""
 
@@ -217,9 +294,26 @@ def retained_generation_artifacts(
         "build-plan",
         {"schema_version": "fixture-build-plan/1", "seed": seed},
     )
+    projection = store.load(run_id)
+    phase_documents = fixture_phase_artifacts()
+    phase_digests = fixture_phase_artifact_digests()
+    if dict(projection.phase_artifact_digests) != phase_digests:
+        raise AssertionError("store fixture ratification differs from canonical phase authority")
     _, build_input = retain(
         "build-input",
-        {"schema_version": "fixture-build-input/1", "seed": seed},
+        {
+            "schema_version": "factory-build-input/1",
+            "run_id": run_id,
+            "target_digest": projection.target_digest,
+            "phase_artifacts": [
+                phase_documents[phase]
+                for phase in (
+                    "product-specification",
+                    "architecture",
+                    "operational-maturity",
+                )
+            ],
+        },
     )
     _, target_source = retain(
         "target-manifest-source",
@@ -407,12 +501,7 @@ def validator_execution_artifacts(
     attempt_id = str(payload["attempt_id"])
     capture = capture_validator_execution((sys.executable,))
     execution_root = (
-        store.root
-        / run_id
-        / "evidence"
-        / "build-attempts"
-        / attempt_id
-        / "validator-execution"
+        store.root / run_id / "evidence" / "build-attempts" / attempt_id / "validator-execution"
     )
     manifest = freeze_blob(
         execution_root / "manifests",
@@ -517,6 +606,7 @@ def preview_artifacts(
         retain_validator_adversarial_review,
         verify_validator_adversarial_review,
     )
+    from factory_runtime.evidence_plane import build_preview_admission
     from factory_runtime.snapshot import verify_frozen_blob, verify_frozen_tree
 
     projection = store.load(run_id)
@@ -671,7 +761,30 @@ def preview_artifacts(
         **change_body,
         "change_set_digest": digest_obj(change_body),
     }
-    checkpoint = {"run_id": run_id, "seed": seed}
+    execution_request_path = store.root / run_id / "evidence" / "intake" / "execution-request.json"
+    execution_request_bytes = execution_request_path.read_bytes()
+    execution_request = json.loads(execution_request_bytes)
+    execution_request_digest = str(store.execution_authority_digests(run_id)["execution-request"])
+    if digest_obj(execution_request) != execution_request_digest:
+        raise AssertionError("fixture Stage-E request differs from the run authority")
+    generation_root = store.root / run_id / "evidence" / "generation"
+
+    def generation_blob(label: str, digest: str) -> Path:
+        return verify_frozen_blob(
+            generation_root / label / digest.removeprefix("sha256:"),
+            expected_digest=digest,
+            label=label,
+        ).payload_path
+
+    build_input_path = generation_blob(
+        "build-input", str(projection.generation_artifact_digests["build-input"])
+    )
+    build_input = json.loads(build_input_path.read_bytes())
+    checkpoint = {
+        "run_id": run_id,
+        "seed": seed,
+        "execution_request_digest": execution_request_digest,
+    }
     checkpoint_bytes = (
         json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
@@ -681,9 +794,7 @@ def preview_artifacts(
         resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
         resume_checkpoint_bytes=checkpoint_bytes,
         configuration_sources={"state-fixture": configuration_bytes},
-        expected_configuration_digests={
-            "state-fixture": digest_bytes(configuration_bytes)
-        },
+        expected_configuration_digests={"state-fixture": digest_bytes(configuration_bytes)},
         changed_existing_tests=(),
         test_change_artifacts={},
         test_change_sources={},
@@ -699,17 +810,15 @@ def preview_artifacts(
         base_source_snapshot=base_source_snapshot,
         candidate_change_set=candidate_change_set,
         authority_context=authority_context,
+        execution_request_bytes=execution_request_bytes,
+        build_input=build_input,
         build_input_digest=str(projection.generation_artifact_digests["build-input"]),
-        pattern_catalog_digest=str(
-            projection.generation_artifact_digests["pattern-catalog"]
-        ),
+        pattern_catalog_digest=str(projection.generation_artifact_digests["pattern-catalog"]),
         pattern_catalog_source_digest=str(
             projection.generation_artifact_digests["pattern-catalog-source"]
         ),
         build_plan_digest=str(projection.generation_artifact_digests["build-plan"]),
-        build_plan_source_digest=str(
-            projection.generation_artifact_digests["build-plan-source"]
-        ),
+        build_plan_source_digest=str(projection.generation_artifact_digests["build-plan-source"]),
         phase_artifact_digests=projection.phase_artifact_digests,
         acceptance_obligation_catalog_digest=catalog.content_digest,
         acceptance_obligation_catalog_source_digest=catalog_source_digest,
@@ -730,18 +839,6 @@ def preview_artifacts(
     tester_snapshot = verify_frozen_tree(
         review_root / trusted["tester-output-snapshot"].removeprefix("sha256:"),
         expected_digest=trusted["tester-output-snapshot"],
-    )
-    generation_root = store.root / run_id / "evidence" / "generation"
-
-    def generation_blob(label: str, digest: str) -> Path:
-        return verify_frozen_blob(
-            generation_root / label / digest.removeprefix("sha256:"),
-            expected_digest=digest,
-            label=label,
-        ).payload_path
-
-    build_input_path = generation_blob(
-        "build-input", str(projection.generation_artifact_digests["build-input"])
     )
     pattern_catalog_path = generation_blob(
         "pattern-catalog",
@@ -772,6 +869,7 @@ def preview_artifacts(
             "review-authority-context",
             "review-authority-context.json",
         ): canonical_document_bytes(authority_context),
+        ("operator-intent", "execution-request.json"): execution_request_bytes,
     }
 
     def review_reference(source: str, path: str) -> dict[str, object]:
@@ -791,17 +889,69 @@ def preview_artifacts(
         review_reference("build-input", "build-input.json"),
         review_reference("pattern-catalog", "pattern-catalog.json"),
         review_reference("build-plan", "build-plan.json"),
-        review_reference(
-            "acceptance-obligation-catalog", "acceptance-obligation-catalog.json"
-        ),
-        review_reference(
-            "acceptance-observations", "acceptance-obligation-observations.json"
-        ),
+        review_reference("acceptance-obligation-catalog", "acceptance-obligation-catalog.json"),
+        review_reference("acceptance-observations", "acceptance-obligation-observations.json"),
         review_reference("candidate-change-set", "candidate-change-set.json"),
-        review_reference(
-            "review-authority-context", "review-authority-context.json"
-        ),
+        review_reference("review-authority-context", "review-authority-context.json"),
+        review_reference("operator-intent", "execution-request.json"),
     ]
+    requirement_dispositions = [
+        {
+            **target,
+            "disposition": "CONFORMS",
+            "summary": "Fixture implementation satisfies the ratified Product item.",
+            "evidence": [references[2], references[0]],
+            "finding_ids": [],
+        }
+        for target in subject["review_targets"]["requirements"]
+    ]
+    architecture_dispositions = [
+        {
+            **target,
+            "disposition": "CONFORMS",
+            "summary": "Fixture change set satisfies the ratified Architecture item.",
+            "evidence": [references[2], references[7]],
+            "finding_ids": [],
+        }
+        for target in subject["review_targets"]["architecture_items"]
+    ]
+    operational_maturity_dispositions = [
+        {
+            **target,
+            "disposition": "CONFORMS",
+            "summary": "Fixture tests and observations satisfy Operational Maturity.",
+            "evidence": [references[2], references[1], references[6]],
+            "finding_ids": [],
+        }
+        for target in subject["review_targets"]["operational_maturity_items"]
+    ]
+    observed_effect = observations["results"][0]
+    observed_test = observed_effect["test_results"][0]
+    probe_body = {
+        "obligation_id": observed_effect["obligation_id"],
+        "verifier_id": observed_effect["verifier_id"],
+        "effect_digest": observed_effect["effect_digest"],
+        "test_result": {
+            "test_id": observed_test["test_id"],
+            "assertion_digest": observed_test["assertion_digest"],
+            "output_digest": observed_test["output_digest"],
+        },
+        "failure_mode": "The fixture candidate could fail its ratified acceptance assertion.",
+        "attempt": "Run the exact retained acceptance assertion against the candidate.",
+        "expected_result": "The retained assertion completes successfully.",
+        "observed_result": "The bound Validator observation records a passing execution.",
+        "outcome": "PASSED",
+        "evidence": [references[1], references[6]],
+        "finding_ids": [],
+    }
+    challenge_body = {
+        "hypothesis": "The candidate omits the exact operator-requested behavior.",
+        "attempt": "Compare the Stage-E request with the complete candidate artifact.",
+        "observed_result": "The candidate artifact implements the requested fixture behavior.",
+        "outcome": "REFUTED",
+        "evidence": [references[9], references[0]],
+        "finding_ids": [],
+    }
     review_report = {
         "schema_version": "factory-validator-adversarial-review/1",
         "authority": "review-evidence-only",
@@ -813,10 +963,19 @@ def preview_artifacts(
                 "dimension_id": dimension,
                 "state": "COMPLETED",
                 "summary": f"Fixture completed {dimension}.",
-                "evidence": [references[0]],
+                "evidence": (
+                    [references[9], references[2], references[0]]
+                    if dimension == "intent-conformance"
+                    else [references[0]]
+                ),
             }
             for dimension in REQUIRED_REVIEW_DIMENSIONS
         ],
+        "requirement_dispositions": requirement_dispositions,
+        "architecture_dispositions": architecture_dispositions,
+        "operational_maturity_dispositions": operational_maturity_dispositions,
+        "failure_mode_probes": [{"probe_id": digest_obj(probe_body), **probe_body}],
+        "clean_claim_challenges": [{"challenge_id": digest_obj(challenge_body), **challenge_body}],
         "findings": [],
         "completeness": {
             "state": "COMPLETED",
@@ -852,26 +1011,34 @@ def preview_artifacts(
         run_id,
         verified_review,
     )
-    phase_artifacts = [
-        {
-            "artifact_id": phase,
-            "phase": phase,
-            "version": "1",
-            "source_digest": digest,
-            "human_ratifier": "human-approver",
-            "validator_ratifier": reviewer_identity,
-            "items": [
-                {
-                    "item_id": f"{phase}:fixture",
-                    "canonical_statement": f"Fixture ratified {phase}.",
-                    "supersedes": [],
-                }
-            ],
-        }
-        for phase, digest in projection.phase_artifact_digests.items()
-    ]
+    entries = store.verified_ledger_entries(run_id)
+    genesis = entries[0]["artifact_digests"]
+    validating_entry = entries[-1]
+    validating_payload = validating_entry["payload"]
+    assert isinstance(genesis, dict)
+    assert isinstance(validating_payload, dict)
+    preview_admission = build_preview_admission(
+        run_schema_version=projection.schema_version,
+        run_id=run_id,
+        generation=projection.generation,
+        validating_ledger_head=projection.ledger_head,
+        authority_genesis_digest=str(genesis["authority-genesis"]),
+        implementer_identity=str(validating_entry["implementer_identity"]),
+        tester_identity=str(validating_payload["tester_identity"]),
+        verifier_identity=str(validating_entry["verifier_identity"]),
+        artifact_digests={
+            "candidate": trusted["candidate"],
+            "acceptance-tests": trusted["acceptance-tests"],
+            "coder-output-snapshot": trusted["coder-output-snapshot"],
+            "tester-output-snapshot": trusted["tester-output-snapshot"],
+            "acceptance-obligation-report": report_digest,
+            **dict(review_artifacts),
+            **execution,
+        },
+    )
+    phase_artifacts = list(fixture_phase_artifacts().values())
     bundle = {
-        "schema_version": "factory-evidence-bundle/2",
+        "schema_version": "factory-evidence-bundle/3",
         "run_id": run_id,
         "target_digest": projection.target_digest,
         "source_digest": projection.source_digest,
@@ -889,6 +1056,7 @@ def preview_artifacts(
         "ledger_head": projection.ledger_head,
         "phase_artifacts": phase_artifacts,
         "trusted_artifact_digests": dict(projection.phase_artifact_digests),
+        "preview_admission": preview_admission,
         "claims": [],
         "checklist_results": [
             {
@@ -898,9 +1066,7 @@ def preview_artifacts(
                 "recorded_at": 1,
                 "evidence": {
                     "body": {"candidate_digest": trusted["candidate"]},
-                    "claimed_digest": digest_obj(
-                        {"candidate_digest": trusted["candidate"]}
-                    ),
+                    "claimed_digest": digest_obj({"candidate_digest": trusted["candidate"]}),
                 },
             }
         ],
@@ -949,8 +1115,6 @@ def preview_artifacts(
         "monitor_declared_unit_count": 0,
     }
     bundle_digest = digest_obj(bundle)
-    genesis = store.verified_ledger_entries(run_id)[0]["artifact_digests"]
-    assert isinstance(genesis, dict)
     envelope = {
         "kind": "factory-evidence-bundle",
         "payload": bundle,
@@ -1068,12 +1232,17 @@ def create_intake_run(
         actor="target-resolver",
         artifact_digests={"resource-ledger": resource_head},
     )
+    execution_request_digest = retain_fixture_execution_request(
+        store,
+        run_id=run_id,
+        target_digest=target_digest,
+    )
     return store.authorize_intake(
         run_id,
         source_digest=source_digest,
         actor="validator",
         artifact_digests={
-            "execution-request": address("execution-request"),
+            "execution-request": execution_request_digest,
             "execution-receipt": address("execution-receipt"),
             "authority-genesis": address("authority-genesis"),
         },

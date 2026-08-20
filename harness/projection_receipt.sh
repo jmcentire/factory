@@ -66,12 +66,15 @@ for number, line in enumerate(config.read_text(encoding="utf-8").splitlines(), 1
 PY
 ) || exit $?
 INCL=()
-[ -z "$INCLUDE_TEXT" ] || mapfile -t INCL <<<"$INCLUDE_TEXT"
+if [ -n "$INCLUDE_TEXT" ]; then
+  while IFS= read -r path; do INCL+=("$path"); done <<<"$INCLUDE_TEXT"
+fi
 [ "${#INCL[@]}" -gt 0 ] || { echo "projection-receipt: no tester-include lines in $CONF" >&2; exit 66; }
 
 # Candidate paths named by the artifact: repo-relative, with a real extension or a
 # directory-ish prefix. Backticked spans and bare tokens both count.
-mapfile -t REFS < <(
+REFS=()
+while IFS= read -r ref; do REFS+=("$ref"); done < <(
   grep -oE '(^|[^A-Za-z0-9_/.-])([A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(py|toml|cfg|ini|json|ya?ml|md|txt|sh)' "$ART" \
     | sed -E 's/^[^A-Za-z0-9_/.-]//' | sort -u
 )

@@ -1700,7 +1700,8 @@ the human. **Never update a test on the grounds that it is inconvenient.**
 paths and modes, before you inspect or execute them. Re-derive candidate and test addresses from
 those frozen subjects. A mutable workspace plus a hash list is not review provenance.
 
-**Complete the host-issued adversarial code review before preview.** Review the exact bound
+**Complete the host-issued adversarial code review before preview.** Begin with the exact Stage-E
+execution request bound by the externally anchored resume checkpoint, then review the exact bound
 implementation, tests, test observations, Product/Architecture/Operational artifacts, build plan,
 pattern catalog, acceptance obligations, and applicable execution contract. Cover every code-owned
 dimension in order: intent conformance, architecture, redundancy, clarity, separation of concerns,
@@ -1710,13 +1711,22 @@ consumers; give every credible failure mode a disposition and a reachable probe 
 mechanically testable. Passing tests do not excuse an intent miss, a wrong boundary, duplicated
 truth, unclear guarantees, or mixed ownership.
 
+Disposition every host-enumerated Product, Architecture, and Operational Maturity item in exact
+order as `CONFORMS`, `VIOLATES`, or `UNRESOLVED`. Review cannot mark ratified scope out of scope;
+that requires a new ratification. A conformance claim cites produced implementation or an exact
+observation, never only a test definition. Every failure-mode probe binds an exact observed
+obligation, verifier, and effect; when that observation contains executed tests, it also binds one
+exact test/assertion/output tuple. A clean claim requires at least one passed probe and one concrete
+refuted defect hypothesis. Empty or merely generic challenge prose is incomplete.
+
 Content-address every finding from its statement, consequence, dimension, severity, and exact
 cited bytes. The current executable `/1` protocol grants no self-refutation authority: every
 emitted finding survives and prevents a clean verdict. Independent fresh-context refutation is a
 separate post-run evidence activity until the host dispatches and receipts it explicitly. Attempt
 to disprove the clean claim through the host-declared completeness checks. Emit only the closed report schema with
-`authority=review-evidence-only`; the host re-derives coverage, subject binding, finding identity,
-completeness, and verdict. A clean review is evidence for preview, never merge, release,
+`authority=review-evidence-only`; the host re-derives coverage, subject binding, ordered item
+membership, observed-effect bindings, finding/probe/challenge identity, completeness, and verdict.
+A clean review is evidence for preview, never merge, release,
 deployment, or promotion authority.
 
 **Verify the mechanical evidence adversarially.** For each acceptance criterion, select a

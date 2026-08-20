@@ -1474,10 +1474,45 @@ class RunStore:
                 )
                 from factory_runtime.evidence_plane import (
                     EvidencePlaneError,
+                    build_preview_admission,
                     verify_retained_evidence_bundle,
                 )
 
                 active_attempt_id = _latest_build_attempt_id(verified_entries)
+                preview_admission = build_preview_admission(
+                    run_schema_version=current.schema_version,
+                    run_id=run_id,
+                    generation=current.generation,
+                    validating_ledger_head=current.ledger_head,
+                    authority_genesis_digest=authority_genesis_digest,
+                    implementer_identity=implementer_identity,
+                    tester_identity=str(transition_payload.get("tester_identity", "")),
+                    verifier_identity=verifier_identity,
+                    artifact_digests={
+                        "candidate": supplied["candidate"],
+                        "acceptance-tests": supplied["acceptance-tests"],
+                        "coder-output-snapshot": trusted_evidence["coder-output-snapshot"],
+                        "tester-output-snapshot": trusted_evidence["tester-output-snapshot"],
+                        "acceptance-obligation-report": supplied[
+                            ACCEPTANCE_OBLIGATION_REPORT_KEY
+                        ],
+                        "validator-review-subject": supplied["validator-review-subject"],
+                        "validator-adversarial-review": supplied[
+                            "validator-adversarial-review"
+                        ],
+                        "base-source-snapshot": supplied["base-source-snapshot"],
+                        "candidate-change-set": supplied["candidate-change-set"],
+                        "validator-review-authority-context": supplied[
+                            "validator-review-authority-context"
+                        ],
+                        "validator-review-observations-source": supplied[
+                            "validator-review-observations-source"
+                        ],
+                        **{
+                            key: supplied[key] for key in VALIDATOR_EXECUTION_ARTIFACT_KEYS
+                        },
+                    },
+                )
                 verified_evidence = verify_retained_evidence_bundle(
                     self._run_dir(run_id),
                     attempt_id=active_attempt_id,
@@ -1494,6 +1529,7 @@ class RunStore:
                     attempt_number=current.build_attempt_count,
                     attempt_limit=current.build_attempt_limit,
                     validating_ledger_head=current.ledger_head,
+                    expected_preview_admission=preview_admission,
                     verifier_identity=verifier_identity,
                     authority_genesis_digest=authority_genesis_digest,
                     verifier=self._preview_evidence_verifier,
@@ -2284,6 +2320,7 @@ class RunStore:
                             attempt_number=build_attempt_count,
                             attempt_limit=build_attempt_limit,
                             validating_ledger_head=str(record.get("prev_hash", "")),
+                            expected_preview_admission=None,
                             verifier_identity=str(record.get("verifier_identity", "")),
                             authority_genesis_digest=authority_genesis_digest,
                             verifier=self._preview_evidence_verifier,
@@ -2481,9 +2518,53 @@ class RunStore:
                         )
                         from factory_runtime.evidence_plane import (
                             EvidencePlaneError,
+                            build_preview_admission,
                             verify_retained_evidence_bundle,
                         )
 
+                        preview_admission = build_preview_admission(
+                            run_schema_version=schema_version,
+                            run_id=run_id,
+                            generation=generation,
+                            validating_ledger_head=str(record.get("prev_hash", "")),
+                            authority_genesis_digest=authority_genesis_digest,
+                            implementer_identity=str(record.get("implementer_identity", "")),
+                            tester_identity=str(payload_raw.get("tester_identity", "")),
+                            verifier_identity=str(record.get("verifier_identity", "")),
+                            artifact_digests={
+                                "candidate": str(digests["candidate"]),
+                                "acceptance-tests": str(digests["acceptance-tests"]),
+                                "coder-output-snapshot": validation_evidence[
+                                    "coder-output-snapshot"
+                                ],
+                                "tester-output-snapshot": validation_evidence[
+                                    "tester-output-snapshot"
+                                ],
+                                "acceptance-obligation-report": str(
+                                    digests[ACCEPTANCE_OBLIGATION_REPORT_KEY]
+                                ),
+                                "validator-review-subject": str(
+                                    digests["validator-review-subject"]
+                                ),
+                                "validator-adversarial-review": str(
+                                    digests["validator-adversarial-review"]
+                                ),
+                                "base-source-snapshot": str(
+                                    digests["base-source-snapshot"]
+                                ),
+                                "candidate-change-set": str(digests["candidate-change-set"]),
+                                "validator-review-authority-context": str(
+                                    digests["validator-review-authority-context"]
+                                ),
+                                "validator-review-observations-source": str(
+                                    digests["validator-review-observations-source"]
+                                ),
+                                **{
+                                    key: str(digests[key])
+                                    for key in VALIDATOR_EXECUTION_ARTIFACT_KEYS
+                                },
+                            },
+                        )
                         verified_evidence = verify_retained_evidence_bundle(
                             self._run_dir(run_id),
                             attempt_id=active_attempt_id,
@@ -2504,6 +2585,7 @@ class RunStore:
                             attempt_number=build_attempt_count,
                             attempt_limit=build_attempt_limit,
                             validating_ledger_head=str(record.get("prev_hash", "")),
+                            expected_preview_admission=preview_admission,
                             verifier_identity=str(record.get("verifier_identity", "")),
                             authority_genesis_digest=authority_genesis_digest,
                             verifier=self._preview_evidence_verifier,

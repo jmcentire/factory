@@ -301,8 +301,9 @@ this IR; Tester receives only the common ratified build input.
 
 Validation now includes a mandatory adversarial code review over the same immutable evidence, not
 an optional instruction to "look carefully." Before the Validator runs, the host issues a closed
-review subject binding the frozen implementation/tests and snapshots, all three ratified phase
-artifacts, complete bounded Git-object baseline and canonical candidate change set, build input,
+review subject binding the exact Stage-E execution-request bytes from the externally anchored
+resume checkpoint, the frozen implementation/tests and snapshots, all three ratified phase
+artifacts and their ordered review-item inventories, complete bounded Git-object baseline and canonical candidate change set, build input,
 plan, pattern catalog, acceptance obligations, resume checkpoint, configuration and exceptional
 test-change authority, target state, and frozen Validator execution identity. Target-controlled
 Validator source is constrained to one admitted Python file and supplied from the exact captured
@@ -316,10 +317,14 @@ author lane launches. The ratified `factory-validator-configuration/3`,
 `factory-validator-environment/3`, and `isolated-build-loop/3` identities bind these semantics.
 The Validator's
 canonical report must cover intent, architecture, redundancy, clarity, separation of concerns,
-test adequacy, correctness/failure, and scope; cite exact retained line bytes; content-address every
-finding; and complete every host-declared clean-claim check. The `/1` report cannot self-refute:
+test adequacy, correctness/failure, and scope; disposition every Product, Architecture, and
+Operational Maturity item in exact host order; cite exact retained line bytes; bind each
+failure-mode probe to an actual observed obligation/effect and any selected executed test; record
+concrete clean-claim challenge attempts; content-address every probe, challenge, and finding; and
+complete every host-declared clean-claim check. The `/1` report cannot self-refute:
 every emitted finding survives and prevents a clean verdict. The host re-derives the subject,
-cited evidence, completeness, finding identities, and verdict. Anything stale, incomplete,
+cited evidence, completeness, item membership, observation bindings, identities, and verdict.
+Empty probe/challenge sets, an unresolved item, or anything stale, incomplete,
 blocking, or found stops
 `VALIDATING -> PREVIEW`. `CLEAN_QUALIFIED` is evidence only and cannot authorize merge, release,
 deployment, or promotion.

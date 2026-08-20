@@ -10,7 +10,7 @@ import pytest
 from pytest import CaptureFixture
 
 import factory_runtime.cli as runtime_cli
-from factory_core.manifest import digest_obj
+from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.target import load_target_manifest
 from factory_runtime.cli import (
     _require_semantic_json_digest,
@@ -97,6 +97,167 @@ def test_replay_cli_store_requires_both_external_authority_anchors(
         )
         is authenticated
     )
+
+
+def test_replay_and_resource_commands_use_the_explicitly_anchored_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    run_id = "run-1"
+    retained_target = {"target": "retained"}
+    target_digest = digest_obj(retained_target)
+    source_text = "Build the exact authorized behavior."
+    source_digest = digest_bytes(source_text.encode("utf-8"))
+    execution_request = {
+        "run_id": run_id,
+        "generation": 1,
+        "target_manifest_digest": DIGEST,
+        "target_state_digest": target_digest,
+        "resolved_commit": "1" * 40,
+        "verbatim_request": source_text,
+        "verbatim_request_digest": source_digest,
+    }
+    request_digest = digest_obj(execution_request)
+    run_root = tmp_path / run_id / "evidence"
+    target_root = run_root / "target-resolution"
+    intake_root = run_root / "intake"
+    target_root.mkdir(parents=True)
+    intake_root.mkdir(parents=True)
+    (target_root / "target-state.json").write_text(
+        json.dumps(retained_target),
+        encoding="utf-8",
+    )
+    (intake_root / "execution-request.json").write_text(
+        json.dumps(execution_request),
+        encoding="utf-8",
+    )
+
+    projection = Namespace(
+        target_state_digest=target_digest,
+        target_state={"resolved_commit": "1" * 40},
+        target_digest=DIGEST,
+        source_digest=source_digest,
+        generation=1,
+    )
+
+    class _ReplayStore:
+        def load(self, actual_run_id: str) -> Namespace:
+            assert actual_run_id == run_id
+            return projection
+
+        def execution_authority_digests(self, actual_run_id: str) -> dict[str, str]:
+            assert actual_run_id == run_id
+            return {
+                "execution-request": request_digest,
+                "execution-receipt": "sha256:" + ("2" * 64),
+                "authority-genesis": "sha256:" + ("3" * 64),
+            }
+
+    observed: list[Namespace] = []
+    resource_appends: list[dict[str, object]] = []
+
+    def load_replay_store(arguments: Namespace) -> _ReplayStore:
+        observed.append(arguments)
+        return _ReplayStore()
+
+    class _ResourceLedger:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def latest(self) -> dict[str, dict[str, object]]:
+            return {
+                "proof-resource": {
+                    "generation": 1,
+                    "resource_type": "proof",
+                    "identifier": "/tmp/proof-resource",
+                    "creator_action": "test",
+                    "ownership": "run-owned",
+                    "baseline": {"absent_at_plan": True},
+                }
+            }
+
+        def append(self, **kwargs: object) -> str:
+            resource_appends.append(kwargs)
+            return DIGEST
+
+    monkeypatch.setattr(runtime_cli, "_load_replay_store", load_replay_store)
+    monkeypatch.setattr(runtime_cli, "verify_target_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_cli, "validate_document", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_cli, "ResourceLedger", _ResourceLedger)
+
+    common = [
+        "--runs",
+        str(tmp_path),
+        "--run-id",
+        run_id,
+        "--genesis",
+        str(tmp_path / "genesis.tessera.json"),
+        "--root-public-key",
+        "f" * 64,
+        "--tessera-bin",
+        "/opt/tessera",
+    ]
+    assert main(["verify-target-state", *common]) == 0
+    capsys.readouterr()
+    assert main(["verify-execution-request", *common]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "record-resource",
+                *common,
+                "--resource-id",
+                "proof-resource",
+                "--resource-type",
+                "proof",
+                "--identifier",
+                "/tmp/proof-resource",
+                "--creator-action",
+                "test",
+                "--ownership",
+                "run-owned",
+                "--status",
+                "planned",
+                "--actor",
+                "test",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "disposition-resource",
+                *common,
+                "--resource-id",
+                "proof-resource",
+                "--status",
+                "retained",
+                "--reason",
+                "retain the exact proof",
+                "--residue",
+                "true",
+                "--actor",
+                "test",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert [arguments.command for arguments in observed] == [
+        "verify-target-state",
+        "verify-execution-request",
+        "record-resource",
+        "disposition-resource",
+    ]
+    for arguments in observed:
+        assert arguments.genesis == str(tmp_path / "genesis.tessera.json")
+        assert arguments.root_public_key == "f" * 64
+        assert arguments.tessera_bin == "/opt/tessera"
+    assert [entry["status"] for entry in resource_appends] == ["planned", "retained"]
 
 
 def test_cli_validates_and_content_addresses_runtime_documents(

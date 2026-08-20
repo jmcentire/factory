@@ -214,6 +214,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify_target.add_argument("--runs", required=True)
     verify_target.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(verify_target)
 
     verify_execution = commands.add_parser(
         "verify-execution-request",
@@ -226,6 +227,7 @@ def _parser() -> argparse.ArgumentParser:
         default="",
         help="also require these exact bytes to equal the signed Stage-E verbatim request",
     )
+    _add_replay_verifier_arguments(verify_execution)
 
     verify_resources = commands.add_parser(
         "verify-resources",
@@ -444,6 +446,7 @@ def _parser() -> argparse.ArgumentParser:
     record_resource.add_argument("--evidence-json", default="{}")
     record_resource.add_argument("--status", required=True)
     record_resource.add_argument("--actor", required=True)
+    _add_replay_verifier_arguments(record_resource)
 
     disposition_resource = commands.add_parser(
         "disposition-resource",
@@ -461,6 +464,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     disposition_resource.add_argument("--evidence-json", default="{}")
     disposition_resource.add_argument("--actor", required=True)
+    _add_replay_verifier_arguments(disposition_resource)
 
     wrap = commands.add_parser(
         "tessera-wrap",
@@ -1712,7 +1716,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         )
         return
     if arguments.command == "verify-target-state":
-        projection = RunStore(arguments.runs).load(arguments.run_id)
+        projection = _load_replay_store(arguments).load(arguments.run_id)
         if not projection.target_state_digest or not projection.target_state:
             raise ValueError("run has no resolved target-state")
         retained_path = (
@@ -1736,7 +1740,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         )
         return
     if arguments.command == "verify-execution-request":
-        store = RunStore(arguments.runs)
+        store = _load_replay_store(arguments)
         projection = store.load(arguments.run_id)
         bindings = store.execution_authority_digests(arguments.run_id)
         request_path = (
@@ -1818,7 +1822,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         )
         return
     if arguments.command == "record-resource":
-        projection = RunStore(arguments.runs).load(arguments.run_id)
+        projection = _load_replay_store(arguments).load(arguments.run_id)
         baseline = _parse_inline_object(arguments.baseline_json, label="resource baseline")
         disposition = _parse_inline_object(
             arguments.disposition_json,
@@ -1850,7 +1854,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         )
         return
     if arguments.command == "disposition-resource":
-        RunStore(arguments.runs).load(arguments.run_id)
+        _load_replay_store(arguments).load(arguments.run_id)
         ledger = ResourceLedger(Path(arguments.runs) / arguments.run_id, arguments.run_id)
         prior = ledger.latest().get(arguments.resource_id)
         if prior is None:

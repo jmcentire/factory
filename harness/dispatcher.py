@@ -187,6 +187,14 @@ class Dispatcher:
         self.workdir = str(target.get("workdir", ""))
         self.runs_root = root.parent
         self.factory_cli = shlex.split(os.environ.get("FACTORY_CLI", "factory"))
+        self.replay_authority_args = (
+            "--genesis",
+            os.environ.get("FACTORY_GENESIS", ""),
+            "--root-public-key",
+            os.environ.get("FACTORY_ROOT_PUBLIC_KEY", ""),
+            "--tessera-bin",
+            os.environ.get("FACTORY_TESSERA_BIN", "tessera"),
+        )
         self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
 
@@ -422,6 +430,7 @@ class Dispatcher:
                     str(self.runs_root),
                     "--run-id",
                     self.run,
+                    *self.replay_authority_args,
                 ],
                 capture_output=True,
                 text=True,

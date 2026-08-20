@@ -44,6 +44,7 @@ from factory_runtime.acceptance_obligations import (
     AcceptanceObligationCatalog,
     validator_execution_digests,
 )
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.authority import AuthorityPolicy, Principal, load_genesis
 from factory_runtime.evidence_plane import (
     DeterminismRecord,
@@ -54,6 +55,7 @@ from factory_runtime.evidence_plane import (
 from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import BuildOutcome, FactoryOrchestrator, OrchestrationError
 from factory_runtime.repair import RepairBrief, RepairPlan, RepairPolicy, RepairSupervisor
+from factory_runtime.resources import ResourceLedger
 from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState, RunStateError, RunStore
@@ -64,6 +66,7 @@ from tests.conftest import (
     acceptance_catalog_artifacts,
     build_payload,
     create_intake_run,
+    fixture_phase_artifact_digests,
     preview_artifacts,
     ratification_receipts,
     retained_generation_artifacts,
@@ -158,17 +161,18 @@ def test_real_tessera_authenticates_preview_admission_and_replay(tmp_path: Path)
         target_digest=target_digest,
         source_digest=source_digest,
     )
-    for state, phase, digest in (
-        (RunState.PRODUCT_SPECIFICATION_RATIFIED, "product-specification", "3"),
-        (RunState.ARCHITECTURE_RATIFIED, "architecture", "4"),
-        (RunState.OPERATIONAL_MATURITY_RATIFIED, "operational-maturity", "5"),
+    phase_digests = fixture_phase_artifact_digests()
+    for state, phase in (
+        (RunState.PRODUCT_SPECIFICATION_RATIFIED, "product-specification"),
+        (RunState.ARCHITECTURE_RATIFIED, "architecture"),
+        (RunState.OPERATIONAL_MATURITY_RATIFIED, "operational-maturity"),
     ):
         staging_store.transition(
             "run-1",
             state,
             actor="agent:validator",
             artifact_digests={
-                phase: "sha256:" + (digest * 64),
+                phase: phase_digests[phase],
                 **ratification_receipts(phase),
             },
         )
@@ -229,9 +233,7 @@ def test_real_tessera_authenticates_preview_admission_and_replay(tmp_path: Path)
         output_path=envelope_path,
     )
     artifacts["evidence-envelope"] = real_envelope.envelope_digest
-    genesis_artifacts = staging_store.verified_ledger_entries("run-1")[0][
-        "artifact_digests"
-    ]
+    genesis_artifacts = staging_store.verified_ledger_entries("run-1")[0]["artifact_digests"]
     assert isinstance(genesis_artifacts, Mapping)
     policy = AuthorityPolicy(
         repository_id="fixture",
@@ -258,6 +260,46 @@ def test_real_tessera_authenticates_preview_admission_and_replay(tmp_path: Path)
         ),
     )
 
+    review_root = (
+        runs
+        / "run-1"
+        / "evidence"
+        / "validator-adversarial-reviews"
+        / artifacts["validator-review-subject"].removeprefix("sha256:")
+    )
+    original_report_path = review_root / (
+        f"{artifacts['validator-adversarial-review'].removeprefix('sha256:')}.json"
+    )
+    substituted_report = json.loads(original_report_path.read_text(encoding="utf-8"))
+    substituted_report["dimensions"][0]["summary"] = (
+        "A different but independently schema-valid review of the same subject."
+    )
+    substituted_report_digest = digest_obj(substituted_report)
+    (review_root / f"{substituted_report_digest.removeprefix('sha256:')}.json").write_bytes(
+        canonical_document_bytes(substituted_report)
+    )
+    substituted_artifacts = {
+        **artifacts,
+        "validator-adversarial-review": substituted_report_digest,
+    }
+
+    with pytest.raises(
+        RunStateError,
+        match="signed evidence bundle is invalid: retained evidence bundle has stale or "
+        "substituted preview_admission",
+    ):
+        authenticated_store.transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="agent:validator",
+            artifact_digests=substituted_artifacts,
+            payload={"tester_identity": "agent:tester"},
+            implementer_identity="agent:coder",
+            verifier_identity="agent:validator",
+        )
+
+    assert authenticated_store.load("run-1").state == RunState.VALIDATING
+
     projection = authenticated_store.transition(
         "run-1",
         RunState.PREVIEW,
@@ -279,6 +321,23 @@ def test_real_tessera_authenticates_preview_admission_and_replay(tmp_path: Path)
     assert authenticated_store.rebuild_projection("run-1") == projection
     with pytest.raises(RunStateError, match="explicit cryptographic evidence verifier"):
         RunStore(runs, clock=lambda: 100).load("run-1")
+
+    ledger_path = runs / "run-1" / "ledger.jsonl"
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+    rows[-1]["artifact_digests"]["validator-adversarial-review"] = substituted_report_digest
+    body = {key: value for key, value in rows[-1].items() if key != "entry_hash"}
+    rows[-1]["entry_hash"] = digest_obj(body)
+    ledger_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RunStateError,
+        match="preview signed evidence bundle is invalid: retained evidence bundle has stale "
+        "or substituted preview_admission",
+    ):
+        authenticated_store.rebuild_projection("run-1")
 
 
 @pytest.mark.tessera_integration
@@ -1113,7 +1172,11 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     preview = workflow.store.load("synthetic-run")
     assert preview == result.projection
     evidence = outcome.evidence_report.document
-    assert evidence["schema_version"] == "factory-evidence-bundle/2"
+    assert evidence["schema_version"] == "factory-evidence-bundle/3"
+    assert (
+        evidence["preview_admission"]["artifact_digests"]["validator-adversarial-review"]
+        == outcome.adversarial_review_digest
+    )
     assert evidence["build_attempt"] == {"number": 2, "limit": 2}
     assert set(evidence["generation_artifacts"]) == {
         "target-manifest-source",
@@ -1149,3 +1212,72 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         expected_digest=outcome.execution.coder_snapshot.digest,
     )
     assert tree_digest(coder_snapshot.files_directory / "artifact") == outcome.candidate_digest
+
+    # The shared shell loader must reopen a PREVIEW run through the same externally pinned
+    # genesis/root/Tessera tuple used by the resume gate.  A structural RunStore can replay
+    # intake, but it must fail closed at PREVIEW because the retained evidence envelope requires
+    # authenticated signer verification.
+    resume_config_manifest = tmp_path / "resume-config.manifest"
+    resume_config_manifest.write_text(
+        f"runner={resume_config.resolve()}\n",
+        encoding="utf-8",
+    )
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
+            "FACTORY_RESUME_CHECKPOINT": str(resume_checkpoint),
+            "FACTORY_RESUME_CHECKPOINT_DIGEST": digest_obj(resume_checkpoint_document),
+            "FACTORY_GENESIS": str(genesis_path),
+            "FACTORY_ROOT_PUBLIC_KEY": root_public_key,
+            "FACTORY_TESSERA_BIN": str(binary.resolve(strict=True)),
+            "FACTORY_RESUME_CONFIG_MANIFEST": str(resume_config_manifest),
+            "PYTHONPATH": os.pathsep.join(
+                filter(
+                    None,
+                    (str(repository_root), environment.get("PYTHONPATH", "")),
+                )
+            ),
+        }
+    )
+    post_preview_resource = tmp_path / "post-preview-resource"
+    post_preview_resource.mkdir()
+    harness_replay = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'set -euo pipefail; source "$1"; factory_load_context "$2" "$3"; '
+            'factory_record_resource --runs "$3" --run-id "$2" '
+            "--resource-id post-preview-proof --resource-type object-store "
+            '--identifier "$4" --creator-action integration-test --ownership run-owned '
+            "--baseline-json '{\"absent_at_plan\":true}' --status planned "
+            "--actor integration-test >/dev/null; "
+            'factory_disposition_resource --runs "$3" --run-id "$2" '
+            "--resource-id post-preview-proof --status failed "
+            '--reason "injected disposition for authenticated replay proof" --residue true '
+            "--actor integration-test >/dev/null; "
+            'factory_disposition_resource --runs "$3" --run-id "$2" '
+            "--resource-id post-preview-proof --status retained "
+            '--reason "retained authenticated replay proof" --residue true '
+            "--actor integration-test >/dev/null; "
+            'printf "%s\\n" "$FACTORY_RUN_STATE"',
+            "factory-preview-replay",
+            str(repository_root / "harness" / "run_context.sh"),
+            "synthetic-run",
+            str(workflow.root),
+            str(post_preview_resource),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert harness_replay.returncode == 0, harness_replay.stderr
+    assert harness_replay.stdout.strip() == "preview"
+    retained_resource = ResourceLedger(
+        workflow.root / "synthetic-run",
+        "synthetic-run",
+    ).latest()["post-preview-proof"]
+    assert retained_resource["status"] == "retained"
+    assert retained_resource["identifier"] == str(post_preview_resource)

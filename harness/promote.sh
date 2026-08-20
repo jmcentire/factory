@@ -83,7 +83,7 @@ REJECTION="$ROOT/promotion_rejection.txt"
 # A close is about this exact target and only this run's resources. The operator's ambient
 # checkout, branches, worktrees, stashes, and PRs are not inspected. Every run-created or
 # contacted resource must already have an admissible explicit terminal disposition.
-$FACTORY_CLI verify-target-state --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >/dev/null || exit $?
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || exit $?
 if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --for-close \
   >/dev/null 2>"$REJECTION"; then
   echo "promote: run-owned resources lack a terminal disposition" >&2

@@ -23,6 +23,7 @@ SCHEMA_NAMES = frozenset(
         "broker-registry",
         "broker-request",
         "evidence-bundle",
+        "evidence-bundle-v2",
         "build-plan",
         "execution-request",
         "effective-directive-contract",
@@ -92,6 +93,8 @@ def validate_document(name: str, document: Mapping[str, Any]) -> None:
     selected_name = name
     if name == "runner-receipt" and document.get("schema_version") == "factory-runner-receipt/2":
         selected_name = "runner-receipt-v2"
+    if name == "evidence-bundle" and document.get("schema_version") == "factory-evidence-bundle/2":
+        selected_name = "evidence-bundle-v2"
     schema = load_schema(selected_name)
     validator = jsonschema.Draft202012Validator(schema, registry=_schema_registry())
     errors = sorted(

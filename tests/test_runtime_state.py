@@ -1,22 +1,33 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import LedgerEntry, SegregationError, SegregationPolicy, digest_obj
+from factory_core.manifest import (
+    LedgerEntry,
+    SegregationError,
+    SegregationPolicy,
+    digest_bytes,
+    digest_obj,
+)
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.state import RunState, RunStateError, RunStore
+from tests import conftest as fixture_support
 from tests.conftest import (
     EMPTY_GIT_TREE_SHA1,
     acceptance_catalog_artifacts,
     build_payload,
     ci_artifacts,
+    fixture_phase_artifact_digests,
     fixture_preview_evidence_verifier,
     generation_artifacts,
     preview_artifacts,
     ratification_receipts,
+    retain_fixture_execution_request,
     retained_generation_artifacts,
     synthetic_candidate_digest,
     terminalize_run_resources,
@@ -27,9 +38,10 @@ TARGET = "sha256:" + ("1" * 64)
 SOURCE = "sha256:" + ("2" * 64)
 TARGET_SOURCE = "sha256:" + ("6" * 64)
 RESOURCE_HEAD = "sha256:" + ("7" * 64)
-PRODUCT = "sha256:" + ("3" * 64)
-ARCHITECTURE = "sha256:" + ("4" * 64)
-OPERATIONS = "sha256:" + ("5" * 64)
+_PHASE_DIGESTS = fixture_phase_artifact_digests()
+PRODUCT = _PHASE_DIGESTS["product-specification"]
+ARCHITECTURE = _PHASE_DIGESTS["architecture"]
+OPERATIONS = _PHASE_DIGESTS["operational-maturity"]
 CANDIDATE = synthetic_candidate_digest()
 
 
@@ -105,12 +117,17 @@ def _create_intake(store: RunStore) -> None:
         actor="target-resolver",
         artifact_digests={"resource-ledger": RESOURCE_HEAD},
     )
+    execution_request_digest = retain_fixture_execution_request(
+        store,
+        run_id="run-1",
+        target_digest=TARGET,
+    )
     store.authorize_intake(
         "run-1",
         source_digest=SOURCE,
         actor="validator",
         artifact_digests={
-            "execution-request": "sha256:" + ("d" * 64),
+            "execution-request": execution_request_digest,
             "execution-receipt": "sha256:" + ("e" * 64),
             "authority-genesis": "sha256:" + ("c" * 64),
         },
@@ -153,9 +170,7 @@ def _start_build(store: RunStore, *, attempt: int = 1, limit: int = 2) -> None:
     current = store.load("run-1")
     first_activation = not current.acceptance_obligation_catalog_digest
     seed = f"attempt-{attempt}"
-    artifacts = retained_generation_artifacts(
-        store, seed, include_acceptance_catalog=False
-    )
+    artifacts = retained_generation_artifacts(store, seed, include_acceptance_catalog=False)
     if first_activation:
         artifacts.update(acceptance_catalog_artifacts(store))
     if current.state == RunState.BLOCKED:
@@ -503,6 +518,130 @@ def test_preview_rejects_signature_shaped_but_unauthenticated_evidence(
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_schema_version",
+        "run_id",
+        "generation",
+        "source",
+        "destination",
+        "validating_ledger_head",
+        "authority_genesis_digest",
+        "identity:implementer",
+        "identity:tester",
+        "identity:verifier",
+        *(
+            f"artifact:{name}"
+            for name in (
+                "candidate",
+                "acceptance-tests",
+                "coder-output-snapshot",
+                "tester-output-snapshot",
+                "acceptance-obligation-report",
+                "validator-review-subject",
+                "validator-adversarial-review",
+                "base-source-snapshot",
+                "candidate-change-set",
+                "validator-review-authority-context",
+                "validator-review-observations-source",
+                "validator-execution-manifest",
+                "validator-execution-configuration",
+                "validator-execution-environment",
+                "validator-execution-snapshot",
+            )
+        ),
+    ],
+)
+def test_preview_rejects_each_substituted_authenticated_admission_field(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    """A valid signature over a different PREVIEW subject is not authority for this run."""
+
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation_artifacts(store, candidate=CANDIDATE),
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator",
+    )
+    artifacts = preview_artifacts(store, candidate=CANDIDATE)
+    building = [
+        entry
+        for entry in store.verified_ledger_entries("run-1")
+        if entry.get("to_state") == RunState.BUILDING
+    ][-1]
+    attempt_payload = building["payload"]
+    assert isinstance(attempt_payload, dict)
+    envelope_path = (
+        tmp_path
+        / "run-1"
+        / "evidence"
+        / "build-attempts"
+        / str(attempt_payload["attempt_id"])
+        / "evidence-bundle.tessera.json"
+    )
+    envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    payload = envelope["payload"]
+    preview = payload["preview_admission"]
+    replacement_digest = "sha256:" + ("f" * 64)
+    if field == "run_schema_version":
+        preview[field] = "factory-run/6"
+    elif field == "run_id":
+        preview[field] = "other-run"
+    elif field == "generation":
+        preview[field] = int(preview[field]) + 1
+    elif field == "source":
+        preview[field] = "building"
+    elif field == "destination":
+        preview[field] = "ci"
+    elif field in {"validating_ledger_head", "authority_genesis_digest"}:
+        preview[field] = replacement_digest
+    elif field.startswith("identity:"):
+        identity = field.partition(":")[2]
+        preview["identities"][identity] = f"other-{identity}"
+    else:
+        artifact = field.partition(":")[2]
+        preview["artifact_digests"][artifact] = replacement_digest
+
+    envelope["payload_digest"] = digest_obj(payload)
+    envelope.pop("fixture_mac")
+    authenticated = json.dumps(
+        envelope,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    envelope["fixture_mac"] = hmac.new(
+        fixture_support._FIXTURE_EVIDENCE_KEY,
+        authenticated,
+        hashlib.sha256,
+    ).hexdigest()
+    envelope_bytes = canonical_document_bytes(envelope)
+    envelope_path.write_bytes(envelope_bytes)
+    artifacts["evidence-bundle"] = digest_obj(payload)
+    artifacts["evidence-envelope"] = digest_bytes(envelope_bytes)
+
+    with pytest.raises(RunStateError, match="signed evidence bundle is invalid"):
+        store.transition(
+            "run-1",
+            RunState.PREVIEW,
+            actor="validator",
+            artifact_digests=artifacts,
+            payload={"tester_identity": "tester"},
+            implementer_identity="coder",
+            verifier_identity="validator",
+        )
+
+    assert store.load("run-1").state == RunState.VALIDATING
+
+
 def test_preview_rejects_a_validator_swap_after_validation(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _create_intake(store)
@@ -549,8 +688,7 @@ def test_replay_rejects_a_rehashed_validator_swap_after_validation(tmp_path: Pat
     body = {key: value for key, value in rows[-1].items() if key != "entry_hash"}
     rows[-1]["entry_hash"] = digest_obj(body)
     ledger_path.write_text(
-        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows)
-        + "\n",
+        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows) + "\n",
         encoding="utf-8",
     )
 
@@ -573,8 +711,7 @@ def test_replay_rejects_a_rehashed_fabricated_evidence_verification_receipt(
     body = {key: value for key, value in rows[-1].items() if key != "entry_hash"}
     rows[-1]["entry_hash"] = digest_obj(body)
     ledger_path.write_text(
-        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows)
-        + "\n",
+        "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows) + "\n",
         encoding="utf-8",
     )
 
@@ -873,7 +1010,9 @@ def test_transition_refuses_a_stale_lifecycle_head_without_appending(
             tmp_path,
             clock=_Clock(),
             preview_evidence_verifier=fixture_preview_evidence_verifier(),
-        ).load("run-1").state
+        )
+        .load("run-1")
+        .state
         == RunState.PREVIEW
     )
 

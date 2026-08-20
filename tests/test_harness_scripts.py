@@ -107,7 +107,13 @@ def note(value):
 if verb == "verify-resume-checkpoint":
     print(json.dumps({"verified": True, "test_fixture": True}))
     raise SystemExit(0)
-if verb == "status":
+if verb in {
+    "status",
+    "verify-target-state",
+    "verify-execution-request",
+    "record-resource",
+    "disposition-resource",
+}:
     expected = {
         "--genesis": os.environ["FACTORY_GENESIS"],
         "--root-public-key": os.environ["FACTORY_ROOT_PUBLIC_KEY"],
@@ -115,7 +121,7 @@ if verb == "status":
     }
     for option, value in expected.items():
         if argument(option) != value:
-            raise SystemExit(f"status replay anchor mismatch for {option}")
+            raise SystemExit(f"{verb} replay anchor mismatch for {option}")
     passthrough = list(sys.argv[1:])
     for option in expected:
         index = passthrough.index(option)

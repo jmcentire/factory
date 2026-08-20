@@ -21,6 +21,7 @@ from factory_runtime.authority import (
     load_genesis,
     verify_receipt,
 )
+from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunState, RunStateError, RunStore
@@ -223,7 +224,13 @@ def _derive_bound_state(
     root = Path(runs_root)
     run_dir = root / run_id
     try:
-        projection = RunStore(root).load(run_id)
+        projection = RunStore(
+            root,
+            preview_evidence_verifier=TesseraEvidenceEnvelopeVerifier(
+                tessera=tessera,
+                authority_policy=policy,
+            ),
+        ).load(run_id)
     except RunStateError as exc:
         raise ResumeVerificationError(str(exc)) from exc
     if projection.state in {
