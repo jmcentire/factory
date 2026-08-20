@@ -109,6 +109,10 @@ public API is still pre-1.0.
   post-PREVIEW runs with the same externally pinned genesis, root key, and Tessera verifier rather
   than falling back to an unauthenticated structural replay. Post-PREVIEW resource mutations are
   covered by the real-Tessera integration proof.
+- Every workflow operation after Stage R that consumes signed authority now reopens the run's
+  verified genesis entry and requires the configured authority policy to match it before receipt
+  verification or evidence retention. Reusing principal labels under a different genesis cannot
+  ratify a phase or authorize later workflow evidence.
 
 ### Explicit boundaries
 

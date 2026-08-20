@@ -348,6 +348,23 @@ class FactoryWorkflow:
         )
         self._clock = clock
 
+    def _require_current_authority_genesis(
+        self,
+        run_id: str,
+        *,
+        expected_ledger_head: str,
+    ) -> None:
+        """Bind every post-creation authority operation to this run's founder genesis."""
+
+        entries = self.store.verified_ledger_entries(run_id)
+        genesis_artifacts = entries[0].get("artifact_digests") if entries else None
+        if not isinstance(genesis_artifacts, Mapping):
+            raise WorkflowError("Stage R has no authority genesis")
+        if entries[-1].get("entry_hash") != expected_ledger_head:
+            raise WorkflowError("run ledger changed while authority genesis was checked")
+        if genesis_artifacts.get("authority-genesis") != self.policy.genesis_digest:
+            raise WorkflowError("current authority genesis differs from Stage R")
+
     def authorize_target_resolution(
         self,
         run_id: str,
@@ -482,6 +499,10 @@ class FactoryWorkflow:
             validate_document("target-resolution-request", request)
         except (TargetManifestError, DocumentValidationError) as exc:
             raise WorkflowError(str(exc)) from exc
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         artifacts = self.store.current_artifact_digests(run_id)
         if manifest.content_digest != current.target_digest:
             raise WorkflowError("retained target manifest differs from the run subject")
@@ -489,8 +510,6 @@ class FactoryWorkflow:
             raise WorkflowError("retained target manifest bytes differ from Stage R")
         if digest_obj(request) != artifacts.get("target-resolution-request"):
             raise WorkflowError("retained target-resolution request differs from Stage R")
-        if self.policy.genesis_digest != artifacts.get("authority-genesis"):
-            raise WorkflowError("current authority genesis differs from Stage R")
         now = (self._clock or (lambda: int(time.time())))()
         if request["expires_at"] <= now:
             raise WorkflowError("target-resolution authority expired before repository contact")
@@ -556,6 +575,10 @@ class FactoryWorkflow:
         current = self.store.load(run_id)
         if current.state != RunState.TARGET_RESOLVED:
             raise WorkflowError("authorized-change intake requires target-resolved state")
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         request, _ = _read_json_object(request_path)
         try:
             validate_document("execution-request", request)
@@ -657,6 +680,10 @@ class FactoryWorkflow:
         current = self.store.load(run_id)
         if current.state != RunState.BLOCKED:
             raise WorkflowError("repair brief requires a blocked run")
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         if current.ledger_head != expected_ledger_head:
             raise WorkflowError("repair brief predecessor ledger head changed")
         entries = self.store.verified_ledger_entries(run_id)
@@ -777,6 +804,10 @@ class FactoryWorkflow:
         current = self.store.load(run_id)
         if current.state != RunState.BLOCKED:
             raise WorkflowError("recorded repair brief requires a blocked run")
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         principal = self.policy.principal(validator_identity)
         if principal is None or principal.kind != "agent":
             raise WorkflowError("repair brief verifier must be an enrolled Validator agent")
@@ -922,6 +953,10 @@ class FactoryWorkflow:
         current = self.store.load(run_id)
         if current.state != RunState.BLOCKED:
             raise WorkflowError("repair recovery requires a blocked run")
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         principal = self.policy.principal(validator_identity)
         if principal is None or principal.kind != "agent":
             raise WorkflowError("repair recovery signer must be an enrolled Validator agent")
@@ -984,6 +1019,10 @@ class FactoryWorkflow:
             raise WorkflowError(str(exc)) from exc
         artifact = PhaseArtifact.from_dict(raw_artifact)
         current = self.store.load(run_id)
+        self._require_current_authority_genesis(
+            run_id,
+            expected_ledger_head=current.ledger_head,
+        )
         if artifact.source_digest != current.source_digest:
             raise WorkflowError(
                 "phase artifact source digest does not match the authorized verbatim source"

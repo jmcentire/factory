@@ -535,6 +535,9 @@ def test_present_but_one_character_review_actions_are_refused(
         "token token token token token token token",
         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
         "x                                           ",
+        "a b c d " + ("!" * 24),
+        "a b c d " + ("\u200b" * 24),
+        "1 2 3 4 " + ("." * 24),
     ),
 )
 def test_formally_padded_probe_narratives_are_refused(
@@ -578,6 +581,43 @@ def test_review_action_narratives_must_be_pairwise_distinct(
     repeated = "Compare the exact retained evidence against the bound authority."
     for field in narrative_fields:
         record[field] = repeated
+    record[identity_field] = digest_obj(
+        {key: value for key, value in record.items() if key != identity_field}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="repeats a narrative"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+@pytest.mark.parametrize(
+    ("report_field", "identity_field", "narrative_fields", "suffixes"),
+    (
+        (
+            "failure_mode_probes",
+            "probe_id",
+            ("failure_mode", "attempt", "expected_result", "observed_result"),
+            (".", "!", "?", ":"),
+        ),
+        (
+            "clean_claim_challenges",
+            "challenge_id",
+            ("hypothesis", "attempt", "observed_result"),
+            (".", "!", "?"),
+        ),
+    ),
+)
+def test_punctuation_does_not_disguise_copied_review_action_narratives(
+    tmp_path: Path,
+    report_field: str,
+    identity_field: str,
+    narrative_fields: tuple[str, ...],
+    suffixes: tuple[str, ...],
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    record = report[report_field][0]
+    copied_tokens = "Compare the exact retained evidence against the bound authority"
+    for field, suffix in zip(narrative_fields, suffixes, strict=True):
+        record[field] = f"{copied_tokens}{suffix}"
     record[identity_field] = digest_obj(
         {key: value for key, value in record.items() if key != identity_field}
     )

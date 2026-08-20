@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from factory_core.comprehensiveness import SubstanceSpec, is_substantive
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_runtime.candidate_diff import (
@@ -47,8 +46,8 @@ REVIEW_PROTOCOL_ID = "factory-validator-adversarial-review/1"
 PROBE_METHOD_OBSERVED_TEST = "inspect-observed-test-result/1"
 PROBE_METHOD_OBSERVED_EFFECT = "recheck-observed-effect/1"
 CHALLENGE_METHOD_EXACT_EVIDENCE = "compare-exact-evidence/1"
-_REVIEW_NARRATIVE_SPEC = SubstanceSpec(min_chars=24, min_tokens=4)
-_MIN_NON_WHITESPACE_NARRATIVE_CHARS = 24
+_MIN_NARRATIVE_TOKEN_CHARS = 24
+_MIN_DISTINCT_NARRATIVE_TOKENS = 4
 REQUIRED_REVIEW_DIMENSIONS = (
     "intent-conformance",
     "architecture",
@@ -111,9 +110,9 @@ _PROTOCOL_BODY = {
         "challenge_method": CHALLENGE_METHOD_EXACT_EVIDENCE,
         "challenge_evidence_selection": ("distinct-authority-and-produced-evidence-array-indices"),
         "narrative_form": {
-            "minimum_non_whitespace_characters": _MIN_NON_WHITESPACE_NARRATIVE_CHARS,
-            "minimum_distinct_word_tokens": _REVIEW_NARRATIVE_SPEC.min_tokens,
-            "same_record_fields": "pairwise-distinct-after-casefold-and-whitespace-fold",
+            "minimum_normalized_word_token_characters": _MIN_NARRATIVE_TOKEN_CHARS,
+            "minimum_distinct_word_tokens": _MIN_DISTINCT_NARRATIVE_TOKENS,
+            "same_record_fields": "pairwise-distinct-normalized-word-token-sequences",
             "semantic_claim": "none",
         },
     },
@@ -964,28 +963,24 @@ def _require_structural_narratives(
 ) -> None:
     """Require only closed, formal properties; this is not a semantic quality claim."""
 
-    normalized: list[str] = []
+    normalized: list[tuple[str, ...]] = []
     for field in fields:
         value = record.get(field)
-        distinct_tokens = (
-            {token.casefold() for token in _NARRATIVE_TOKEN.findall(value)}
+        tokens = (
+            tuple(token.casefold() for token in _NARRATIVE_TOKEN.findall(value))
             if isinstance(value, str)
-            else set()
-        )
-        non_whitespace_chars = (
-            sum(not character.isspace() for character in value) if isinstance(value, str) else 0
+            else ()
         )
         if (
-            not is_substantive(value, _REVIEW_NARRATIVE_SPEC)
-            or non_whitespace_chars < _MIN_NON_WHITESPACE_NARRATIVE_CHARS
-            or len(distinct_tokens) < _REVIEW_NARRATIVE_SPEC.min_tokens
+            sum(len(token) for token in tokens) < _MIN_NARRATIVE_TOKEN_CHARS
+            or len(set(tokens)) < _MIN_DISTINCT_NARRATIVE_TOKENS
         ):
             raise AdversarialReviewError(
                 f"{label} {field} is not structurally substantive "
-                f"({_MIN_NON_WHITESPACE_NARRATIVE_CHARS} non-whitespace characters and "
-                f"{_REVIEW_NARRATIVE_SPEC.min_tokens} distinct word tokens required)"
+                f"({_MIN_NARRATIVE_TOKEN_CHARS} normalized word-token characters and "
+                f"{_MIN_DISTINCT_NARRATIVE_TOKENS} distinct word tokens required)"
             )
-        normalized.append(" ".join(str(value).split()).casefold())
+        normalized.append(tokens)
     if len(normalized) != len(set(normalized)):
         raise AdversarialReviewError(f"{label} repeats a narrative across distinct fields")
 

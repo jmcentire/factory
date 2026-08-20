@@ -89,12 +89,17 @@ class _Tessera:
         return envelope
 
 
-def _policy() -> AuthorityPolicy:
+def _policy(
+    *,
+    root_key: str = ROOT_KEY,
+    validator_key: str = VALIDATOR_KEY,
+    genesis_digest: str = "sha256:" + ("d" * 64),
+) -> AuthorityPolicy:
     principals = {
         "human:founder": Principal(
             identity="human:founder",
             kind="human",
-            public_key=ROOT_KEY,
+            public_key=root_key,
             capabilities=frozenset(
                 {
                     "factory:authorize-target-resolution",
@@ -109,7 +114,7 @@ def _policy() -> AuthorityPolicy:
         "agent:validator": Principal(
             identity="agent:validator",
             kind="agent",
-            public_key=VALIDATOR_KEY,
+            public_key=validator_key,
             capabilities=frozenset(
                 {
                     "factory:ratify-product-specification",
@@ -122,13 +127,13 @@ def _policy() -> AuthorityPolicy:
     return AuthorityPolicy(
         repository_id="factory",
         policy_id="factory-authority/1",
-        root_public_key=ROOT_KEY,
+        root_public_key=root_key,
         principals=principals,
         bootstrap_enabled=True,
         bootstrap_scope=frozenset(
             {"authorize-target-resolution", "authorize-change", "activate-policy"}
         ),
-        genesis_digest="sha256:" + ("d" * 64),
+        genesis_digest=genesis_digest,
     )
 
 
@@ -721,6 +726,72 @@ def test_three_phases_require_human_and_validator_receipts_and_reach_build_ready
 
     assert workflow.store.load("run-1").state == RunState.OPERATIONAL_MATURITY_RATIFIED
     assert len(workflow.store.consumed_authority_nonces("run-1")) == 8
+
+
+def test_phase_ratification_refuses_a_different_authority_genesis(
+    tmp_path: Path,
+) -> None:
+    tessera = _Tessera()
+    original_workflow = _authorize(tmp_path, tessera)
+    document = _phase("product-specification", 1)
+    artifact = PhaseArtifact.from_dict(document)
+    artifact_path = _write_json(tmp_path / "foreign-product.json", document)
+    foreign_root_key = "c" * 64
+    foreign_validator_key = "e" * 64
+    foreign_policy = _policy(
+        root_key=foreign_root_key,
+        validator_key=foreign_validator_key,
+        genesis_digest="sha256:" + ("f" * 64),
+    )
+    human_receipt = tessera.add(
+        tmp_path / "foreign-product.human.tessera.json",
+        _receipt(
+            receipt_id="foreign-product-human",
+            action="ratify-product-specification",
+            subject_digest=artifact.content_digest,
+            signer="human:founder",
+            nonce="foreign-product-human-nonce",
+        ),
+        key=foreign_root_key,
+        kind="factory-authority-receipt",
+    )
+    validator_receipt = tessera.add(
+        tmp_path / "foreign-product.validator.tessera.json",
+        _receipt(
+            receipt_id="foreign-product-validator",
+            action="ratify-product-specification",
+            subject_digest=artifact.content_digest,
+            signer="agent:validator",
+            nonce="foreign-product-validator-nonce",
+        ),
+        key=foreign_validator_key,
+        kind="factory-authority-receipt",
+    )
+    foreign_workflow = FactoryWorkflow(
+        tmp_path / "runs",
+        authority_policy=foreign_policy,
+        tessera=tessera,  # type: ignore[arg-type]
+        clock=lambda: 150,
+    )
+
+    with pytest.raises(WorkflowError, match="authority genesis differs from Stage R"):
+        foreign_workflow.ratify_phase(
+            "run-1",
+            artifact_path=artifact_path,
+            human_receipt_path=human_receipt,
+            validator_receipt_path=validator_receipt,
+        )
+
+    evidence = (
+        tmp_path
+        / "runs"
+        / "run-1"
+        / "evidence"
+        / "product-specification"
+        / artifact.content_digest.removeprefix("sha256:")
+    )
+    assert not evidence.exists()
+    assert original_workflow.store.load("run-1").state == RunState.INTAKE
 
 
 def test_phase_artifact_must_bind_the_authorized_verbatim_source(tmp_path: Path) -> None:
