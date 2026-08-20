@@ -322,7 +322,9 @@ Operational Maturity item in exact host order; cite exact retained line bytes; b
 failure-mode probe to an actual observed obligation/effect and any selected executed test; record
 the host-derived probe method; record clean-claim challenges that select distinct exact authority
 and produced-evidence references for the code-owned comparison method; reject empty, repeated, or
-formally vacuous narratives without claiming semantic insight; content-address every probe,
+formally vacuous narratives through a closed ASCII control-prose alphabet, letter/token floors,
+and an exact minimum pairwise letter-stream edit distance without claiming semantic insight or
+general copy detection; content-address every probe,
 challenge, and finding; and
 complete every host-declared clean-claim check. The `/1` report cannot self-refute:
 every emitted finding survives and prevents a clean verdict. The host re-derives the subject,

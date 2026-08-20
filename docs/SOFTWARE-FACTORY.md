@@ -1719,8 +1719,10 @@ obligation, verifier, and effect; when that observation contains executed tests,
 exact test/assertion/output tuple. A clean claim requires at least one passed probe and one concrete
 refuted defect hypothesis. The host derives the probe method from that exact tuple. Each challenge
 selects distinct exact authority and produced-evidence references for the code-owned comparison
-method. Empty, repeated, or formally vacuous narrative fields are incomplete; this structural
-rule does not establish semantic insight.
+method. Control-report narratives admit only HT, LF, CR, and printable ASCII; they must clear
+code-owned ASCII-letter/token floors and an exact minimum pairwise letter-stream edit distance.
+Empty, repeated, or formally vacuous narrative fields are incomplete. This structural rule does
+not establish semantic insight or general copy detection.
 
 Content-address every finding from its statement, consequence, dimension, severity, and exact
 cited bytes. The current executable `/1` protocol grants no self-refutation authority: every

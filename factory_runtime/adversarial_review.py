@@ -15,7 +15,6 @@ import os
 import re
 import stat
 import tempfile
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -47,8 +46,9 @@ REVIEW_PROTOCOL_ID = "factory-validator-adversarial-review/1"
 PROBE_METHOD_OBSERVED_TEST = "inspect-observed-test-result/1"
 PROBE_METHOD_OBSERVED_EFFECT = "recheck-observed-effect/1"
 CHALLENGE_METHOD_EXACT_EVIDENCE = "compare-exact-evidence/1"
-_MIN_NARRATIVE_LETTER_CHARS = 24
-_MIN_DISTINCT_NARRATIVE_LETTER_TOKENS = 4
+_MIN_NARRATIVE_ASCII_LETTER_CHARS = 24
+_MIN_DISTINCT_NARRATIVE_ASCII_LETTER_TOKENS = 4
+_MIN_PAIRWISE_NARRATIVE_EDIT_DISTANCE = 4
 REQUIRED_REVIEW_DIMENSIONS = (
     "intent-conformance",
     "architecture",
@@ -86,6 +86,8 @@ clean-claim challenge, select the exact-evidence comparison method and name the 
 produced-evidence references being compared. Emit each defect as a content-addressed finding; this
 protocol has no
 self-refutation authority, so every finding survives and prevents a clean verdict.
+Write every report narrative using HT, LF, CR, and printable ASCII only. The host applies the
+code-owned ASCII narrative-form checks mechanically; they do not judge meaning.
 CLEAN_QUALIFIED requires every item disposition to conform, at least one successful failure-mode
 probe, and at least one refuted defect hypothesis. It proves only that this bounded review
 completed with no emitted finding; it grants no merge, release, deployment, or promotion authority.
@@ -111,10 +113,13 @@ _PROTOCOL_BODY = {
         "challenge_method": CHALLENGE_METHOD_EXACT_EVIDENCE,
         "challenge_evidence_selection": ("distinct-authority-and-produced-evidence-array-indices"),
         "narrative_form": {
-            "normalization": "unicode-nfkc-casefold",
-            "minimum_unicode_letter_characters": _MIN_NARRATIVE_LETTER_CHARS,
-            "minimum_distinct_letter_token_signatures": _MIN_DISTINCT_NARRATIVE_LETTER_TOKENS,
-            "same_record_fields": "pairwise-distinct-normalized-unicode-letter-streams",
+            "admitted_characters": "HT-LF-CR-or-U+0020-through-U+007E",
+            "normalization": "code-owned-ascii-lowercase/1",
+            "minimum_ascii_latin_letter_characters": _MIN_NARRATIVE_ASCII_LETTER_CHARS,
+            "minimum_distinct_ascii_latin_letter_tokens": (
+                _MIN_DISTINCT_NARRATIVE_ASCII_LETTER_TOKENS
+            ),
+            "minimum_pairwise_ascii_letter_edit_distance": (_MIN_PAIRWISE_NARRATIVE_EDIT_DISTANCE),
             "semantic_claim": "none",
         },
     },
@@ -126,7 +131,7 @@ _PROTOCOL_BODY = {
 REVIEW_PROTOCOL_DIGEST = digest_obj(_PROTOCOL_BODY)
 _MAX_REVIEW_BYTES = 4 * 1024 * 1024
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-_NARRATIVE_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+_ASCII_NARRATIVE_TOKEN = re.compile(r"[a-z]+")
 
 
 class AdversarialReviewError(ValueError):
@@ -957,6 +962,49 @@ _INTENT_REFERENCE_FIELDS = (
 )
 
 
+def _ascii_lower(value: str) -> str:
+    """Apply the protocol-owned ASCII case projection without a Unicode database."""
+
+    return "".join(
+        chr(ord(character) + 32) if "A" <= character <= "Z" else character for character in value
+    )
+
+
+def _edit_distance_at_most(left: str, right: str, *, maximum: int) -> bool:
+    """Return whether standard Levenshtein distance is at most ``maximum``.
+
+    Only the diagonal band that could still satisfy the cutoff is retained. Runtime is therefore
+    bounded by the input length times the small code-owned cutoff rather than by the product of two
+    schema-maximum narrative lengths.
+    """
+
+    if maximum < 0:
+        return False
+    if abs(len(left) - len(right)) > maximum:
+        return False
+    sentinel = maximum + 1
+    previous = {index: index for index in range(min(len(right), maximum) + 1)}
+    for left_index, left_character in enumerate(left, start=1):
+        start = max(0, left_index - maximum)
+        end = min(len(right), left_index + maximum)
+        current: dict[int, int] = {}
+        if start == 0:
+            current[0] = left_index
+        for right_index in range(max(1, start), end + 1):
+            distance = min(
+                previous.get(right_index, sentinel) + 1,
+                current.get(right_index - 1, sentinel) + 1,
+                previous.get(right_index - 1, sentinel)
+                + (left_character != right[right_index - 1]),
+            )
+            if distance <= maximum:
+                current[right_index] = distance
+        if not current:
+            return False
+        previous = current
+    return previous.get(len(right), sentinel) <= maximum
+
+
 def _require_structural_narratives(
     record: Mapping[str, Any],
     fields: Sequence[str],
@@ -968,36 +1016,35 @@ def _require_structural_narratives(
     content_signatures: list[str] = []
     for field in fields:
         value = record.get(field)
-        normalized = (
-            unicodedata.normalize(
-                "NFKC",
-                unicodedata.normalize("NFKC", value).casefold(),
+        if not isinstance(value, str):
+            value = ""
+        if any(character not in "\t\n\r" and not (" " <= character <= "~") for character in value):
+            raise AdversarialReviewError(
+                f"{label} {field} narrative contains characters outside HT, LF, CR, and "
+                "U+0020 through U+007E"
             )
-            if isinstance(value, str)
-            else ""
-        )
-        tokens = _NARRATIVE_TOKEN.findall(normalized)
-        letter_tokens = tuple(
-            "".join(character for character in token if character.isalpha())
-            for token in tokens
-            if any(character.isalpha() for character in token)
-        )
-        letter_count = sum(character.isalpha() for character in normalized)
+        normalized = _ascii_lower(value)
+        letter_tokens = tuple(_ASCII_NARRATIVE_TOKEN.findall(normalized))
+        letter_count = sum(len(token) for token in letter_tokens)
         if (
-            letter_count < _MIN_NARRATIVE_LETTER_CHARS
-            or len(set(letter_tokens)) < _MIN_DISTINCT_NARRATIVE_LETTER_TOKENS
+            letter_count < _MIN_NARRATIVE_ASCII_LETTER_CHARS
+            or len(set(letter_tokens)) < _MIN_DISTINCT_NARRATIVE_ASCII_LETTER_TOKENS
         ):
             raise AdversarialReviewError(
                 f"{label} {field} is not structurally substantive "
-                f"({_MIN_NARRATIVE_LETTER_CHARS} normalized Unicode letter characters and "
-                f"{_MIN_DISTINCT_NARRATIVE_LETTER_TOKENS} distinct letter-token "
-                "signatures required)"
+                f"({_MIN_NARRATIVE_ASCII_LETTER_CHARS} normalized ASCII Latin-letter "
+                f"characters and {_MIN_DISTINCT_NARRATIVE_ASCII_LETTER_TOKENS} distinct "
+                "normalized ASCII Latin-letter tokens required)"
             )
-        content_signatures.append(
-            "".join(character for character in normalized if character.isalpha())
-        )
-    if len(content_signatures) != len(set(content_signatures)):
-        raise AdversarialReviewError(f"{label} repeats a narrative across distinct fields")
+        content_signatures.append("".join(letter_tokens))
+    maximum_near_copy_distance = _MIN_PAIRWISE_NARRATIVE_EDIT_DISTANCE - 1
+    for index, left in enumerate(content_signatures):
+        for right in content_signatures[index + 1 :]:
+            if _edit_distance_at_most(left, right, maximum=maximum_near_copy_distance):
+                raise AdversarialReviewError(
+                    f"{label} repeats a narrative or separates two narrative fields by fewer "
+                    f"than {_MIN_PAIRWISE_NARRATIVE_EDIT_DISTANCE} ASCII-letter edits"
+                )
 
 
 def _verify_review_narrative_form(report: Mapping[str, Any]) -> None:

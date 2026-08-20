@@ -143,9 +143,11 @@ obligation, verifier, and effect digest. If that observation contains executable
 bind one exact test/assertion/output tuple and cite both the test and observation; otherwise cite
 the non-test observation without inventing test evidence. The host derives the probe method from
 that tuple. A challenge uses the code-owned exact-evidence comparison method and selects distinct,
-in-range authority and produced-evidence references. Narrative fields must clear the protocol's
-purely formal non-vacuity rules; those rules do not establish semantic insight. No evidence-bound
-probe and no refuted challenge, no clean claim.
+in-range authority and produced-evidence references. Control-report narrative fields use only HT,
+LF, CR, and printable ASCII. Each must contain at least 24 ASCII letters and four distinct
+ASCII-letter tokens; same-record letter streams must be separated by at least four standard
+Levenshtein edits. These are purely formal, code-owned non-vacuity rules, not semantic insight or
+general copy detection. No evidence-bound probe and no refuted challenge, no clean claim.
 `CLEAN_QUALIFIED` establishes completion of this bounded protocol, not absence of unknown defects;
 an escaped defect, incident, or rollback becomes a regression fixture and a proposed protocol
 correction.

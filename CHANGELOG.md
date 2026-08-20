@@ -23,8 +23,10 @@ public API is still pre-1.0.
   an exact ordered disposition for every Product, Architecture, and Operational Maturity item,
   clean-claim challenges that select exact authority and produced evidence, and failure probes
   covering every acceptance-observation effect through a host-derived method. Purely formal
-  non-vacuity rules reject short, padded, repeated-token, and copied narrative fields without
-  claiming semantic insight. The host re-derives coverage and verdict; the `/1` protocol grants
+  non-vacuity rules use a version-stable ASCII control-prose alphabet, letter/token floors, and an
+  exact minimum pairwise letter-stream edit distance to reject short, padded, repeated-token,
+  exact-copy, and below-threshold near-copy narrative fields without claiming semantic insight or
+  general copy detection. The host re-derives coverage and verdict; the `/1` protocol grants
   no self-refutation
   authority, so every emitted finding prevents a clean verdict. Review remains evidence-only and
   grants no merge, release, deploy, or promotion authority.

@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import subprocess
+from itertools import product
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,22 @@ def _git(arguments: list[str], *, cwd: Path | None = None) -> str:
     )
     assert completed.returncode == 0, completed.stderr
     return completed.stdout.strip()
+
+
+def _full_edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_character in enumerate(right, start=1):
+            current.append(
+                min(
+                    previous[right_index] + 1,
+                    current[right_index - 1] + 1,
+                    previous[right_index - 1] + (left_character != right_character),
+                )
+            )
+        previous = current
+    return previous[-1]
 
 
 def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
@@ -540,6 +557,13 @@ def test_present_but_one_character_review_actions_are_refused(
         "1 2 3 4 " + ("." * 24),
         "111111 222222 333333 444444",
         "placeholder1 placeholder2 placeholder3 placeholder4",
+        ("\u115f" * 6)
+        + " "
+        + ("\u1160" * 6)
+        + " "
+        + ("\u115f\u1160" * 3)
+        + " "
+        + ("\u1160\u115f" * 3),
     ),
 )
 def test_formally_padded_probe_narratives_are_refused(
@@ -553,7 +577,10 @@ def test_formally_padded_probe_narratives_are_refused(
         {key: value for key, value in probe.items() if key != "probe_id"}
     )
 
-    with pytest.raises(AdversarialReviewError, match="structurally substantive"):
+    with pytest.raises(
+        AdversarialReviewError,
+        match="structurally substantive|outside HT",
+    ):
         _verify(tmp_path, subject, report, observations, paths)
 
 
@@ -673,6 +700,18 @@ def test_punctuation_does_not_disguise_copied_review_action_narratives(
             "Compare the exact retained evidence against the bound authority. 3",
             "Compare the exact retained evidence against the bound authority. 4",
         ),
+        (
+            "C1mpare the exact retained evidence against the bound authority.",
+            "Co2pare the exact retained evidence against the bound authority.",
+            "Com3are the exact retained evidence against the bound authority.",
+            "Comp4re the exact retained evidence against the bound authority.",
+        ),
+        (
+            "C\u115fompare the exact retained evidence against the bound authority.",
+            "Co\u1160mpare the exact retained evidence against the bound authority.",
+            "Com\u115fpare the exact retained evidence against the bound authority.",
+            "Comp\u1160are the exact retained evidence against the bound authority.",
+        ),
     ),
 )
 def test_internal_formatting_does_not_disguise_copied_probe_narratives(
@@ -691,7 +730,7 @@ def test_internal_formatting_does_not_disguise_copied_probe_narratives(
         {key: value for key, value in probe.items() if key != "probe_id"}
     )
 
-    with pytest.raises(AdversarialReviewError, match="repeats a narrative"):
+    with pytest.raises(AdversarialReviewError, match="narrative"):
         _verify(tmp_path, subject, report, observations, paths)
 
 
@@ -710,6 +749,65 @@ def test_distinct_numeric_placeholders_do_not_supply_narrative_substance(
     )
 
     with pytest.raises(AdversarialReviewError, match="structurally substantive"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+def test_banded_edit_distance_matches_full_reference() -> None:
+    values = [""]
+    for length in range(1, 6):
+        values.extend("".join(characters) for characters in product("ab", repeat=length))
+
+    for left in values:
+        for right in values:
+            distance = _full_edit_distance(left, right)
+            for maximum in range(4):
+                observed = adversarial_review_module._edit_distance_at_most(
+                    left,
+                    right,
+                    maximum=maximum,
+                )
+                assert observed is (distance <= maximum)
+                reverse = adversarial_review_module._edit_distance_at_most(
+                    right,
+                    left,
+                    maximum=maximum,
+                )
+                assert reverse is observed
+
+
+def test_banded_edit_distance_honors_exact_cutoff_at_schema_maximum() -> None:
+    base = "a" * 4000
+    distance_three = ("b" * 3) + base[3:]
+    distance_four = ("b" * 4) + base[4:]
+
+    assert adversarial_review_module._edit_distance_at_most(base, distance_three, maximum=3)
+    assert not adversarial_review_module._edit_distance_at_most(base, distance_four, maximum=3)
+    assert adversarial_review_module._edit_distance_at_most(base, base[:-3], maximum=3)
+    assert not adversarial_review_module._edit_distance_at_most(base, base[:-4], maximum=3)
+
+
+def test_fewer_than_four_letter_edits_do_not_disguise_copied_probe_narratives(
+    tmp_path: Path,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    probe = report["failure_mode_probes"][0]
+    narratives = (
+        "C-mpare the exact retained evidence against the bound authority.",
+        "Co-pare the exact retained evidence against the bound authority.",
+        "Com-are the exact retained evidence against the bound authority.",
+        "Comp-re the exact retained evidence against the bound authority.",
+    )
+    for field, narrative in zip(
+        ("failure_mode", "attempt", "expected_result", "observed_result"),
+        narratives,
+        strict=True,
+    ):
+        probe[field] = narrative
+    probe["probe_id"] = digest_obj(
+        {key: value for key, value in probe.items() if key != "probe_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="fewer than 4 ASCII-letter edits"):
         _verify(tmp_path, subject, report, observations, paths)
 
 
