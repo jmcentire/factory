@@ -358,6 +358,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
             "assertion_digest": assertion_digest,
             "output_digest": output_digest,
         },
+        "probe_method": "inspect-observed-test-result/1",
         "failure_mode": "The implementation could preserve the baseline subtraction defect.",
         "attempt": "Execute the retained acceptance oracle with representative operands.",
         "expected_result": "The oracle reports that 2 + 3 equals 5.",
@@ -367,6 +368,9 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
         "finding_ids": [],
     }
     challenge_body = {
+        "challenge_method": "compare-exact-evidence/1",
+        "authority_evidence_index": 0,
+        "produced_evidence_index": 1,
         "hypothesis": "The candidate does not implement the operator's requested addition.",
         "attempt": "Compare exact operator intent with the candidate implementation.",
         "observed_result": "The candidate returns the sum of both operands.",
@@ -384,7 +388,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
             {
                 "dimension_id": dimension,
                 "state": "COMPLETED",
-                "summary": f"Reviewed {dimension}.",
+                "summary": f"Reviewed exact evidence for the {dimension} dimension.",
                 "evidence": (
                     [
                         evidence["operator_intent"],
@@ -410,7 +414,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
                 {
                     "check_id": check_id,
                     "state": "COMPLETED",
-                    "summary": f"Completed {check_id}.",
+                    "summary": f"Completed exact evidence checks for {check_id}.",
                     "evidence": [evidence["build_input"], evidence["observations"]],
                 }
                 for check_id in REQUIRED_COMPLETENESS_CHECKS
@@ -492,6 +496,133 @@ def test_vacuous_clean_claim_is_refused(tmp_path: Path, field: str, error: str) 
         _verify(tmp_path, subject, report, observations, paths)
 
 
+@pytest.mark.parametrize(
+    ("report_field", "identity_field", "narrative_fields"),
+    (
+        (
+            "failure_mode_probes",
+            "probe_id",
+            ("failure_mode", "attempt", "expected_result", "observed_result"),
+        ),
+        (
+            "clean_claim_challenges",
+            "challenge_id",
+            ("hypothesis", "attempt", "observed_result"),
+        ),
+    ),
+)
+def test_present_but_one_character_review_actions_are_refused(
+    tmp_path: Path,
+    report_field: str,
+    identity_field: str,
+    narrative_fields: tuple[str, ...],
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    record = report[report_field][0]
+    for field in narrative_fields:
+        record[field] = "x"
+    record[identity_field] = digest_obj(
+        {key: value for key, value in record.items() if key != identity_field}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="validation failed"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+@pytest.mark.parametrize(
+    "vacuous_value",
+    (
+        "token token token token token token token",
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        "x                                           ",
+    ),
+)
+def test_formally_padded_probe_narratives_are_refused(
+    tmp_path: Path,
+    vacuous_value: str,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    probe = report["failure_mode_probes"][0]
+    probe["attempt"] = vacuous_value
+    probe["probe_id"] = digest_obj(
+        {key: value for key, value in probe.items() if key != "probe_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="structurally substantive"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+@pytest.mark.parametrize(
+    ("report_field", "identity_field", "narrative_fields"),
+    (
+        (
+            "failure_mode_probes",
+            "probe_id",
+            ("failure_mode", "attempt", "expected_result", "observed_result"),
+        ),
+        (
+            "clean_claim_challenges",
+            "challenge_id",
+            ("hypothesis", "attempt", "observed_result"),
+        ),
+    ),
+)
+def test_review_action_narratives_must_be_pairwise_distinct(
+    tmp_path: Path,
+    report_field: str,
+    identity_field: str,
+    narrative_fields: tuple[str, ...],
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    record = report[report_field][0]
+    repeated = "Compare the exact retained evidence against the bound authority."
+    for field in narrative_fields:
+        record[field] = repeated
+    record[identity_field] = digest_obj(
+        {key: value for key, value in record.items() if key != identity_field}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="repeats a narrative"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+def test_probe_method_must_rederive_from_observed_result(tmp_path: Path) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    probe = report["failure_mode_probes"][0]
+    probe["probe_method"] = "recheck-observed-effect/1"
+    probe["probe_id"] = digest_obj(
+        {key: value for key, value in probe.items() if key != "probe_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="method does not re-derive"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+@pytest.mark.parametrize(
+    ("authority_index", "produced_index", "error"),
+    (
+        (0, 0, "distinct in-range"),
+        (1, 0, "exact authority and produced evidence"),
+    ),
+)
+def test_challenge_must_select_exact_authority_and_produced_evidence(
+    tmp_path: Path,
+    authority_index: int,
+    produced_index: int,
+    error: str,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    challenge = report["clean_claim_challenges"][0]
+    challenge["authority_evidence_index"] = authority_index
+    challenge["produced_evidence_index"] = produced_index
+    challenge["challenge_id"] = digest_obj(
+        {key: value for key, value in challenge.items() if key != "challenge_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match=error):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
 def test_intent_lens_must_cite_operator_request_and_ratified_requirements(
     tmp_path: Path,
 ) -> None:
@@ -561,6 +692,7 @@ def test_non_test_probe_binds_exact_effect_without_fake_test_evidence(tmp_path: 
             "verifier_id": observed_effect["verifier_id"],
             "effect_digest": observed_effect["effect_digest"],
             "test_result": None,
+            "probe_method": "recheck-observed-effect/1",
             "evidence": [observations_ref],
         }
     )

@@ -21,8 +21,11 @@ public API is still pre-1.0.
   the ratified Validator configuration and environment identities. The closed report
   requires eight code-owned engineering lenses, exact cited bytes, content-addressed findings,
   an exact ordered disposition for every Product, Architecture, and Operational Maturity item,
-  concrete clean-claim challenges, and failure probes covering every acceptance-observation
-  effect. The host re-derives coverage and verdict; the `/1` protocol grants no self-refutation
+  clean-claim challenges that select exact authority and produced evidence, and failure probes
+  covering every acceptance-observation effect through a host-derived method. Purely formal
+  non-vacuity rules reject short, padded, repeated-token, and copied narrative fields without
+  claiming semantic insight. The host re-derives coverage and verdict; the `/1` protocol grants
+  no self-refutation
   authority, so every emitted finding prevents a clean verdict. Review remains evidence-only and
   grants no merge, release, deploy, or promotion authority.
 - PREVIEW admission and every ledger replay now require an explicit Tessera verifier bound to the

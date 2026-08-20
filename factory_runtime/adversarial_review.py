@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from factory_core.comprehensiveness import SubstanceSpec, is_substantive
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_runtime.candidate_diff import (
@@ -43,6 +44,11 @@ REVIEW_AUTHORITY_CONTEXT_ARTIFACT_KEY = "validator-review-authority-context"
 REVIEW_OBSERVATIONS_SOURCE_ARTIFACT_KEY = "validator-review-observations-source"
 OPERATOR_INTENT_EVIDENCE_SOURCE = "operator-intent"
 REVIEW_PROTOCOL_ID = "factory-validator-adversarial-review/1"
+PROBE_METHOD_OBSERVED_TEST = "inspect-observed-test-result/1"
+PROBE_METHOD_OBSERVED_EFFECT = "recheck-observed-effect/1"
+CHALLENGE_METHOD_EXACT_EVIDENCE = "compare-exact-evidence/1"
+_REVIEW_NARRATIVE_SPEC = SubstanceSpec(min_chars=24, min_tokens=4)
+_MIN_NON_WHITESPACE_NARRATIVE_CHARS = 24
 REQUIRED_REVIEW_DIMENSIONS = (
     "intent-conformance",
     "architecture",
@@ -75,7 +81,10 @@ redundancy, clarity, separation of concerns, test adequacy, correctness and fail
 Cite exact bytes for every conclusion. Bind every failure-mode probe to an exact observed
 acceptance obligation/effect and, when present, one exact executed test result. Enumerate concrete
 clean-claim challenge attempts, recording the attempted action, expected behavior, observed result,
-and exact evidence. Emit each defect as a content-addressed finding; this protocol has no
+and exact evidence. Select the code-owned probe method that matches the observed effect. For every
+clean-claim challenge, select the exact-evidence comparison method and name the authority and
+produced-evidence references being compared. Emit each defect as a content-addressed finding; this
+protocol has no
 self-refutation authority, so every finding survives and prevents a clean verdict.
 CLEAN_QUALIFIED requires every item disposition to conform, at least one successful failure-mode
 probe, and at least one refuted defect hypothesis. It proves only that this bounded review
@@ -94,6 +103,20 @@ _PROTOCOL_BODY = {
         "failure-mode-probes",
         "clean-claim-challenges",
     ],
+    "review_action_contract": {
+        "probe_methods": [
+            PROBE_METHOD_OBSERVED_TEST,
+            PROBE_METHOD_OBSERVED_EFFECT,
+        ],
+        "challenge_method": CHALLENGE_METHOD_EXACT_EVIDENCE,
+        "challenge_evidence_selection": ("distinct-authority-and-produced-evidence-array-indices"),
+        "narrative_form": {
+            "minimum_non_whitespace_characters": _MIN_NON_WHITESPACE_NARRATIVE_CHARS,
+            "minimum_distinct_word_tokens": _REVIEW_NARRATIVE_SPEC.min_tokens,
+            "same_record_fields": "pairwise-distinct-after-casefold-and-whitespace-fold",
+            "semantic_claim": "none",
+        },
+    },
     "clean_rule": (
         "all-items-dispositioned-all-probes-passed-all-challenges-refuted-"
         "all-dimensions-and-completeness-completed-no-findings"
@@ -102,6 +125,7 @@ _PROTOCOL_BODY = {
 REVIEW_PROTOCOL_DIGEST = digest_obj(_PROTOCOL_BODY)
 _MAX_REVIEW_BYTES = 4 * 1024 * 1024
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_NARRATIVE_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 class AdversarialReviewError(ValueError):
@@ -932,6 +956,92 @@ _INTENT_REFERENCE_FIELDS = (
 )
 
 
+def _require_structural_narratives(
+    record: Mapping[str, Any],
+    fields: Sequence[str],
+    *,
+    label: str,
+) -> None:
+    """Require only closed, formal properties; this is not a semantic quality claim."""
+
+    normalized: list[str] = []
+    for field in fields:
+        value = record.get(field)
+        distinct_tokens = (
+            {token.casefold() for token in _NARRATIVE_TOKEN.findall(value)}
+            if isinstance(value, str)
+            else set()
+        )
+        non_whitespace_chars = (
+            sum(not character.isspace() for character in value) if isinstance(value, str) else 0
+        )
+        if (
+            not is_substantive(value, _REVIEW_NARRATIVE_SPEC)
+            or non_whitespace_chars < _MIN_NON_WHITESPACE_NARRATIVE_CHARS
+            or len(distinct_tokens) < _REVIEW_NARRATIVE_SPEC.min_tokens
+        ):
+            raise AdversarialReviewError(
+                f"{label} {field} is not structurally substantive "
+                f"({_MIN_NON_WHITESPACE_NARRATIVE_CHARS} non-whitespace characters and "
+                f"{_REVIEW_NARRATIVE_SPEC.min_tokens} distinct word tokens required)"
+            )
+        normalized.append(" ".join(str(value).split()).casefold())
+    if len(normalized) != len(set(normalized)):
+        raise AdversarialReviewError(f"{label} repeats a narrative across distinct fields")
+
+
+def _verify_review_narrative_form(report: Mapping[str, Any]) -> None:
+    """Reject objectively empty form without pretending to understand the prose."""
+
+    for dimension in report["dimensions"]:
+        _require_structural_narratives(
+            dimension,
+            ("summary",),
+            label=f"review dimension {dimension['dimension_id']}",
+        )
+    for field in (
+        "requirement_dispositions",
+        "architecture_dispositions",
+        "operational_maturity_dispositions",
+    ):
+        for disposition in report[field]:
+            _require_structural_narratives(
+                disposition,
+                ("summary",),
+                label=f"{field} item {disposition['item_id']}",
+            )
+    for probe in report["failure_mode_probes"]:
+        _require_structural_narratives(
+            probe,
+            ("failure_mode", "attempt", "expected_result", "observed_result"),
+            label=f"failure-mode probe {probe['probe_id']}",
+        )
+    for challenge in report["clean_claim_challenges"]:
+        _require_structural_narratives(
+            challenge,
+            ("hypothesis", "attempt", "observed_result"),
+            label=f"clean-claim challenge {challenge['challenge_id']}",
+        )
+    for finding in report["findings"]:
+        _require_structural_narratives(
+            finding,
+            ("statement", "consequence"),
+            label=f"review finding {finding['finding_id']}",
+        )
+    completeness = report["completeness"]
+    _require_structural_narratives(
+        completeness,
+        ("summary",),
+        label="review completeness",
+    )
+    for check in completeness["checks"]:
+        _require_structural_narratives(
+            check,
+            ("summary",),
+            label=f"review completeness check {check['check_id']}",
+        )
+
+
 def _verify_finding_links(
     finding_ids: Sequence[object],
     *,
@@ -1081,6 +1191,15 @@ def _verify_probe_and_challenge_records(
             raise AdversarialReviewError(
                 "failure-mode probe invents a test result for a non-test observation"
             )
+        expected_probe_method = (
+            PROBE_METHOD_OBSERVED_TEST
+            if isinstance(raw_test_result, Mapping)
+            else PROBE_METHOD_OBSERVED_EFFECT
+        )
+        if probe["probe_method"] != expected_probe_method:
+            raise AdversarialReviewError(
+                "failure-mode probe method does not re-derive from its exact observed effect"
+            )
         sources = {str(item["source"]) for item in probe["evidence"]}
         if "acceptance-observations" not in sources or (
             raw_test_result is not None and "acceptance-tests" not in sources
@@ -1109,10 +1228,24 @@ def _verify_probe_and_challenge_records(
         if challenge["challenge_id"] != expected_id:
             raise AdversarialReviewError("clean-claim challenge identity does not re-derive")
         challenge_ids.append(expected_id)
-        sources = {str(item["source"]) for item in challenge["evidence"]}
-        if not sources.intersection({OPERATOR_INTENT_EVIDENCE_SOURCE, "build-input"}) or not (
-            sources
-            & {
+        if challenge["challenge_method"] != CHALLENGE_METHOD_EXACT_EVIDENCE:
+            raise AdversarialReviewError(
+                "clean-claim challenge method does not re-derive from the protocol"
+            )
+        authority_index = int(challenge["authority_evidence_index"])
+        produced_index = int(challenge["produced_evidence_index"])
+        evidence = challenge["evidence"]
+        if authority_index == produced_index or max(authority_index, produced_index) >= len(
+            evidence
+        ):
+            raise AdversarialReviewError(
+                "clean-claim challenge must select distinct in-range evidence references"
+            )
+        authority_source = str(evidence[authority_index]["source"])
+        produced_source = str(evidence[produced_index]["source"])
+        if authority_source not in {OPERATOR_INTENT_EVIDENCE_SOURCE, "build-input"} or (
+            produced_source
+            not in {
                 "implementation",
                 "acceptance-observations",
                 "baseline-source",
@@ -1120,7 +1253,7 @@ def _verify_probe_and_challenge_records(
             }
         ):
             raise AdversarialReviewError(
-                "clean-claim challenge must compare authority with concrete produced evidence"
+                "clean-claim challenge must select exact authority and produced evidence"
             )
         outcome = str(challenge["outcome"])
         _verify_finding_links(
@@ -1156,6 +1289,7 @@ def _verify_review_contract(
         validate_document("validator-adversarial-review", report)
     except DocumentValidationError as exc:
         raise AdversarialReviewError(str(exc)) from exc
+    _verify_review_narrative_form(report)
     expected_protocol = {
         "protocol_id": REVIEW_PROTOCOL_ID,
         "protocol_digest": REVIEW_PROTOCOL_DIGEST,

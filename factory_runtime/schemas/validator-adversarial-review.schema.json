@@ -37,7 +37,7 @@
         "properties": {
           "dimension_id": {"$ref": "#/$defs/dimension"},
           "state": {"$ref": "#/$defs/state"},
-          "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "summary": {"$ref": "#/$defs/review_narrative_short"},
           "evidence": {
             "type": "array",
             "maxItems": 32,
@@ -92,8 +92,8 @@
           "finding_id": {"$ref": "#/$defs/digest"},
           "dimension_id": {"$ref": "#/$defs/dimension"},
           "severity": {"enum": ["blocking", "should-fix", "minor"]},
-          "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
-          "consequence": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "statement": {"$ref": "#/$defs/review_narrative"},
+          "consequence": {"$ref": "#/$defs/review_narrative"},
           "evidence": {
             "type": "array",
             "minItems": 1,
@@ -109,7 +109,7 @@
       "required": ["state", "summary", "checks", "evidence"],
       "properties": {
         "state": {"$ref": "#/$defs/state"},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "summary": {"$ref": "#/$defs/review_narrative"},
         "checks": {
           "type": "array",
           "minItems": 7,
@@ -121,7 +121,7 @@
             "properties": {
               "check_id": {"$ref": "#/$defs/completeness_check"},
               "state": {"$ref": "#/$defs/state"},
-              "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "summary": {"$ref": "#/$defs/review_narrative_short"},
               "evidence": {
                 "type": "array",
                 "maxItems": 32,
@@ -151,6 +151,8 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "review_narrative": {"type": "string", "minLength": 24, "maxLength": 4000},
+    "review_narrative_short": {"type": "string", "minLength": 24, "maxLength": 2000},
     "dimension": {
       "enum": [
         "intent-conformance",
@@ -207,7 +209,7 @@
         "item_id": {"type": "string", "minLength": 1, "maxLength": 1024},
         "intent_digest": {"$ref": "#/$defs/digest"},
         "disposition": {"enum": ["CONFORMS", "VIOLATES", "UNRESOLVED"]},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "summary": {"$ref": "#/$defs/review_narrative"},
         "evidence": {
           "type": "array",
           "minItems": 1,
@@ -231,6 +233,7 @@
         "verifier_id",
         "effect_digest",
         "test_result",
+        "probe_method",
         "failure_mode",
         "attempt",
         "expected_result",
@@ -265,10 +268,13 @@
             }
           ]
         },
-        "failure_mode": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "attempt": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "expected_result": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "observed_result": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "probe_method": {
+          "enum": ["inspect-observed-test-result/1", "recheck-observed-effect/1"]
+        },
+        "failure_mode": {"$ref": "#/$defs/review_narrative"},
+        "attempt": {"$ref": "#/$defs/review_narrative"},
+        "expected_result": {"$ref": "#/$defs/review_narrative"},
+        "observed_result": {"$ref": "#/$defs/review_narrative"},
         "outcome": {"enum": ["PASSED", "FAILED", "INCONCLUSIVE"]},
         "evidence": {
           "type": "array",
@@ -289,6 +295,9 @@
       "additionalProperties": false,
       "required": [
         "challenge_id",
+        "challenge_method",
+        "authority_evidence_index",
+        "produced_evidence_index",
         "hypothesis",
         "attempt",
         "observed_result",
@@ -298,13 +307,16 @@
       ],
       "properties": {
         "challenge_id": {"$ref": "#/$defs/digest"},
-        "hypothesis": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "attempt": {"type": "string", "minLength": 1, "maxLength": 4000},
-        "observed_result": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "challenge_method": {"const": "compare-exact-evidence/1"},
+        "authority_evidence_index": {"type": "integer", "minimum": 0, "maximum": 31},
+        "produced_evidence_index": {"type": "integer", "minimum": 0, "maximum": 31},
+        "hypothesis": {"$ref": "#/$defs/review_narrative"},
+        "attempt": {"$ref": "#/$defs/review_narrative"},
+        "observed_result": {"$ref": "#/$defs/review_narrative"},
         "outcome": {"enum": ["REFUTED", "CONFIRMED", "INCONCLUSIVE"]},
         "evidence": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 2,
           "maxItems": 32,
           "items": {"$ref": "#/$defs/evidence"}
         },

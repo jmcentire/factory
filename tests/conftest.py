@@ -936,6 +936,7 @@ def preview_artifacts(
             "assertion_digest": observed_test["assertion_digest"],
             "output_digest": observed_test["output_digest"],
         },
+        "probe_method": "inspect-observed-test-result/1",
         "failure_mode": "The fixture candidate could fail its ratified acceptance assertion.",
         "attempt": "Run the exact retained acceptance assertion against the candidate.",
         "expected_result": "The retained assertion completes successfully.",
@@ -945,6 +946,9 @@ def preview_artifacts(
         "finding_ids": [],
     }
     challenge_body = {
+        "challenge_method": "compare-exact-evidence/1",
+        "authority_evidence_index": 0,
+        "produced_evidence_index": 1,
         "hypothesis": "The candidate omits the exact operator-requested behavior.",
         "attempt": "Compare the Stage-E request with the complete candidate artifact.",
         "observed_result": "The candidate artifact implements the requested fixture behavior.",
@@ -962,7 +966,7 @@ def preview_artifacts(
             {
                 "dimension_id": dimension,
                 "state": "COMPLETED",
-                "summary": f"Fixture completed {dimension}.",
+                "summary": f"Fixture reviewed exact evidence for {dimension}.",
                 "evidence": (
                     [references[9], references[2], references[0]]
                     if dimension == "intent-conformance"
@@ -984,7 +988,7 @@ def preview_artifacts(
                 {
                     "check_id": check_id,
                     "state": "COMPLETED",
-                    "summary": f"Fixture completed {check_id}.",
+                    "summary": f"Fixture completed exact evidence checks for {check_id}.",
                     "evidence": [references[2]],
                 }
                 for check_id in REQUIRED_COMPLETENESS_CHECKS

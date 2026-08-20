@@ -294,6 +294,7 @@ probe_body = {
         "assertion_digest": observed_test["assertion_digest"],
         "output_digest": observed_test["output_digest"],
     },
+    "probe_method": "inspect-observed-test-result/1",
     "failure_mode": "The implementation could retain subtraction behavior for positive inputs.",
     "attempt": "Execute the exact positive-addition acceptance assertion.",
     "expected_result": "The assertion observes the mathematical sum.",
@@ -303,6 +304,9 @@ probe_body = {
     "finding_ids": [],
 }
 challenge_body = {
+    "challenge_method": "compare-exact-evidence/1",
+    "authority_evidence_index": 0,
+    "produced_evidence_index": 1,
     "hypothesis": "The candidate does not implement the operator-authorized addition outcome.",
     "attempt": "Compare exact Stage-E intent with the complete candidate and change set.",
     "observed_result": "The implementation replaces subtraction with addition.",

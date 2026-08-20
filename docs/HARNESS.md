@@ -320,7 +320,10 @@ canonical report must cover intent, architecture, redundancy, clarity, separatio
 test adequacy, correctness/failure, and scope; disposition every Product, Architecture, and
 Operational Maturity item in exact host order; cite exact retained line bytes; bind each
 failure-mode probe to an actual observed obligation/effect and any selected executed test; record
-concrete clean-claim challenge attempts; content-address every probe, challenge, and finding; and
+the host-derived probe method; record clean-claim challenges that select distinct exact authority
+and produced-evidence references for the code-owned comparison method; reject empty, repeated, or
+formally vacuous narratives without claiming semantic insight; content-address every probe,
+challenge, and finding; and
 complete every host-declared clean-claim check. The `/1` report cannot self-refute:
 every emitted finding survives and prevents a clean verdict. The host re-derives the subject,
 cited evidence, completeness, item membership, observation bindings, identities, and verdict.
