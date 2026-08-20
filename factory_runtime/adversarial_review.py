@@ -15,6 +15,7 @@ import os
 import re
 import stat
 import tempfile
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -46,8 +47,8 @@ REVIEW_PROTOCOL_ID = "factory-validator-adversarial-review/1"
 PROBE_METHOD_OBSERVED_TEST = "inspect-observed-test-result/1"
 PROBE_METHOD_OBSERVED_EFFECT = "recheck-observed-effect/1"
 CHALLENGE_METHOD_EXACT_EVIDENCE = "compare-exact-evidence/1"
-_MIN_NARRATIVE_TOKEN_CHARS = 24
-_MIN_DISTINCT_NARRATIVE_TOKENS = 4
+_MIN_NARRATIVE_LETTER_CHARS = 24
+_MIN_DISTINCT_NARRATIVE_LETTER_TOKENS = 4
 REQUIRED_REVIEW_DIMENSIONS = (
     "intent-conformance",
     "architecture",
@@ -110,9 +111,10 @@ _PROTOCOL_BODY = {
         "challenge_method": CHALLENGE_METHOD_EXACT_EVIDENCE,
         "challenge_evidence_selection": ("distinct-authority-and-produced-evidence-array-indices"),
         "narrative_form": {
-            "minimum_normalized_word_token_characters": _MIN_NARRATIVE_TOKEN_CHARS,
-            "minimum_distinct_word_tokens": _MIN_DISTINCT_NARRATIVE_TOKENS,
-            "same_record_fields": "pairwise-distinct-normalized-word-token-sequences",
+            "normalization": "unicode-nfkc-casefold",
+            "minimum_unicode_letter_characters": _MIN_NARRATIVE_LETTER_CHARS,
+            "minimum_distinct_letter_token_signatures": _MIN_DISTINCT_NARRATIVE_LETTER_TOKENS,
+            "same_record_fields": "pairwise-distinct-normalized-unicode-letter-streams",
             "semantic_claim": "none",
         },
     },
@@ -963,25 +965,38 @@ def _require_structural_narratives(
 ) -> None:
     """Require only closed, formal properties; this is not a semantic quality claim."""
 
-    normalized: list[tuple[str, ...]] = []
+    content_signatures: list[str] = []
     for field in fields:
         value = record.get(field)
-        tokens = (
-            tuple(token.casefold() for token in _NARRATIVE_TOKEN.findall(value))
+        normalized = (
+            unicodedata.normalize(
+                "NFKC",
+                unicodedata.normalize("NFKC", value).casefold(),
+            )
             if isinstance(value, str)
-            else ()
+            else ""
         )
+        tokens = _NARRATIVE_TOKEN.findall(normalized)
+        letter_tokens = tuple(
+            "".join(character for character in token if character.isalpha())
+            for token in tokens
+            if any(character.isalpha() for character in token)
+        )
+        letter_count = sum(character.isalpha() for character in normalized)
         if (
-            sum(len(token) for token in tokens) < _MIN_NARRATIVE_TOKEN_CHARS
-            or len(set(tokens)) < _MIN_DISTINCT_NARRATIVE_TOKENS
+            letter_count < _MIN_NARRATIVE_LETTER_CHARS
+            or len(set(letter_tokens)) < _MIN_DISTINCT_NARRATIVE_LETTER_TOKENS
         ):
             raise AdversarialReviewError(
                 f"{label} {field} is not structurally substantive "
-                f"({_MIN_NARRATIVE_TOKEN_CHARS} normalized word-token characters and "
-                f"{_MIN_DISTINCT_NARRATIVE_TOKENS} distinct word tokens required)"
+                f"({_MIN_NARRATIVE_LETTER_CHARS} normalized Unicode letter characters and "
+                f"{_MIN_DISTINCT_NARRATIVE_LETTER_TOKENS} distinct letter-token "
+                "signatures required)"
             )
-        normalized.append(tokens)
-    if len(normalized) != len(set(normalized)):
+        content_signatures.append(
+            "".join(character for character in normalized if character.isalpha())
+        )
+    if len(content_signatures) != len(set(content_signatures)):
         raise AdversarialReviewError(f"{label} repeats a narrative across distinct fields")
 
 

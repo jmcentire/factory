@@ -538,6 +538,8 @@ def test_present_but_one_character_review_actions_are_refused(
         "a b c d " + ("!" * 24),
         "a b c d " + ("\u200b" * 24),
         "1 2 3 4 " + ("." * 24),
+        "111111 222222 333333 444444",
+        "placeholder1 placeholder2 placeholder3 placeholder4",
     ),
 )
 def test_formally_padded_probe_narratives_are_refused(
@@ -623,6 +625,91 @@ def test_punctuation_does_not_disguise_copied_review_action_narratives(
     )
 
     with pytest.raises(AdversarialReviewError, match="repeats a narrative"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+@pytest.mark.parametrize(
+    "narratives",
+    (
+        (
+            "Co-mpare the exact retained evidence against the bound authority.",
+            "Com.pare the exact retained evidence against the bound authority.",
+            "Comp!are the exact retained evidence against the bound authority.",
+            "Compa?re the exact retained evidence against the bound authority.",
+        ),
+        (
+            "C\u200bompare the exact retained evidence against the bound authority.",
+            "Co\u200bmpare the exact retained evidence against the bound authority.",
+            "Com\u200bpare the exact retained evidence against the bound authority.",
+            "Comp\u200bare the exact retained evidence against the bound authority.",
+        ),
+        (
+            "Ｃompare the exact retained evidence against the bound authority.",
+            "Cｏmpare the exact retained evidence against the bound authority.",
+            "Coｍpare the exact retained evidence against the bound authority.",
+            "Comｐare the exact retained evidence against the bound authority.",
+        ),
+        (
+            "C\u2060ompare the exact retained evidence against the bound authority.",
+            "Co\u2060mpare the exact retained evidence against the bound authority.",
+            "Com\u2060pare the exact retained evidence against the bound authority.",
+            "Comp\u2060are the exact retained evidence against the bound authority.",
+        ),
+        (
+            "C\u00a0ompare the exact retained evidence against the bound authority.",
+            "Co\u00a0mpare the exact retained evidence against the bound authority.",
+            "Com\u00a0pare the exact retained evidence against the bound authority.",
+            "Comp\u00a0are the exact retained evidence against the bound authority.",
+        ),
+        (
+            "C\u034fompare the exact retained evidence against the bound authority.",
+            "Co\u034fmpare the exact retained evidence against the bound authority.",
+            "Com\u034fpare the exact retained evidence against the bound authority.",
+            "Comp\u034fare the exact retained evidence against the bound authority.",
+        ),
+        (
+            "Compare the exact retained evidence against the bound authority. 1",
+            "Compare the exact retained evidence against the bound authority. 2",
+            "Compare the exact retained evidence against the bound authority. 3",
+            "Compare the exact retained evidence against the bound authority. 4",
+        ),
+    ),
+)
+def test_internal_formatting_does_not_disguise_copied_probe_narratives(
+    tmp_path: Path,
+    narratives: tuple[str, str, str, str],
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    probe = report["failure_mode_probes"][0]
+    for field, narrative in zip(
+        ("failure_mode", "attempt", "expected_result", "observed_result"),
+        narratives,
+        strict=True,
+    ):
+        probe[field] = narrative
+    probe["probe_id"] = digest_obj(
+        {key: value for key, value in probe.items() if key != "probe_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="repeats a narrative"):
+        _verify(tmp_path, subject, report, observations, paths)
+
+
+def test_distinct_numeric_placeholders_do_not_supply_narrative_substance(
+    tmp_path: Path,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path)
+    probe = report["failure_mode_probes"][0]
+    for index, field in enumerate(
+        ("failure_mode", "attempt", "expected_result", "observed_result"),
+        start=1,
+    ):
+        probe[field] = " ".join(str(index * 100_000 + offset) for offset in range(4))
+    probe["probe_id"] = digest_obj(
+        {key: value for key, value in probe.items() if key != "probe_id"}
+    )
+
+    with pytest.raises(AdversarialReviewError, match="structurally substantive"):
         _verify(tmp_path, subject, report, observations, paths)
 
 
