@@ -6830,3 +6830,179 @@ def test_endgame_routes_only_a_fully_green_run_through_gate_l() -> None:
         )
     ]
     assert "FAILED=1" in missing_target_branch
+
+
+# --------------------------------------------------------------------------
+# Ambient-override reconciliation (contract 780ce1f092f6) — every remaining
+# ambient override is a hard denial. The environment is never authority:
+# setting a retired break-glass variable changes nothing, a refusal mints no
+# evidence, and the retired names may not reappear in an enforcing surface.
+# --------------------------------------------------------------------------
+
+_ORACLE_LEAK_MESSAGE = (
+    "adjust the code until pytest tests/test_widget.py::test_frobnicates passes "
+    "-- the assert currently raises AssertionError"
+)
+
+
+def test_inject_oracle_leak_ambient_override_is_ignored(tmp_path: Path) -> None:
+    """Gate E: a coder-bound message carrying pytest vocabulary always refuses
+    (exit 80). INJECT_ALLOW_ORACLE_WORDS is not read — the boundary does not
+    open from the environment — and a refused message is never receipted."""
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "coder", _ORACLE_LEAK_MESSAGE],
+        tmp_path,
+        {
+            "INJECT_DRY_RUN": "1",
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_ALLOW_ORACLE_WORDS": "1",
+        },
+    )
+    assert r.returncode == 80, r.stdout + r.stderr
+    assert "oracle-leak refusal" in r.stderr
+    assert "no ambient override" in r.stderr
+    assert "Fix and re-ratify" in r.stderr
+    assert not (tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl").exists()
+
+
+def test_inject_oracle_leak_refusal_identical_without_override(tmp_path: Path) -> None:
+    """The same message with no override variable refuses identically (exit 80):
+    the variable was dead weight, never a hinge."""
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "coder", _ORACLE_LEAK_MESSAGE],
+        tmp_path,
+        {"INJECT_DRY_RUN": "1", "HARNESS_DIR": str(tmp_path / ".harness")},
+    )
+    assert r.returncode == 80, r.stdout + r.stderr
+    assert "oracle-leak refusal" in r.stderr
+    assert not (tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl").exists()
+
+
+def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None:
+    """A target pane running a plain shell is never an injection target (exit 77):
+    INJECT_ALLOW_SHELL is not read, and nothing is delivered (no send-keys)."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$@" >> {shlex.quote(str(calls))}\n'
+        'for a in "$@"; do\n'
+        '  case "$a" in display*) echo bash; exit 0;; esac\n'
+        "done\n"
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "short note"],
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_ALLOW_SHELL": "1",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 77, r.stdout + r.stderr
+    assert "not an agent" in r.stderr
+    assert "no ambient override" in r.stderr
+    delivered = calls.read_text(encoding="utf-8") if calls.exists() else ""
+    assert "send-keys" not in delivered
+
+
+def test_dispatch_ambient_gap_override_family_mints_no_evidence(tmp_path: Path) -> None:
+    """The whole retired gap-override family set at once still denies a
+    primer-gap dispatch: exit 70, no workspace resource, no dispatch receipt."""
+    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
+    receipts = root / "dispatches.jsonl"
+    before = receipts.read_bytes() if receipts.exists() else b""
+    env = _dispatch_env(stub, root)
+    env.update({"GATE_BC_ALLOW_GAP": "1", "PHASE1_ALLOW_GAPS": "1", "FACTORY_ALLOW_GAP": "1"})
+    r = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        src,
+        env,
+    )
+    assert r.returncode == 70, r.stdout + r.stderr
+    assert "no kindex primer" in r.stderr
+    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
+    after = receipts.read_bytes() if receipts.exists() else b""
+    assert after == before
+
+
+def test_no_harness_reader_of_retired_ambient_overrides() -> None:
+    """Structural sweep: the retired override names may not appear anywhere in
+    the enforcing surfaces (harness/*.sh, harness/*.py, scripts/*.py) — not even
+    in a comment. Reintroducing a reader turns this red. tests/ and docs may
+    still name them when describing the refusals."""
+    import re
+
+    repo = Path(__file__).resolve().parents[1]
+    surfaces = sorted(
+        [
+            *(repo / "harness").glob("*.sh"),
+            *(repo / "harness").glob("*.py"),
+            *(repo / "scripts").glob("*.py"),
+        ]
+    )
+    names = {p.name for p in surfaces}
+    assert {"inject.sh", "lane_env.sh", "dispatch_lane.sh", "phase1_gate.sh"} <= names
+    assert "check_denial_probes.py" in names
+    patterns = (re.compile(r"ALLOW_GAPS?\b"), re.compile(r"INJECT_ALLOW_[A-Z_]+"))
+    offenders = [
+        f"{path.name}: {match.group(0)}"
+        for path in surfaces
+        for pattern in patterns
+        for match in pattern.finditer(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == [], f"retired ambient-override names found: {offenders}"
+
+
+def test_lane_env_ground_min_extension_is_clamped(tmp_path: Path) -> None:
+    """HARNESS_MAX_GROUND_MIN tightens only: a 400-minute-old grounding marker
+    is stale at the 360-minute ceiling no matter how large the variable is, and
+    the attempted extension is called out on stderr."""
+    env = lane_env_setup(tmp_path)
+    marker = tmp_path / ".harness" / "grounded"
+    stale = time.time() - 400 * 60
+    os.utime(marker, (stale, stale))
+    env["HARNESS_MAX_GROUND_MIN"] = "100000"
+    r = run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"],
+        tmp_path,
+        env,
+    )
+    assert r.returncode == 76, r.stdout + r.stderr
+    assert "not grounded" in r.stderr
+    assert "grounding-staleness extension refused" in r.stderr
+
+
+def test_lane_env_ground_min_tightening_still_works(tmp_path: Path) -> None:
+    """Lowering the ceiling is honored: a 120-minute-old marker is fresh at the
+    360-minute default but stale under HARNESS_MAX_GROUND_MIN=60 — and no
+    extension-refusal note fires, because tightening is legitimate."""
+    env = lane_env_setup(tmp_path)
+    marker = tmp_path / ".harness" / "grounded"
+    aged = time.time() - 120 * 60
+    os.utime(marker, (aged, aged))
+    env["HARNESS_MAX_GROUND_MIN"] = "60"
+    r = run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"],
+        tmp_path,
+        env,
+    )
+    assert r.returncode == 76, r.stdout + r.stderr
+    assert "grounding-staleness extension refused" not in r.stderr
+
+
+def test_lane_env_ground_min_invalid_value_refuses(tmp_path: Path) -> None:
+    """A non-integer knob value is refused outright (exit 76), never coerced."""
+    env = lane_env_setup(tmp_path)
+    env["HARNESS_MAX_GROUND_MIN"] = "never"
+    r = run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"],
+        tmp_path,
+        env,
+    )
+    assert r.returncode == 76, r.stdout + r.stderr
+    assert "invalid HARNESS_MAX_GROUND_MIN" in r.stderr

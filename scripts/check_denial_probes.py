@@ -29,21 +29,30 @@ not done here. A probe that passes while the gate is neutered is the residual th
 cannot catch; the ``red_now`` declaration is the contract that names it.
 
 Exit codes: 0 = every gate has a collecting probe and a red_now; 1 = a gate is uncovered, a
-probe is a dead pointer, or a gate is unfalsifiable; 2 = the registry or suite could not be read
-(a fail-closed refusal — the build cannot verify coverage, so it does not ship).
+probe is a dead pointer, or a gate is unfalsifiable; 2 = the registry or suite could not be read,
+or an ambient environment override was present (a fail-closed refusal — the build cannot verify
+coverage, so it does not ship).
+
+Test seam: ``--registry`` and ``--nodeids`` let a unit test point at a temp registry and a
+temp node-id set so it does not pay the full pytest-collection cost to exercise the coverage
+logic. The seam is explicit argv only: the retired ``GATES_TSV`` / ``DENIAL_PROBE_NODEIDS``
+environment variables are REFUSED (exit 2) whenever present, because an ambient variable that
+can substitute the registry or the node-id set can flip this ship gate without any invocation
+showing it — an ambient environment override is not authority.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Env overrides exist for the test suite: a test points at a temp registry and a temp
-# node-id set so it does not pay the full pytest-collection cost (or depend on the real
-# suite) to exercise the coverage logic. Production runs leave them unset.
-REGISTRY = Path(os.environ.get("GATES_TSV", REPO_ROOT / "harness" / "gates.tsv"))
+DEFAULT_REGISTRY = REPO_ROOT / "harness" / "gates.tsv"
+# The retired ambient override names. Their presence — not their use — refuses the run:
+# a gate that can be redirected by the caller's environment is not a gate.
+AMBIENT_OVERRIDES = ("GATES_TSV", "DENIAL_PROBE_NODEIDS")
 FIELDS = ("gate", "name", "prohibits", "probes", "red_now")
 
 
@@ -75,7 +84,23 @@ def _load_registry(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def _collect_nodeids() -> set[str]:
+def _refuse_ambient_overrides() -> None:
+    """Die when a retired ambient override variable is present, set or not consulted.
+
+    An environment variable that can substitute the registry or the node-id set flips this
+    ship gate without the invocation showing it. The explicit ``--registry``/``--nodeids``
+    flags are the only seam: they appear in the argv the Makefile pins, so a redirected run
+    is visible where the ambient one was not.
+    """
+    for name in AMBIENT_OVERRIDES:
+        if name in os.environ:
+            _die(
+                f"ambient environment override is not authority — {name} is refused; "
+                "unset it (test fixtures pass --registry/--nodeids explicitly)"
+            )
+
+
+def _collect_nodeids(nodeids_file: Path | None) -> set[str]:
     """The set of every pytest node-id the suite can collect, by introspecting the test modules.
 
     A subprocess ``pytest --collect-only`` is authoritative but slow (and its output format
@@ -86,20 +111,20 @@ def _collect_nodeids() -> set[str]:
     probe pointing there is correctly flagged as a dead pointer — the same outcome a real
     collection would give for a module that does not collect.
 
-    For the test suite, ``DENIAL_PROBE_NODEIDS`` may name a file holding one node-id per line;
-    that substitutes for introspection so a unit test exercises the coverage logic without the
-    real suite. Production leaves it unset.
+    For the test suite, ``--nodeids`` may name a file holding one node-id per line; that
+    substitutes for introspection so a unit test exercises the coverage logic without the
+    real suite. Production passes no flags.
     """
-    override = os.environ.get("DENIAL_PROBE_NODEIDS")
-    if override:
-        p = Path(override)
-        if not p.exists():
-            _die(f"DENIAL_PROBE_NODEIDS file not found: {p}")
+    if nodeids_file is not None:
+        if not nodeids_file.exists():
+            _die(f"--nodeids file not found: {nodeids_file}")
         override_ids = {
-            ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()
+            ln.strip()
+            for ln in nodeids_file.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
         }
         if not override_ids:
-            _die("DENIAL_PROBE_NODEIDS file is empty (cannot verify probe coverage)")
+            _die("--nodeids file is empty (cannot verify probe coverage)")
         return override_ids
 
     import importlib.util
@@ -137,8 +162,25 @@ def _collect_nodeids() -> set[str]:
 
 
 def main() -> int:
-    rows = _load_registry(REGISTRY)
-    nodeids = _collect_nodeids()
+    parser = argparse.ArgumentParser(
+        description="verify every factory gate has a registered, collecting denial probe"
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help="test-fixture seam: a temp gates.tsv (production omits this)",
+    )
+    parser.add_argument(
+        "--nodeids",
+        type=Path,
+        default=None,
+        help="test-fixture seam: a file of node-ids, one per line (production omits this)",
+    )
+    args = parser.parse_args()
+    _refuse_ambient_overrides()
+    rows = _load_registry(args.registry if args.registry is not None else DEFAULT_REGISTRY)
+    nodeids = _collect_nodeids(args.nodeids)
     seen_gates: set[str] = set()
     problems: list[str] = []
 

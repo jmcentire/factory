@@ -32,18 +32,49 @@ _GOOD_B = "tests/test_harness_scripts.py::test_dispatch_refuses_without_authorit
 
 
 def _run_check(*, registry: Path | str | None, nodeids: Path | None) -> subprocess.CompletedProcess:
+    """Invoke the check through its explicit argv seam (--registry/--nodeids).
+
+    The old ambient-env seam (GATES_TSV / DENIAL_PROBE_NODEIDS) is retired and refused;
+    both variables are scrubbed here so an ambient value in the developer's shell can
+    never reach the check under test.
+    """
     env = dict(os.environ)
-    if registry is not None:
-        env["GATES_TSV"] = str(registry)
-    else:
-        env.pop("GATES_TSV", None)
-    if nodeids is not None:
-        env["DENIAL_PROBE_NODEIDS"] = str(nodeids)
-    else:
-        env.pop("DENIAL_PROBE_NODEIDS", None)
+    env.pop("GATES_TSV", None)
+    env.pop("DENIAL_PROBE_NODEIDS", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    argv = [sys.executable, str(CHECK)]
+    if registry is not None:
+        argv += ["--registry", str(registry)]
+    if nodeids is not None:
+        argv += ["--nodeids", str(nodeids)]
     return subprocess.run(
-        [sys.executable, str(CHECK)],
+        argv,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_check_with_ambient(
+    ambient: dict[str, str],
+    *,
+    registry: Path | None = None,
+    nodeids: Path | None = None,
+) -> subprocess.CompletedProcess:
+    """Invoke the check with retired ambient variables deliberately present."""
+    env = dict(os.environ)
+    env.pop("GATES_TSV", None)
+    env.pop("DENIAL_PROBE_NODEIDS", None)
+    env.update(ambient)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    argv = [sys.executable, str(CHECK)]
+    if registry is not None:
+        argv += ["--registry", str(registry)]
+    if nodeids is not None:
+        argv += ["--nodeids", str(nodeids)]
+    return subprocess.run(
+        argv,
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -176,6 +207,48 @@ def test_check_fails_when_registry_missing(tmp_path: Path) -> None:
     proc = _run_check(registry=tmp_path / "does-not-exist.tsv", nodeids=None)
     assert proc.returncode == 2
     assert "registry not found" in proc.stderr
+
+
+# --- ambient environment is refused, never authority (contract 780ce1f092f6) -------
+
+
+def test_check_refuses_ambient_registry_env(tmp_path: Path) -> None:
+    """GATES_TSV in the process environment — even naming a perfectly good registry —
+    is refused outright (exit 2): the ambient environment is not authority, and the
+    explicit argv seam is the only test-fixture entry."""
+    reg = tmp_path / "gates.tsv"
+    _write_registry(reg, [_good_row("A", _GOOD_A)])
+    proc = _run_check_with_ambient({"GATES_TSV": str(reg)})
+    assert proc.returncode == 2
+    assert "check-denial-probes:" in proc.stderr
+    assert "ambient environment override is not authority" in proc.stderr
+    assert "GATES_TSV" in proc.stderr
+
+
+def test_check_refuses_ambient_nodeids_env(tmp_path: Path) -> None:
+    """DENIAL_PROBE_NODEIDS in the process environment is refused the same way:
+    exit 2 and the offending variable named on stderr."""
+    nodes = tmp_path / "nodeids"
+    _write_nodeids(nodes, [_GOOD_A, _GOOD_B])
+    proc = _run_check_with_ambient({"DENIAL_PROBE_NODEIDS": str(nodes)})
+    assert proc.returncode == 2
+    assert "ambient environment override is not authority" in proc.stderr
+    assert "DENIAL_PROBE_NODEIDS" in proc.stderr
+
+
+def test_check_ambient_env_cannot_rescue_failing_registry(tmp_path: Path) -> None:
+    """An ambient GATES_TSV naming a fully-covered registry cannot rescue a failing
+    --registry: the run refuses (exit 2) — it never exits 0. The ambient variable
+    cannot flip the gate outcome in either direction."""
+    bad = tmp_path / "bad.tsv"
+    _write_registry(bad, [_good_row("A", "")])  # uncovered gate: would fail on its own
+    good = tmp_path / "good.tsv"
+    _write_registry(good, [_good_row("A", _GOOD_A)])
+    nodes = tmp_path / "nodeids"
+    _write_nodeids(nodes, [_GOOD_A, _GOOD_B])
+    proc = _run_check_with_ambient({"GATES_TSV": str(good)}, registry=bad, nodeids=nodes)
+    assert proc.returncode == 2
+    assert "GATES_TSV" in proc.stderr
 
 
 # --- the runner (harness/denial_probe.sh) -----------------------------------------

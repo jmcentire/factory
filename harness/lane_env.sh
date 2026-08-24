@@ -8,7 +8,24 @@ H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
 GROUND_ROOT="${HARNESS_RUN_ROOT:-$H}"
 D="$(cd "$(dirname "$0")" && pwd -P)"
 [ -e "$H/HALT" ] && { echo "HALT: $(head -1 "$H/HALT")" >&2; exit 75; }
-if [ ! -e "$GROUND_ROOT/grounded" ] || [ -n "$(find "$GROUND_ROOT/grounded" -mmin +"${HARNESS_MAX_GROUND_MIN:-360}" 2>/dev/null)" ]; then
+# Grounding-staleness ceiling. HARNESS_MAX_GROUND_MIN tightens only: an ambient
+# environment variable is not authority to extend trust in a stale ground, so a
+# value above the 360-minute default is refused (clamped) — extending the window
+# is a ratified policy change, not a knob. Incident days set a LOWER value.
+GROUND_CEIL=360
+if [ -n "${HARNESS_MAX_GROUND_MIN:-}" ]; then
+  case "$HARNESS_MAX_GROUND_MIN" in
+    *[!0-9]*) echo "invalid HARNESS_MAX_GROUND_MIN: '$HARNESS_MAX_GROUND_MIN' (positive integer minutes)" >&2; exit 76 ;;
+  esac
+  if [ "$HARNESS_MAX_GROUND_MIN" -lt 1 ]; then
+    echo "invalid HARNESS_MAX_GROUND_MIN: '$HARNESS_MAX_GROUND_MIN' (positive integer minutes)" >&2; exit 76
+  elif [ "$HARNESS_MAX_GROUND_MIN" -gt 360 ]; then
+    echo "grounding-staleness extension refused: HARNESS_MAX_GROUND_MIN=$HARNESS_MAX_GROUND_MIN exceeds the 360-minute ceiling; using 360" >&2
+  else
+    GROUND_CEIL="$HARNESS_MAX_GROUND_MIN"
+  fi
+fi
+if [ ! -e "$GROUND_ROOT/grounded" ] || [ -n "$(find "$GROUND_ROOT/grounded" -mmin +"$GROUND_CEIL" 2>/dev/null)" ]; then
   echo "not grounded: run harness/ground.sh (re-derive state from disk, not memory)" >&2
   exit 76
 fi

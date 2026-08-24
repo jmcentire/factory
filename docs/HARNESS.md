@@ -491,7 +491,9 @@ and cross-worktree ordering is not a property receipts claim.
 
 `lane_env` grounding staleness defaults to six hours; on incident days set
 `HARNESS_MAX_GROUND_MIN=60` — six hours of credit is calibrated for steady state, not for
-a substrate that is actively moving.
+a substrate that is actively moving. The knob tightens only: a value above the 360-minute
+default is refused (clamped to 360), because extending trust in a stale ground is a
+ratified policy change, not an environment variable.
 
 ## Anti-features
 

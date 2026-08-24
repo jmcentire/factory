@@ -55,7 +55,8 @@ names a consuming project:
 - Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
   from the immutable target workdir after target-state verification.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
-  `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN`, plus externally supplied
+  `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
+  360-minute default are refused), plus externally supplied
   `FACTORY_RESUME_*`, `FACTORY_RUNNER_*`, and `FACTORY_BROKER_REGISTRY_DIR` paths. Secrets are
   read only from the named-secret root declared by the checkpoint-bound runner manifest.
   Directive ledger, provisional chain, and role doctrine paths are not ambient seams: the external

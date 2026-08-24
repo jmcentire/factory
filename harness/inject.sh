@@ -43,27 +43,28 @@ fi
 # in run v8 the Validator broke it twice from memory while actively editing the
 # document that states it. A rule an executor must recall is not a control; this
 # makes it one. Blocks test-file paths, test function names, pytest vocabulary and
-# assertion text on the way to the implementation lane.
+# assertion text on the way to the implementation lane. There is no ambient
+# override: an environment variable is not authority, and a bypass a signature
+# never covered is how a guard becomes theater. A genuine false positive is a
+# defect in the filter pattern, repaired through a ratified change — never
+# stepped around at delivery time.
 if [ "$TO" = "coder" ]; then
   if printf '%s' "$MSG" | grep -qiE 'tests?/[A-Za-z0-9_]+\.py|test_[a-z0-9_]+|(^|[^a-z])tests?($|[^a-z])|pytest|assertion|traceback|fixture|conftest|oracle|::[A-Za-z_]'; then
     echo "oracle-leak refusal: coder-bound message names a test, fixture, or assertion." >&2
     echo "The Coder never learns how the oracle is built. Report WHAT failed by" >&2
     echo "requirement id, or an observation of the implementation's own behavior." >&2
-    echo "Override for a genuine false positive: INJECT_ALLOW_ORACLE_WORDS=1" >&2
-    [ "${INJECT_ALLOW_ORACLE_WORDS:-0}" = "1" ] || exit 80
-    # The override is legitimate — the Coder's own regression rail must be
-    # reportable, and that sentence contains the same words. But an override
-    # nobody can see becomes the habit that turns this guard into theater, so
-    # each use is receipted and countable.
-    ORACLE_OVERRIDE=1
+    echo "There is no ambient override: a genuine false positive is a filter defect —" >&2
+    echo "Fix and re-ratify the filter pattern; the boundary does not open from the" >&2
+    echo "environment." >&2
+    exit 80
   fi
 fi
 
 
 mkdir -p "$ROOT"
 DIGEST=$(printf '%s' "$MSG" | shasum -a 256 | cut -d' ' -f1)
-printf '{"ts":"%s","run":"%s","from":"%s","to":"%s","results":%s,"oracle_override":%s,"sha256":"%s"}\n' \
-  "$(date -u +%FT%TZ)" "$RUN" "$FROM" "$TO" "$RESULTS" "${ORACLE_OVERRIDE:-0}" "$DIGEST" >> "$ROOT/injections.jsonl"
+printf '{"ts":"%s","run":"%s","from":"%s","to":"%s","results":%s,"sha256":"%s"}\n' \
+  "$(date -u +%FT%TZ)" "$RUN" "$FROM" "$TO" "$RESULTS" "$DIGEST" >> "$ROOT/injections.jsonl"
 
 if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent"; exit 0; fi
 
@@ -71,8 +72,9 @@ if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent"; e
 #
 # 1. A pane hosting a SHELL parses the message as a command — injected text is
 #    arbitrary execution in the repo cwd, and backticks command-substitute. Refuse
-#    unless the target is running an agent, or INJECT_ALLOW_SHELL=1 declares a
-#    deliberate mailbox sink.
+#    unless the target is running an agent. There is no ambient override for a
+#    non-agent sink: an environment variable is not authority, and delivery into
+#    a command parser is the exact effect this guard exists to prevent.
 # 2. Agent TUIs treat a large send-keys burst as a bracketed paste and ABSORB the
 #    trailing Enter, so the message sits in the input box unsubmitted (observed:
 #    two lanes stalled ~20 minutes). Send Enter as a separate, delayed keypress,
@@ -93,12 +95,10 @@ case "$TARGET_CMD" in
   # on bun, and `ollama launch <integration>` keeps the launcher as the pane command.
   claude|codex|node|python*|agy|ollama|opencode|bun|deno) ;;
   *)
-    if [ "${INJECT_ALLOW_SHELL:-0}" != "1" ]; then
-      echo "refusing: $RUN:$TO is running '$TARGET_CMD', not an agent — injected text" >&2
-      echo "would be PARSED AS A COMMAND in that pane's cwd. Set INJECT_ALLOW_SHELL=1" >&2
-      echo "only for a deliberate non-executing sink (e.g. 'cat >> inbox.log')." >&2
-      exit 77
-    fi ;;
+    echo "refusing: $RUN:$TO is running '$TARGET_CMD', not an agent — injected text" >&2
+    echo "would be PARSED AS A COMMAND in that pane's cwd. There is no ambient override:" >&2
+    echo "run an agent in the pane, or use a file mailbox outside tmux injection." >&2
+    exit 77 ;;
 esac
 
 tmux send-keys -t "$RUN:$TO" -l -- "$MSG"      # -l: literal, no key-name parsing
