@@ -3,6 +3,36 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.4.1] - 2026-08-24
+
+### Changed
+
+- Every remaining ambient environment override across the guard boundaries is a hard denial.
+  The `inject.sh` oracle-leak and shell-target refusals are unconditional;
+  `INJECT_ALLOW_ORACLE_WORDS`, `ORACLE_OVERRIDE`, and `INJECT_ALLOW_SHELL` are retired, and the
+  injection receipt no longer carries an `oracle_override` field. A genuine false positive is a
+  filter defect fixed through a ratified change, never stepped around at delivery time.
+- The denial-probe gate refuses ambient `GATES_TSV` / `DENIAL_PROBE_NODEIDS` whenever present;
+  the test-fixture seam is explicit argv pinned by the Makefile invocation, so the registry that
+  proves every gate blocks cannot be redirected from the environment.
+- `HARNESS_MAX_GROUND_MIN` tightens only: a value above the 360-minute default is clamped and a
+  non-positive-integer value refuses. Extending trust in a stale ground is a ratified policy
+  change, not a knob.
+- Red-now and mutation-style tests prove no ambient variable can flip a decision, gate outcome,
+  or recorded evidence — verified against v0.4.0 with eight discriminating failures, including
+  the denial-probe gate going GREEN off an ambient registry — and a structural sweep pins
+  `harness/` and `scripts/` against reintroducing a reader of the retired names. Gates E and I
+  register the new probes with extended red-now mutations.
+
+### Explicit boundaries
+
+- The recorded `network_mode=unrestricted-outbound` qualification claim is pinned to what the
+  Seatbelt profile actually enforces: the three runner schemas `const` the claim, the profile's
+  general-outbound grant is asserted alongside them, and the stronger `model-api-only` wording
+  may appear nowhere in `factory_runtime`. When a provider egress boundary is enforced and
+  independently tested, the pin and the schemas change together in one ratified change — never
+  separately.
+
 ## [0.4.0] - 2026-08-19
 
 ### Added
