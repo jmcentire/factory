@@ -439,6 +439,7 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     assert result.passed is True
     assert len(backend.commands) == 1
     frozen_command = backend.commands[0]
+    assert frozen_command[0] == sys.executable
     assert Path(frozen_command[0]).resolve() == Path(sys.executable).resolve()
     assert frozen_command[1] == "-"
     assert backend.validator_script_bytes == ratified_bytes

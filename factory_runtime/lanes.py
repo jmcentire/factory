@@ -208,7 +208,9 @@ def freeze_validator_execution(
         compile(source_bytes, f"<factory-validator:{capture.command_digest}>", "exec")
     except (OSError, SyntaxError, ValueError) as exc:
         raise LaneError(f"Validator source cannot be executed from captured bytes: {exc}") from exc
-    frozen_command = [str(Path(sys.executable).resolve()), "-", *original_command[2:]]
+    # Preserve the virtualenv entrypoint: resolving it first invokes the base interpreter
+    # and bypasses pyvenv.cfg plus the Factory dependency environment.
+    frozen_command = [sys.executable, "-", *original_command[2:]]
     readable_paths = tuple(
         (
             tree.files_directory / str(item["snapshot_path"]) / "payload"
