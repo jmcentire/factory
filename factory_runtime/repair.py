@@ -19,7 +19,6 @@ from typing import Any, Protocol
 
 from factory_core.manifest import digest_obj
 from factory_core.provenance import IntentBackreference
-from factory_runtime.orchestrator import BuildOutcome
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.tessera import TesseraVerificationError, VerifiedEnvelope
@@ -69,26 +68,42 @@ class RepairCampaignBlocked(RuntimeError):
         self.user_action_required = user_action_required
 
 
+class RepairableOutcome(Protocol):
+    """The durable public facts a repair campaign may consume.
+
+    ``BuildOutcome`` satisfies this protocol, but the campaign boundary need not
+    reconstruct private Validator evidence merely to run a generic external
+    attempt launcher.  The launcher re-derives these fields from the verified
+    run projection instead.
+    """
+
+    @property
+    def candidate_digest(self) -> str: ...
+
+    @property
+    def tests_digest(self) -> str: ...
+
+    @property
+    def projection(self) -> RunProjection: ...
+
+    @property
+    def passed(self) -> bool: ...
+
+
 class RepairPlanner(Protocol):
     """Privileged Validator diagnosis, deliberately separate from Coder input."""
 
     def __call__(
         self,
-        outcome: BuildOutcome,
+        outcome: RepairableOutcome,
         *,
         predecessor_ledger_head: str,
         phase_artifact_digests: Mapping[str, str],
     ) -> RepairPlan: ...
 
 
-class AttemptRunner(Protocol):
-    """Runs exactly one fresh immutable attempt using an optional repair brief."""
-
-    def __call__(
-        self,
-        attempt_id: str,
-        repair_brief_path: Path | None,
-    ) -> BuildOutcome: ...
+AttemptRunner = Callable[[str, Path | None], RepairableOutcome]
+"""Runs exactly one fresh immutable attempt using an optional repair brief."""
 
 
 class ValidatorLaunchRepairer(Protocol):
