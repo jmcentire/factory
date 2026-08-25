@@ -12,7 +12,9 @@ import json
 import os
 import re
 import secrets as secure_random
+import shutil
 import stat
+import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -40,6 +42,56 @@ _MAX_PROMPT_BYTES = 2_097_152
 _PROMPT_SCHEMA_VERSION = "factory-runner-prompt/3"
 _PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/2"
 _MAX_DIAGNOSTIC_STREAM_BYTES = 16_384
+
+
+def _prepare_codex_api_key_authentication(
+    *,
+    manifest: RunnerManifest,
+    executable: Path,
+    environment: Mapping[str, str],
+) -> tuple[dict[str, str], Callable[[], None]]:
+    """Authenticate one Codex invocation without retaining API credentials.
+
+    Codex's API-key mode persists an auth file under ``CODEX_HOME``; the Factory
+    runner deliberately uses a fresh private home for each invocation. Bootstrap
+    that file immediately before the Seatbelt process starts, omit the key from
+    the model environment, and remove the entire Codex home once that process
+    exits. This keeps the named secret out of retained runner material.
+    """
+
+    prepared = dict(environment)
+    if (
+        manifest.document["adapter"] != "codex"
+        or manifest.document["billing_key_name"] != "OPENAI_API_KEY"
+    ):
+        return prepared, lambda: None
+    api_key = prepared.pop("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RunnerError("Codex API-key authentication requires OPENAI_API_KEY")
+    codex_home = Path(prepared["CODEX_HOME"])
+    codex_home.mkdir(mode=0o700, parents=True, exist_ok=False)
+    codex_home.chmod(0o700)
+    try:
+        completed = subprocess.run(
+            (str(executable), "login", "--with-api-key"),
+            cwd=Path(prepared["HOME"]),
+            env=prepared,
+            input=(api_key + "\n").encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as exc:
+        shutil.rmtree(codex_home, ignore_errors=True)
+        raise RunnerError("Codex API-key authentication bootstrap could not start") from exc
+    if completed.returncode != 0:
+        shutil.rmtree(codex_home, ignore_errors=True)
+        raise RunnerError("Codex API-key authentication bootstrap was rejected")
+
+    def cleanup() -> None:
+        shutil.rmtree(codex_home, ignore_errors=True)
+
+    return prepared, cleanup
 
 
 class RunnerError(ValueError):
@@ -876,16 +928,24 @@ class HardenedModelRunner:
             )
             output = output_root / f"attempt-{index}.json"
             command = adapter.command(output=output, session_id=session_id if index > 1 else "")
+            invocation_environment, cleanup_authentication = _prepare_codex_api_key_authentication(
+                manifest=manifest,
+                executable=executable,
+                environment=environment,
+            )
             try:
-                result = self.backend.run(
-                    command,
-                    cwd=workspace,
-                    readable_paths=(output_schema, executable, *child_executables),
-                    writable_paths=(output_root, home, temporary),
-                    environment=environment,
-                    stdin=raw_prompt,
-                    limits=attempt_limits,
-                )
+                try:
+                    result = self.backend.run(
+                        command,
+                        cwd=workspace,
+                        readable_paths=(output_schema, executable, *child_executables),
+                        writable_paths=(output_root, home, temporary),
+                        environment=invocation_environment,
+                        stdin=raw_prompt,
+                        limits=attempt_limits,
+                    )
+                finally:
+                    cleanup_authentication()
             except RunnerError as exc:
                 current_attempts = min(exc.model_attempts, 1)
                 attempts = (index - 1) + current_attempts
