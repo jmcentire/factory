@@ -455,6 +455,41 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert task_prompt["data"]["directive_readback"]["semantic_clearance"] is False
 
 
+def test_codex_api_key_bootstrap_is_private_to_each_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _, backend, manifest, projection, _, workspace, _ = fixture
+    secret_root = projection.parent / "secrets"
+    (secret_root / "FACTORY_TEST_API_KEY").rename(secret_root / "OPENAI_API_KEY")
+    manifest["billing_key_name"] = "OPENAI_API_KEY"
+    manifest["secret_names"] = ["OPENAI_API_KEY"]
+    bootstraps: list[dict[str, Any]] = []
+
+    def fake_login(*args: Any, **kwargs: Any) -> Any:
+        command = args[0]
+        environment = kwargs["env"]
+        codex_home = Path(environment["CODEX_HOME"])
+        assert command[1:] == ("login", "--with-api-key")
+        assert kwargs["input"] == b"named-secret-value\n"
+        assert "OPENAI_API_KEY" not in environment
+        (codex_home / "log").mkdir(parents=True)
+        (codex_home / "auth.json").write_text("ephemeral", encoding="utf-8")
+        (codex_home / "log" / "codex-login.log").write_text("ephemeral", encoding="utf-8")
+        bootstraps.append(dict(environment))
+        return type("Completed", (), {"returncode": 0})()
+
+    monkeypatch.setattr(runtime_runner.subprocess, "run", fake_login)
+
+    _, receipt = _dispatch(fixture)
+
+    assert len(bootstraps) == 3
+    assert not (workspace / "home" / "codex").exists()
+    assert all("OPENAI_API_KEY" not in call["environment"] for call in backend.calls)
+    assert "named-secret-value" not in json.dumps(receipt.document, sort_keys=True)
+
+
 def test_runner_receipt_v2_keeps_its_historical_prompt_identity(tmp_path: Path) -> None:
     _, receipt = _dispatch(_fixture(tmp_path))
     historical = json.loads(json.dumps(receipt.document))
