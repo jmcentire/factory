@@ -464,6 +464,18 @@ def _parser() -> argparse.ArgumentParser:
     run_model.add_argument("--state-qualification-config-source-name", required=True)
     run_model.add_argument("--workspace", required=True)
     run_model.add_argument("--secret-root", required=True)
+    run_model.add_argument(
+        "--handoff-output",
+        help="durably retain the qualified model handoff before broker execution",
+    )
+    run_model.add_argument(
+        "--runner-receipt-output",
+        help="durably retain the qualified model runner receipt",
+    )
+    run_model.add_argument(
+        "--state-capsule-output",
+        help="durably retain the state capsule bound to the model handoff",
+    )
     run_model.add_argument("--checkpoint", required=True)
     run_model.add_argument("--checkpoint-digest", required=True)
     run_model.add_argument("--config-source", action="append", default=[], metavar="NAME=PATH")
@@ -1891,6 +1903,21 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         except RunnerError as exc:
             arguments._model_attempts = exc.model_attempts
             raise
+        retained_outputs = (
+            arguments.handoff_output,
+            arguments.runner_receipt_output,
+            arguments.state_capsule_output,
+        )
+        if any(retained_outputs) and not all(retained_outputs):
+            raise ValueError(
+                "runner handoff retention requires handoff, receipt, and state-capsule outputs"
+            )
+        if all(retained_outputs):
+            _write_json_once(arguments.handoff_output, handoff)
+            _write_json_once(
+                arguments.runner_receipt_output, dict(runner_receipt.document)
+            )
+            _write_json_once(arguments.state_capsule_output, state_capsule)
         _emit(
             {
                 "run_id": arguments.run_id,
@@ -1900,6 +1927,19 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "handoff": handoff,
                 "runner_receipt": dict(runner_receipt.document),
                 "workspace": str(workspace),
+                **(
+                    {
+                        "handoff_output": str(Path(arguments.handoff_output)),
+                        "runner_receipt_output": str(
+                            Path(arguments.runner_receipt_output)
+                        ),
+                        "state_capsule_output": str(
+                            Path(arguments.state_capsule_output)
+                        ),
+                    }
+                    if all(retained_outputs)
+                    else {}
+                ),
             }
         )
         return
