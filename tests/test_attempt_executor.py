@@ -14,6 +14,7 @@ from factory_runtime.attempt import (
     FactoryAttemptInvocation,
 )
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
+from factory_runtime.lanes import LaneRole
 from factory_runtime.state import RunProjection, RunState
 
 
@@ -144,6 +145,7 @@ def test_attempt_config_resolves_only_declared_regular_config_sources(tmp_path: 
             }
             for role in ("coder", "tester", "validator")
         },
+        "prebuilt_author_outputs": None,
         "surface_evidence": [],
         "determinism_records": [],
         "lane": "capability",
@@ -161,3 +163,66 @@ def test_attempt_config_resolves_only_declared_regular_config_sources(tmp_path: 
     config_path.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(AttemptContractError, match="does not name"):
         FactoryAttemptConfig.load(config_path, configuration_sources=sources)
+
+
+def test_attempt_config_accepts_sealed_runner_author_outputs(tmp_path: Path) -> None:
+    source_names = (
+        "target",
+        "catalog",
+        "plan",
+        "acceptance",
+        "acceptance-human",
+        "acceptance-validator",
+        "coder-executable",
+        "tester-executable",
+        "validator-executable",
+    )
+    sources = {name: tmp_path / name for name in source_names}
+    for path in sources.values():
+        path.write_text("fixture", encoding="utf-8")
+    coder_output = tmp_path / "coder-output"
+    tester_output = tmp_path / "tester-output"
+    coder_output.mkdir()
+    tester_output.mkdir()
+    sources.update({"coder-output": coder_output, "tester-output": tester_output})
+    roles = {
+        role: {
+            "identity": f"agent:{role}",
+            "executable_source": f"{role}-executable",
+            "arguments": [],
+            "trusted_path_sources": [f"{role}-executable"],
+        }
+        for role in ("coder", "tester", "validator")
+    }
+    document = {
+        "schema_version": "factory-attempt/1",
+        "artifacts": {
+            "target_manifest": "target",
+            "pattern_catalog": "catalog",
+            "build_plan": "plan",
+            "acceptance_catalog": "acceptance",
+            "acceptance_catalog_human_receipt": "acceptance-human",
+            "acceptance_catalog_validator_receipt": "acceptance-validator",
+        },
+        "roles": roles,
+        "prebuilt_author_outputs": {"coder": "coder-output", "tester": "tester-output"},
+        "surface_evidence": [],
+        "determinism_records": [],
+        "lane": "capability",
+        "independence": {},
+        "monitors": [],
+        "monitor_declared_unit_count": 0,
+    }
+    config_path = tmp_path / "attempt.json"
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    config = FactoryAttemptConfig.load(config_path, configuration_sources=sources)
+
+    assert config.invocation.coder_command == ()
+    assert config.invocation.tester_command == ()
+    assert config.invocation.coder_trusted_paths == ()
+    assert config.invocation.tester_trusted_paths == ()
+    assert config.invocation.prebuilt_author_outputs == {
+        LaneRole.CODER: coder_output,
+        LaneRole.TESTER: tester_output,
+    }

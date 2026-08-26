@@ -45,6 +45,7 @@ attempt inputs, not a generic command hook:
       "trusted_path_sources": ["validator-runner"]
     }
   },
+  "prebuilt_author_outputs": null,
   "surface_evidence": [],
   "determinism_records": [],
   "lane": "capability",
@@ -73,6 +74,12 @@ The third step accepts both sealed artifacts together and rejects any attempt
 that also supplies direct Coder or Tester commands. This keeps the existing
 Validator evidence and oracle-isolation guarantees while preventing an outer
 networked runner from becoming a hidden shared lane.
+
+Set `prebuilt_author_outputs` to `{ "coder": "source-name", "tester":
+"source-name" }` when those two names resolve to the sealed author directories
+published by `execute-broker-handoff`.  The typed executor then omits the
+direct Coder and Tester commands entirely; Validator remains the only process
+launched inside the deterministic build loop.
 
 A repair brief remains an explicit `--repair-brief` input. A separate
 Validator diagnosis adapter is required before the retry supervisor can be
