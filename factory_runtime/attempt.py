@@ -53,6 +53,7 @@ class FactoryAttemptConfig:
             "schema_version",
             "artifacts",
             "roles",
+            "prebuilt_author_outputs",
             "surface_evidence",
             "determinism_records",
             "lane",
@@ -78,6 +79,23 @@ class FactoryAttemptConfig:
         roles = _mapping(document["roles"], "roles")
         if set(roles) != {"coder", "tester", "validator"}:
             raise AttemptContractError("attempt roles are incomplete or open")
+        coder = _role_command(sources, roles["coder"], "coder")
+        tester = _role_command(sources, roles["tester"], "tester")
+        validator = _role_command(sources, roles["validator"], "validator")
+        prebuilt_author_outputs = _prebuilt_author_outputs(
+            sources, document["prebuilt_author_outputs"]
+        )
+        if prebuilt_author_outputs is not None:
+            # The runner-backed path has already created sealed Coder and Tester
+            # trees.  Passing their runner commands into the deny-network build
+            # loop would both be wrong and is explicitly rejected by that loop.
+            coder_command: tuple[str, ...] = ()
+            tester_command: tuple[str, ...] = ()
+            coder_trusted_paths: tuple[Path, ...] = ()
+            tester_trusted_paths: tuple[Path, ...] = ()
+        else:
+            coder_command, coder_trusted_paths, _ = coder
+            tester_command, tester_trusted_paths, _ = tester
         invocation = FactoryAttemptInvocation(
             target_manifest_path=_source(sources, artifacts["target_manifest"], "target manifest"),
             pattern_catalog_path=_source(sources, artifacts["pattern_catalog"], "pattern catalog"),
@@ -93,19 +111,19 @@ class FactoryAttemptConfig:
                 artifacts["acceptance_catalog_validator_receipt"],
                 "acceptance Validator receipt",
             ),
-            coder_command=_role_command(sources, roles["coder"], "coder")[0],
-            tester_command=_role_command(sources, roles["tester"], "tester")[0],
-            validator_command=_role_command(sources, roles["validator"], "validator")[0],
-            coder_trusted_paths=_role_command(sources, roles["coder"], "coder")[1],
-            tester_trusted_paths=_role_command(sources, roles["tester"], "tester")[1],
-            validator_trusted_paths=_role_command(sources, roles["validator"], "validator")[1],
+            coder_command=coder_command,
+            tester_command=tester_command,
+            validator_command=validator[0],
+            coder_trusted_paths=coder_trusted_paths,
+            tester_trusted_paths=tester_trusted_paths,
+            validator_trusted_paths=validator[1],
             resume_checkpoint_path=Path(),
             expected_resume_checkpoint_digest="",
             genesis_path=Path(),
             resume_configuration_sources=sources,
-            implementer_identity=_role_command(sources, roles["coder"], "coder")[2],
-            tester_identity=_role_command(sources, roles["tester"], "tester")[2],
-            verifier_identity=_role_command(sources, roles["validator"], "validator")[2],
+            implementer_identity=coder[2],
+            tester_identity=tester[2],
+            verifier_identity=validator[2],
             verifier_key_path=Path(),
             surface_evidence=_surface_evidence(document["surface_evidence"]),
             determinism_records=_determinism_records(document["determinism_records"]),
@@ -113,6 +131,7 @@ class FactoryAttemptConfig:
             independence=IndependenceRecord.from_dict(
                 _mapping(document["independence"], "independence")
             ),
+            prebuilt_author_outputs=prebuilt_author_outputs,
             monitors=tuple(
                 Monitor.from_dict(_mapping(item, "monitor"))
                 for item in _array(document["monitors"], "monitors")
@@ -321,6 +340,38 @@ def _role_command(
     if not trusted:
         raise AttemptContractError(f"{role} trusted path sources cannot be empty")
     return ((str(executable), *arguments), trusted, _string(raw["identity"], f"{role} identity"))
+
+
+def _prebuilt_author_outputs(
+    sources: Mapping[str, Path], value: object
+) -> Mapping[LaneRole, Path] | None:
+    if value is None:
+        return None
+    raw = _mapping(value, "prebuilt author outputs")
+    if set(raw) != {"coder", "tester"}:
+        raise AttemptContractError(
+            "prebuilt author outputs must name exactly coder and tester"
+        )
+    return {
+        LaneRole.CODER: _directory_source(sources, raw["coder"], "Coder author output"),
+        LaneRole.TESTER: _directory_source(
+            sources, raw["tester"], "Tester author output"
+        ),
+    }
+
+
+def _directory_source(sources: Mapping[str, Path], value: object, label: str) -> Path:
+    name = _string(value, label)
+    path = sources.get(name)
+    if path is None:
+        raise AttemptContractError(f"{label} does not name a supplied configuration source")
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AttemptContractError(f"{label} source is unreadable") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise AttemptContractError(f"{label} source is not a directory")
+    return path.resolve(strict=True)
 
 
 def _surface_evidence(value: object) -> tuple[SurfaceEvidence, ...]:
