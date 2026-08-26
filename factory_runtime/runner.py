@@ -1349,6 +1349,23 @@ class HardenedModelRunner:
             bootstrap.conclude(workspace=workspace, model_attempts=len(results))
 
         handoff = dict(results[-1].structured_output)
+        # Digests are content addresses, not authority: a sealed model lane has no
+        # local computation and cannot hash its own request input, so trusted host
+        # code derives each broker request's input address before the handoff is
+        # sealed. The broker independently re-derives the same address on execution.
+        raw_requests = handoff.get("broker_requests")
+        if isinstance(raw_requests, list):
+            derived_requests = []
+            for raw_request in raw_requests:
+                if isinstance(raw_request, Mapping) and isinstance(
+                    raw_request.get("input"), Mapping
+                ):
+                    corrected = dict(raw_request)
+                    corrected["input_digest"] = digest_obj(dict(corrected["input"]))
+                    derived_requests.append(corrected)
+                else:
+                    derived_requests.append(raw_request)
+            handoff["broker_requests"] = derived_requests
         handoff_bytes = json.dumps(
             handoff,
             sort_keys=True,

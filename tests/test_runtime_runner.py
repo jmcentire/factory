@@ -473,6 +473,50 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert task_prompt["data"]["directive_readback"]["semantic_clearance"] is False
 
 
+def test_runner_rederives_broker_request_input_digest_host_side(tmp_path: Path) -> None:
+    """A sealed lane cannot hash its own request input; the host derives the address."""
+
+    class PublishingBackend(FakeBackend):
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            result = super().run(*args, **kwargs)
+            if len(self.calls) == 3:
+                output = dict(result.structured_output)
+                output["broker_requests"] = [
+                    {
+                        "schema_version": "factory-broker-request/1",
+                        "request_id": "publish-1",
+                        "run_id": "run-1",
+                        "generation": 1,
+                        "role": "coder",
+                        "capability_digest": "sha256:" + "c" * 64,
+                        "operation_kind": "publish-artifact",
+                        "idempotency_key": "publish-1",
+                        "input": {"files": [{"path": "a.py", "content": "print(1)\n"}]},
+                        "input_digest": "sha256:" + "0" * 64,
+                        "created_at": 100,
+                    }
+                ]
+                return RunnerProcessResult(
+                    command=result.command,
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    structured_output=output,
+                    session_id=result.session_id,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    process_peak=result.process_peak,
+                    termination_reason=result.termination_reason,
+                )
+            return result
+
+    handoff, _ = _dispatch(_fixture(tmp_path, backend=PublishingBackend()))
+
+    request = handoff["broker_requests"][0]
+    assert request["input_digest"] == digest_obj(dict(request["input"]))
+    assert request["input_digest"] != "sha256:" + "0" * 64
+
+
 def test_codex_api_key_is_bootstrapped_to_auth_file_and_absent_from_model_env(
     tmp_path: Path,
 ) -> None:

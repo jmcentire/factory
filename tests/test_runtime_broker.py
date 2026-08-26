@@ -173,6 +173,126 @@ def test_publish_uses_fixed_registered_path_and_durable_rehash(tmp_path: Path) -
         broker.execute(replay, capability_envelope_path=capability)
 
 
+def test_publish_materializes_bounded_text_file_map_host_side(tmp_path: Path) -> None:
+    """A sealed lane emits only text; the broker owns every mechanical publish step."""
+
+    output = tmp_path / "owned"
+    output.mkdir()
+    operation = BrokerOperation(
+        operation_id="publish-oracle",
+        kind="publish-artifact",
+        verifier_kind="durable-rehash",
+        resource_root=output,
+        relative_path="tester",
+    )
+    tessera = _Tessera()
+    capability = _capability(tmp_path, tessera, operation)
+    files = [
+        {"path": "tests/run_acceptance.py", "content": "print('ok')\n"},
+        {"path": "tests/README.md", "content": "# oracle\n"},
+    ]
+    request = _request(
+        tessera,
+        capability,
+        kind=operation.kind,
+        input_value={"files": files},
+    )
+    broker = _broker(tmp_path, tessera, operation)
+
+    effect = broker.execute(request, capability_envelope_path=capability)
+
+    assert effect.verified is True
+    root = output / "tester"
+    assert (root / "tests" / "run_acceptance.py").read_text() == "print('ok')\n"
+    assert (root / "tests" / "README.md").read_text() == "# oracle\n"
+    assert effect.artifact_digest == digest_obj(
+        {
+            "files": [
+                {
+                    "path": item["path"],
+                    "content_digest": digest_obj_bytes(item["content"]),
+                }
+                for item in sorted(files, key=lambda item: item["path"])
+            ]
+        }
+    )
+    # Idempotent re-execution returns the retained effect.
+    assert broker.execute(request, capability_envelope_path=capability) == effect
+
+
+def digest_obj_bytes(text: str) -> str:
+    from factory_core.manifest import digest_bytes
+
+    return digest_bytes(text.encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("../escape.py", "/abs.py", "tests/../../escape.py", "tests//x.py", "", "a\\b"),
+)
+def test_publish_text_files_refuse_non_canonical_paths(tmp_path: Path, path: str) -> None:
+    output = tmp_path / "owned"
+    output.mkdir()
+    operation = BrokerOperation(
+        operation_id="publish-oracle",
+        kind="publish-artifact",
+        verifier_kind="durable-rehash",
+        resource_root=output,
+        relative_path="tester",
+    )
+    tessera = _Tessera()
+    capability = _capability(tmp_path, tessera, operation)
+    request = _request(
+        tessera,
+        capability,
+        kind=operation.kind,
+        input_value={"files": [{"path": path, "content": "x"}]},
+    )
+    broker = _broker(tmp_path, tessera, operation)
+
+    with pytest.raises(BrokerError, match="canonical and relative|empty"):
+        broker.execute(request, capability_envelope_path=capability)
+    assert not (tmp_path / "escape.py").exists()
+
+
+def test_publish_text_files_refuse_duplicates_and_extra_keys(tmp_path: Path) -> None:
+    output = tmp_path / "owned"
+    output.mkdir()
+    operation = BrokerOperation(
+        operation_id="publish-oracle",
+        kind="publish-artifact",
+        verifier_kind="durable-rehash",
+        resource_root=output,
+        relative_path="tester",
+    )
+    tessera = _Tessera()
+    capability = _capability(tmp_path, tessera, operation)
+    broker = _broker(tmp_path, tessera, operation)
+
+    duplicated = _request(
+        tessera,
+        capability,
+        kind=operation.kind,
+        input_value={
+            "files": [
+                {"path": "a.py", "content": "1"},
+                {"path": "a.py", "content": "2"},
+            ]
+        },
+    )
+    with pytest.raises(BrokerError, match="unique"):
+        broker.execute(duplicated, capability_envelope_path=capability)
+
+    widened = _request(
+        tessera,
+        capability,
+        kind=operation.kind,
+        input_value={"files": [{"path": "a.py", "content": "1", "mode": "755"}]},
+    )
+    with pytest.raises(BrokerError, match="exactly path and content"):
+        broker.execute(widened, capability_envelope_path=capability)
+
+
 def test_model_cannot_supply_a_path_command_script_or_extra_input(tmp_path: Path) -> None:
     output = tmp_path / "owned"
     output.mkdir()
