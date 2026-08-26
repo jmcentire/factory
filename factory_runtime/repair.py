@@ -20,7 +20,6 @@ from typing import Any, Protocol
 from factory_core.manifest import digest_obj
 from factory_core.provenance import IntentBackreference
 from factory_runtime.authority import human_public_keys
-from factory_runtime.orchestrator import BuildOutcome
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.tessera import TesseraVerificationError, VerifiedEnvelope

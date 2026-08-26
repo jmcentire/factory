@@ -6,13 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from factory_core.manifest import digest_obj
+from factory_core.provenance import IntentBackreference
 from factory_runtime.campaign import (
     CampaignAttemptOutcome,
     CampaignLaunchConfig,
     CampaignLauncher,
     CampaignLaunchError,
 )
+from factory_runtime.repair import RepairCampaignBlocked, RepairPlan
 from factory_runtime.state import RunProjection, RunState
 
 
@@ -56,16 +57,11 @@ class _Store:
 
 def _config(tmp_path: Path, **overrides: object) -> CampaignLaunchConfig:
     document: dict[str, object] = {
-        "schema_version": "factory-campaign-launch/1",
+        "schema_version": "factory-campaign-launch/2",
         "initial_attempt_id": "attempt-1",
         "next_attempt_prefix": "repair",
-        "workdir": str(tmp_path),
-        "attempt_command": ["attempt-tool", "--sealed"],
-        "diagnose_command": ["diagnose-tool"],
         "max_attempts": 2,
         "max_elapsed_seconds": 60,
-        "attempt_timeout_seconds": 30,
-        "diagnosis_timeout_seconds": 30,
         **overrides,
     }
     path = tmp_path / "campaign.json"
@@ -73,98 +69,115 @@ def _config(tmp_path: Path, **overrides: object) -> CampaignLaunchConfig:
     return CampaignLaunchConfig.load(path)
 
 
-def _launcher(tmp_path: Path, *, state: RunState = RunState.PREVIEW) -> CampaignLauncher:
+class _Executor:
+    def __init__(self, outcome: CampaignAttemptOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[tuple[str, str, Path | None]] = []
+
+    def execute(
+        self, run_id: str, *, attempt_id: str, repair_brief_path: Path | None
+    ) -> CampaignAttemptOutcome:
+        self.calls.append((run_id, attempt_id, repair_brief_path))
+        return CampaignAttemptOutcome(
+            attempt_id=attempt_id,
+            candidate_digest=self.outcome.candidate_digest,
+            tests_digest=self.outcome.tests_digest,
+            projection=self.outcome.projection,
+            _passed=self.outcome.passed,
+        )
+
+
+class _Diagnoser:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def diagnose(self, outcome, *, predecessor_ledger_head, phase_artifact_digests, mode):
+        self.calls.append(
+            {
+                "outcome": outcome,
+                "predecessor_ledger_head": predecessor_ledger_head,
+                "phase_artifact_digests": phase_artifact_digests,
+                "mode": mode,
+            }
+        )
+        return RepairPlan(
+            summary="Repair the signed requirement without exposing oracle mechanics.",
+            actions=("Use the ratified source of truth.",),
+            intent_backreferences=(
+                IntentBackreference(
+                    artifact_id="architecture",
+                    artifact_digest="sha256:" + "e" * 64,
+                    item_id="target-binding",
+                    intent_digest="sha256:" + "3" * 64,
+                ),
+            ),
+            failure_signature="typed-diagnosis",
+        )
+
+
+def _launcher(
+    tmp_path: Path, *, state: RunState = RunState.PREVIEW
+) -> tuple[CampaignLauncher, _Executor, _Diagnoser]:
     workflow = SimpleNamespace(root=tmp_path / "runs", store=_Store(_projection(state=state)))
-    return CampaignLauncher(
+    executor = _Executor(
+        CampaignAttemptOutcome(
+            attempt_id="attempt-1",
+            candidate_digest="sha256:" + "1" * 64,
+            tests_digest="sha256:" + "2" * 64,
+            projection=workflow.store.projection,
+            _passed=state == RunState.PREVIEW,
+        )
+    )
+    diagnoser = _Diagnoser()
+    return (
+        CampaignLauncher(
         workflow,
         validator_identity="agent:validator",
         validator_key_path=tmp_path / "validator.key",
         config=_config(tmp_path),
+        attempt_executor=executor,
+        diagnosis_provider=diagnoser,
+        ),
+        executor,
+        diagnoser,
     )
 
 
-def test_campaign_launcher_runs_external_attempt_then_rederives_preview(
+def test_campaign_launcher_runs_typed_attempt_executor_then_rederives_preview(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launcher = _launcher(tmp_path)
-    calls: list[dict[str, object]] = []
-
-    def run(command, **kwargs):
-        calls.append({"command": command, **kwargs})
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr("factory_runtime.campaign.subprocess.run", run)
+    launcher, executor, _ = _launcher(tmp_path)
 
     result = launcher.run("run-1")
 
     assert result.terminal_reason == "preview"
     assert result.attempts_run == 1
-    assert calls[0]["command"] == ("attempt-tool", "--sealed")
-    environment = calls[0]["env"]
-    assert isinstance(environment, dict)
-    assert environment["FACTORY_CAMPAIGN_RUN_ID"] == "run-1"
-    assert environment["FACTORY_CAMPAIGN_ATTEMPT_ID"] == "attempt-1"
-    assert environment["FACTORY_CAMPAIGN_REPAIR_BRIEF"] == ""
+    assert executor.calls == [("run-1", "attempt-1", None)]
 
 
 def test_campaign_launcher_treats_no_terminal_candidate_as_retriable_launch_fault(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launcher = _launcher(tmp_path, state=RunState.OPERATIONAL_MATURITY_RATIFIED)
-    monkeypatch.setattr(
-        "factory_runtime.campaign.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1),
-    )
+    launcher, executor, _ = _launcher(tmp_path, state=RunState.OPERATIONAL_MATURITY_RATIFIED)
+    def no_terminal_result(*_args, **_kwargs):
+        raise RepairCampaignBlocked(
+            "typed attempt executor returned without a terminal candidate result",
+            validator_retriable=True,
+        )
+
+    executor.execute = no_terminal_result
 
     result = launcher.run("run-1")
 
-    assert result.terminal_reason.startswith("infrastructure-blocked:attempt command exited 1")
+    assert result.terminal_reason.startswith("infrastructure-blocked:")
     assert result.repair_brief_paths == ()
 
 
 def test_validator_diagnosis_is_closed_to_coder_safe_plan_fields(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launcher = _launcher(tmp_path, state=RunState.BLOCKED)
+    launcher, _, diagnoser = _launcher(tmp_path, state=RunState.BLOCKED)
     launcher._active_run_id = "run-1"
-    launcher.workflow.store.attempt_ids = frozenset({"attempt-1"})
-    seen: dict[str, str] = {}
-
-    def run(_command, **kwargs):
-        environment = kwargs["env"]
-        seen.update(
-            {
-                key: environment[key]
-                for key in environment
-                if key.startswith("FACTORY_CAMPAIGN_")
-            }
-        )
-        output = Path(environment["FACTORY_CAMPAIGN_PLAN_OUTPUT"])
-        output.parent.mkdir(parents=True)
-        output.write_text(
-            json.dumps(
-                {
-                    "summary": "Bind the authenticated turn to its selected target.",
-                    "actions": ["Persist the selected target before dispatch."],
-                    "intent_backreferences": [
-                        {
-                            "artifact_id": "architecture",
-                            "artifact_digest": "sha256:" + "e" * 64,
-                            "item_id": "target-binding",
-                            "intent_digest": "sha256:" + "3" * 64,
-                        }
-                    ],
-                    "failure_signature": "selected-target-not-bound",
-                }
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr("factory_runtime.campaign.subprocess.run", run)
     projection = _projection(state=RunState.BLOCKED)
     outcome = CampaignAttemptOutcome(
         attempt_id="repair-10",
@@ -178,16 +191,11 @@ def test_validator_diagnosis_is_closed_to_coder_safe_plan_fields(
         outcome,
         predecessor_ledger_head=projection.ledger_head,
         phase_artifact_digests=projection.phase_artifact_digests,
-        mode="diagnose",
     )
 
-    assert plan.failure_signature == "selected-target-not-bound"
-    assert "candidate" not in seen
-    assert "oracle" not in seen
-    assert "stdout" not in seen
-    assert "stderr" not in seen
-    assert digest_obj(dict(projection.phase_artifact_digests)) not in seen.values()
-    assert seen["FACTORY_CAMPAIGN_FAILED_ATTEMPT_ID"] == "repair-10"
+    assert plan.failure_signature == "typed-diagnosis"
+    assert diagnoser.calls[0]["mode"] == "diagnose"
+    assert diagnoser.calls[0]["outcome"] == outcome
 
 
 def test_campaign_config_refuses_shell_like_or_unknown_fields(tmp_path: Path) -> None:
@@ -195,17 +203,12 @@ def test_campaign_config_refuses_shell_like_or_unknown_fields(tmp_path: Path) ->
     path.write_text(
         json.dumps(
             {
-                "schema_version": "factory-campaign-launch/1",
+                "schema_version": "factory-campaign-launch/2",
                 "initial_attempt_id": "attempt-1",
                 "next_attempt_prefix": "repair",
-                "workdir": str(tmp_path),
-                "attempt_command": "attempt-tool --unsafe-shell",
-                "diagnose_command": ["diagnose-tool"],
                 "max_attempts": 1,
                 "max_elapsed_seconds": 1,
-                "attempt_timeout_seconds": 1,
-                "diagnosis_timeout_seconds": 1,
-                "unexpected": True,
+                "attempt_command": ["attempt-tool", "--unsafe-shell"],
             }
         ),
         encoding="utf-8",

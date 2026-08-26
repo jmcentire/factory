@@ -18,7 +18,6 @@ from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest_bytes
 from factory_runtime.authority import load_genesis
 from factory_runtime.broker import TypedOperationBroker, load_broker_registry
-from factory_runtime.campaign import CampaignLaunchConfig, CampaignLauncher
 from factory_runtime.instruction_control import (
     canonical_document_bytes,
     compile_role_contract,
@@ -201,49 +200,6 @@ def _parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--runs", required=True)
     rebuild.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(rebuild)
-
-    launch_campaign = commands.add_parser(
-        "launch-campaign",
-        help="run a bounded repair-supervisor campaign from an already-ratified run",
-    )
-    launch_campaign.add_argument("--runs", required=True)
-    launch_campaign.add_argument("--run-id", required=True)
-    launch_campaign.add_argument(
-        "--campaign-config",
-        required=True,
-        help="bounded operator-owned JSON argv/timeout contract; never product authority",
-    )
-    launch_campaign.add_argument(
-        "--validator-identity",
-        required=True,
-        help="enrolled Validator identity authorized to sign derived Repair Briefs",
-    )
-    launch_campaign.add_argument(
-        "--validator-key",
-        required=True,
-        help="private key for the enrolled Validator identity",
-    )
-    launch_campaign.add_argument(
-        "--initial-repair-brief",
-        default="",
-        help="optional previously signed repair brief authorizing the first retry",
-    )
-    launch_campaign.add_argument("--checkpoint", required=True)
-    launch_campaign.add_argument("--checkpoint-digest", required=True)
-    launch_campaign.add_argument(
-        "--campaign-config-source-name",
-        required=True,
-        help="checkpoint-bound configuration source name for --campaign-config",
-    )
-    launch_campaign.add_argument(
-        "--config-source", action="append", default=[], metavar="NAME=PATH"
-    )
-    launch_campaign.add_argument(
-        "--accepted-previous-checkpoint-digest",
-        action="append",
-        default=[],
-    )
-    _add_authority_arguments(launch_campaign)
 
     verify_genesis = commands.add_parser(
         "verify-genesis",
@@ -1193,55 +1149,6 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "rebuild-projection":
         _emit(_load_replay_store(arguments).rebuild_projection(arguments.run_id))
-        return
-    if arguments.command == "launch-campaign":
-        workflow = _load_workflow(arguments)
-        configuration_sources = _parse_named_paths(
-            arguments.config_source,
-            label="configuration source",
-        )
-        config = CampaignLaunchConfig.load(arguments.campaign_config)
-        resume = verify_resume_checkpoint(
-            arguments.checkpoint,
-            expected_checkpoint_digest=arguments.checkpoint_digest,
-            runs_root=arguments.runs,
-            run_id=arguments.run_id,
-            genesis_path=arguments.genesis,
-            trusted_root_public_key=arguments.root_public_key,
-            tessera=_tessera(arguments.tessera_bin),
-            configuration_sources=configuration_sources,
-            accepted_previous_checkpoint_digests=(
-                arguments.accepted_previous_checkpoint_digest
-            ),
-        )
-        if (
-            resume.configuration_digests.get(arguments.campaign_config_source_name)
-            != config.source_digest
-        ):
-            raise ValueError("campaign config is not bound by the external resume checkpoint")
-        if workflow.store.load(arguments.run_id).ledger_head != resume.current_run_ledger_head:
-            raise ValueError("run ledger changed after external resume verification")
-        campaign_result = CampaignLauncher(
-            workflow,
-            validator_identity=arguments.validator_identity,
-            validator_key_path=arguments.validator_key,
-            config=config,
-        ).run(
-            arguments.run_id,
-            initial_repair_brief_path=(
-                arguments.initial_repair_brief if arguments.initial_repair_brief else None
-            ),
-        )
-        _emit(
-            {
-                "run_id": arguments.run_id,
-                "state": campaign_result.projection.state,
-                "ledger_head": campaign_result.projection.ledger_head,
-                "attempts_run": campaign_result.attempts_run,
-                "repair_brief_paths": [str(path) for path in campaign_result.repair_brief_paths],
-                "terminal_reason": campaign_result.terminal_reason,
-            }
-        )
         return
     if arguments.command == "prepare-lane-dispatch":
         ledger_bytes = _read_regular_bytes(
