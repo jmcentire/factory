@@ -16,6 +16,7 @@ from typing import Any
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest_bytes
+from factory_runtime.attempt import FactoryAttemptConfig, FactoryAttemptExecutor
 from factory_runtime.authority import load_genesis
 from factory_runtime.broker import TypedOperationBroker, load_broker_registry
 from factory_runtime.instruction_control import (
@@ -157,6 +158,36 @@ def _parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--runs", required=True)
     rebuild.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(rebuild)
+
+    execute_attempt = commands.add_parser(
+        "execute-attempt",
+        help="execute one immutable Factory attempt from a checkpoint-bound typed config",
+    )
+    execute_attempt.add_argument("--runs", required=True)
+    execute_attempt.add_argument("--run-id", required=True)
+    execute_attempt.add_argument("--attempt-id", required=True)
+    execute_attempt.add_argument("--attempt-config", required=True)
+    execute_attempt.add_argument("--attempt-config-source-name", required=True)
+    execute_attempt.add_argument("--validator-key", required=True)
+    execute_attempt.add_argument("--checkpoint", required=True)
+    execute_attempt.add_argument("--checkpoint-digest", required=True)
+    execute_attempt.add_argument("--repair-brief", default="")
+    execute_attempt.add_argument(
+        "--config-source", action="append", default=[], metavar="NAME=PATH"
+    )
+    execute_attempt.add_argument(
+        "--accepted-previous-checkpoint-digest", action="append", default=[]
+    )
+    _add_authority_arguments(execute_attempt)
+
+    validate_attempt = commands.add_parser(
+        "validate-attempt-config",
+        help="validate and resolve a typed Factory attempt config against named sources",
+    )
+    validate_attempt.add_argument("--attempt-config", required=True)
+    validate_attempt.add_argument(
+        "--config-source", action="append", default=[], metavar="NAME=PATH"
+    )
 
     verify_genesis = commands.add_parser(
         "verify-genesis",
@@ -828,6 +859,71 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "rebuild-projection":
         _emit(_load_replay_store(arguments).rebuild_projection(arguments.run_id))
+        return
+    if arguments.command == "validate-attempt-config":
+        config = FactoryAttemptConfig.load(
+            arguments.attempt_config,
+            configuration_sources=_parse_named_paths(
+                arguments.config_source,
+                label="configuration source",
+            ),
+        )
+        _emit({"source_digest": config.source_digest})
+        return
+    if arguments.command == "execute-attempt":
+        workflow = _load_workflow(arguments)
+        configuration_sources = _parse_named_paths(
+            arguments.config_source,
+            label="configuration source",
+        )
+        config = FactoryAttemptConfig.load(
+            arguments.attempt_config,
+            configuration_sources=configuration_sources,
+        )
+        resume = verify_resume_checkpoint(
+            arguments.checkpoint,
+            expected_checkpoint_digest=arguments.checkpoint_digest,
+            runs_root=arguments.runs,
+            run_id=arguments.run_id,
+            genesis_path=arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=_tessera(arguments.tessera_bin),
+            configuration_sources=configuration_sources,
+            accepted_previous_checkpoint_digests=(
+                arguments.accepted_previous_checkpoint_digest
+            ),
+        )
+        if (
+            resume.configuration_digests.get(arguments.attempt_config_source_name)
+            != config.source_digest
+        ):
+            raise ValueError("attempt config is not bound by the external resume checkpoint")
+        if workflow.store.load(arguments.run_id).ledger_head != resume.current_run_ledger_head:
+            raise ValueError("run ledger changed after external resume verification")
+        outcome = FactoryAttemptExecutor(
+            workflow,
+            invocation=config.invocation_for(
+                checkpoint=arguments.checkpoint,
+                checkpoint_digest=arguments.checkpoint_digest,
+                genesis=arguments.genesis,
+                verifier_key=arguments.validator_key,
+            ),
+        ).execute(
+            arguments.run_id,
+            attempt_id=arguments.attempt_id,
+            repair_brief_path=Path(arguments.repair_brief) if arguments.repair_brief else None,
+        )
+        _emit(
+            {
+                "run_id": outcome.projection.run_id,
+                "attempt_id": outcome.attempt_id,
+                "state": outcome.projection.state,
+                "ledger_head": outcome.projection.ledger_head,
+                "candidate_digest": outcome.candidate_digest,
+                "tests_digest": outcome.tests_digest,
+                "passed": outcome.passed,
+            }
+        )
         return
     if arguments.command == "prepare-lane-dispatch":
         ledger_bytes = _read_regular_bytes(
