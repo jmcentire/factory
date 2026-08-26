@@ -138,6 +138,7 @@ class CampaignLaunchConfig:
 class CampaignAttemptOutcome:
     """The public facts re-derived from a terminal Factory projection."""
 
+    attempt_id: str
     candidate_digest: str
     tests_digest: str
     projection: RunProjection
@@ -236,6 +237,7 @@ class CampaignLauncher:
                     validator_retriable=True,
                 )
             return CampaignAttemptOutcome(
+                attempt_id=attempt_id,
                 candidate_digest=candidate_digest,
                 tests_digest=tests_digest,
                 projection=projection,
@@ -243,6 +245,7 @@ class CampaignLauncher:
             )
         if projection.state == RunState.BLOCKED and candidate_digest and tests_digest:
             return CampaignAttemptOutcome(
+                attempt_id=attempt_id,
                 candidate_digest=candidate_digest,
                 tests_digest=tests_digest,
                 projection=projection,
@@ -288,7 +291,7 @@ class CampaignLauncher:
         )
         if command is None:
             raise RepairCampaignBlocked(f"no {mode} command is configured")
-        failed_attempt_id = self._attempt_id_from_run(outcome.projection.run_id)
+        failed_attempt_id = outcome.attempt_id
         output = self._diagnosis_path(
             outcome.projection.run_id,
             outcome.projection.generation,
@@ -347,12 +350,6 @@ class CampaignLauncher:
             / "diagnoses"
             / f"generation-{generation}-{failed_attempt_id}-{mode}.json"
         )
-
-    def _attempt_id_from_run(self, run_id: str) -> str:
-        attempts = self.workflow.store.build_attempt_ids(run_id)
-        if not attempts:
-            raise RepairCampaignBlocked("blocked projection does not name a build attempt")
-        return sorted(attempts)[-1]
 
     def _execute(
         self,

@@ -167,6 +167,7 @@ def test_validator_diagnosis_is_closed_to_coder_safe_plan_fields(
     monkeypatch.setattr("factory_runtime.campaign.subprocess.run", run)
     projection = _projection(state=RunState.BLOCKED)
     outcome = CampaignAttemptOutcome(
+        attempt_id="repair-10",
         candidate_digest="sha256:" + "1" * 64,
         tests_digest="sha256:" + "2" * 64,
         projection=projection,
@@ -186,6 +187,7 @@ def test_validator_diagnosis_is_closed_to_coder_safe_plan_fields(
     assert "stdout" not in seen
     assert "stderr" not in seen
     assert digest_obj(dict(projection.phase_artifact_digests)) not in seen.values()
+    assert seen["FACTORY_CAMPAIGN_FAILED_ATTEMPT_ID"] == "repair-10"
 
 
 def test_campaign_config_refuses_shell_like_or_unknown_fields(tmp_path: Path) -> None:
