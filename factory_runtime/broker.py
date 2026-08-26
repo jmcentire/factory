@@ -31,6 +31,7 @@ BROKER_CAPABILITY = "factory:activate-broker-capability"
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_INPUT_BYTES = 1_048_576
 _MAX_OUTPUT_BYTES = 10_485_760
+_MAX_PUBLISH_FILES = 256
 
 
 class BrokerError(ValueError):
@@ -630,9 +631,78 @@ class TypedOperationBroker:
         }
 
     @staticmethod
+    def _publish_text_files(operation: BrokerOperation, raw_files: Any) -> Mapping[str, Any]:
+        """Materialize a bounded model-authored text-file map with host-owned mechanics.
+
+        A sealed model lane has no local computation, so it cannot assemble archives or
+        binary encodings; it can only emit text. Every mechanical step — path admission,
+        byte encoding, durable writes, and content addressing — happens here in trusted
+        host code, inside the operation's registered resource root.
+        """
+
+        if not isinstance(raw_files, Sequence) or isinstance(raw_files, (str, bytes)):
+            raise BrokerError("publish-artifact files must be an array")
+        if not raw_files or len(raw_files) > _MAX_PUBLISH_FILES:
+            raise BrokerError("publish-artifact files are empty or exceed the file ceiling")
+        root = operation.resolved_path()
+        entries: list[tuple[str, bytes]] = []
+        seen_paths: set[str] = set()
+        total_bytes = 0
+        for raw in raw_files:
+            if not isinstance(raw, Mapping) or set(raw) != {"path", "content"}:
+                raise BrokerError("publish-artifact file requires exactly path and content")
+            path_text = str(raw["path"])
+            pure = PurePosixPath(path_text)
+            if (
+                not path_text
+                or len(path_text) > 512
+                or pure.is_absolute()
+                or "\\" in path_text
+                or path_text != str(pure)
+                or any(ord(char) < 32 or ord(char) == 127 for char in path_text)
+                or any(part in ("", ".", "..") for part in pure.parts)
+            ):
+                raise BrokerError("publish-artifact file path must be canonical and relative")
+            if path_text in seen_paths:
+                raise BrokerError("publish-artifact file paths must be unique")
+            seen_paths.add(path_text)
+            content = str(raw["content"]).encode("utf-8")
+            total_bytes += len(content)
+            if len(content) > _MAX_INPUT_BYTES or total_bytes > _MAX_INPUT_BYTES:
+                raise BrokerError("publish-artifact files exceed the bounded input size")
+            entries.append((path_text, content))
+        published: list[dict[str, str]] = []
+        for path_text, content in sorted(entries):
+            destination = root / PurePosixPath(path_text)
+            probe = root
+            for part in PurePosixPath(path_text).parts:
+                probe = probe / part
+                if probe.is_symlink():
+                    raise BrokerError("publish-artifact destination crosses a symlink")
+            _write_once(destination, content)
+            persisted = destination.read_bytes()
+            if persisted != content:
+                raise BrokerError("published artifact did not survive durable re-open")
+            published.append(
+                {"path": path_text, "content_digest": digest_bytes(persisted)}
+            )
+        return {
+            "exit_status": 0,
+            "stdout_digest": digest_bytes(b""),
+            "stderr_digest": digest_bytes(b""),
+            "artifact_digest": digest_obj({"files": published}),
+            "verified": True,
+        }
+
+    @staticmethod
     def _publish_artifact(operation: BrokerOperation, raw_input: Any) -> Mapping[str, Any]:
-        if not isinstance(raw_input, Mapping) or set(raw_input) != {"content_base64"}:
-            raise BrokerError("publish-artifact input requires only content_base64")
+        if not isinstance(raw_input, Mapping) or set(raw_input) not in (
+            {"content_base64"},
+            {"files"},
+        ):
+            raise BrokerError("publish-artifact input requires only content_base64 or files")
+        if set(raw_input) == {"files"}:
+            return TypedOperationBroker._publish_text_files(operation, raw_input["files"])
         try:
             content = base64.b64decode(str(raw_input["content_base64"]), validate=True)
         except (ValueError, binascii.Error) as exc:
