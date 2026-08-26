@@ -45,6 +45,7 @@ from factory_runtime.generation import GenerationError, GenerationPreparer
 from factory_runtime.lanes import (
     IsolatedBuildLoop,
     LaneExecution,
+    LaneRole,
     ValidationExecution,
 )
 from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint

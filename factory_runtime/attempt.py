@@ -17,8 +17,8 @@ from factory_core.independence import IndependenceRecord
 from factory_core.monitors import Monitor
 from factory_runtime.campaign import CampaignAttemptOutcome
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
-from factory_runtime.orchestrator import FactoryOrchestrator
 from factory_runtime.lanes import LaneRole
+from factory_runtime.orchestrator import FactoryOrchestrator
 from factory_runtime.workflow import FactoryWorkflow
 
 
