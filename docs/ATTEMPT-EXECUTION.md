@@ -54,6 +54,26 @@ attempt inputs, not a generic command hook:
 }
 ```
 
+## Runner-backed author outputs
+
+The direct author command form is for a deterministic, already-qualified lane
+tool. It is not a valid way to invoke a networked model: `IsolatedBuildLoop`
+correctly denies network access to Coder and Tester processes. A model-backed
+attempt therefore has a distinct, Factory-owned composition:
+
+1. `run-model` executes Coder and Tester through the qualified networked
+   runner using the bounded path-free projection.
+2. Each runner result is persisted as a handoff, runner receipt, and state
+   capsule, then its signed broker request publishes one sealed author tree.
+3. The normal build loop copies those regular-file trees into fresh Coder and
+   Tester lanes, freezes them, and runs the deterministic Validator. It never
+   re-runs a model inside the network-denied sandbox.
+
+The third step accepts both sealed artifacts together and rejects any attempt
+that also supplies direct Coder or Tester commands. This keeps the existing
+Validator evidence and oracle-isolation guarantees while preventing an outer
+networked runner from becoming a hidden shared lane.
+
 A repair brief remains an explicit `--repair-brief` input. A separate
 Validator diagnosis adapter is required before the retry supervisor can be
 re-exposed as a public command; this command deliberately executes one
