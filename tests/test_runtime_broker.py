@@ -383,6 +383,43 @@ def _registry_document(root: Path, envelope: Path) -> dict[str, Any]:
     }
 
 
+def test_registry_configuration_digest_is_computable_before_capability_issuance(
+    tmp_path: Path,
+) -> None:
+    """A capability embeds the configuration digest and the registry lists the capability.
+
+    The binding is satisfiable only if the digest is independent of the capability
+    handles themselves; otherwise no issuable capability can ever pass the
+    execute-time configuration check.
+    """
+
+    root = (tmp_path / "owned").resolve()
+    root.mkdir()
+    envelope = (tmp_path / "capability.json").resolve()
+    envelope.write_text("{}\n", encoding="utf-8")
+    resources = {
+        "candidate-output": {
+            "ownership": "run-owned",
+            "status": "active",
+            "identifier": str(root),
+        }
+    }
+    document = _registry_document(root, envelope)
+    pre_issuance = dict(document)
+    pre_issuance["capabilities"] = []
+
+    registry = load_broker_registry(
+        document,
+        run_id="run-1",
+        generation=1,
+        role="coder",
+        target_state_digest=TARGET,
+        resources=resources,
+    )
+
+    assert registry.configuration_digest == digest_obj(pre_issuance)
+
+
 def test_registry_resolves_only_active_run_owned_resource_roots(tmp_path: Path) -> None:
     root = (tmp_path / "owned").resolve()
     root.mkdir()
