@@ -46,6 +46,7 @@ from factory_runtime.generation import GenerationError, GenerationPreparer
 from factory_runtime.lanes import (
     IsolatedBuildLoop,
     LaneExecution,
+    LaneRole,
     ValidationExecution,
 )
 from factory_runtime.preflight import run_preflight
