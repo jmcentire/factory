@@ -47,7 +47,14 @@ class BrokerRegistry:
 
     @property
     def configuration_digest(self) -> str:
-        return digest_obj(dict(self.document))
+        # A capability handle embeds this digest, and the registry lists every capability
+        # handle: digesting the handles back into the configuration would make the binding
+        # self-referential and unsatisfiable. Each handle is independently signed and
+        # verified against the genesis roster, so the attested configuration is the
+        # operation surface — the handles are canonicalized out.
+        body = dict(self.document)
+        body["capabilities"] = []
+        return digest_obj(body)
 
 
 @dataclass(frozen=True)
