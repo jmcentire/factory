@@ -18,6 +18,7 @@ from factory_core.monitors import Monitor
 from factory_runtime.campaign import CampaignAttemptOutcome
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
 from factory_runtime.orchestrator import FactoryOrchestrator
+from factory_runtime.lanes import LaneRole
 from factory_runtime.workflow import FactoryWorkflow
 
 
@@ -49,6 +50,7 @@ class FactoryAttemptInvocation:
     determinism_records: tuple[DeterminismRecord, ...]
     lane: str
     independence: IndependenceRecord
+    prebuilt_author_outputs: Mapping[LaneRole, Path] | None = None
     monitors: tuple[Monitor, ...] = ()
     monitor_declared_unit_count: int = 0
     correction: CorrectionRecord | None = None
@@ -99,6 +101,7 @@ class FactoryAttemptExecutor:
             coder_trusted_paths=values.coder_trusted_paths,
             tester_trusted_paths=values.tester_trusted_paths,
             validator_trusted_paths=values.validator_trusted_paths,
+            prebuilt_author_outputs=values.prebuilt_author_outputs,
             resume_checkpoint_path=values.resume_checkpoint_path,
             expected_resume_checkpoint_digest=values.expected_resume_checkpoint_digest,
             genesis_path=values.genesis_path,

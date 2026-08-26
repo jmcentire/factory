@@ -27,6 +27,7 @@ from factory_runtime.isolation import (
 from factory_runtime.lanes import (
     IsolatedBuildLoop,
     LaneError,
+    LaneRole,
     freeze_validator_execution,
     temporary_build_loop_root,
 )
@@ -508,6 +509,77 @@ def test_review_callback_runs_only_after_both_snapshots_are_durably_published(
     )
 
     assert result.passed is True
+
+
+def test_prebuilt_author_artifacts_skip_direct_author_execution(tmp_path: Path) -> None:
+    """A qualified networked runner may feed sealed outputs into local validation."""
+
+    root = temporary_build_loop_root(tmp_path)
+    validator_command = (sys.executable, str(FIXTURES / "validator.py"))
+    validator_trusted_paths = (FIXTURES / "validator.py",)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path, validator_command, validator_trusted_paths
+    )
+    execution_digests = validator_execution_digests(
+        validator_command, trusted_paths=validator_trusted_paths
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+    coder = tmp_path / "sealed-coder"
+    tester = tmp_path / "sealed-tester"
+    (coder / "artifact").mkdir(parents=True)
+    (tester / "tests").mkdir(parents=True)
+    (coder / "artifact" / "candidate.py").write_text("value = 1\n", encoding="utf-8")
+    (tester / "tests" / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+    backend = _RecordingQualifiedBackend()
+
+    result = IsolatedBuildLoop(root, sandbox=backend).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=validator_command,
+        acceptance_catalog_path=acceptance_catalog_path,
+        validator_trusted_paths=validator_trusted_paths,
+        prebuilt_author_outputs={
+            LaneRole.CODER: coder,
+            LaneRole.TESTER: tester,
+        },
+        before_validation=lambda *_: {"validator_execution": expected_execution},
+    )
+
+    assert result.passed is True
+    assert result.coder.process.command == ("factory:sealed-author-artifact", "coder")
+    assert result.tester.process.command == ("factory:sealed-author-artifact", "tester")
+    assert len(backend.commands) == 1
+    assert (root / "coder" / "output" / "artifact" / "candidate.py").read_text() == "value = 1\n"
+
+
+def test_prebuilt_author_artifacts_refuse_direct_commands(tmp_path: Path) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator_command = (sys.executable, str(FIXTURES / "validator.py"))
+    validator_trusted_paths = (FIXTURES / "validator.py",)
+    acceptance_catalog_path = _acceptance_catalog(
+        tmp_path, validator_command, validator_trusted_paths
+    )
+
+    with pytest.raises(LaneError, match="may not also admit direct Coder or Tester commands"):
+        IsolatedBuildLoop(root, sandbox=_RecordingQualifiedBackend()).execute(
+            build_input_path=FIXTURES / "build-input.json",
+            coder_command=("must-not-run",),
+            tester_command=(),
+            validator_command=validator_command,
+            acceptance_catalog_path=acceptance_catalog_path,
+            validator_trusted_paths=validator_trusted_paths,
+            prebuilt_author_outputs={
+                LaneRole.CODER: tmp_path,
+                LaneRole.TESTER: tmp_path,
+            },
+        )
 
 
 def test_external_review_snapshot_store_requires_explicit_durability_root(
