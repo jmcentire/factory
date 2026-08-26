@@ -682,6 +682,11 @@ print(json.dumps(result, sort_keys=True))
     (literal "/dev/null")
     {writes})
 (allow network-outbound)
+; A networked lane cannot complete TLS trust evaluation or name resolution
+; without the system trust/DNS services; mach-lookup grants IPC to launchd
+; services only and widens no file or network scope in this deny-default
+; profile.
+(allow mach-lookup)
 """
 
 
