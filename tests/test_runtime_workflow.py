@@ -22,7 +22,7 @@ from factory_runtime.authority import (
 from factory_runtime.state import RunState
 from factory_runtime.tessera import TesseraVerificationError, VerifiedEnvelope
 from factory_runtime.workflow import FactoryWorkflow, WorkflowError
-from tests.conftest import SYNTHETIC_TARGET
+from tests.conftest import SYNTHETIC_CATALOG, SYNTHETIC_TARGET
 
 ROOT_KEY = "a" * 64
 VALIDATOR_KEY = "b" * 64
@@ -361,6 +361,7 @@ def _resolve(
         manifest_path=SYNTHETIC_TARGET,
         request_path=request_path,
         receipt_path=receipt_path,
+        pattern_catalog_path=SYNTHETIC_CATALOG,
     )
     assert projection.state == RunState.TARGET_RESOLUTION_AUTHORIZED
     projection = workflow.resolve_target("run-1", object_source=_object_source(tmp_path))
@@ -423,6 +424,7 @@ def test_stage_r_persists_authority_but_performs_no_contact_or_source_creation(
         manifest_path=SYNTHETIC_TARGET,
         request_path=request_path,
         receipt_path=receipt_path,
+        pattern_catalog_path=SYNTHETIC_CATALOG,
     )
 
     evidence = tmp_path / "runs" / "run-1" / "evidence" / "target-resolution"
@@ -476,6 +478,7 @@ def test_stage_r_receipt_nonce_and_expiry_must_match_the_signed_request(
             manifest_path=SYNTHETIC_TARGET,
             request_path=request_path,
             receipt_path=receipt_path,
+            pattern_catalog_path=SYNTHETIC_CATALOG,
         )
     assert not (tmp_path / "runs" / "run-1" / "ledger.jsonl").exists()
     assert not (tmp_path / "runs" / "run-1" / "resources.jsonl").exists()
@@ -508,6 +511,7 @@ def test_expired_stage_r_authority_causes_zero_repository_contact(tmp_path: Path
         manifest_path=SYNTHETIC_TARGET,
         request_path=request_path,
         receipt_path=receipt_path,
+        pattern_catalog_path=SYNTHETIC_CATALOG,
     )
     now[0] = 200
     with pytest.raises(WorkflowError, match="expired before repository contact"):
@@ -543,6 +547,7 @@ def test_retained_stage_r_signature_is_reverified_before_repository_contact(
         manifest_path=SYNTHETIC_TARGET,
         request_path=request_path,
         receipt_path=receipt_path,
+        pattern_catalog_path=SYNTHETIC_CATALOG,
     )
     retained = (
         tmp_path
@@ -850,3 +855,84 @@ def test_phase_receipt_nonce_cannot_be_replayed(tmp_path: Path) -> None:
             human_receipt_path=human_receipt,
             validator_receipt_path=validator_receipt,
         )
+
+
+def _guard_manifest(tmp_path: Path, pinned_digest: str) -> Path:
+    path = tmp_path / "guard-target.toml"
+    path.write_text(
+        "\n".join(
+            (
+                'schema_version = "factory-target-manifest/1"',
+                'target_id = "guard-target"',
+                "[repo]",
+                'url = "https://example.invalid/acme/widget.git"',
+                'ref = "main"',
+                'provider = "github"',
+                'scope_tier = "read"',
+                "[adapters]",
+                'repo = "git"',
+                'knowledge = "none"',
+                'compliance = "file"',
+                'idp = "none"',
+                'artifact_sink = "local_posix"',
+                "[compliance]",
+                'rules_path = "rules.yaml"',
+                'format = "yaml"',
+                "[build]",
+                f'pattern_catalog_digest = "{pinned_digest}"',
+                "max_attempts = 2",
+                'construction_modes = ["brownfield"]',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_stage_r_preflight_rejects_a_legacy_shape_catalog(tmp_path: Path) -> None:
+    """A pin addressing a pre-contract document must reject the run actionably."""
+
+    legacy = {
+        "schema_version": "factory-pattern-catalog/1",
+        "catalog_id": "legacy-catalog",
+        "qualified_by": "human:founder",
+        "patterns": [
+            {
+                "pattern_id": "legacy-pattern",
+                "construction_mode": "brownfield",
+                "language": "python",
+                "environment": "uv",
+                "scope": "legacy scope",
+            }
+        ],
+    }
+    catalog_path = tmp_path / "legacy-catalog.json"
+    catalog_path.write_text(json.dumps(legacy), encoding="utf-8")
+    manifest = load_target_manifest(_guard_manifest(tmp_path, digest_obj(legacy)))
+
+    with pytest.raises(WorkflowError, match="predates the current catalog contract"):
+        workflow_module.preflight_pattern_catalog(manifest, catalog_path)
+
+
+def test_stage_r_preflight_rejects_a_digest_mismatch(tmp_path: Path) -> None:
+    valid = json.loads(SYNTHETIC_CATALOG.read_text())
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(valid), encoding="utf-8")
+    wrong_pin = "sha256:" + "b" * 64
+    manifest = load_target_manifest(_guard_manifest(tmp_path, wrong_pin))
+
+    with pytest.raises(WorkflowError, match="content digest is sha256:"):
+        workflow_module.preflight_pattern_catalog(manifest, catalog_path)
+
+
+def test_stage_r_preflight_admits_the_exact_pinned_current_format_catalog(
+    tmp_path: Path,
+) -> None:
+    from factory_core.build_plan import PatternCatalog
+
+    document = json.loads(SYNTHETIC_CATALOG.read_text())
+    pinned = PatternCatalog.from_dict(document).content_digest
+    manifest = load_target_manifest(_guard_manifest(tmp_path, pinned))
+
+    workflow_module.preflight_pattern_catalog(manifest, SYNTHETIC_CATALOG)

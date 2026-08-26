@@ -26,7 +26,7 @@ rules_path = "compliance/rules.json"
 format = "json"
 
 [build]
-pattern_catalog_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pattern_catalog_digest = "sha256:7a835a3dcad6838a98bcca3b8499d527dbc8b9b15d61a165236a497b01450145"
 max_attempts = 2
 construction_modes = ["regenerate", "brownfield"]
 

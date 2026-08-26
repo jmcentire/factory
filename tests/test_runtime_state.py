@@ -1309,3 +1309,52 @@ def test_run_store_refuses_symlinked_run_or_ledger_paths(tmp_path: Path) -> None
     (run_dir / "ledger.jsonl").symlink_to(tmp_path / "missing-ledger")
     with pytest.raises(RunStateError, match="run ledger cannot be a symlink"):
         _create_resolution(store)
+
+
+def test_phase_derived_catalog_activation_requires_exact_om_receipt_citation() -> None:
+    """Reuse is admissible only as exact re-citation of the run's own om receipts."""
+
+    from factory_runtime.state import (
+        RunStateError,
+        _require_phase_derived_catalog_receipts,
+    )
+
+    om = "sha256:" + "1" * 64
+    human = "sha256:" + "2" * 64
+    validator = "sha256:" + "3" * 64
+    catalog = "sha256:" + "4" * 64
+    entries = [
+        {
+            "artifact_digests": {
+                "operational-maturity": om,
+                "operational-maturity:human-receipt": human,
+                "operational-maturity:validator-receipt": validator,
+            }
+        }
+    ]
+
+    def supplied(human_digest: str, validator_digest: str) -> dict[str, str]:
+        return {
+            "acceptance-obligation-catalog": catalog,
+            "acceptance-obligation-catalog:human-receipt": human_digest,
+            "acceptance-obligation-catalog:validator-receipt": validator_digest,
+        }
+
+    _require_phase_derived_catalog_receipts(
+        supplied(human, validator), entries=entries, catalog_digest=catalog
+    )
+
+    with pytest.raises(RunStateError, match="exactly the recorded"):
+        _require_phase_derived_catalog_receipts(
+            supplied("sha256:" + "9" * 64, validator),
+            entries=entries,
+            catalog_digest=catalog,
+        )
+    with pytest.raises(RunStateError, match="recorded operational-maturity"):
+        _require_phase_derived_catalog_receipts(
+            supplied(human, validator), entries=[], catalog_digest=catalog
+        )
+    with pytest.raises(RunStateError, match="distinct"):
+        _require_phase_derived_catalog_receipts(
+            supplied(human, validator), entries=entries, catalog_digest=human
+        )
