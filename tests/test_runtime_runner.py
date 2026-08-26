@@ -386,6 +386,19 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Closed-env dispatch: canaries, session resume, names-only receipt, plus the F5
+    auth-delivery boundary.
+
+    [guard] Founder ruling 2026-08-26 (F5 amendment, dual-ratified Jeremy McEntire +
+    Validator) supersedes the pre-ruling assertion that a codex-family billing key rides in
+    the model process environment. The billing key is bootstrapped to CODEX_HOME/auth.json
+    and MUST be absent from the model process environment (env-delivery of a codex billing
+    key is non-functional exposure). The auth-file side of the bootstrap is pinned by
+    ``test_codex_api_key_is_bootstrapped_to_auth_file_and_absent_from_model_env``.
+
+    Named mutation that reddens this test: inject the codex billing key (its name or value)
+    into the model process environment instead of the auth-file bootstrap.
+    """
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-must-not-leak")
     fixture = _fixture(tmp_path)
 
@@ -401,7 +414,12 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert second["command"][-2:] == ("session-1", "-")
     assert third["command"][-2:] == ("session-1", "-")
     assert "AWS_SECRET_ACCESS_KEY" not in first["environment"]
-    assert first["environment"]["FACTORY_TEST_API_KEY"] == "named-secret-value"
+    # F5 (founder ruling 2026-08-26, dual-ratified): the codex billing key is bootstrapped to
+    # CODEX_HOME/auth.json, never env-delivered — absent from every model invocation's
+    # environment. Supersedes the pre-ruling ``== "named-secret-value"`` in-env assertion.
+    for call in backend.calls:
+        assert "FACTORY_TEST_API_KEY" not in call["environment"]
+        assert "named-secret-value" not in "\n".join(map(str, call["environment"].values()))
     assert first["environment"]["HOME"] == str(workspace / "home")
     encoded_receipt = json.dumps(receipt.document, sort_keys=True)
     assert "named-secret-value" not in encoded_receipt
@@ -455,38 +473,68 @@ def test_runner_uses_closed_environment_canaries_resume_and_names_only_receipt(
     assert task_prompt["data"]["directive_readback"]["semantic_clearance"] is False
 
 
-def test_codex_api_key_bootstrap_is_private_to_each_invocation(
+def test_codex_api_key_is_bootstrapped_to_auth_file_and_absent_from_model_env(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fixture = _fixture(tmp_path)
-    _, backend, manifest, projection, _, workspace, _ = fixture
+    """A codex-family billing key is authenticated via the CODEX_HOME/auth.json bootstrap: the
+    auth file is live for every model invocation, and the key is never in the model process
+    environment.
+
+    [guard] Founder ruling 2026-08-26 (F5 amendment, dual-ratified Jeremy McEntire + Validator)
+    supersedes the pre-ruling oracle that asserted a ``codex login --with-api-key`` host
+    subprocess received the raw key on stdin, once per invocation. Under the ruling the billing
+    key is authenticated only from CODEX_HOME/auth.json, and the raw key never reaches any host
+    process (pinned independently by
+    ``tests/test_runner_auth_repair.py::test_t5_raw_api_key_never_reaches_a_bare_host_process``),
+    so the auth file is written directly. This oracle is therefore mechanism-agnostic: it
+    observes the auth file the model actually authenticates from, not how it was written.
+
+    Named mutation that reddens this test: inject the billing key into the model process
+    environment (env-delivery) instead of provisioning CODEX_HOME/auth.json, or fail to make
+    auth.json live before a model invocation.
+    """
+
+    class AuthObservingBackend(FakeBackend):
+        """Records, per model invocation, whether auth.json is live in the codex home the model
+        process would authenticate from (CODEX_HOME, else ``$HOME/.codex``)."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.auth_live: list[bool] = []
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            environment = kwargs["environment"]
+            explicit = environment.get("CODEX_HOME", "")
+            home = environment.get("HOME", "")
+            if explicit:
+                codex_home: Path | None = Path(explicit)
+            elif home:
+                codex_home = Path(home) / ".codex"
+            else:
+                codex_home = None
+            self.auth_live.append(
+                codex_home is not None and (codex_home / "auth.json").is_file()
+            )
+            return super().run(*args, **kwargs)
+
+    backend = AuthObservingBackend()
+    fixture = _fixture(tmp_path, backend=backend)
+    _, _, manifest, projection, _, _, _ = fixture
     secret_root = projection.parent / "secrets"
     (secret_root / "FACTORY_TEST_API_KEY").rename(secret_root / "OPENAI_API_KEY")
     manifest["billing_key_name"] = "OPENAI_API_KEY"
     manifest["secret_names"] = ["OPENAI_API_KEY"]
-    bootstraps: list[dict[str, Any]] = []
 
-    def fake_login(*args: Any, **kwargs: Any) -> Any:
-        command = args[0]
-        environment = kwargs["env"]
-        codex_home = Path(environment["CODEX_HOME"])
-        assert command[1:] == ("login", "--with-api-key")
-        assert kwargs["input"] == b"named-secret-value\n"
-        assert "OPENAI_API_KEY" not in environment
-        (codex_home / "log").mkdir(parents=True)
-        (codex_home / "auth.json").write_text("ephemeral", encoding="utf-8")
-        (codex_home / "log" / "codex-login.log").write_text("ephemeral", encoding="utf-8")
-        bootstraps.append(dict(environment))
-        return type("Completed", (), {"returncode": 0})()
+    handoff, receipt = _dispatch(fixture)
 
-    monkeypatch.setattr(runtime_runner.subprocess, "run", fake_login)
-
-    _, receipt = _dispatch(fixture)
-
-    assert len(bootstraps) == 3
-    assert not (workspace / "home" / "codex").exists()
-    assert all("OPENAI_API_KEY" not in call["environment"] for call in backend.calls)
+    assert handoff["kind"] == "handoff"
+    assert len(backend.calls) == 3
+    # Delivered via the auth-file bootstrap: auth.json is live for every model invocation.
+    assert backend.auth_live == [True, True, True], backend.auth_live
+    # Never env-delivered to the model process (neither the billing-key name nor its value).
+    for call in backend.calls:
+        assert "OPENAI_API_KEY" not in call["environment"]
+        assert "named-secret-value" not in "\n".join(map(str, call["environment"].values()))
     assert "named-secret-value" not in json.dumps(receipt.document, sort_keys=True)
 
 
