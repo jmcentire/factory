@@ -75,6 +75,10 @@ construction — the purity guard will (and must) reject it.
 - `core_purity_baseline.json` — justified token exceptions (empty on a clean core).
 - `tests/` — pytest suite, incl. the portability proof and the purity guard tests.
 - `tests/fixtures/synthetic_target/` — the synthetic empty target for the portability proof.
+- `prompts/` — the role and review prompts (Validator/Coder/Tester/orchestrator lanes, the
+  code-review standard, the diff-intent gate) with each lane's behavior loop and the
+  Validator↔orchestrator state-keeper protocol; generic by construction (target tokens
+  removed). See `prompts/README.md` for provenance and the canonical-source map.
 
 ## Commands
 
