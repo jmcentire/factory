@@ -8,12 +8,15 @@ brief or manufacture terminal state.
 
 from __future__ import annotations
 
+import json
+import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from factory_core.correction import CorrectionRecord
 from factory_core.independence import IndependenceRecord
+from factory_core.manifest import digest_bytes
 from factory_core.monitors import Monitor
 from factory_runtime.campaign import CampaignAttemptOutcome
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
@@ -21,6 +24,120 @@ from factory_runtime.lanes import LaneRole
 from factory_runtime.orchestrator import FactoryOrchestrator
 from factory_runtime.workflow import FactoryWorkflow
 
+_CONFIG_VERSION = "factory-attempt/1"
+
+
+class AttemptContractError(ValueError):
+    """A typed attempt config cannot be resolved from checkpoint sources."""
+
+
+@dataclass(frozen=True)
+class FactoryAttemptConfig:
+    """Closed JSON materialization of a :class:`FactoryAttemptInvocation`."""
+
+    source_digest: str
+    invocation: FactoryAttemptInvocation
+
+    @classmethod
+    def load(
+        cls, path: str | Path, *, configuration_sources: Mapping[str, str | Path]
+    ) -> FactoryAttemptConfig:
+        raw = _read_regular(Path(path), label="attempt config")
+        try:
+            document = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AttemptContractError("attempt config is not valid JSON") from exc
+        if not isinstance(document, Mapping):
+            raise AttemptContractError("attempt config must be a JSON object")
+        allowed = {
+            "schema_version",
+            "artifacts",
+            "roles",
+            "surface_evidence",
+            "determinism_records",
+            "lane",
+            "independence",
+            "monitors",
+            "monitor_declared_unit_count",
+        }
+        if set(document) != allowed:
+            raise AttemptContractError("attempt config fields are incomplete or open")
+        if document["schema_version"] != _CONFIG_VERSION:
+            raise AttemptContractError("attempt config has an unsupported schema_version")
+        sources = {name: Path(value) for name, value in configuration_sources.items()}
+        artifacts = _mapping(document["artifacts"], "artifacts")
+        if set(artifacts) != {
+            "target_manifest",
+            "pattern_catalog",
+            "build_plan",
+            "acceptance_catalog",
+            "acceptance_catalog_human_receipt",
+            "acceptance_catalog_validator_receipt",
+        }:
+            raise AttemptContractError("attempt artifacts are incomplete or open")
+        roles = _mapping(document["roles"], "roles")
+        if set(roles) != {"coder", "tester", "validator"}:
+            raise AttemptContractError("attempt roles are incomplete or open")
+        invocation = FactoryAttemptInvocation(
+            target_manifest_path=_source(sources, artifacts["target_manifest"], "target manifest"),
+            pattern_catalog_path=_source(sources, artifacts["pattern_catalog"], "pattern catalog"),
+            build_plan_path=_source(sources, artifacts["build_plan"], "build plan"),
+            acceptance_catalog_path=_source(
+                sources, artifacts["acceptance_catalog"], "acceptance catalog"
+            ),
+            acceptance_catalog_human_receipt_path=_source(
+                sources, artifacts["acceptance_catalog_human_receipt"], "acceptance human receipt"
+            ),
+            acceptance_catalog_validator_receipt_path=_source(
+                sources,
+                artifacts["acceptance_catalog_validator_receipt"],
+                "acceptance Validator receipt",
+            ),
+            coder_command=_role_command(sources, roles["coder"], "coder")[0],
+            tester_command=_role_command(sources, roles["tester"], "tester")[0],
+            validator_command=_role_command(sources, roles["validator"], "validator")[0],
+            coder_trusted_paths=_role_command(sources, roles["coder"], "coder")[1],
+            tester_trusted_paths=_role_command(sources, roles["tester"], "tester")[1],
+            validator_trusted_paths=_role_command(sources, roles["validator"], "validator")[1],
+            resume_checkpoint_path=Path(),
+            expected_resume_checkpoint_digest="",
+            genesis_path=Path(),
+            resume_configuration_sources=sources,
+            implementer_identity=_role_command(sources, roles["coder"], "coder")[2],
+            tester_identity=_role_command(sources, roles["tester"], "tester")[2],
+            verifier_identity=_role_command(sources, roles["validator"], "validator")[2],
+            verifier_key_path=Path(),
+            surface_evidence=_surface_evidence(document["surface_evidence"]),
+            determinism_records=_determinism_records(document["determinism_records"]),
+            lane=_string(document["lane"], "lane"),
+            independence=IndependenceRecord.from_dict(
+                _mapping(document["independence"], "independence")
+            ),
+            monitors=tuple(
+                Monitor.from_dict(_mapping(item, "monitor"))
+                for item in _array(document["monitors"], "monitors")
+            ),
+            monitor_declared_unit_count=_nonnegative(
+                document["monitor_declared_unit_count"], "monitor_declared_unit_count"
+            ),
+        )
+        return cls(source_digest=digest_bytes(raw), invocation=invocation)
+
+    def invocation_for(
+        self,
+        *,
+        checkpoint: str | Path,
+        checkpoint_digest: str,
+        genesis: str | Path,
+        verifier_key: str | Path,
+    ) -> FactoryAttemptInvocation:
+        return replace(
+            self.invocation,
+            resume_checkpoint_path=Path(checkpoint),
+            expected_resume_checkpoint_digest=checkpoint_digest,
+            genesis_path=Path(genesis),
+            verifier_key_path=Path(verifier_key),
+        )
 
 @dataclass(frozen=True)
 class FactoryAttemptInvocation:
@@ -130,3 +247,135 @@ class FactoryAttemptExecutor:
             projection=outcome.projection,
             _passed=outcome.passed,
         )
+
+
+def _read_regular(path: Path, *, label: str) -> bytes:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AttemptContractError(f"{label} is unreadable") from exc
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 131_072:
+        raise AttemptContractError(f"{label} must be a bounded regular file")
+    return path.read_bytes()
+
+
+def _mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise AttemptContractError(f"{label} must be a JSON object")
+    return value
+
+
+def _array(value: object, label: str) -> list[object]:
+    if not isinstance(value, list):
+        raise AttemptContractError(f"{label} must be an array")
+    return value
+
+
+def _string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise AttemptContractError(f"{label} must be a non-empty string")
+    return value
+
+
+def _nonnegative(value: object, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise AttemptContractError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise AttemptContractError(f"{label} must be a boolean")
+    return value
+
+
+def _source(sources: Mapping[str, Path], value: object, label: str) -> Path:
+    name = _string(value, label)
+    path = sources.get(name)
+    if path is None:
+        raise AttemptContractError(f"{label} does not name a supplied configuration source")
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AttemptContractError(f"{label} source is unreadable") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise AttemptContractError(f"{label} source is not a regular file")
+    return path.resolve(strict=True)
+
+
+def _role_command(
+    sources: Mapping[str, Path], value: object, role: str
+) -> tuple[tuple[str, ...], tuple[Path, ...], str]:
+    raw = _mapping(value, f"{role} role")
+    if set(raw) != {"identity", "executable_source", "arguments", "trusted_path_sources"}:
+        raise AttemptContractError(f"{role} role fields are incomplete or open")
+    executable = _source(sources, raw["executable_source"], f"{role} executable")
+    arguments = tuple(
+        _string(item, f"{role} argument")
+        for item in _array(raw["arguments"], f"{role} arguments")
+    )
+    trusted = tuple(
+        _source(sources, item, f"{role} trusted path")
+        for item in _array(raw["trusted_path_sources"], f"{role} trusted path sources")
+    )
+    if not trusted:
+        raise AttemptContractError(f"{role} trusted path sources cannot be empty")
+    return ((str(executable), *arguments), trusted, _string(raw["identity"], f"{role} identity"))
+
+
+def _surface_evidence(value: object) -> tuple[SurfaceEvidence, ...]:
+    result: list[SurfaceEvidence] = []
+    for item in _array(value, "surface_evidence"):
+        raw = _mapping(item, "surface evidence")
+        if set(raw) != {
+            "surface_id",
+            "criticality",
+            "oracle_adequate",
+            "required_evidence_ids",
+            "evidence_digests",
+        }:
+            raise AttemptContractError("surface evidence fields are incomplete or open")
+        required = tuple(
+            _string(item, "required evidence id")
+            for item in _array(raw["required_evidence_ids"], "required evidence ids")
+        )
+        digests = _mapping(raw["evidence_digests"], "evidence digests")
+        result.append(
+            SurfaceEvidence(
+                surface_id=_string(raw["surface_id"], "surface id"),
+                criticality=_string(raw["criticality"], "surface criticality"),
+                oracle_adequate=_boolean(raw["oracle_adequate"], "oracle_adequate"),
+                required_evidence_ids=required,
+                evidence_digests={
+                    _string(key, "evidence digest key"): _string(item, "evidence digest")
+                    for key, item in digests.items()
+                },
+            )
+        )
+    return tuple(result)
+
+
+def _determinism_records(value: object) -> tuple[DeterminismRecord, ...]:
+    result: list[DeterminismRecord] = []
+    for item in _array(value, "determinism_records"):
+        raw = _mapping(item, "determinism record")
+        if set(raw) != {
+            "surface_id",
+            "criticality",
+            "deterministic",
+            "flake_count",
+            "automatic_retry_count",
+        }:
+            raise AttemptContractError("determinism record fields are incomplete or open")
+        result.append(
+            DeterminismRecord(
+                surface_id=_string(raw["surface_id"], "surface id"),
+                criticality=_string(raw["criticality"], "criticality"),
+                deterministic=_boolean(raw["deterministic"], "deterministic"),
+                flake_count=_nonnegative(raw["flake_count"], "flake_count"),
+                automatic_retry_count=_nonnegative(
+                    raw["automatic_retry_count"], "automatic_retry_count"
+                ),
+            )
+        )
+    return tuple(result)

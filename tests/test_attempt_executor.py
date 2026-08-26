@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from factory_core.independence import IndependenceRecord
-from factory_runtime.attempt import FactoryAttemptExecutor, FactoryAttemptInvocation
+from factory_runtime.attempt import (
+    AttemptContractError,
+    FactoryAttemptConfig,
+    FactoryAttemptExecutor,
+    FactoryAttemptInvocation,
+)
 from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
 from factory_runtime.state import RunProjection, RunState
 
@@ -100,3 +108,56 @@ def test_typed_executor_calls_only_the_factory_orchestrator(tmp_path: Path) -> N
     assert seen["attempt_id"] == "attempt-1"
     assert seen["repair_brief_path"] == paths["repair-brief"]
     assert "environment" not in seen
+
+
+def test_attempt_config_resolves_only_declared_regular_config_sources(tmp_path: Path) -> None:
+    source_names = (
+        "target",
+        "catalog",
+        "plan",
+        "acceptance",
+        "acceptance-human",
+        "acceptance-validator",
+        "coder-executable",
+        "tester-executable",
+        "validator-executable",
+    )
+    sources = {name: tmp_path / name for name in source_names}
+    for path in sources.values():
+        path.write_text("fixture", encoding="utf-8")
+    document = {
+        "schema_version": "factory-attempt/1",
+        "artifacts": {
+            "target_manifest": "target",
+            "pattern_catalog": "catalog",
+            "build_plan": "plan",
+            "acceptance_catalog": "acceptance",
+            "acceptance_catalog_human_receipt": "acceptance-human",
+            "acceptance_catalog_validator_receipt": "acceptance-validator",
+        },
+        "roles": {
+            role: {
+                "identity": f"agent:{role}",
+                "executable_source": f"{role}-executable",
+                "arguments": [],
+                "trusted_path_sources": [f"{role}-executable"],
+            }
+            for role in ("coder", "tester", "validator")
+        },
+        "surface_evidence": [],
+        "determinism_records": [],
+        "lane": "capability",
+        "independence": {},
+        "monitors": [],
+        "monitor_declared_unit_count": 0,
+    }
+    config_path = tmp_path / "attempt.json"
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    config = FactoryAttemptConfig.load(config_path, configuration_sources=sources)
+
+    assert config.invocation.coder_command == (str(sources["coder-executable"]),)
+    document["artifacts"]["target_manifest"] = "not-bound"
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(AttemptContractError, match="does not name"):
+        FactoryAttemptConfig.load(config_path, configuration_sources=sources)
