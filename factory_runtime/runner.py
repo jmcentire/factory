@@ -1163,7 +1163,10 @@ class HardenedModelRunner:
                     result = self.backend.run(
                         command,
                         cwd=workspace,
-                        readable_paths=(output_schema, executable, *child_executables),
+                        # The workspace is the process's working directory; a model CLI
+                        # reads its cwd at startup, and every workspace member is already
+                        # part of this invocation's closed input/output surface.
+                        readable_paths=(workspace, output_schema, executable, *child_executables),
                         writable_paths=(output_root, home, temporary),
                         environment=model_environment,
                         stdin=raw_prompt,
