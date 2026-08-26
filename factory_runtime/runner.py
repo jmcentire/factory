@@ -12,9 +12,7 @@ import json
 import os
 import re
 import secrets as secure_random
-import shutil
 import stat
-import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -43,55 +41,23 @@ _PROMPT_SCHEMA_VERSION = "factory-runner-prompt/3"
 _PROMPT_ASSEMBLER_VERSION = "factory-runner-prompt-assembler/2"
 _MAX_DIAGNOSTIC_STREAM_BYTES = 16_384
 
-
-def _prepare_codex_api_key_authentication(
-    *,
-    manifest: RunnerManifest,
-    executable: Path,
-    environment: Mapping[str, str],
-) -> tuple[dict[str, str], Callable[[], None]]:
-    """Authenticate one Codex invocation without retaining API credentials.
-
-    Codex's API-key mode persists an auth file under ``CODEX_HOME``; the Factory
-    runner deliberately uses a fresh private home for each invocation. Bootstrap
-    that file immediately before the Seatbelt process starts, omit the key from
-    the model environment, and remove the entire Codex home once that process
-    exits. This keeps the named secret out of retained runner material.
-    """
-
-    prepared = dict(environment)
-    if (
-        manifest.document["adapter"] != "codex"
-        or manifest.document["billing_key_name"] != "OPENAI_API_KEY"
-    ):
-        return prepared, lambda: None
-    api_key = prepared.pop("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RunnerError("Codex API-key authentication requires OPENAI_API_KEY")
-    codex_home = Path(prepared["CODEX_HOME"])
-    codex_home.mkdir(mode=0o700, parents=True, exist_ok=False)
-    codex_home.chmod(0o700)
-    try:
-        completed = subprocess.run(
-            (str(executable), "login", "--with-api-key"),
-            cwd=Path(prepared["HOME"]),
-            env=prepared,
-            input=(api_key + "\n").encode("utf-8"),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except OSError as exc:
-        shutil.rmtree(codex_home, ignore_errors=True)
-        raise RunnerError("Codex API-key authentication bootstrap could not start") from exc
-    if completed.returncode != 0:
-        shutil.rmtree(codex_home, ignore_errors=True)
-        raise RunnerError("Codex API-key authentication bootstrap was rejected")
-
-    def cleanup() -> None:
-        shutil.rmtree(codex_home, ignore_errors=True)
-
-    return prepared, cleanup
+# Environment names the dispatch composes itself from host-owned paths and control
+# metadata.  A named secret may never shadow one of them: secrets merge into the model
+# environment after the host entries, so a secret literally called HOME or CODEX_HOME
+# would redirect host filesystem mutation to a path chosen by secret file content.
+_RESERVED_ENVIRONMENT_NAMES = frozenset(
+    {
+        "HOME",
+        "CODEX_HOME",
+        "PATH",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "FACTORY_ROLE",
+        "FACTORY_PROJECTION_DIGEST",
+        "FACTORY_STATE_CAPSULE_DIGEST",
+    }
+)
 
 
 class RunnerError(ValueError):
@@ -265,6 +231,12 @@ class RunnerManifest:
             raise RunnerError(str(exc)) from exc
         if document["billing_key_name"] not in document["secret_names"]:
             raise RunnerError("runner billing key must be one of the named secrets")
+        reserved = _RESERVED_ENVIRONMENT_NAMES.intersection(document["secret_names"])
+        if reserved:
+            raise RunnerError(
+                "runner manifest names secrets that collide with reserved host "
+                f"environment variables: {', '.join(sorted(reserved))}"
+            )
         children = tuple(document["child_executables"])
         if document["adapter"] == "codex" and children:
             raise RunnerError("direct Codex runner may not declare child executables")
@@ -272,6 +244,13 @@ class RunnerManifest:
             raise RunnerError("Ollama-to-Codex runner requires exactly one Codex child")
         if document["state_profile_digest"] != profile_digest("lane-dispatch"):
             raise RunnerError("runner manifest binds a stale state-admission profile")
+        # Fail closed at load: every loadable manifest must bind an explicitly
+        # declared billing-authentication mechanism; raw-key environment injection
+        # is never a fallback for an undeclared adapter/billing-key combination.
+        _billing_authentication_mode(
+            str(document["adapter"]),
+            str(document["billing_key_name"]),
+        )
         return cls(dict(document))
 
     @property
@@ -281,6 +260,19 @@ class RunnerManifest:
     @property
     def limits(self) -> RunnerLimits:
         return RunnerLimits(**dict(self.document["limits"]))
+
+    @property
+    def billing_authentication(self) -> str:
+        """The declared billing-authentication mode for this manifest's pairing.
+
+        Re-derived (not stored) so a directly constructed manifest that bypassed
+        ``from_dict`` still fails closed on an undeclared pairing.
+        """
+
+        return _billing_authentication_mode(
+            str(self.document["adapter"]),
+            str(self.document["billing_key_name"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -338,9 +330,18 @@ class NamedSecretStore:
             if not raw or len(raw) > _MAX_SECRET_BYTES or b"\x00" in raw:
                 raise RunnerError(f"named secret has invalid bounded content: {name}")
             try:
-                values[name] = raw.decode("utf-8").removesuffix("\n")
+                text = raw.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise RunnerError(f"named secret is not UTF-8: {name}") from exc
+            text = text.removesuffix("\n")
+            if "\n" in text or "\r" in text:
+                # A CRLF-terminated or multi-line secret file would otherwise
+                # authenticate with a silently corrupted key; refuse it here so the
+                # defect surfaces at resolve time instead of as a provider 401.
+                raise RunnerError(
+                    f"named secret contains a carriage return or interior newline: {name}"
+                )
+            values[name] = text
         return values
 
 
@@ -405,6 +406,211 @@ class CodexRunnerAdapter:
             *codex_args,
             "-",
         )
+
+
+# CLI-specific billing-authentication knowledge lives here, adjacent to
+# CodexRunnerAdapter.  The mechanism is keyed on adapter-FAMILY membership, not on the
+# billing_key_name.  Every codex-family adapter (the codex CLI directly, and
+# `ollama launch codex`) authenticates by writing the billing key's VALUE into
+# CODEX_HOME/auth.json (see CodexApiKeyBootstrap); codex reads the key from a fixed
+# auth.json field named ``OPENAI_API_KEY``, so the manifest's billing_key_name only
+# *names the secret to resolve* and is decoupled from that field — hence unconstrained.
+# The key is never placed in the model process environment for these adapters.
+#
+# Founder ruling 2026-08-26 (F5 amendment, signed intent): the iter-1 guard admitted
+# only the single pairing ("codex","OPENAI_API_KEY") and so wrongly refused
+# codex+FACTORY_TEST_API_KEY and every ollama-codex pairing, all of which bootstrap
+# safely.  Widen the supported set to the whole family.  Membership is the schema's
+# adapter enum; the frozenset below is the single source of truth for the family and
+# the map is derived from it.  Any adapter OUTSIDE the family has no auth-file
+# bootstrap path, so a declared billing_key_name there would require delivering a
+# billing secret into a network-capable model process environment; that pairing is
+# refused fail-closed at load rather than silently env-injected.
+_CODEX_AUTH_FILE = "codex-auth-file"
+_CODEX_ADAPTER_FAMILY = frozenset({"codex", "ollama-codex"})
+_BILLING_AUTHENTICATION_BY_ADAPTER: Mapping[str, str] = {
+    adapter: _CODEX_AUTH_FILE for adapter in _CODEX_ADAPTER_FAMILY
+}
+
+
+def _billing_authentication_mode(adapter: str, billing_key_name: str) -> str:
+    """Resolve the billing-authentication mechanism for an adapter/billing-key pairing.
+
+    Codex-family adapters bootstrap the billing key into CODEX_HOME/auth.json for ANY
+    billing_key_name (the name is decoupled from codex's fixed ``OPENAI_API_KEY``
+    auth.json field), so the name is unconstrained here.  An adapter outside the family
+    has no auth-file bootstrap path, so declaring a billing_key_name would require
+    delivering a billing secret into a network-capable model process environment —
+    refused fail-closed as an unsafe channel / spec defect, never a raw-key
+    environment-injection fallback.
+    """
+
+    mode = _BILLING_AUTHENTICATION_BY_ADAPTER.get(adapter)
+    if mode is None:
+        raise RunnerError(
+            "runner manifest binds a billing_key_name "
+            f"({billing_key_name}) to a non-codex-family adapter ({adapter}) with no "
+            "auth-file bootstrap path; delivering a billing secret into the model "
+            "process environment is refused (raw-key environment injection is never a "
+            "fallback)"
+        )
+    return mode
+
+
+@dataclass(frozen=True)
+class CodexApiKeyBootstrap:
+    """Provision Codex API-key authentication once per dispatch, host-side, exec-free.
+
+    Codex reads ``CODEX_HOME/auth.json`` for API-key authentication, and the same
+    ``CODEX_HOME`` holds the session rollouts that ``codex exec resume`` requires, so
+    the home must be bootstrapped once before the invocation loop and preserved across
+    every invocation of the dispatch.  The auth file is written directly by the host —
+    no process (least of all the snapshotted model executable) ever runs with the raw
+    key, so no timeout or sandbox question arises for a login subprocess that does not
+    exist.
+
+    File-format evidence: on codex-cli 0.148.0 (the pinned executable family),
+    ``codex login --with-api-key`` writes ``CODEX_HOME/auth.json`` with mode 0600
+    containing exactly ``{"auth_mode": "apikey", "OPENAI_API_KEY": "<key>"}``, and
+    ``codex login status`` accepts a directly written file of that shape (verified
+    empirically 2026-08-26 against a throwaway CODEX_HOME with a fake key).
+
+    Enforced containment (exactly this, no more): ``auth.json`` must live inside the
+    model-writable home because Codex requires it there, so its absence from retained
+    material is proven rather than assumed — ``conclude`` removes the file exactly once
+    after the dispatch loop (success or failure, after failure evidence is retained),
+    verifies the removal, and then scans every retained regular file under the
+    workspace for the raw key bytes, failing the dispatch on any appearance.  Model
+    stdout/stderr/structured output are separately gated by ``_require_no_secret_leak``
+    and retained diagnostics pass through ``_redact_diagnostic_stream`` with the key in
+    the redaction set.
+    """
+
+    codex_home: Path
+    billing_key_name: str
+    api_key: str
+
+    @classmethod
+    def for_dispatch(
+        cls,
+        manifest: RunnerManifest,
+        *,
+        codex_home: Path,
+        secrets: Mapping[str, str],
+    ) -> CodexApiKeyBootstrap | None:
+        """Build the declared bootstrap for this manifest, or None when no file bootstrap applies.
+
+        ``codex_home`` is a host-owned path derived from the private workspace, never
+        read back out of an environment mapping a secret value could have shadowed.
+        """
+
+        if manifest.billing_authentication != _CODEX_AUTH_FILE:
+            return None
+        billing_key_name = str(manifest.document["billing_key_name"])
+        api_key = secrets.get(billing_key_name, "")
+        if not api_key:
+            raise RunnerError(
+                "Codex API-key authentication requires a non-empty "
+                f"{billing_key_name} named secret"
+            )
+        return cls(
+            codex_home=codex_home,
+            billing_key_name=billing_key_name,
+            api_key=api_key,
+        )
+
+    @property
+    def auth_path(self) -> Path:
+        return self.codex_home / "auth.json"
+
+    def provision(self) -> None:
+        """Create the Codex home and write auth.json before the first invocation."""
+
+        try:
+            self.codex_home.mkdir(mode=0o700, parents=True, exist_ok=False)
+            self.codex_home.chmod(0o700)
+        except OSError as exc:
+            raise RunnerError(
+                f"Codex authentication home could not be provisioned: {exc}"
+            ) from exc
+        content = json.dumps(
+            {"auth_mode": "apikey", "OPENAI_API_KEY": self.api_key},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        try:
+            _write_once(self.auth_path, content)
+        except (OSError, RunnerError) as exc:
+            removal_hazard = ""
+            try:
+                self.auth_path.unlink(missing_ok=True)
+            except OSError as unlink_exc:
+                removal_hazard = (
+                    "; retention hazard: partial auth material could not be removed: "
+                    f"{unlink_exc}"
+                )
+            raise RunnerError(
+                f"Codex auth file could not be provisioned: {exc}{removal_hazard}"
+            ) from exc
+
+    def conclude(self, *, workspace: Path, model_attempts: int) -> None:
+        """Remove the auth material exactly once and prove the retained tree is key-free.
+
+        Runs after the dispatch loop — and, on failure, after invocation evidence has
+        been retained — so Codex-side session rollouts and logs survive as retained
+        diagnostics while the credential does not.  Any cleanup failure is a typed
+        retention hazard carrying the true model-attempt count; it is never silent.
+        """
+
+        try:
+            self.auth_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RunnerError(
+                "retention hazard: Codex auth material could not be removed from the "
+                f"retained workspace: {exc}",
+                model_attempts=model_attempts,
+            ) from exc
+        if self.auth_path.exists() or self.auth_path.is_symlink():
+            raise RunnerError(
+                "retention hazard: Codex auth material persists in the retained "
+                "workspace after removal",
+                model_attempts=model_attempts,
+            )
+        needle = self.api_key.encode("utf-8")
+        try:
+            for root, _directories, files in os.walk(workspace, followlinks=False):
+                for file_name in sorted(files):
+                    candidate = Path(root) / file_name
+                    if candidate.is_symlink() or not candidate.is_file():
+                        continue
+                    if self._file_contains(candidate, needle):
+                        raise RunnerError(
+                            "retention hazard: Codex billing key material appears in "
+                            "retained runner bytes: "
+                            f"{candidate.relative_to(workspace).as_posix()}",
+                            model_attempts=model_attempts,
+                        )
+        except OSError as exc:
+            raise RunnerError(
+                "retention hazard: retained runner bytes could not be verified "
+                f"key-free: {exc}",
+                model_attempts=model_attempts,
+            ) from exc
+
+    @staticmethod
+    def _file_contains(path: Path, needle: bytes) -> bool:
+        overlap = max(len(needle) - 1, 0)
+        tail = b""
+        with open(path, "rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    return False
+                if needle in tail + chunk:
+                    return True
+                tail = chunk[-overlap:] if overlap else b""
 
 
 def _regular_executable(path: str | Path) -> Path:
@@ -838,10 +1044,19 @@ class HardenedModelRunner:
         )
 
         secrets = self.secret_store.resolve(tuple(manifest.document["secret_names"]))
+        if _RESERVED_ENVIRONMENT_NAMES.intersection(secrets):
+            # from_dict already refuses these; keep the merge point fail-closed for
+            # any manifest object that reached dispatch without that gate.
+            raise RunnerError(
+                "resolved secrets collide with reserved host environment variables"
+            )
+        # Host-owned path: every bootstrap filesystem effect derives from this
+        # variable, never from the (secret-merged) environment mapping.
+        codex_home = home / "codex"
         path_entries = {str(executable.parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
         environment = {
             "HOME": str(home),
-            "CODEX_HOME": str(home / "codex"),
+            "CODEX_HOME": str(codex_home),
             "TMPDIR": str(temporary),
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
@@ -911,54 +1126,114 @@ class HardenedModelRunner:
                 zip(prompt_kinds, prompt_bytes, strict=True), start=1
             )
         ]
-        for index, raw_prompt in enumerate(prompt_bytes, start=1):
-            _write_once(input_root / f"prompt-{index}.json", raw_prompt)
-            elapsed = self._monotonic() - objective_started
-            remaining_wall = limits.wall_seconds - int(elapsed)
-            if remaining_wall <= 0:
-                raise RunnerError("runner objective wall-time ceiling was exceeded")
-            attempt_limits = RunnerLimits(
-                wall_seconds=remaining_wall,
-                idle_seconds=min(limits.idle_seconds, remaining_wall),
-                max_processes=limits.max_processes,
-                max_attempts=limits.max_attempts,
-                max_output_bytes=limits.max_output_bytes,
-                max_tokens=limits.max_tokens,
-                max_cost_microusd=limits.max_cost_microusd,
-            )
-            output = output_root / f"attempt-{index}.json"
-            command = adapter.command(output=output, session_id=session_id if index > 1 else "")
-            invocation_environment, cleanup_authentication = _prepare_codex_api_key_authentication(
-                manifest=manifest,
-                executable=executable,
-                environment=environment,
-            )
-            try:
+        # Bootstrap the declared billing authentication exactly once per dispatch,
+        # before the invocation loop, so Codex session rollouts survive for the
+        # mandatory `codex exec resume` invocations; the billing key is withheld
+        # from the model environment for the auth-file mode.  A provision failure
+        # here precedes every model attempt, so its default zero-attempt
+        # pre-model classification is truthful.
+        model_environment = dict(environment)
+        bootstrap = CodexApiKeyBootstrap.for_dispatch(
+            manifest,
+            codex_home=codex_home,
+            secrets=secrets,
+        )
+        if bootstrap is not None:
+            model_environment.pop(bootstrap.billing_key_name, None)
+            bootstrap.provision()
+        try:
+            for index, raw_prompt in enumerate(prompt_bytes, start=1):
+                _write_once(input_root / f"prompt-{index}.json", raw_prompt)
+                elapsed = self._monotonic() - objective_started
+                remaining_wall = limits.wall_seconds - int(elapsed)
+                if remaining_wall <= 0:
+                    raise RunnerError("runner objective wall-time ceiling was exceeded")
+                attempt_limits = RunnerLimits(
+                    wall_seconds=remaining_wall,
+                    idle_seconds=min(limits.idle_seconds, remaining_wall),
+                    max_processes=limits.max_processes,
+                    max_attempts=limits.max_attempts,
+                    max_output_bytes=limits.max_output_bytes,
+                    max_tokens=limits.max_tokens,
+                    max_cost_microusd=limits.max_cost_microusd,
+                )
+                output = output_root / f"attempt-{index}.json"
+                command = adapter.command(output=output, session_id=session_id if index > 1 else "")
                 try:
                     result = self.backend.run(
                         command,
                         cwd=workspace,
                         readable_paths=(output_schema, executable, *child_executables),
                         writable_paths=(output_root, home, temporary),
-                        environment=invocation_environment,
+                        environment=model_environment,
                         stdin=raw_prompt,
                         limits=attempt_limits,
                     )
-                finally:
-                    cleanup_authentication()
-            except RunnerError as exc:
-                current_attempts = min(exc.model_attempts, 1)
-                attempts = (index - 1) + current_attempts
-                if attempt_observer is not None and attempts:
-                    attempt_observer(attempts)
-                if current_attempts:
-                    result = exc.invocation_result or RunnerProcessResult(
+                except RunnerError as exc:
+                    current_attempts = min(exc.model_attempts, 1)
+                    attempts = (index - 1) + current_attempts
+                    if attempt_observer is not None and attempts:
+                        attempt_observer(attempts)
+                    if current_attempts:
+                        result = exc.invocation_result or RunnerProcessResult(
+                            command=tuple(map(str, command)),
+                            returncode=-1,
+                            stdout="",
+                            stderr=(
+                                "[CAPTURE INCOMPLETE: runner backend failed after the model "
+                                "attempt began]"
+                            ),
+                            structured_output={},
+                            session_id="",
+                            input_tokens=0,
+                            output_tokens=0,
+                            process_peak=1,
+                            termination_reason=SUPERVISOR_ERROR,
+                        )
+                        raise self._invocation_error(
+                            workspace=workspace,
+                            run_id=run_id,
+                            generation=generation,
+                            receipt_id=receipt_id,
+                            invocation=index,
+                            result=result,
+                            secret_values=tuple(secrets.values()),
+                            message=str(exc),
+                            model_attempts=attempts,
+                            manifest=manifest,
+                            manifest_bytes=manifest_bytes,
+                            projection_digest=projection_digest,
+                            task_digest=task_digest,
+                            state_capsule_digest=state_capsule_digest,
+                            target_state_digest=target_state_digest,
+                            run_ledger_head=run_ledger_head,
+                            resume_checkpoint_digest=resume_checkpoint_digest,
+                            broker_registry_source_digest=broker_registry_source_digest,
+                            qualification=qualification,
+                            continuity_nonce_digest=digest_obj(
+                                {"continuity_nonce": continuity_nonce}
+                            ),
+                            prompt_sequence=prompt_sequence[:index],
+                            executable_snapshot=executable_snapshot.evidence(
+                                workspace=workspace
+                            ),
+                            child_executable_snapshots=[
+                                item.evidence(workspace=workspace)
+                                for item in child_executable_snapshots
+                            ],
+                            failed_at=self._clock(),
+                        ) from exc
+                    raise RunnerError(str(exc), model_attempts=attempts) from exc
+                except (OSError, ValueError) as exc:
+                    if attempt_observer is not None:
+                        attempt_observer(index)
+                    result = RunnerProcessResult(
                         command=tuple(map(str, command)),
                         returncode=-1,
                         stdout="",
                         stderr=(
-                            "[CAPTURE INCOMPLETE: runner backend failed after the model "
-                            "attempt began]"
+                            "[CAPTURE INCOMPLETE: runner backend raised after invocation "
+                            "admission]"
                         ),
                         structured_output={},
                         session_id="",
@@ -976,7 +1251,7 @@ class HardenedModelRunner:
                         result=result,
                         secret_values=tuple(secrets.values()),
                         message=str(exc),
-                        model_attempts=attempts,
+                        model_attempts=index,
                         manifest=manifest,
                         manifest_bytes=manifest_bytes,
                         projection_digest=projection_digest,
@@ -991,119 +1266,84 @@ class HardenedModelRunner:
                             {"continuity_nonce": continuity_nonce}
                         ),
                         prompt_sequence=prompt_sequence[:index],
-                        executable_snapshot=executable_snapshot.evidence(
-                            workspace=workspace
-                        ),
+                        executable_snapshot=executable_snapshot.evidence(workspace=workspace),
                         child_executable_snapshots=[
                             item.evidence(workspace=workspace)
                             for item in child_executable_snapshots
                         ],
                         failed_at=self._clock(),
                     ) from exc
-                raise RunnerError(str(exc), model_attempts=attempts) from exc
-            except (OSError, ValueError) as exc:
                 if attempt_observer is not None:
                     attempt_observer(index)
-                result = RunnerProcessResult(
-                    command=tuple(map(str, command)),
-                    returncode=-1,
-                    stdout="",
-                    stderr=(
-                        "[CAPTURE INCOMPLETE: runner backend raised after invocation "
-                        "admission]"
-                    ),
-                    structured_output={},
-                    session_id="",
-                    input_tokens=0,
-                    output_tokens=0,
-                    process_peak=1,
-                    termination_reason=SUPERVISOR_ERROR,
-                )
-                raise self._invocation_error(
+                try:
+                    self._require_process_success(result, limits)
+                    self._require_no_secret_leak(result, tuple(secrets.values()))
+                    if index == 1:
+                        session_id = result.session_id
+                        if not session_id:
+                            raise RunnerError("runner canary produced no resumable session id")
+                    elif result.session_id != session_id:
+                        raise RunnerError("runner did not resume the exact canary session")
+                    self._require_output(
+                        result.structured_output,
+                        manifest=manifest,
+                        projection_digest=projection_digest,
+                        state_capsule_digest=state_capsule_digest,
+                        sequence=index,
+                        continuity_nonce=continuity_nonce,
+                        output_schema=output_schema_document,
+                    )
+                    results.append(result)
+                    self._enforce_meter(manifest, results)
+                except RunnerError as exc:
+                    raise self._invocation_error(
+                        workspace=workspace,
+                        run_id=run_id,
+                        generation=generation,
+                        receipt_id=receipt_id,
+                        invocation=index,
+                        result=result,
+                        secret_values=tuple(secrets.values()),
+                        message=str(exc),
+                        model_attempts=max(exc.model_attempts, index),
+                        manifest=manifest,
+                        manifest_bytes=manifest_bytes,
+                        projection_digest=projection_digest,
+                        task_digest=task_digest,
+                        state_capsule_digest=state_capsule_digest,
+                        target_state_digest=target_state_digest,
+                        run_ledger_head=run_ledger_head,
+                        resume_checkpoint_digest=resume_checkpoint_digest,
+                        broker_registry_source_digest=broker_registry_source_digest,
+                        qualification=qualification,
+                        continuity_nonce_digest=digest_obj(
+                            {"continuity_nonce": continuity_nonce}
+                        ),
+                        prompt_sequence=prompt_sequence[:index],
+                        executable_snapshot=executable_snapshot.evidence(workspace=workspace),
+                        child_executable_snapshots=[
+                            item.evidence(workspace=workspace)
+                            for item in child_executable_snapshots
+                        ],
+                        failed_at=self._clock(),
+                    ) from exc
+        except BaseException as exc:
+            if bootstrap is not None:
+                # Every invocation error retained its diagnostic and failure receipt
+                # before it was raised, so cleanup here runs strictly after failure
+                # evidence retention: the retained workspace keeps the Codex-side
+                # sessions and logs while the auth material is removed and the
+                # retained bytes are proven key-free.  A cleanup failure surfaces as
+                # a typed retention hazard carrying the true attempt count (the
+                # original failure remains chained as its context and its receipt
+                # bytes are already durably on disk).
+                bootstrap.conclude(
                     workspace=workspace,
-                    run_id=run_id,
-                    generation=generation,
-                    receipt_id=receipt_id,
-                    invocation=index,
-                    result=result,
-                    secret_values=tuple(secrets.values()),
-                    message=str(exc),
-                    model_attempts=index,
-                    manifest=manifest,
-                    manifest_bytes=manifest_bytes,
-                    projection_digest=projection_digest,
-                    task_digest=task_digest,
-                    state_capsule_digest=state_capsule_digest,
-                    target_state_digest=target_state_digest,
-                    run_ledger_head=run_ledger_head,
-                    resume_checkpoint_digest=resume_checkpoint_digest,
-                    broker_registry_source_digest=broker_registry_source_digest,
-                    qualification=qualification,
-                    continuity_nonce_digest=digest_obj(
-                        {"continuity_nonce": continuity_nonce}
-                    ),
-                    prompt_sequence=prompt_sequence[:index],
-                    executable_snapshot=executable_snapshot.evidence(workspace=workspace),
-                    child_executable_snapshots=[
-                        item.evidence(workspace=workspace)
-                        for item in child_executable_snapshots
-                    ],
-                    failed_at=self._clock(),
-                ) from exc
-            if attempt_observer is not None:
-                attempt_observer(index)
-            try:
-                self._require_process_success(result, limits)
-                self._require_no_secret_leak(result, tuple(secrets.values()))
-                if index == 1:
-                    session_id = result.session_id
-                    if not session_id:
-                        raise RunnerError("runner canary produced no resumable session id")
-                elif result.session_id != session_id:
-                    raise RunnerError("runner did not resume the exact canary session")
-                self._require_output(
-                    result.structured_output,
-                    manifest=manifest,
-                    projection_digest=projection_digest,
-                    state_capsule_digest=state_capsule_digest,
-                    sequence=index,
-                    continuity_nonce=continuity_nonce,
-                    output_schema=output_schema_document,
+                    model_attempts=max(len(results), getattr(exc, "model_attempts", 0)),
                 )
-                results.append(result)
-                self._enforce_meter(manifest, results)
-            except RunnerError as exc:
-                raise self._invocation_error(
-                    workspace=workspace,
-                    run_id=run_id,
-                    generation=generation,
-                    receipt_id=receipt_id,
-                    invocation=index,
-                    result=result,
-                    secret_values=tuple(secrets.values()),
-                    message=str(exc),
-                    model_attempts=max(exc.model_attempts, index),
-                    manifest=manifest,
-                    manifest_bytes=manifest_bytes,
-                    projection_digest=projection_digest,
-                    task_digest=task_digest,
-                    state_capsule_digest=state_capsule_digest,
-                    target_state_digest=target_state_digest,
-                    run_ledger_head=run_ledger_head,
-                    resume_checkpoint_digest=resume_checkpoint_digest,
-                    broker_registry_source_digest=broker_registry_source_digest,
-                    qualification=qualification,
-                    continuity_nonce_digest=digest_obj(
-                        {"continuity_nonce": continuity_nonce}
-                    ),
-                    prompt_sequence=prompt_sequence[:index],
-                    executable_snapshot=executable_snapshot.evidence(workspace=workspace),
-                    child_executable_snapshots=[
-                        item.evidence(workspace=workspace)
-                        for item in child_executable_snapshots
-                    ],
-                    failed_at=self._clock(),
-                ) from exc
+            raise
+        if bootstrap is not None:
+            bootstrap.conclude(workspace=workspace, model_attempts=len(results))
 
         handoff = dict(results[-1].structured_output)
         handoff_bytes = json.dumps(
