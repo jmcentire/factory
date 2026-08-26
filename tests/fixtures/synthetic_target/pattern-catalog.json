@@ -1,0 +1,16 @@
+{
+ "catalog_id": "synthetic-empty-target-patterns",
+ "patterns": [
+  {
+   "artifact_digest": "sha256:bed7b3d4c5b91bf8d9399d0ea016afbb35edad77be636250f3cdf8c9fa8c6567",
+   "mechanism": {
+    "kind": "synthetic-fixture"
+   },
+   "pattern_id": "synthetic-noop",
+   "qualification_evidence_digest": "sha256:abf9a56bdeca92c0e1eedbedf897435ed90217dab3927e70bb4a7a4f7453b541",
+   "version": "1"
+  }
+ ],
+ "schema_version": "factory-pattern-catalog/1",
+ "version": "1"
+}

@@ -504,6 +504,54 @@ def _receipt_digests_in(digests: Mapping[str, Any]) -> set[str]:
     return {str(digests[key]) for key in _receipt_keys(digests)}
 
 
+def _require_phase_derived_catalog_receipts(
+    digests: Mapping[str, Any],
+    *,
+    entries: Iterable[Mapping[str, Any]],
+    catalog_digest: str,
+) -> None:
+    """A phase-derived catalog cites exactly this run's operational-maturity receipts.
+
+    The reuse guard exists so one receipt can never ratify a second version of a
+    subject. A phase-derived activation deliberately re-presents the
+    operational-maturity receipts for the same subject they already ratified, so
+    admissibility here is exact re-citation: both recorded receipt digests,
+    unchanged, and distinct from the catalog's own address. Anything else — a
+    missing ratification, a substituted receipt, a padded map — fails closed.
+    """
+
+    recorded_human = ""
+    recorded_validator = ""
+    for record in entries:
+        record_digests = record.get("artifact_digests")
+        if not isinstance(record_digests, Mapping):
+            continue
+        human = str(record_digests.get("operational-maturity:human-receipt", ""))
+        validator = str(record_digests.get("operational-maturity:validator-receipt", ""))
+        if human and validator and str(record_digests.get("operational-maturity", "")):
+            recorded_human = human
+            recorded_validator = validator
+    if not recorded_human or not recorded_validator:
+        raise RunStateError(
+            "phase-derived catalog activation requires a recorded operational-maturity "
+            "ratification in this run"
+        )
+    human = str(digests.get(f"{ACCEPTANCE_OBLIGATION_CATALOG_KEY}:human-receipt", ""))
+    validator = str(
+        digests.get(f"{ACCEPTANCE_OBLIGATION_CATALOG_KEY}:validator-receipt", "")
+    )
+    if human != recorded_human or validator != recorded_validator:
+        raise RunStateError(
+            "phase-derived catalog activation must cite exactly the recorded "
+            "operational-maturity ratification receipts"
+        )
+    if len({catalog_digest, human, validator}) != 3:
+        raise RunStateError(
+            "phase-derived catalog activation requires the catalog digest and both "
+            "cited receipts to be distinct"
+        )
+
+
 def _recorded_receipt_digests(records: Iterable[Mapping[str, Any]]) -> set[str]:
     """Every ratification-receipt digest already recorded in a run's ledger."""
     seen: set[str] = set()
@@ -1404,12 +1452,21 @@ class RunStore:
                     "first build requires a human and Validator ratified "
                     "acceptance-obligation catalog"
                 )
-            already_recorded_receipts |= _require_ratification_receipts(
-                supplied,
-                ACCEPTANCE_OBLIGATION_CATALOG_KEY,
-                context=str(destination),
-                already_recorded=already_recorded_receipts,
-            )
+            if (payload or {}).get(
+                "catalog_authority_basis"
+            ) == "phase-ratification:operational-maturity":
+                _require_phase_derived_catalog_receipts(
+                    supplied,
+                    entries=self._ledger(run_id).entries(),
+                    catalog_digest=catalog_digest,
+                )
+            else:
+                already_recorded_receipts |= _require_ratification_receipts(
+                    supplied,
+                    ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+                    context=str(destination),
+                    already_recorded=already_recorded_receipts,
+                )
             next_acceptance_catalog_digest = catalog_digest
         elif ACCEPTANCE_OBLIGATION_CATALOG_KEY in supplied:
             raise RunStateError(
@@ -1434,6 +1491,11 @@ class RunStore:
                 "changed_existing_tests set"
             )
 
+        # A phase-derived catalog re-cites already-consumed operational-maturity receipts, so it
+        # records no new authority nonce: it counts as a non-activation for nonce admission below.
+        catalog_phase_derived = (payload or {}).get(
+            "catalog_authority_basis"
+        ) == "phase-ratification:operational-maturity"
         transition_nonces = transition_payload.get("authority_receipt_nonces", [])
         if not isinstance(transition_nonces, list):
             raise RunStateError("authority_receipt_nonces must be an array")
@@ -1445,7 +1507,7 @@ class RunStore:
             schema_version=RUN_SCHEMA_VERSION,
             destination=str(destination),
             phase_key=bool(phase_key),
-            catalog_activation=bool(catalog_activation),
+            catalog_activation=bool(catalog_activation and not catalog_phase_derived),
             test_change_activation=bool(test_change_activation),
         )
         if len(normalized_nonces) not in allowed_authority_nonce_counts:
@@ -2161,12 +2223,26 @@ class RunStore:
                         f"{derived_phase_key!r} artifact digest"
                     )
             if derived_catalog_activation:
-                entry_recorded_receipts |= _require_ratification_receipts(
-                    digests,
-                    ACCEPTANCE_OBLIGATION_CATALOG_KEY,
-                    context=f"ledger entry {index} acceptance-obligation catalog",
-                    already_recorded=entry_recorded_receipts,
-                )
+                if payload_raw.get(
+                    "catalog_authority_basis"
+                ) == "phase-ratification:operational-maturity":
+                    # Replay applies the same admissibility the writer proved: a
+                    # phase-derived activation is an exact re-citation of this run's
+                    # recorded operational-maturity receipts, never a new ratification.
+                    _require_phase_derived_catalog_receipts(
+                        digests,
+                        entries=entries[:index],
+                        catalog_digest=str(
+                            digests.get(ACCEPTANCE_OBLIGATION_CATALOG_KEY, "")
+                        ),
+                    )
+                else:
+                    entry_recorded_receipts |= _require_ratification_receipts(
+                        digests,
+                        ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+                        context=f"ledger entry {index} acceptance-obligation catalog",
+                        already_recorded=entry_recorded_receipts,
+                    )
                 acceptance_obligation_catalog_digest = str(
                     digests[ACCEPTANCE_OBLIGATION_CATALOG_KEY]
                 )
@@ -2335,11 +2411,18 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} repeats an authority nonce")
             if schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS:
                 # 4.1c: same admission row as the write path — one axis, one answer.
+                # A phase-derived catalog re-cites already-consumed operational-maturity receipts,
+                # so it records no new authority nonce and counts as a non-activation here.
+                derived_catalog_phase_derived = payload_raw.get(
+                    "catalog_authority_basis"
+                ) == "phase-ratification:operational-maturity"
                 allowed_entry_nonce_counts = allowed_authority_nonce_counts_for(
                     schema_version=str(schema_version),
                     destination=str(destination),
                     phase_key=bool(derived_phase_key),
-                    catalog_activation=bool(derived_catalog_activation),
+                    catalog_activation=bool(
+                        derived_catalog_activation and not derived_catalog_phase_derived
+                    ),
                     test_change_activation=bool(derived_test_change_activation),
                 )
                 if len(entry_nonces) not in allowed_entry_nonce_counts:

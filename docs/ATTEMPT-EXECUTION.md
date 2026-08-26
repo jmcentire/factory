@@ -75,6 +75,17 @@ that also supplies direct Coder or Tester commands. This keeps the existing
 Validator evidence and oracle-isolation guarantees while preventing an outer
 networked runner from becoming a hidden shared lane.
 
+## Phase-derived acceptance catalogs
+
+An initial catalog may declare `authority_basis` as
+`{"mode":"phase-ratification","phase":"operational-maturity"}`. Factory then
+binds it to the already retained human and Validator operational-maturity
+receipts for that run, rather than requiring a redundant catalog-specific
+human signature. The catalog must still prove every obligation against the
+exact retained phase artifacts; the existing phase receipts are provenance,
+not permission to widen scope. Independent catalog ratification remains the
+default when `authority_basis` is absent.
+
 Set `prebuilt_author_outputs` to `{ "coder": "source-name", "tester":
 "source-name" }` when those two names resolve to the sealed author directories
 published by `execute-broker-handoff`.  The typed executor then omits the

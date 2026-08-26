@@ -362,8 +362,14 @@ class FactoryOrchestrator:
                 acceptance_catalog = stored_catalog.catalog
                 catalog_activation_artifacts = dict(stored_catalog.artifact_digests)
                 # 4.1b: only the human AUTHORITY nonce is consumed; the Validator
-                # attribution carries no replay ceremony.
-                catalog_activation_nonces = [stored_catalog.human_receipt.nonce]
+                # attribution carries no replay ceremony. A phase-derived catalog re-cites the
+                # already-consumed operational-maturity receipts, so it records no new nonce.
+                catalog_activation_nonces = (
+                    [stored_catalog.human_receipt.nonce]
+                    if stored_catalog.consumes_new_nonces
+                    else []
+                )
+                catalog_phase_derived = not stored_catalog.consumes_new_nonces
             else:
                 acceptance_catalog = load_retained_acceptance_catalog(
                     self.workflow.root,
@@ -382,6 +388,7 @@ class FactoryOrchestrator:
                     )
                 catalog_activation_artifacts = {}
                 catalog_activation_nonces = []
+                catalog_phase_derived = False
         except AcceptanceObligationError as exc:
             raise OrchestrationError(str(exc)) from exc
         if acceptance_catalog.content_digest != resume.acceptance_obligation_catalog_digest:
@@ -489,6 +496,11 @@ class FactoryOrchestrator:
                 "anchored_run_ledger_head": resume.anchored_run_ledger_head,
                 "anchored_run_ledger_length": resume.anchored_run_ledger_length,
                 "changed_existing_tests": list(changed_test_ids),
+                **(
+                    {"catalog_authority_basis": "phase-ratification:operational-maturity"}
+                    if catalog_phase_derived
+                    else {}
+                ),
                 **(
                     {
                         "authority_receipt_nonces": [

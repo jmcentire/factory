@@ -622,6 +622,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         manifest_path=target_path,
         request_path=resolution_request_path,
         receipt_path=resolution_receipt_path,
+        pattern_catalog_path=catalog_path,
     )
     resolved = workflow.resolve_target("synthetic-run", object_source=operator_source)
 

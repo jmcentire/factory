@@ -248,6 +248,11 @@ def _parser() -> argparse.ArgumentParser:
     authorize_resolution.add_argument("--manifest", required=True)
     authorize_resolution.add_argument("--request", required=True)
     authorize_resolution.add_argument("--receipt", required=True)
+    authorize_resolution.add_argument(
+        "--pattern-catalog",
+        required=True,
+        help="the exact qualified catalog document the manifest pins",
+    )
     _add_authority_arguments(authorize_resolution)
 
     resolve_target = commands.add_parser(
@@ -2141,6 +2146,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 manifest_path=arguments.manifest,
                 request_path=arguments.request,
                 receipt_path=arguments.receipt,
+                pattern_catalog_path=arguments.pattern_catalog,
             )
         )
         return

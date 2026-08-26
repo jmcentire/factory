@@ -23,6 +23,7 @@ from factory_core.manifest import (
     digest_bytes,
     digest_obj,
 )
+from factory_core.build_plan import PatternCatalog
 from factory_core.provenance import REQUIRED_PHASES, IntentBackreference, PhaseArtifact
 from factory_core.target import TargetManifestError, load_target_manifest
 from factory_runtime.authority import (
@@ -328,6 +329,47 @@ def _segregation_policy(policy: AuthorityPolicy) -> SegregationPolicy:
     )
 
 
+def preflight_pattern_catalog(
+    manifest: Any,
+    pattern_catalog_path: str | Path,
+) -> None:
+    """Fail Stage-R admission unless the manifest's pinned catalog is usable.
+
+    The target manifest pins a pattern-catalog content digest, but generation
+    preparation is the first place the catalog document itself is loaded — long
+    after founder signatures bound the manifest into the run. A pin that
+    addresses an unusable document (wrong schema era, or simply not the
+    document supplied) must reject the run before any authority is spent on it.
+    No legacy shape is accepted: the pin must resolve to a schema-valid,
+    current-format catalog whose canonical content digest equals the pin.
+    """
+
+    pinned = str(manifest.build.get("pattern_catalog_digest", ""))
+    document, _ = _read_json_object(pattern_catalog_path)
+    try:
+        validate_document("pattern-catalog", document)
+    except DocumentValidationError as exc:
+        message = (
+            "target manifest pattern-catalog preflight failed: the supplied catalog "
+            f"does not satisfy the current contract: {exc}"
+        )
+        if digest_obj(document) == pinned:
+            message += (
+                " The manifest pin addresses this document's raw form, which predates "
+                "the current catalog contract; re-qualify the catalog in the current "
+                "format and amend the manifest pin before admitting a run."
+            )
+        raise WorkflowError(message) from exc
+    catalog = PatternCatalog.from_dict(document)
+    if catalog.content_digest != pinned:
+        raise WorkflowError(
+            "target manifest pattern-catalog preflight failed: the manifest pins "
+            f"{pinned} but the supplied catalog's content digest is "
+            f"{catalog.content_digest}; supply the exact qualified catalog or amend "
+            "the manifest pin before admitting a run."
+        )
+
+
 class FactoryWorkflow:
     """High-level authority boundary over the persisted run state machine."""
 
@@ -376,6 +418,7 @@ class FactoryWorkflow:
         manifest_path: str | Path,
         request_path: str | Path,
         receipt_path: str | Path,
+        pattern_catalog_path: str | Path,
         actor: str = "validator",
     ) -> RunProjection:
         """Create Stage R before any repository contact or source inspection."""
@@ -390,6 +433,7 @@ class FactoryWorkflow:
             subpath = normalize_subpath(str(manifest.repo.get("subpath", "")))
         except (DocumentValidationError, TargetManifestError, TargetResolutionError) as exc:
             raise WorkflowError(str(exc)) from exc
+        preflight_pattern_catalog(manifest, pattern_catalog_path)
         if request["run_id"] != run_id:
             raise WorkflowError("target-resolution request belongs to a different Factory run")
         if request["repository_id"] != self.policy.repository_id:

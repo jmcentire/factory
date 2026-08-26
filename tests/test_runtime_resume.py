@@ -17,7 +17,7 @@ from factory_runtime.resume import (
 )
 from factory_runtime.state import RunState, RunStateError
 from factory_runtime.workflow import FactoryWorkflow
-from tests.conftest import SYNTHETIC_TARGET, ratification_receipts
+from tests.conftest import SYNTHETIC_CATALOG, SYNTHETIC_TARGET, ratification_receipts
 from tests.test_runtime_workflow import (
     ROOT_KEY,
     VALIDATOR_KEY,
@@ -111,6 +111,7 @@ def _authorized_run(tmp_path: Path) -> tuple[FactoryWorkflow, _Tessera, Path, Pa
         manifest_path=SYNTHETIC_TARGET,
         request_path=resolution_path,
         receipt_path=resolution_receipt,
+        pattern_catalog_path=SYNTHETIC_CATALOG,
     )
     workflow.resolve_target("run-1", object_source=_object_source(tmp_path))
     execution_path, execution = _execution_request(tmp_path, workflow)

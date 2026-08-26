@@ -777,6 +777,7 @@ class StoredAcceptanceCatalog:
     human_receipt: VerifiedReceipt
     validator_receipt: VerifiedReceipt
     directory: Path
+    consumes_new_nonces: bool = True
 
     @property
     def artifact_digests(self) -> Mapping[str, str]:
@@ -845,8 +846,8 @@ def verify_and_retain_acceptance_catalog(
     run_id: str,
     *,
     catalog_path: str | Path,
-    human_receipt_path: str | Path,
-    validator_receipt_path: str | Path,
+    human_receipt_path: str | Path | None,
+    validator_receipt_path: str | Path | None,
     policy: AuthorityPolicy,
     tessera: TesseraCli,
     clock: Callable[[], int] | None = None,
@@ -877,6 +878,30 @@ def verify_and_retain_acceptance_catalog(
             "acceptance-obligation human and Validator ratifiers must be distinct"
         )
     _verify_catalog_provenance(catalog, _phase_artifacts(root, run_id))
+    phase_derived = catalog.document.get("authority_basis") == {
+        "mode": "phase-ratification",
+        "phase": "operational-maturity",
+    }
+    if phase_derived:
+        phase_digest = projection.phase_artifact_digests["operational-maturity"]
+        receipt_root = (
+            root
+            / run_id
+            / "evidence"
+            / "operational-maturity"
+            / phase_digest.removeprefix("sha256:")
+        )
+        human_receipt_path = receipt_root / "human-receipt.tessera.json"
+        validator_receipt_path = receipt_root / "validator-receipt.tessera.json"
+        expected_action = "ratify-operational-maturity"
+        expected_subject_digest = phase_digest
+    else:
+        if human_receipt_path is None or validator_receipt_path is None:
+            raise AcceptanceObligationError(
+                "independently ratified acceptance-obligation catalog requires both receipts"
+            )
+        expected_action = RATIFY_ACTION
+        expected_subject_digest = catalog.content_digest
     human_envelope_bytes = _read_regular_bytes(
         human_receipt_path,
         label="acceptance-obligation human receipt",
@@ -885,13 +910,13 @@ def verify_and_retain_acceptance_catalog(
         validator_receipt_path,
         label="acceptance-obligation Validator receipt",
     )
-    consumed = RunStore(root).consumed_authority_nonces(run_id)
+    consumed = () if phase_derived else RunStore(root).consumed_authority_nonces(run_id)
     try:
         human_receipt = verify_receipt(
             human_receipt_path,
             policy=policy,
-            expected_action=RATIFY_ACTION,
-            expected_subject_digest=catalog.content_digest,
+            expected_action=expected_action,
+            expected_subject_digest=expected_subject_digest,
             expected_run_id=run_id,
             expected_signer_identity=human_identity,
             tessera=tessera,
@@ -906,8 +931,8 @@ def verify_and_retain_acceptance_catalog(
         validator_receipt = verify_receipt(
             validator_receipt_path,
             policy=policy,
-            expected_action=RATIFY_ACTION,
-            expected_subject_digest=catalog.content_digest,
+            expected_action=expected_action,
+            expected_subject_digest=expected_subject_digest,
             expected_run_id=run_id,
             expected_signer_identity=validator_identity,
             tessera=tessera,
@@ -953,7 +978,9 @@ def verify_and_retain_acceptance_catalog(
         fsync_directory_chain(directory, through=root / run_id)
     except DurabilityError as exc:
         raise AcceptanceObligationError(str(exc)) from exc
-    return StoredAcceptanceCatalog(catalog, human_receipt, validator_receipt, directory)
+    return StoredAcceptanceCatalog(
+        catalog, human_receipt, validator_receipt, directory, consumes_new_nonces=not phase_derived
+    )
 
 
 def load_retained_acceptance_catalog(

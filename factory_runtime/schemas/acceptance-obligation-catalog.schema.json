@@ -36,6 +36,15 @@
     },
     "human_ratifier": {"type": "string", "minLength": 1},
     "validator_ratifier": {"type": "string", "minLength": 1},
+    "authority_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "phase"],
+      "properties": {
+        "mode": {"const": "phase-ratification"},
+        "phase": {"const": "operational-maturity"}
+      }
+    },
     "max_review_rounds": {"type": "integer", "minimum": 1, "maximum": 8},
     "triggers": {
       "type": "array",

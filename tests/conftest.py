@@ -1402,3 +1402,4 @@ def write_promoting_chain(run_root: Path) -> Path:
         encoding="utf-8",
     )
     return chain_path
+SYNTHETIC_CATALOG = FIXTURES / "synthetic_target" / "pattern-catalog.json"
