@@ -307,6 +307,7 @@ class IsolatedBuildLoop:
         coder_trusted_paths: Sequence[str | Path] = (),
         tester_trusted_paths: Sequence[str | Path] = (),
         validator_trusted_paths: Sequence[str | Path] = (),
+        prebuilt_author_outputs: Mapping[LaneRole, str | Path] | None = None,
         build_plan_path: str | Path | None = None,
         pattern_catalog_path: str | Path | None = None,
         acceptance_catalog_path: str | Path | None = None,
@@ -393,25 +394,41 @@ class IsolatedBuildLoop:
             input_bytes,
             acceptance_catalog_bytes=acceptance_catalog_bytes,
         )
-        coder_runners = tuple(Path(path).resolve() for path in coder_trusted_paths)
-        tester_runners = tuple(Path(path).resolve() for path in tester_trusted_paths)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            coder_future = executor.submit(
-                self._run_author,
-                coder,
-                coder_command,
-                coder_runners,
-                expected_input_digest,
+        if prebuilt_author_outputs is not None:
+            if set(prebuilt_author_outputs) != {LaneRole.CODER, LaneRole.TESTER}:
+                raise LaneError(
+                    "prebuilt author outputs must contain exactly Coder and Tester artifacts"
+                )
+            if coder_command or tester_command or coder_trusted_paths or tester_trusted_paths:
+                raise LaneError(
+                    "prebuilt author outputs may not also admit direct Coder or Tester commands"
+                )
+            coder_result = self._stage_prebuilt_author_output(
+                coder, LaneRole.CODER, Path(prebuilt_author_outputs[LaneRole.CODER])
             )
-            tester_future = executor.submit(
-                self._run_author,
-                tester,
-                tester_command,
-                tester_runners,
-                expected_input_digest,
+            tester_result = self._stage_prebuilt_author_output(
+                tester, LaneRole.TESTER, Path(prebuilt_author_outputs[LaneRole.TESTER])
             )
-            coder_result = coder_future.result()
-            tester_result = tester_future.result()
+        else:
+            coder_runners = tuple(Path(path).resolve() for path in coder_trusted_paths)
+            tester_runners = tuple(Path(path).resolve() for path in tester_trusted_paths)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                coder_future = executor.submit(
+                    self._run_author,
+                    coder,
+                    coder_command,
+                    coder_runners,
+                    expected_input_digest,
+                )
+                tester_future = executor.submit(
+                    self._run_author,
+                    tester,
+                    tester_command,
+                    tester_runners,
+                    expected_input_digest,
+                )
+                coder_result = coder_future.result()
+                tester_result = tester_future.result()
         if not coder_result.succeeded or not tester_result.succeeded:
             validator = LaneExecution(
                 role=LaneRole.VALIDATOR,
@@ -564,6 +581,40 @@ class IsolatedBuildLoop:
             environment=environment,
         )
         return LaneExecution(role=role, process=process, output_directory=output)
+
+    @staticmethod
+    def _stage_prebuilt_author_output(
+        lane: Path, role: LaneRole, source: Path
+    ) -> LaneExecution:
+        """Import a sealed runner artifact as a regular-file lane output.
+
+        A networked model runner is not an author lane: it may publish a result only through
+        the broker, and this method is the one-way conversion from that retained result into
+        the normal Validator pipeline.  No model command is executed here, and the source is
+        copied before the Validator receives it so its path and subsequent mutations cannot
+        influence validation.
+        """
+
+        if source.is_symlink() or not source.is_dir():
+            raise LaneError(f"prebuilt {role} output is missing, symlinked, or not a directory")
+        source = source.resolve()
+        output = lane / "output"
+        if any(output.iterdir()):
+            raise LaneError(f"prebuilt {role} output destination is not empty")
+        staging = lane / "sealed-output"
+        _copy_regular_tree(source, staging)
+        output.rmdir()
+        staging.replace(output)
+        return LaneExecution(
+            role=role,
+            process=IsolatedProcessResult(
+                command=("factory:sealed-author-artifact", str(role)),
+                returncode=0,
+                stdout="",
+                stderr="",
+            ),
+            output_directory=output,
+        )
 
     def _run_validator(
         self,
