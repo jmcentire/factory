@@ -50,16 +50,31 @@ class LoopbackSupervisionError(RuntimeError):
 
 @dataclass(frozen=True)
 class CandidateEndpoint:
-    """The exact endpoint contract handed to the validator lane."""
+    """The exact per-attempt endpoint contract handed to the validator lane.
+
+    One freshly allocated contiguous block is partitioned into three disjoint parts: the TCP
+    ``signaling_port`` the candidate serves ``/offer`` on, the ``candidate_udp_ports`` block
+    the candidate gathers its ICE host candidates in, and the ``validator_udp_ports`` block the
+    validator's acceptance oracle gathers in. The two peers send only to each other's block.
+    """
 
     host: str
-    port_low: int
-    port_high: int
+    signaling_port: int
+    candidate_udp_ports: tuple[int, ...]
+    validator_udp_ports: tuple[int, ...]
     base_url: str
 
     @property
-    def ports(self) -> tuple[int, ...]:
-        return tuple(range(self.port_low, self.port_high + 1))
+    def port_low(self) -> int:
+        return self.signaling_port
+
+    @property
+    def port_high(self) -> int:
+        return self.validator_udp_ports[-1]
+
+    @property
+    def block(self) -> tuple[int, int]:
+        return (self.signaling_port, self.validator_udp_ports[-1])
 
 
 def _load_active(handle: os.PathLike[str] | int) -> list[list[int]]:
@@ -146,6 +161,54 @@ def _listeners_in_range(lo: int, hi: int) -> list[int]:
     return live
 
 
+def _udp_ports_still_held(ports: Sequence[int]) -> list[int]:
+    """Return UDP ports that cannot be bound — i.e. a leaked socket is still holding them."""
+
+    held: list[int] = []
+    for port in ports:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            held.append(port)
+        finally:
+            probe.close()
+    return held
+
+
+_PIN_SITECUSTOMIZE = (
+    "# Materialised by the Factory loopback supervisor: pin peer-local WebRTC ICE to the\n"
+    "# per-attempt UDP block before the sealed candidate imports aiortc. Keeps the candidate\n"
+    "# source untouched; the pinning is a host-owned isolation concern.\n"
+    "try:\n"
+    "    import factory_webrtc_pin\n"
+    "    factory_webrtc_pin.apply()\n"
+    "except Exception as exc:  # fail loud in the candidate log, never silently unpinned\n"
+    "    import sys\n"
+    "    sys.stderr.write('factory ICE pin failed: %r\\n' % (exc,))\n"
+    "    raise\n"
+)
+
+
+def _materialize_pin_shim(work_root: Path) -> Path:
+    """Write a standalone copy of the pin module + a sitecustomize that applies it.
+
+    The candidate sandbox reads only its own source, runtime, and this work root, so the pin
+    logic is copied here as a self-contained module rather than imported from ``factory_runtime``
+    (which the candidate cannot see). ``sitecustomize`` is auto-imported by the ``site`` module
+    at interpreter start, before the candidate's ``import aiortc``.
+    """
+
+    from factory_runtime import webrtc_pin
+
+    shim_dir = work_root / "pin"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    source = Path(webrtc_pin.__file__).read_text(encoding="utf-8")
+    (shim_dir / "factory_webrtc_pin.py").write_text(source, encoding="utf-8")
+    (shim_dir / "sitecustomize.py").write_text(_PIN_SITECUSTOMIZE, encoding="utf-8")
+    return shim_dir
+
+
 @contextlib.contextmanager
 def supervised_candidate(
     *,
@@ -153,30 +216,46 @@ def supervised_candidate(
     candidate_source: Path,
     candidate_runtime: Path | None,
     work_root: Path,
-    block_size: int = 8,
+    udp_block_size: int = 4,
     sandbox: MacOSSandbox | None = None,
     readiness_timeout: float = _READINESS_TIMEOUT_SECONDS,
 ) -> Iterator[CandidateEndpoint]:
-    """Start the sealed candidate as a supervised loopback-bind sibling; tear it down cleanly.
+    """Start the sealed candidate as a supervised WebRTC-capable sibling; tear it down cleanly.
 
-    The candidate reads only its source and runtime, binds only inside the allocated block,
-    and cannot connect anywhere. Readiness is a live listener inside the block. On exit the
-    whole process group is killed and the range is asserted clear before revocation.
+    One freshly allocated contiguous block is partitioned into a TCP signaling port, the
+    candidate's own UDP ICE block, and the validator's UDP ICE block. The candidate runs under
+    a ``candidate-webrtc`` profile — it may bind the signaling port and its own UDP block and
+    send only to the validator's UDP block; it reads only its source, runtime, and this work
+    root (never the Tester tree). Its ICE binds are pinned to its UDP block through a
+    materialised ``sitecustomize`` shim, so the sealed source is untouched. Readiness is a live
+    TCP listener on the signaling port. On exit the whole process group is killed, the signaling
+    listener must be gone, and the candidate UDP block must be fully bindable (no leaked socket)
+    before the range is revoked.
     """
 
     sandbox = sandbox or MacOSSandbox()
     if not candidate_launch or not Path(candidate_launch[0]).is_absolute():
         raise LoopbackSupervisionError("candidate launch argv[0] must be an absolute path")
+    if not (1 <= udp_block_size <= 24):
+        raise LoopbackSupervisionError("candidate UDP block size must be between 1 and 24")
     work_root = Path(work_root)
     work_root.mkdir(parents=True, exist_ok=True)
+    block_size = 1 + 2 * udp_block_size
     lo, hi, reservation = _allocate_block(block_size)
-    policy = NetworkPolicy(mode="loopback-bind", ports=tuple(range(lo, hi + 1)))
-    readable = [Path(candidate_source).resolve()]
+    signaling_port = lo
+    candidate_udp = tuple(range(lo + 1, lo + 1 + udp_block_size))
+    validator_udp = tuple(range(lo + 1 + udp_block_size, lo + 1 + 2 * udp_block_size))
+    policy = NetworkPolicy(
+        mode="candidate-webrtc",
+        signaling_port=signaling_port,
+        own_udp_ports=candidate_udp,
+        peer_udp_ports=validator_udp,
+    )
+    shim_dir = _materialize_pin_shim(work_root)
+    readable = [Path(candidate_source).resolve(), shim_dir.resolve()]
     if candidate_runtime is not None:
         readable.append(Path(candidate_runtime).resolve())
-    profile = sandbox._profile(
-        tuple(readable), (work_root.resolve(),), policy
-    )
+    profile = sandbox._profile(tuple(readable), (work_root.resolve(),), policy)
     profile_path = work_root / ".candidate.sb"
     profile_path.write_text(profile, encoding="utf-8")
     log_path = work_root / "candidate.log"
@@ -186,11 +265,13 @@ def supervised_candidate(
         "LC_ALL": "C.UTF-8",
         "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(shim_dir),
         "TMPDIR": str(work_root),
         "HOST": "127.0.0.1",
-        "PORT": str(lo),
-        "FACTORY_CANDIDATE_PORT_LOW": str(lo),
-        "FACTORY_CANDIDATE_PORT_HIGH": str(hi),
+        "PORT": str(signaling_port),
+        "FACTORY_ICE_HOST": "127.0.0.1",
+        "FACTORY_ICE_UDP_PORTS": ",".join(str(p) for p in candidate_udp),
+        "FACTORY_CANDIDATE_SIGNALING_PORT": str(signaling_port),
     }
     invocation = [
         str(sandbox.executable),
@@ -201,7 +282,7 @@ def supervised_candidate(
     process: subprocess.Popen[bytes] | None = None
     log = open(log_path, "wb")
     try:
-        reservation.close()  # hand the first port to the candidate; block stays registered
+        reservation.close()  # hand the signaling port to the candidate; block stays registered
         process = subprocess.Popen(
             invocation,
             cwd=str(Path(candidate_source).resolve()),
@@ -212,37 +293,43 @@ def supervised_candidate(
             start_new_session=True,
         )
         deadline = time.monotonic() + readiness_timeout
-        ready_port: int | None = None
+        ready = False
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise LoopbackSupervisionError(
                     "sealed candidate exited before it became ready: "
-                    + log_path.read_text(errors="replace")[-800:]
+                    + log_path.read_text(errors="replace")[-1200:]
                 )
-            live = _listeners_in_range(lo, hi)
-            if live:
-                ready_port = live[0]
+            if signaling_port in _listeners_in_range(signaling_port, signaling_port):
+                ready = True
                 break
             time.sleep(_READINESS_POLL_SECONDS)
-        if ready_port is None:
+        if not ready:
             raise LoopbackSupervisionError(
-                "sealed candidate never listened inside its loopback block within the timeout"
+                "sealed candidate never listened on its signaling port within the timeout: "
+                + log_path.read_text(errors="replace")[-1200:]
             )
         yield CandidateEndpoint(
             host="127.0.0.1",
-            port_low=lo,
-            port_high=hi,
-            base_url=f"http://127.0.0.1:{ready_port}",
+            signaling_port=signaling_port,
+            candidate_udp_ports=candidate_udp,
+            validator_udp_ports=validator_udp,
+            base_url=f"http://127.0.0.1:{signaling_port}",
         )
     finally:
         if process is not None:
             _terminate_group(process)
         log.close()
-        survivors = _listeners_in_range(lo, hi)
+        survivors = _listeners_in_range(signaling_port, signaling_port)
+        leaked_udp = _udp_ports_still_held(candidate_udp)
         _revoke(lo, hi)
         if survivors:
             raise LoopbackSupervisionError(
-                f"loopback block {lo}-{hi} still had live listeners after teardown: {survivors}"
+                f"signaling port {signaling_port} still had a live listener after teardown"
+            )
+        if leaked_udp:
+            raise LoopbackSupervisionError(
+                f"candidate UDP ports leaked after teardown: {leaked_udp}"
             )
 
 
