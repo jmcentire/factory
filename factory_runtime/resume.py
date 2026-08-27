@@ -27,8 +27,8 @@ from factory_runtime.durability import load_chain_key
 from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
-from factory_runtime.state import RunState, RunStateError, RunStore
 from factory_runtime.snapshot import SnapshotError, tree_digest
+from factory_runtime.state import RunState, RunStateError, RunStore
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
 from factory_runtime.target_state import TargetResolutionError, verify_target_state
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError

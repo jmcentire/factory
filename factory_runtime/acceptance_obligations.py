@@ -75,15 +75,20 @@ _VALIDATOR_LAUNCH_CONTRACT = {
     "additional_path_bindings": "forbidden",
 }
 _VALIDATOR_ENVIRONMENT_CONTRACT = {
-    "schema_version": "factory-validator-environment/4",
+    "schema_version": "factory-validator-environment/5",
     "ambient_environment": "closed",
-    # The Validator lane is no longer network-zero: under the host-supervisor sibling
-    # topology it runs connect-only inside the sealed candidate's exact per-attempt loopback
-    # block (no bind, no out-of-range, no external), so it can drive the candidate the host
-    # started as a separately sandboxed loopback-bind sibling. Declaring this honestly is why
-    # the contract — and therefore every acceptance catalog's environment_digest — advances.
-    "network": "loopback-connect-candidate-range",
-    "candidate_endpoint": "host-supervised-loopback-block",
+    # Peer-local WebRTC acceptance. Under the host-supervisor sibling topology, one freshly
+    # allocated contiguous loopback block is partitioned into three disjoint parts: the
+    # candidate's TCP signaling port, the candidate's UDP ICE block, and the Validator's UDP ICE
+    # block. The candidate runs candidate-webrtc (bind signaling + own UDP block; send only to
+    # the Validator UDP block). The Validator runs validator-webrtc (connect to the signaling
+    # port; bind its own UDP block; send only to the candidate UDP block). No wildcard bind, no
+    # out-of-block endpoint, no external TCP or UDP. Declaring this honestly is why the contract
+    # — and therefore every acceptance catalog's environment_digest — advances.
+    "network": "loopback-webrtc-dual-block",
+    "network_protocols": ["tcp-signaling", "udp-ice"],
+    "candidate_endpoint": "host-supervised-webrtc-partitioned-block",
+    "ice_port_handoff": "supervisor-pinned-udp-block/1",
     "launch_contract": _VALIDATOR_LAUNCH_CONTRACT,
     "read_scope": [
         "build-input",

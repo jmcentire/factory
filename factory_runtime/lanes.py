@@ -760,9 +760,12 @@ class IsolatedBuildLoop:
             )
 
         if candidate_launch:
-            # Host-supervisor sibling topology: the sealed candidate runs as a separately
-            # sandboxed loopback-bind sibling (its own source + runtime only, never the
-            # Tester tree or catalog), and the Validator drives it over a connect-only block.
+            # Host-supervisor sibling topology for peer-local WebRTC: the sealed candidate runs
+            # as a separately sandboxed candidate-webrtc sibling (its own source + runtime only,
+            # never the Tester tree or catalog), gathering ICE in its own UDP block and serving
+            # /offer on its signaling port. The Validator runs under a validator-webrtc profile:
+            # it connects out to the signaling port and gathers ICE in a disjoint UDP block,
+            # sending only to the candidate's block. Both are exact, enumerated, per-attempt.
             candidate_source = implementation / "artifact"
             with supervised_candidate(
                 candidate_launch=candidate_launch,
@@ -775,12 +778,25 @@ class IsolatedBuildLoop:
                     {
                         "FACTORY_CANDIDATE_BASE_URL": endpoint.base_url,
                         "FACTORY_CANDIDATE_HOST": endpoint.host,
-                        "FACTORY_CANDIDATE_PORT_LOW": str(endpoint.port_low),
-                        "FACTORY_CANDIDATE_PORT_HIGH": str(endpoint.port_high),
+                        "FACTORY_CANDIDATE_SIGNALING_PORT": str(endpoint.signaling_port),
+                        "FACTORY_ICE_HOST": endpoint.host,
+                        # The runner forwards this to the acceptance oracle as its pinned ICE
+                        # block; the oracle gathers only inside the Validator's UDP block.
+                        "FACTORY_VALIDATOR_ICE_UDP_PORTS": ",".join(
+                            str(p) for p in endpoint.validator_udp_ports
+                        ),
+                        "FACTORY_CANDIDATE_ICE_UDP_PORTS": ",".join(
+                            str(p) for p in endpoint.candidate_udp_ports
+                        ),
                     }
                 )
                 process = run_validator_lane(
-                    NetworkPolicy(mode="loopback-connect", ports=endpoint.ports)
+                    NetworkPolicy(
+                        mode="validator-webrtc",
+                        signaling_port=endpoint.signaling_port,
+                        own_udp_ports=endpoint.validator_udp_ports,
+                        peer_udp_ports=endpoint.candidate_udp_ports,
+                    )
                 )
         else:
             process = run_validator_lane()

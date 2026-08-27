@@ -125,10 +125,12 @@ def test_validator_execution_configuration_binds_the_closed_stdin_launch_abi(
     )
     assert capture.environment_digest == digest_obj(
         {
-            "schema_version": "factory-validator-environment/4",
+            "schema_version": "factory-validator-environment/5",
             "ambient_environment": "closed",
-            "network": "loopback-connect-candidate-range",
-            "candidate_endpoint": "host-supervised-loopback-block",
+            "network": "loopback-webrtc-dual-block",
+            "network_protocols": ["tcp-signaling", "udp-ice"],
+            "candidate_endpoint": "host-supervised-webrtc-partitioned-block",
+            "ice_port_handoff": "supervisor-pinned-udp-block/1",
             "launch_contract": launch_contract,
             "read_scope": [
                 "build-input",
