@@ -48,8 +48,11 @@ from factory_runtime.lanes import (
     LaneRole,
     ValidationExecution,
 )
-from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
-from factory_runtime.resume import _stable_stream_digest
+from factory_runtime.resume import (
+    ResumeVerification,
+    _stable_stream_digest,
+    verify_resume_checkpoint,
+)
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes

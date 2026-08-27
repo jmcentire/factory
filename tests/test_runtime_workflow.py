@@ -983,7 +983,7 @@ def test_stage_e_canonical_form_is_shared_with_the_review_plane() -> None:
 
     assert admission_canonical is review_canonical
     assert admitted == review_canonical(document)
-    assert "—".encode("utf-8") in admitted
+    assert "—".encode() in admitted
     assert b"\\u2014" not in admitted
 
 
@@ -1017,4 +1017,4 @@ def test_intake_retains_the_exact_shared_canonical_request_bytes(tmp_path: Path)
         tmp_path / "runs" / "run-1" / "evidence" / "intake" / "execution-request.json"
     ).read_bytes()
     assert retained == canonical_document_bytes(request)
-    assert "—".encode("utf-8") in retained
+    assert "—".encode() in retained

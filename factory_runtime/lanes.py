@@ -23,7 +23,6 @@ from factory_runtime.acceptance_obligations import (
 )
 from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.isolation import (
-    DENY_ALL_NETWORK,
     IsolatedProcessResult,
     IsolationQualification,
     MacOSSandbox,
@@ -55,7 +54,7 @@ class IsolationBackend(Protocol):
     def qualify(
         self,
         root: str | Path,
-        network_policy: "NetworkPolicy" = ...,
+        network_policy: NetworkPolicy = ...,
     ) -> IsolationQualification: ...
 
     def run(
@@ -67,7 +66,7 @@ class IsolationBackend(Protocol):
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
-        network_policy: "NetworkPolicy" = ...,
+        network_policy: NetworkPolicy = ...,
     ) -> IsolatedProcessResult: ...
 
 
