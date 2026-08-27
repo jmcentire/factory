@@ -809,7 +809,6 @@ def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
 ) -> None:
     """Directly prove a range-scoped lane cannot reach an unrelated live loopback port."""
 
-    import errno
     import json
     import socket
 
@@ -844,3 +843,57 @@ def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
     finally:
         listener.close()
     assert json.loads(result.stdout)["denied"] is True
+
+
+@pytest.mark.isolation_integration
+def test_supervised_candidate_lifecycle_and_range_isolation(tmp_path: Path) -> None:
+    """Sealed candidate binds in-range, serves loopback, and leaves no survivor at teardown."""
+
+    import urllib.request
+
+    from factory_runtime.loopback_supervisor import (
+        _listeners_in_range,
+        supervised_candidate,
+    )
+
+    src = tmp_path / "candidate-src"
+    src.mkdir()
+    (src / "server.py").write_text(
+        "import http.server, os\n"
+        "port = int(os.environ['PORT'])\n"
+        "http.server.HTTPServer(('127.0.0.1', port),"
+        " http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+        encoding="utf-8",
+    )
+    with supervised_candidate(
+        candidate_launch=[sys.executable, "server.py"],
+        candidate_source=src,
+        candidate_runtime=None,
+        work_root=tmp_path / "work",
+        block_size=8,
+    ) as endpoint:
+        assert endpoint.port_low <= int(endpoint.base_url.rsplit(":", 1)[1]) <= endpoint.port_high
+        body = urllib.request.urlopen(endpoint.base_url + "/", timeout=5).read(16)
+        assert body
+        assert _listeners_in_range(endpoint.port_low, endpoint.port_high)
+        low, high = endpoint.port_low, endpoint.port_high
+    assert _listeners_in_range(low, high) == []
+
+
+def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatch) -> None:
+    """Concurrent attempts never receive an overlapping block."""
+
+    import factory_runtime.loopback_supervisor as sup
+
+    monkeypatch.setattr(sup, "_REGISTRY_DIR", tmp_path / "reg")
+    monkeypatch.setattr(sup, "_REGISTRY_FILE", tmp_path / "reg" / "active.json")
+
+    lo1, hi1, r1 = sup._allocate_block(8)
+    lo2, hi2, r2 = sup._allocate_block(8)
+    try:
+        assert hi1 < lo2 or hi2 < lo1  # disjoint
+    finally:
+        r1.close()
+        r2.close()
+        sup._revoke(lo1, hi1)
+        sup._revoke(lo2, hi2)

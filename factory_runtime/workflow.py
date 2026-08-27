@@ -18,14 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory_core.build_plan import PatternCatalog
 from factory_core.manifest import (
     SegregationPolicy,
     digest_bytes,
     digest_obj,
 )
-from factory_core.build_plan import PatternCatalog
 from factory_core.provenance import REQUIRED_PHASES, IntentBackreference, PhaseArtifact
 from factory_core.target import TargetManifestError, load_target_manifest
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.authority import (
     AuthorityPolicy,
     AuthorityVerificationError,
@@ -38,7 +39,6 @@ from factory_runtime.durability import (
     load_chain_root_material,
 )
 from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
-from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
 from factory_runtime.target_state import (
