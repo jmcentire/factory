@@ -49,6 +49,7 @@ from factory_runtime.lanes import (
     ValidationExecution,
 )
 from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
+from factory_runtime.resume import _stable_stream_digest
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
@@ -565,14 +566,33 @@ class FactoryOrchestrator:
                     label="Validator review Stage-E execution request",
                     max_bytes=4 * 1024 * 1024,
                 )
-                configuration_sources = {
-                    name: read_stable_regular_bytes(
+                configuration_sources = {}
+                configuration_trees = {}
+                configuration_large_files = {}
+                for name, source in sorted(resume_configuration_sources.items()):
+                    source_path = Path(source)
+                    if not source_path.is_symlink() and source_path.is_dir():
+                        # Sealed author outputs are directory sources; their review
+                        # identity is the same deterministic tree digest the resume
+                        # checkpoint bound, not a byte read.
+                        configuration_trees[name] = tree_digest(source_path)
+                        continue
+                    if (
+                        not source_path.is_symlink()
+                        and source_path.is_file()
+                        and source_path.stat().st_size > 4 * 1024 * 1024
+                    ):
+                        # A qualified lane executable binds by the same streaming
+                        # digest the resume checkpoint derived, never embedded bytes.
+                        configuration_large_files[name] = _stable_stream_digest(
+                            source_path, name
+                        )
+                        continue
+                    configuration_sources[name] = read_stable_regular_bytes(
                         source,
                         label=f"Validator review configuration source {name!r}",
                         max_bytes=4 * 1024 * 1024,
                     )
-                    for name, source in sorted(resume_configuration_sources.items())
-                }
                 test_change_sources: dict[str, bytes] = {}
                 if test_change_directory is not None:
                     test_change_sources = {
@@ -601,6 +621,8 @@ class FactoryOrchestrator:
                     changed_existing_tests=changed_test_ids,
                     test_change_artifacts=test_change_artifacts,
                     test_change_sources=test_change_sources,
+                    configuration_trees=configuration_trees,
+                    configuration_large_files=configuration_large_files,
                 )
             except (CandidateDiffError, StateAdmissionError) as exc:
                 raise OrchestrationError(str(exc)) from exc
@@ -664,8 +686,12 @@ class FactoryOrchestrator:
                 run_id,
                 exc=exc,
                 tester_identity=tester_identity,
-                implementer_identity=(implementer_identity if candidate_digest else ""),
-                verifier_identity=(verifier_identity if candidate_digest else ""),
+                # The causal lane identities are known and truthful even when the
+                # failure precedes any lane output; omitting them left the blocked
+                # entry unrecoverable by the repair-brief machinery, which requires
+                # all three roles on the causal failed attempt.
+                implementer_identity=implementer_identity,
+                verifier_identity=verifier_identity,
                 candidate_digest=candidate_digest,
                 tests_digest=tests_digest,
             )

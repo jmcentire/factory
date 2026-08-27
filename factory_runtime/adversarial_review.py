@@ -350,6 +350,8 @@ def build_review_authority_context(
     changed_existing_tests: Sequence[str],
     test_change_artifacts: Mapping[str, str],
     test_change_sources: Mapping[str, bytes],
+    configuration_trees: Mapping[str, str] | None = None,
+    configuration_large_files: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compile the exact externally anchored configuration and exceptional test authority."""
 
@@ -363,18 +365,51 @@ def build_review_authority_context(
         resume_checkpoint_digest
     ):
         raise AdversarialReviewError("review resume checkpoint content address does not re-derive")
-    if set(configuration_sources) != set(expected_configuration_digests):
+    trees = dict(configuration_trees or {})
+    large_files = dict(configuration_large_files or {})
+    named = [set(configuration_sources), set(trees), set(large_files)]
+    if sum(len(group) for group in named) != len(set().union(*named)):
+        raise AdversarialReviewError(
+            "review configuration sources, directory trees, and large files must not overlap"
+        )
+    if set().union(*named) != set(expected_configuration_digests):
         raise AdversarialReviewError(
             "review configuration source membership differs from the resume checkpoint"
         )
-    configuration_entries = [
-        _content_entry(
-            name,
-            configuration_sources[name],
-            declared_digest=expected_configuration_digests[name],
-        )
-        for name in sorted(configuration_sources)
-    ]
+    configuration_entries: list[dict[str, Any]] = []
+    for name in sorted(set().union(*named)):
+        if name in trees:
+            # A sealed author output is a directory source: its checkpoint address is
+            # the same deterministic tree digest resume binding derived, and its exact
+            # bytes are already retained as frozen lane evidence rather than embedded.
+            configuration_entries.append(
+                {
+                    "name": name,
+                    "declared_digest": expected_configuration_digests[name],
+                    "content_digest": trees[name],
+                    "kind": "directory-tree",
+                }
+            )
+        elif name in large_files:
+            # A qualified lane executable is checkpoint configuration far larger than
+            # a reviewable document; it binds by the same stability-checked streaming
+            # digest resume binding derived rather than by embedded bytes.
+            configuration_entries.append(
+                {
+                    "name": name,
+                    "declared_digest": expected_configuration_digests[name],
+                    "content_digest": large_files[name],
+                    "kind": "large-file",
+                }
+            )
+        else:
+            configuration_entries.append(
+                _content_entry(
+                    name,
+                    configuration_sources[name],
+                    declared_digest=expected_configuration_digests[name],
+                )
+            )
     for entry in configuration_entries:
         if entry["content_digest"] != expected_configuration_digests[entry["name"]]:
             raise AdversarialReviewError(
@@ -480,6 +515,18 @@ def _verify_review_authority_context(context: Mapping[str, Any]) -> None:
     ):
         raise AdversarialReviewError("review configuration sources are not canonical and unique")
     for entry in configuration:
+        if entry.get("kind") in {"directory-tree", "large-file"}:
+            # Digest-only entries carry no embedded bytes: their identity is the
+            # checkpoint-bound tree or streaming digest, re-derived at build time.
+            if (
+                set(entry) != {"name", "declared_digest", "content_digest", "kind"}
+                or entry.get("content_digest") != entry.get("declared_digest")
+                or not _DIGEST.fullmatch(str(entry.get("content_digest", "")))
+            ):
+                raise AdversarialReviewError(
+                    "review digest-only configuration entry does not re-derive"
+                )
+            continue
         _verify_content_entry(entry, allow_semantic_digest=False)
     changed_tests = [str(value) for value in context["changed_existing_tests"]]
     if changed_tests != sorted(changed_tests) or len(changed_tests) != len(set(changed_tests)):
