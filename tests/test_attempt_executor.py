@@ -127,7 +127,7 @@ def test_attempt_config_resolves_only_declared_regular_config_sources(tmp_path: 
     for path in sources.values():
         path.write_text("fixture", encoding="utf-8")
     document = {
-        "schema_version": "factory-attempt/1",
+        "schema_version": "factory-attempt/2",
         "artifacts": {
             "target_manifest": "target",
             "pattern_catalog": "catalog",
@@ -146,6 +146,8 @@ def test_attempt_config_resolves_only_declared_regular_config_sources(tmp_path: 
             for role in ("coder", "tester", "validator")
         },
         "prebuilt_author_outputs": None,
+        "candidate_runtime": None,
+        "candidate_launch": [],
         "surface_evidence": [],
         "determinism_records": [],
         "lane": "capability",
@@ -195,7 +197,7 @@ def test_attempt_config_accepts_sealed_runner_author_outputs(tmp_path: Path) -> 
         for role in ("coder", "tester", "validator")
     }
     document = {
-        "schema_version": "factory-attempt/1",
+        "schema_version": "factory-attempt/2",
         "artifacts": {
             "target_manifest": "target",
             "pattern_catalog": "catalog",
@@ -206,6 +208,8 @@ def test_attempt_config_accepts_sealed_runner_author_outputs(tmp_path: Path) -> 
         },
         "roles": roles,
         "prebuilt_author_outputs": {"coder": "coder-output", "tester": "tester-output"},
+        "candidate_runtime": None,
+        "candidate_launch": [],
         "surface_evidence": [],
         "determinism_records": [],
         "lane": "capability",
@@ -226,3 +230,13 @@ def test_attempt_config_accepts_sealed_runner_author_outputs(tmp_path: Path) -> 
         LaneRole.CODER: coder_output,
         LaneRole.TESTER: tester_output,
     }
+
+
+
+def test_attempt_config_rejects_legacy_v1(tmp_path: Path) -> None:
+    from factory_runtime.attempt import AttemptContractError, FactoryAttemptConfig
+
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"schema_version": "factory-attempt/1"}), encoding="utf-8")
+    with pytest.raises(AttemptContractError, match="factory-attempt/1 predates"):
+        FactoryAttemptConfig.load(path, configuration_sources={})

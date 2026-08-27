@@ -94,17 +94,27 @@ result["unrelated_listener_denied"] = unrelated_denied
 if mode == "deny-all":
     bind_denied = _denied(("127.0.0.1", 0), connect=False)
     result["bind_denied"] = bind_denied
-    result["connect_denied"] = unrelated_denied
     result["network_denied"] = bind_denied and unrelated_denied and external_denied
-    result["loopback_in_range_ok"] = False
-    result["loopback_out_of_range_denied"] = True
-else:
+    result["permitted_use_ok"] = False
+    result["wrong_direction_denied"] = True
+    result["out_of_range_denied"] = True
+elif mode == "loopback-connect":
+    # Validator: connect in-range works; binding (any port) and out-of-range connect denied.
     result["network_denied"] = False
-    result["loopback_in_range_ok"] = _allowed_connect(
-        int(os.environ["FACTORY_IN_RANGE_CONNECT_PORT"])
-    ) and _allowed_bind(int(os.environ["FACTORY_IN_RANGE_BIND_PORT"]))
-    result["loopback_out_of_range_denied"] = _denied(
-        ("127.0.0.1", int(os.environ["FACTORY_OUT_OF_RANGE_BIND_PORT"])), connect=False
+    result["permitted_use_ok"] = _allowed_connect(int(os.environ["FACTORY_IN_RANGE_CONNECT_PORT"]))
+    result["wrong_direction_denied"] = _denied(("127.0.0.1", 0), connect=False)
+    result["out_of_range_denied"] = _denied(
+        ("127.0.0.1", int(os.environ["FACTORY_OUT_OF_RANGE_PORT"])), connect=True
+    )
+else:  # loopback-bind
+    # Candidate: bind in-range works; any outbound connect and out-of-range bind denied.
+    result["network_denied"] = False
+    result["permitted_use_ok"] = _allowed_bind(int(os.environ["FACTORY_IN_RANGE_BIND_PORT"]))
+    result["wrong_direction_denied"] = _denied(
+        ("127.0.0.1", int(os.environ["FACTORY_IN_RANGE_CONNECT_PORT"])), connect=True
+    )
+    result["out_of_range_denied"] = _denied(
+        ("127.0.0.1", int(os.environ["FACTORY_OUT_OF_RANGE_PORT"])), connect=False
     )
 print(json.dumps(result, sort_keys=True))
 """
@@ -123,37 +133,52 @@ _MAX_LOOPBACK_RANGE_PORTS = 64
 
 @dataclass(frozen=True)
 class NetworkPolicy:
-    """A lane's exact, enforceable network boundary.
+    """A lane's exact, enforceable, directional network boundary.
 
-    ``deny-all`` is the default and the only policy the author (Coder/Tester) and broker
-    lanes may ever run under: no bind, no connect, not even loopback. ``loopback-range``
-    grants a validator lane an exact, per-attempt, contiguous loopback TCP port block —
-    enumerated as one Seatbelt rule per port because SBPL supports no range literal — so the
-    validator may connect to, and its launched candidate child may bind, only ports inside
-    the block. Every other endpoint, loopback or external, stays denied.
+    Three modes, each scoped to an exact per-attempt contiguous loopback TCP block that is
+    enumerated as one Seatbelt rule per port (SBPL has no range literal):
+
+    - ``deny-all`` (default): the only policy author (Coder/Tester) and broker lanes ever run
+      under. No bind, no connect, not even loopback.
+    - ``loopback-bind``: the sealed candidate's own sandbox. It may bind/listen only inside
+      the block and may make no outbound connection at all — it is a pure server.
+    - ``loopback-connect``: the validator's sandbox. It may connect only to endpoints inside
+      the block and may not bind — it drives the candidate but cannot itself stand up a peer.
+
+    Every endpoint outside the block, loopback or external, stays denied in every mode.
     """
 
     mode: str = "deny-all"
     ports: tuple[int, ...] = ()
 
+    _MODES = ("deny-all", "loopback-bind", "loopback-connect")
+
     def __post_init__(self) -> None:
-        if self.mode not in {"deny-all", "loopback-range"}:
+        if self.mode not in self._MODES:
             raise IsolationError(f"unsupported network policy mode: {self.mode}")
         if self.mode == "deny-all":
             if self.ports:
                 raise IsolationError("deny-all network policy cannot enumerate ports")
             return
         if not self.ports:
-            raise IsolationError("loopback-range network policy requires at least one port")
+            raise IsolationError(f"{self.mode} network policy requires at least one port")
         if len(self.ports) > _MAX_LOOPBACK_RANGE_PORTS:
-            raise IsolationError("loopback-range exceeds the per-attempt port ceiling")
+            raise IsolationError("loopback range exceeds the per-attempt port ceiling")
         if list(self.ports) != sorted(set(self.ports)):
-            raise IsolationError("loopback-range ports must be unique and ascending")
+            raise IsolationError("loopback range ports must be unique and ascending")
         if self.ports[-1] - self.ports[0] + 1 != len(self.ports):
-            raise IsolationError("loopback-range ports must be a contiguous block")
+            raise IsolationError("loopback range ports must be a contiguous block")
         for port in self.ports:
             if not (1 <= port <= 65535):
-                raise IsolationError(f"loopback-range port out of range: {port}")
+                raise IsolationError(f"loopback range port out of range: {port}")
+
+    @property
+    def allows_bind(self) -> bool:
+        return self.mode == "loopback-bind"
+
+    @property
+    def allows_connect(self) -> bool:
+        return self.mode == "loopback-connect"
 
     @property
     def identity(self) -> dict[str, object]:
@@ -167,9 +192,11 @@ class NetworkPolicy:
         lines: list[str] = []
         for port in self.ports:
             endpoint = _scheme_string(f"localhost:{port}")
-            lines.append(f"(allow network-outbound (remote tcp {endpoint}))")
-            lines.append(f"(allow network-bind (local tcp {endpoint}))")
-            lines.append(f"(allow network-inbound (local tcp {endpoint}))")
+            if self.mode == "loopback-bind":
+                lines.append(f"(allow network-bind (local tcp {endpoint}))")
+                lines.append(f"(allow network-inbound (local tcp {endpoint}))")
+            else:  # loopback-connect
+                lines.append(f"(allow network-outbound (remote tcp {endpoint}))")
         return "\n".join(lines)
 
 
@@ -183,8 +210,9 @@ class IsolationQualification:
     write_denied: bool
     network_denied: bool
     network_policy: str = "deny-all"
-    loopback_in_range_ok: bool = False
-    loopback_out_of_range_denied: bool = True
+    permitted_use_ok: bool = False
+    wrong_direction_denied: bool = True
+    out_of_range_denied: bool = True
     external_denied: bool = True
     unrelated_listener_denied: bool = True
 
@@ -192,15 +220,18 @@ class IsolationQualification:
     def satisfied(self) -> bool:
         if self.network_policy == "deny-all":
             return self.read_denied and self.write_denied and self.network_denied
-        # A loopback-range lane deliberately succeeds inside its block; the guarantee is
-        # that filesystem denial still holds, the permitted use works, and every endpoint
-        # outside the block — out-of-range loopback, a live unrelated listener, and any
-        # external address — is refused. network_denied is not required or expected here.
+        # A directional loopback lane deliberately succeeds at its permitted use inside the
+        # block; the guarantee is that filesystem denial holds, the permitted direction works,
+        # and everything else is refused: the wrong direction (bind for a connect-only lane,
+        # or any outbound for a bind-only lane), any out-of-range endpoint, a live unrelated
+        # loopback listener, and every external address. ``network_denied`` is neither required
+        # nor expected here.
         return (
             self.read_denied
             and self.write_denied
-            and self.loopback_in_range_ok
-            and self.loopback_out_of_range_denied
+            and self.permitted_use_ok
+            and self.wrong_direction_denied
+            and self.out_of_range_denied
             and self.unrelated_listener_denied
             and self.external_denied
         )
@@ -390,24 +421,25 @@ class MacOSSandbox:
             "FACTORY_UNRELATED_PORT": str(deny_port),
             "FACTORY_NETWORK_MODE": network_policy.mode,
         }
-        if network_policy.mode == "loopback-range":
-            # A host listener on the first in-range port proves permitted connect; the
-            # candidate would bind these ports, so the probe also binds the last in-range
-            # port (distinct from the listener) to prove permitted bind, and one port just
-            # past the block to prove the block is exact.
+        if network_policy.mode != "deny-all":
+            # In-range endpoints for the permitted-use probe, plus one port just past the
+            # block to prove the block is exact. A connect-only lane needs a live in-range
+            # listener; a bind-only lane needs a free in-range port to bind and an in-range
+            # port to prove outbound is refused.
             in_range_connect = network_policy.ports[0]
             in_range_bind = network_policy.ports[-1]
-            out_of_range_bind = network_policy.ports[-1] + 1
-            if out_of_range_bind == deny_port or in_range_bind == deny_port:
+            out_of_range = network_policy.ports[-1] + 1
+            if deny_port in (in_range_connect, in_range_bind, out_of_range):
                 raise IsolationError("qualification port allocation collided; retry attempt")
-            in_range_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            in_range_listener.bind(("127.0.0.1", in_range_connect))
-            in_range_listener.listen(1)
+            if network_policy.mode == "loopback-connect":
+                in_range_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                in_range_listener.bind(("127.0.0.1", in_range_connect))
+                in_range_listener.listen(1)
             environment.update(
                 {
                     "FACTORY_IN_RANGE_CONNECT_PORT": str(in_range_connect),
                     "FACTORY_IN_RANGE_BIND_PORT": str(in_range_bind),
-                    "FACTORY_OUT_OF_RANGE_BIND_PORT": str(out_of_range_bind),
+                    "FACTORY_OUT_OF_RANGE_PORT": str(out_of_range),
                 }
             )
 
@@ -438,8 +470,9 @@ class MacOSSandbox:
             write_denied=result.get("write_denied") is True,
             network_denied=result.get("network_denied") is True,
             network_policy=network_policy.mode,
-            loopback_in_range_ok=result.get("loopback_in_range_ok") is True,
-            loopback_out_of_range_denied=result.get("loopback_out_of_range_denied") is True,
+            permitted_use_ok=result.get("permitted_use_ok") is True,
+            wrong_direction_denied=result.get("wrong_direction_denied") is True,
+            out_of_range_denied=result.get("out_of_range_denied") is True,
             external_denied=result.get("external_denied") is True,
             unrelated_listener_denied=result.get("unrelated_listener_denied") is True,
         )
