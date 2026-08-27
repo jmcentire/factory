@@ -172,6 +172,7 @@ def _parser() -> argparse.ArgumentParser:
     execute_attempt.add_argument("--checkpoint", required=True)
     execute_attempt.add_argument("--checkpoint-digest", required=True)
     execute_attempt.add_argument("--repair-brief", default="")
+    execute_attempt.add_argument("--acceptance-obligation-catalog-digest", default=None)
     execute_attempt.add_argument(
         "--config-source", action="append", default=[], metavar="NAME=PATH"
     )
@@ -901,6 +902,13 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             trusted_root_public_key=arguments.root_public_key,
             tessera=_tessera(arguments.tessera_bin),
             configuration_sources=configuration_sources,
+            # On first activation the checkpoint must already record the proposed
+            # catalog digest for the orchestrator's own re-verification, while the
+            # run projection still records none — the caller supplies the expected
+            # value exactly as verify-resume-checkpoint does.
+            expected_acceptance_obligation_catalog_digest=(
+                arguments.acceptance_obligation_catalog_digest
+            ),
             accepted_previous_checkpoint_digests=(
                 arguments.accepted_previous_checkpoint_digest
             ),
