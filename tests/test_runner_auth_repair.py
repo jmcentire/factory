@@ -489,10 +489,33 @@ def _auth_residue(root: Path, *, key: str, exclude: Sequence[Path] = ()) -> list
     residue: list[str] = []
     key_bytes = key.encode("utf-8")
     excluded = list(exclude)
+    tree = root.resolve()
     for path in sorted(root.rglob("*")):
         if any(item == path or item in path.parents for item in excluded):
             continue
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink():
+            # A symlink is auth residue when it cannot be resolved or when it points
+            # outside the scanned tree: an escaping link is a live pointer at (for
+            # example) the named-secret store that a byte scan of retained regular
+            # files can never see. In-tree links are covered by scanning their
+            # targets, which rglob visits as ordinary entries.
+            try:
+                target = path.resolve(strict=False)
+            except OSError:
+                residue.append(f"unresolvable retained symlink: {path}")
+                continue
+            if not target.is_relative_to(tree):
+                residue.append(f"escaping retained symlink: {path}")
+            elif any(
+                target == item.resolve() or target.is_relative_to(item.resolve())
+                for item in excluded
+            ):
+                # The excluded paths are the secret store itself: a retained link
+                # RESOLVING INTO them is a live pointer at the plaintext key even
+                # though the link sits outside the excluded subtrees.
+                residue.append(f"retained symlink into excluded secret material: {path}")
+            continue
+        if not path.is_file():
             continue
         if path.name == "auth.json":
             residue.append(f"auth file retained: {path}")
@@ -1289,3 +1312,53 @@ def test_t10_rejected_bootstrap_diagnostic_is_bounded_and_redacted(
     assert marker in combined
     assert _OPENAI_KEY not in combined
     assert len(combined.encode("utf-8")) <= 65_536
+
+
+def test_t11_model_planted_symlink_to_key_is_a_retention_hazard(
+    tmp_path: Path,
+) -> None:
+    """F11 hardening: the retained-tree key-free proof must not be evadable by
+    symlink. A model process with write access to its home can plant a symlink
+    whose target is the resolved billing-key file; the key bytes then never appear
+    in any retained regular file, yet the retained workspace carries a live
+    pointer to the plaintext key on the host where the secret store exists. The
+    dispatch must fail closed with a typed retention hazard, not report the tree
+    "proven key-free".
+
+    [guard] red-now against 29fdcf3's scan: ``os.walk(followlinks=False)`` plus an
+    ``is_symlink()`` skip never reads through (or objects to) the planted link, so
+    the dispatch there completes green with the pointer retained.
+
+    Named mutation that reddens this test after repair: restore the silent
+    ``is_symlink()`` skip (or drop the escape check) so a symlink under the
+    workspace is ignored instead of failing the dispatch as a retention hazard.
+    """
+
+    class SymlinkPlantingBackend(CodexHomeBackend):
+        """Plants home/key-link -> <secret file> during the first invocation."""
+
+        plant_target: Path | None = None
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            home = kwargs["environment"].get("HOME", "")
+            if self.plant_target is not None and home:
+                link = Path(home) / "key-link"
+                if not link.is_symlink():
+                    os.symlink(self.plant_target, link)
+            return super().run(*args, **kwargs)
+
+    backend = SymlinkPlantingBackend(require_session_persistence=False)
+    fixture = _build_fixture(
+        tmp_path / "t11", billing_key_name="OPENAI_API_KEY", backend=backend
+    )
+    backend.plant_target = fixture["secret_root"] / "OPENAI_API_KEY"
+
+    with pytest.raises(RunnerError, match="retention hazard.*symlink"):
+        _dispatch(fixture)
+
+    assert len(backend.calls) >= 1, "dispatch failed before any model invocation ran"
+    # The planted pointer is exactly the residue the oracle helper must also see.
+    residue = _auth_residue(
+        fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
+    )
+    assert any("symlink" in item for item in residue), residue

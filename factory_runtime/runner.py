@@ -482,7 +482,9 @@ class CodexApiKeyBootstrap:
     included, since provision runs inside the dispatch's guarded region — after
     failure evidence is retained),
     verifies the removal, and then scans every retained regular file under the
-    workspace for the raw key bytes, failing the dispatch on any appearance.  Model
+    workspace for the raw key bytes, failing the dispatch on any appearance — and
+    on any retained symlink that escapes the workspace, which would otherwise
+    retain a live pointer to the key the byte scan cannot see.  Model
     stdout/stderr/structured output are separately gated by ``_require_no_secret_leak``
     and retained diagnostics pass through ``_redact_diagnostic_stream`` with the key in
     the redaction set.
@@ -562,6 +564,11 @@ class CodexApiKeyBootstrap:
         been retained — so Codex-side session rollouts and logs survive as retained
         diagnostics while the credential does not.  Any cleanup failure is a typed
         retention hazard carrying the true model-attempt count; it is never silent.
+
+        The key-free proof covers symlinks: a retained symlink must resolve inside
+        the retained workspace (its target is then scanned like any regular file);
+        a link escaping the tree — a model-plantable live pointer at the plaintext
+        key — fails the dispatch as a retention hazard rather than being skipped.
         """
 
         try:
@@ -582,7 +589,27 @@ class CodexApiKeyBootstrap:
             )
         needle = self.api_key.encode("utf-8")
         try:
-            for root, _directories, files in os.walk(workspace, followlinks=False):
+            workspace_root = workspace.resolve()
+            for root, directories, files in os.walk(workspace, followlinks=False):
+                for name in sorted((*directories, *files)):
+                    candidate = Path(root) / name
+                    if not candidate.is_symlink():
+                        continue
+                    # Containment: a retained symlink is admissible only when it
+                    # resolves inside the retained tree, where its target is scanned
+                    # like any other file.  A link that escapes — e.g. a model-planted
+                    # pointer at the named-secret store — retains a live path to the
+                    # plaintext key without the key bytes ever appearing in a
+                    # retained file, so it is a retention hazard, not a skip.
+                    if not candidate.resolve(strict=False).is_relative_to(
+                        workspace_root
+                    ):
+                        raise RunnerError(
+                            "retention hazard: retained runner material contains a "
+                            "symlink escaping the retained workspace: "
+                            f"{candidate.relative_to(workspace).as_posix()}",
+                            model_attempts=model_attempts,
+                        )
                 for file_name in sorted(files):
                     candidate = Path(root) / file_name
                     if candidate.is_symlink() or not candidate.is_file():
