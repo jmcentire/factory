@@ -1451,3 +1451,88 @@ def test_t11_in_tree_symlink_target_bearing_key_bytes_is_still_a_hazard(
         fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
     )
     assert any("key material retained" in item for item in residue), residue
+
+
+def test_t11_escaping_symlinked_directory_is_a_retention_hazard(
+    tmp_path: Path,
+) -> None:
+    """Directory analog of the planted-symlink attack: ``os.walk(followlinks=False)``
+    lists a symlinked directory in its directories half and never descends it, so
+    without the directory half of the containment loop a model can plant
+    home/leakdir -> <secret_root> and the retained workspace carries a live pointer
+    at the whole secret store — no key bytes in any retained regular file, dispatch
+    reported "proven key-free". The dispatch must fail closed as a retention hazard.
+
+    Named mutation that reddens this test: scan only the files half of the walk
+    (``for name in sorted(files):``) so symlinked directories are never vetted.
+    """
+
+    class DirLinkPlantingBackend(CodexHomeBackend):
+        """Plants home/leakdir -> <secret_root> (escaping directory symlink)."""
+
+        plant_target: Path | None = None
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            home = kwargs["environment"].get("HOME", "")
+            if self.plant_target is not None and home:
+                link = Path(home) / "leakdir"
+                if not link.is_symlink():
+                    os.symlink(self.plant_target, link, target_is_directory=True)
+            return super().run(*args, **kwargs)
+
+    backend = DirLinkPlantingBackend(require_session_persistence=False)
+    fixture = _build_fixture(
+        tmp_path / "t11-dir", billing_key_name="OPENAI_API_KEY", backend=backend
+    )
+    backend.plant_target = fixture["secret_root"]
+
+    with pytest.raises(RunnerError, match="retention hazard.*symlink"):
+        _dispatch(fixture)
+
+    assert len(backend.calls) >= 1, "dispatch failed before any model invocation ran"
+    residue = _auth_residue(
+        fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
+    )
+    assert any("symlink" in item for item in residue), residue
+
+
+def test_t11_in_tree_symlinked_directory_is_admissible(
+    tmp_path: Path,
+) -> None:
+    """Directory analog of the admissible branch: a symlinked directory whose target
+    resolves inside the retained workspace must not fail the dispatch — its contents
+    are reachable through the real directory, which the walk descends and scans.
+
+    Named mutation that reddens this test: widen the containment check to reject
+    every symlinked directory regardless of where it resolves.
+    """
+
+    class InTreeDirLinkBackend(CodexHomeBackend):
+        """Plants home/state-link -> home/state (benign, in-tree directory)."""
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            home = kwargs["environment"].get("HOME", "")
+            if home:
+                state = Path(home) / "state"
+                state.mkdir(exist_ok=True)
+                pointer = state / "current.txt"
+                if not pointer.exists():
+                    pointer.write_text("benign session state\n", encoding="utf-8")
+                link = Path(home) / "state-link"
+                if not link.is_symlink():
+                    os.symlink(state, link, target_is_directory=True)
+            return super().run(*args, **kwargs)
+
+    backend = InTreeDirLinkBackend(require_session_persistence=False)
+    fixture = _build_fixture(
+        tmp_path / "t11-dir-intree", billing_key_name="OPENAI_API_KEY", backend=backend
+    )
+
+    handoff, _ = _dispatch(fixture)
+
+    assert handoff["kind"] == "handoff"
+    assert len(backend.calls) == 3
+    residue = _auth_residue(
+        fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
+    )
+    assert residue == [], residue
