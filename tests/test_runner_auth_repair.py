@@ -1362,3 +1362,92 @@ def test_t11_model_planted_symlink_to_key_is_a_retention_hazard(
         fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
     )
     assert any("symlink" in item for item in residue), residue
+
+
+def test_t11_in_tree_symlink_is_admissible_in_a_key_free_dispatch(
+    tmp_path: Path,
+) -> None:
+    """Specificity of the symlink containment check: a retained symlink whose target
+    resolves INSIDE the retained workspace is admissible — the dispatch completes and
+    hands off. Codex session state lives in the model-writable CODEX_HOME and may
+    legitimately use in-tree pointers (e.g. a current-rollout link), so an
+    over-strict reject-all-symlinks check would fail a fully successful, key-free
+    dispatch: a false-positive availability break masquerading as a security control.
+
+    Named mutation that reddens this test: widen the containment check to reject
+    every symlink (``if candidate.is_symlink(): raise``) instead of only links
+    escaping the retained workspace.
+    """
+
+    class InTreeLinkBackend(CodexHomeBackend):
+        """Plants home/rollout-link -> home/rollout-current.txt (benign, in-tree)."""
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            home = kwargs["environment"].get("HOME", "")
+            if home:
+                target = Path(home) / "rollout-current.txt"
+                if not target.exists():
+                    target.write_text("benign session pointer target\n", encoding="utf-8")
+                link = Path(home) / "rollout-link"
+                if not link.is_symlink():
+                    os.symlink(target, link)
+            return super().run(*args, **kwargs)
+
+    backend = InTreeLinkBackend(require_session_persistence=False)
+    fixture = _build_fixture(
+        tmp_path / "t11-intree", billing_key_name="OPENAI_API_KEY", backend=backend
+    )
+
+    handoff, _ = _dispatch(fixture)
+
+    assert handoff["kind"] == "handoff"
+    assert len(backend.calls) == 3
+    residue = _auth_residue(
+        fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
+    )
+    assert residue == [], residue
+
+
+def test_t11_in_tree_symlink_target_bearing_key_bytes_is_still_a_hazard(
+    tmp_path: Path,
+) -> None:
+    """The admissible in-tree branch is safe only because the link's target is
+    scanned like any other retained regular file: when that target holds the raw
+    key bytes, the byte scan must fail the dispatch as a retention hazard — the
+    symlink being in-tree buys the model nothing.
+
+    Named mutation that reddens this test: drop the retained-file byte scan (or
+    skip files reachable through admitted in-tree symlinks) so a key-bearing
+    retained target rides out the dispatch undetected.
+    """
+
+    class KeyBearingTargetBackend(CodexHomeBackend):
+        """Plants home/leak-link -> home/leak.txt where leak.txt holds the key."""
+
+        plant_key: str = ""
+
+        def run(self, *args: Any, **kwargs: Any) -> RunnerProcessResult:
+            home = kwargs["environment"].get("HOME", "")
+            if home and self.plant_key:
+                target = Path(home) / "leak.txt"
+                if not target.exists():
+                    target.write_text(f"exfil: {self.plant_key}\n", encoding="utf-8")
+                link = Path(home) / "leak-link"
+                if not link.is_symlink():
+                    os.symlink(target, link)
+            return super().run(*args, **kwargs)
+
+    backend = KeyBearingTargetBackend(require_session_persistence=False)
+    backend.plant_key = _OPENAI_KEY
+    fixture = _build_fixture(
+        tmp_path / "t11-target", billing_key_name="OPENAI_API_KEY", backend=backend
+    )
+
+    with pytest.raises(RunnerError, match="retention hazard"):
+        _dispatch(fixture)
+
+    assert len(backend.calls) >= 1, "dispatch failed before any model invocation ran"
+    residue = _auth_residue(
+        fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
+    )
+    assert any("key material retained" in item for item in residue), residue
