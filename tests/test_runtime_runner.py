@@ -538,6 +538,62 @@ def test_codex_api_key_is_bootstrapped_to_auth_file_and_absent_from_model_env(
     assert "named-secret-value" not in json.dumps(receipt.document, sort_keys=True)
 
 
+def test_codex_auth_provision_failure_sweeps_partial_auth_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A graceful provision failure must still reach the conclude sweep.
+
+    A mid-write OSError (disk full) can leave a partially written auth.json holding
+    raw key bytes, and provision's own first-chance unlink can fail too. Because
+    provision runs inside the dispatch's guarded region, that failure routes through
+    ``conclude`` — the partial key-bearing file is removed from the retained
+    workspace, the retained tree is proven key-free, and the failure surfaces as a
+    typed pre-model RunnerError with zero billed attempts.
+
+    Named mutation that reddens this test: move ``bootstrap.provision()`` back
+    outside the dispatch ``try:`` so a provisioning failure bypasses ``conclude``
+    and the partial auth.json (raw key bytes) stays in the retained workspace.
+    """
+
+    backend = FakeBackend()
+    fixture = _fixture(tmp_path, backend=backend)
+    _, _, manifest, projection, _, _, _ = fixture
+    secret_root = projection.parent / "secrets"
+    (secret_root / "FACTORY_TEST_API_KEY").rename(secret_root / "OPENAI_API_KEY")
+    manifest["billing_key_name"] = "OPENAI_API_KEY"
+    manifest["secret_names"] = ["OPENAI_API_KEY"]
+
+    real_write_once = runtime_runner._write_once
+
+    def partial_then_fail(path: Path, content: bytes) -> None:
+        if path.name == "auth.json":
+            path.write_bytes(content[: max(len(content) - 2, 1)])
+            raise OSError("injected mid-write failure (disk full)")
+        real_write_once(path, content)
+
+    real_unlink = os.unlink
+    first_chance: list[str] = []
+
+    def unlink_fails_once(path: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(path).name == "auth.json" and not first_chance:
+            first_chance.append(str(path))
+            raise PermissionError("injected first-chance unlink failure")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_runner, "_write_once", partial_then_fail)
+    monkeypatch.setattr(os, "unlink", unlink_fails_once)
+
+    with pytest.raises(RunnerError, match="could not be provisioned") as caught:
+        _dispatch(fixture)
+
+    assert caught.value.model_attempts == 0
+    assert backend.calls == []  # pre-model: no attempt was billed
+    assert first_chance, "sabotaged first-chance unlink never fired"
+    leftovers = [path for path in tmp_path.rglob("auth.json") if path.is_file()]
+    assert leftovers == [], leftovers
+
+
 def test_runner_receipt_v2_keeps_its_historical_prompt_identity(tmp_path: Path) -> None:
     _, receipt = _dispatch(_fixture(tmp_path))
     historical = json.loads(json.dumps(receipt.document))
