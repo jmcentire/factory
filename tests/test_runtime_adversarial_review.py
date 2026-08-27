@@ -1179,3 +1179,99 @@ def test_retention_refuses_a_destination_swapped_after_successful_link(
 
     with pytest.raises(AdversarialReviewError):
         retain_validator_adversarial_review(tmp_path / "runs", "run-1", verified)
+
+
+def test_authority_context_binds_sealed_author_directory_sources(tmp_path: Path) -> None:
+    """Directory configuration sources bind by the same tree digest resume pinned."""
+
+    from factory_runtime.adversarial_review import (
+        AdversarialReviewError,
+        build_review_authority_context,
+    )
+    from factory_runtime.snapshot import tree_digest
+
+    sealed = tmp_path / "coder-sealed"
+    (sealed / "artifact").mkdir(parents=True)
+    (sealed / "artifact" / "server.py").write_text("print('ok')\n", encoding="utf-8")
+    sealed_digest = tree_digest(sealed)
+    checkpoint_bytes = canonical_document_bytes(
+        {
+            "schema_version": "factory-resume-checkpoint/1",
+            "checkpoint_id": "cp-1",
+            "execution_request_digest": "sha256:" + "e" * 64,
+        }
+    )
+    config_bytes = b'{"exact":true}\n'
+    expected = {
+        "attempt-config": digest_bytes(config_bytes),
+        "coder-sealed": sealed_digest,
+    }
+
+    context = build_review_authority_context(
+        resume_checkpoint_digest=digest_obj(json.loads(checkpoint_bytes)),
+        resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+        resume_checkpoint_bytes=checkpoint_bytes,
+        configuration_sources={"attempt-config": config_bytes},
+        expected_configuration_digests=expected,
+        changed_existing_tests=[],
+        test_change_artifacts={},
+        test_change_sources={},
+        configuration_trees={"coder-sealed": sealed_digest},
+    )
+
+    big = tmp_path / "interpreter.bin"
+    big.write_bytes(b"x" * (5 * 1024 * 1024))
+    import hashlib
+    big_digest = "sha256:" + hashlib.sha256(big.read_bytes()).hexdigest()
+    expected_with_big = {**expected, "python-runtime": big_digest}
+    context_big = build_review_authority_context(
+        resume_checkpoint_digest=digest_obj(json.loads(checkpoint_bytes)),
+        resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+        resume_checkpoint_bytes=checkpoint_bytes,
+        configuration_sources={"attempt-config": config_bytes},
+        expected_configuration_digests=expected_with_big,
+        changed_existing_tests=[],
+        test_change_artifacts={},
+        test_change_sources={},
+        configuration_trees={"coder-sealed": sealed_digest},
+        configuration_large_files={"python-runtime": big_digest},
+    )
+    big_entries = {e["name"]: e for e in context_big["configuration_sources"]}
+    assert big_entries["python-runtime"]["kind"] == "large-file"
+    assert "content_base64" not in big_entries["python-runtime"]
+
+    from factory_runtime.adversarial_review import _verify_review_authority_context
+
+    _verify_review_authority_context(context_big)
+
+    entries = {entry["name"]: entry for entry in context["configuration_sources"]}
+    assert entries["coder-sealed"]["kind"] == "directory-tree"
+    assert entries["coder-sealed"]["content_digest"] == sealed_digest
+    assert "content_base64" not in entries["coder-sealed"]
+    assert entries["attempt-config"]["content_digest"] == expected["attempt-config"]
+
+    with pytest.raises(AdversarialReviewError, match="changed after checkpoint"):
+        build_review_authority_context(
+            resume_checkpoint_digest=digest_obj(json.loads(checkpoint_bytes)),
+            resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+            resume_checkpoint_bytes=checkpoint_bytes,
+            configuration_sources={"attempt-config": config_bytes},
+            expected_configuration_digests=expected,
+            changed_existing_tests=[],
+            test_change_artifacts={},
+            test_change_sources={},
+            configuration_trees={"coder-sealed": "sha256:" + "0" * 64},
+        )
+
+    with pytest.raises(AdversarialReviewError, match="membership differs"):
+        build_review_authority_context(
+            resume_checkpoint_digest=digest_obj(json.loads(checkpoint_bytes)),
+            resume_checkpoint_source_digest=digest_bytes(checkpoint_bytes),
+            resume_checkpoint_bytes=checkpoint_bytes,
+            configuration_sources={"attempt-config": config_bytes},
+            expected_configuration_digests=expected,
+            changed_existing_tests=[],
+            test_change_artifacts={},
+            test_change_sources={},
+            configuration_trees={},
+        )

@@ -8,7 +8,9 @@ the digest from independent custody and freeze it for the process/session.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunState, RunStateError, RunStore
+from factory_runtime.snapshot import SnapshotError, tree_digest
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
 from factory_runtime.target_state import TargetResolutionError, verify_target_state
 from factory_runtime.tessera import TesseraCli, TesseraVerificationError
@@ -134,6 +137,20 @@ def _configuration_digests(sources: Mapping[str, str | Path]) -> dict[str, str]:
     for name, raw_path in sorted(sources.items()):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name):
             raise ResumeVerificationError(f"invalid configuration source name: {name!r}")
+        path = Path(raw_path)
+        if not path.is_symlink() and path.is_dir():
+            # Sealed author outputs are directories: an attempt configuration must
+            # name them as sources, and the external checkpoint must pin them just
+            # as exactly as any file. The content address of a directory source is
+            # its deterministic tree digest, re-derived identically at derive and
+            # verify time.
+            try:
+                result[name] = tree_digest(path)
+            except SnapshotError as exc:
+                raise ResumeVerificationError(
+                    f"configuration source {name!r} tree is invalid: {exc}"
+                ) from exc
+            continue
         try:
             raw = read_stable_regular_bytes(
                 raw_path,
@@ -141,9 +158,48 @@ def _configuration_digests(sources: Mapping[str, str | Path]) -> dict[str, str]:
                 max_bytes=_MAX_DOCUMENT_BYTES,
             )
         except StateAdmissionError as exc:
-            raise ResumeVerificationError(str(exc)) from exc
+            if "exceeds" not in str(exc):
+                raise ResumeVerificationError(str(exc)) from exc
+            # A qualified lane executable (for example the Validator's exact
+            # interpreter) is legitimate checkpoint configuration and larger than
+            # a document. Stream-digest it with the same stability guarantee:
+            # the file identity must not change across the read.
+            result[name] = _stable_stream_digest(path, name)
+            continue
         result[name] = digest_bytes(raw)
     return result
+
+
+def _stable_stream_digest(path: Path, name: str) -> str:
+    import hashlib
+
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        )
+    except OSError as exc:
+        raise ResumeVerificationError(
+            f"configuration source {name!r} is unavailable: {exc}"
+        ) from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ResumeVerificationError(f"configuration source {name!r} is not regular")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        identity = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in identity):
+            raise ResumeVerificationError(
+                f"configuration source {name!r} changed during the read"
+            )
+        return "sha256:" + digest.hexdigest()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _entries(path: Path, *, label: str) -> tuple[Mapping[str, Any], ...]:

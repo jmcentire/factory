@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -445,3 +446,47 @@ def test_retained_receipt_tampering_is_denied_even_with_unchanged_checkpoint(
     receipt.write_text('{"tampered":true}\n', encoding="utf-8")
     with pytest.raises(ResumeVerificationError, match="retained authorize-change receipt"):
         _verify(workflow, tessera, genesis_path, config, checkpoint_path, checkpoint_digest)
+
+
+def test_configuration_sources_admit_directories_by_tree_digest(tmp_path: Path) -> None:
+    """Sealed author outputs are directory sources; the checkpoint pins their tree."""
+
+    from factory_core.manifest import digest_bytes
+    from factory_runtime.snapshot import tree_digest
+
+    document = tmp_path / "config.json"
+    document.write_bytes(b'{"exact":true}\n')
+    sealed = tmp_path / "sealed"
+    (sealed / "artifact").mkdir(parents=True)
+    (sealed / "artifact" / "candidate.py").write_text("print(1)\n", encoding="utf-8")
+
+    digests = resume_module._configuration_digests(
+        {"attempt-config": document, "coder-sealed": sealed}
+    )
+
+    assert digests["attempt-config"] == digest_bytes(document.read_bytes())
+    assert digests["coder-sealed"] == tree_digest(sealed)
+
+    (sealed / "artifact" / "candidate.py").write_text("print(2)\n", encoding="utf-8")
+    mutated = resume_module._configuration_digests(
+        {"attempt-config": document, "coder-sealed": sealed}
+    )
+    assert mutated["coder-sealed"] != digests["coder-sealed"]
+
+
+def test_configuration_sources_stream_digest_large_regular_files(tmp_path: Path) -> None:
+    """A qualified lane executable is checkpoint configuration; pin its exact bytes."""
+
+    import hashlib
+
+    small = tmp_path / "config.json"
+    small.write_bytes(b'{"exact":true}\n')
+    big = tmp_path / "interpreter.bin"
+    payload = os.urandom(1024) * 1100  # > 1 MiB document ceiling
+    big.write_bytes(payload)
+
+    digests = resume_module._configuration_digests(
+        {"attempt-config": small, "python-runtime": big}
+    )
+
+    assert digests["python-runtime"] == "sha256:" + hashlib.sha256(payload).hexdigest()
