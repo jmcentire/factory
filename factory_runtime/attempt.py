@@ -24,7 +24,7 @@ from factory_runtime.lanes import LaneRole
 from factory_runtime.orchestrator import FactoryOrchestrator
 from factory_runtime.workflow import FactoryWorkflow
 
-_CONFIG_VERSION = "factory-attempt/1"
+_CONFIG_VERSION = "factory-attempt/2"
 
 
 class AttemptContractError(ValueError):
@@ -54,6 +54,8 @@ class FactoryAttemptConfig:
             "artifacts",
             "roles",
             "prebuilt_author_outputs",
+            "candidate_runtime",
+            "candidate_launch",
             "surface_evidence",
             "determinism_records",
             "lane",
@@ -61,6 +63,11 @@ class FactoryAttemptConfig:
             "monitors",
             "monitor_declared_unit_count",
         }
+        if document.get("schema_version") == "factory-attempt/1":
+            raise AttemptContractError(
+                "attempt config factory-attempt/1 predates the sealed candidate runtime/launch "
+                "contract; re-author as factory-attempt/2"
+            )
         if set(document) != allowed:
             raise AttemptContractError("attempt config fields are incomplete or open")
         if document["schema_version"] != _CONFIG_VERSION:
@@ -85,6 +92,18 @@ class FactoryAttemptConfig:
         prebuilt_author_outputs = _prebuilt_author_outputs(
             sources, document["prebuilt_author_outputs"]
         )
+        candidate_runtime_raw = document["candidate_runtime"]
+        candidate_runtime_path = (
+            None
+            if candidate_runtime_raw is None
+            else _directory_source(sources, candidate_runtime_raw, "candidate runtime")
+        )
+        candidate_launch = tuple(
+            _string(item, "candidate launch argument")
+            for item in _array(document["candidate_launch"], "candidate launch")
+        )
+        if candidate_launch and not Path(candidate_launch[0]).is_absolute():
+            raise AttemptContractError("candidate launch argv[0] must be an absolute path")
         if prebuilt_author_outputs is not None:
             # The runner-backed path has already created sealed Coder and Tester
             # trees.  Passing their runner commands into the deny-network build
@@ -139,6 +158,8 @@ class FactoryAttemptConfig:
             monitor_declared_unit_count=_nonnegative(
                 document["monitor_declared_unit_count"], "monitor_declared_unit_count"
             ),
+            candidate_runtime_path=candidate_runtime_path,
+            candidate_launch=candidate_launch,
         )
         return cls(source_digest=digest_bytes(raw), invocation=invocation)
 
@@ -194,6 +215,8 @@ class FactoryAttemptInvocation:
     test_change_authorization_path: Path | None = None
     test_change_human_receipt_path: Path | None = None
     test_change_validator_receipt_path: Path | None = None
+    candidate_runtime_path: Path | None = None
+    candidate_launch: tuple[str, ...] = ()
 
 
 class FactoryAttemptExecutor:
@@ -254,6 +277,8 @@ class FactoryAttemptExecutor:
             monitor_declared_unit_count=values.monitor_declared_unit_count,
             correction=values.correction,
             repair_brief_path=repair_brief_path,
+            candidate_runtime_path=values.candidate_runtime_path,
+            candidate_launch=values.candidate_launch,
             changed_existing_tests=values.changed_existing_tests,
             test_change_authorization_path=values.test_change_authorization_path,
             test_change_human_receipt_path=values.test_change_human_receipt_path,

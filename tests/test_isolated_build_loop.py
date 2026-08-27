@@ -778,27 +778,29 @@ def test_build_loop_refuses_an_unqualified_custom_backend(tmp_path: Path) -> Non
 
 
 @pytest.mark.isolation_integration
-def test_loopback_range_policy_scopes_exactly_to_its_block(tmp_path: Path) -> None:
-    """Validator loopback-range: in-range works; out-of-range, unrelated, external denied."""
+def test_directional_loopback_policies_scope_exactly_to_their_block(tmp_path: Path) -> None:
+    """Deny-all unchanged; validator connect-only and candidate bind-only each exact."""
 
     from factory_runtime.isolation import DENY_ALL_NETWORK, NetworkPolicy
 
     sandbox = MacOSSandbox()
-    # Deny-all lane (Coder/Tester/broker) qualification is unchanged and still passes.
     deny = sandbox.qualify(tmp_path / "deny", DENY_ALL_NETWORK)
     assert deny.satisfied and deny.network_denied and deny.network_policy == "deny-all"
 
-    # A contiguous loopback block clear of the ephemeral range used by qualification's own
-    # host listeners; qualify raises if a collision occurs, so a fixed low block is safe.
-    policy = NetworkPolicy(mode="loopback-range", ports=tuple(range(48120, 48128)))
-    loopback = sandbox.qualify(tmp_path / "loop", policy)
-    assert loopback.satisfied
-    assert loopback.network_policy == "loopback-range"
-    assert loopback.loopback_in_range_ok
-    assert loopback.loopback_out_of_range_denied
-    assert loopback.unrelated_listener_denied
-    assert loopback.external_denied
-    assert loopback.read_denied and loopback.write_denied
+    connect = NetworkPolicy(mode="loopback-connect", ports=tuple(range(48120, 48128)))
+    vq = sandbox.qualify(tmp_path / "connect", connect)
+    assert vq.satisfied and vq.network_policy == "loopback-connect"
+    assert vq.permitted_use_ok  # in-range connect works
+    assert vq.wrong_direction_denied  # cannot bind
+    assert vq.out_of_range_denied and vq.unrelated_listener_denied and vq.external_denied
+
+    bind = NetworkPolicy(mode="loopback-bind", ports=tuple(range(48160, 48168)))
+    cq = sandbox.qualify(tmp_path / "bind", bind)
+    assert cq.satisfied and cq.network_policy == "loopback-bind"
+    assert cq.permitted_use_ok  # in-range bind works
+    assert cq.wrong_direction_denied  # cannot make any outbound connection
+    assert cq.out_of_range_denied and cq.unrelated_listener_denied and cq.external_denied
+    assert cq.read_denied and cq.write_denied
 
 
 @pytest.mark.isolation_integration
@@ -814,7 +816,7 @@ def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
     from factory_runtime.isolation import MacOSSandbox, NetworkPolicy
 
     sandbox = MacOSSandbox()
-    policy = NetworkPolicy(mode="loopback-range", ports=tuple(range(48140, 48144)))
+    policy = NetworkPolicy(mode="loopback-connect", ports=tuple(range(48140, 48144)))
     work = tmp_path / "work"
     work.mkdir()
     listener = socket.socket()
