@@ -23,11 +23,13 @@ from factory_runtime.acceptance_obligations import (
 )
 from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.isolation import (
+    DENY_ALL_NETWORK,
     IsolatedProcessResult,
     IsolationQualification,
     MacOSSandbox,
     NetworkPolicy,
 )
+from factory_runtime.loopback_supervisor import supervised_candidate
 from factory_runtime.snapshot import (
     FrozenBlob,
     FrozenTree,
@@ -320,6 +322,8 @@ class IsolatedBuildLoop:
         review_snapshot_store: str | Path | None = None,
         review_snapshot_durable_through: str | Path | None = None,
         repair_brief_bytes: bytes | None = None,
+        candidate_runtime_path: str | Path | None = None,
+        candidate_launch: Sequence[str] = (),
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
         ]
@@ -483,6 +487,10 @@ class IsolatedBuildLoop:
             catalog_bytes,
             acceptance_catalog_bytes,
             canonical_document_bytes(review_subject),
+            candidate_runtime_path=(
+                Path(candidate_runtime_path) if candidate_runtime_path is not None else None
+            ),
+            candidate_launch=tuple(str(part) for part in candidate_launch),
         )
         return ValidationExecution(
             coder=coder_result,
@@ -633,6 +641,8 @@ class IsolatedBuildLoop:
         catalog_bytes: bytes | None,
         acceptance_catalog_bytes: bytes | None,
         review_subject_bytes: bytes,
+        candidate_runtime_path: Path | None = None,
+        candidate_launch: Sequence[str] = (),
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -728,20 +738,52 @@ class IsolatedBuildLoop:
                 "FACTORY_VALIDATOR_EXECUTION_SNAPSHOT_DIGEST": validator_execution.tree.digest,
             }
         )
-        process = self.sandbox.run(
-            validator_execution.command,
-            cwd=work,
-            readable_paths=(
-                *readable_inputs,
-                implementation,
-                tests,
-                validator_execution.manifest.payload_path,
-                *validator_execution.readable_paths,
-            ),
-            writable_paths=(work, output),
-            environment=environment,
-            stdin_bytes=validator_execution.source,
+        readable_paths = (
+            *readable_inputs,
+            implementation,
+            tests,
+            validator_execution.manifest.payload_path,
+            *validator_execution.readable_paths,
         )
+
+        def run_validator_lane(
+            network_policy: NetworkPolicy = DENY_ALL_NETWORK,
+        ) -> IsolatedProcessResult:
+            return self.sandbox.run(
+                validator_execution.command,
+                cwd=work,
+                readable_paths=readable_paths,
+                writable_paths=(work, output),
+                environment=environment,
+                stdin_bytes=validator_execution.source,
+                network_policy=network_policy,
+            )
+
+        if candidate_launch:
+            # Host-supervisor sibling topology: the sealed candidate runs as a separately
+            # sandboxed loopback-bind sibling (its own source + runtime only, never the
+            # Tester tree or catalog), and the Validator drives it over a connect-only block.
+            candidate_source = implementation / "artifact"
+            with supervised_candidate(
+                candidate_launch=candidate_launch,
+                candidate_source=candidate_source,
+                candidate_runtime=candidate_runtime_path,
+                work_root=lane / "candidate-work",
+                sandbox=self.sandbox if isinstance(self.sandbox, MacOSSandbox) else None,
+            ) as endpoint:
+                environment.update(
+                    {
+                        "FACTORY_CANDIDATE_BASE_URL": endpoint.base_url,
+                        "FACTORY_CANDIDATE_HOST": endpoint.host,
+                        "FACTORY_CANDIDATE_PORT_LOW": str(endpoint.port_low),
+                        "FACTORY_CANDIDATE_PORT_HIGH": str(endpoint.port_high),
+                    }
+                )
+                process = run_validator_lane(
+                    NetworkPolicy(mode="loopback-connect", ports=endpoint.ports)
+                )
+        else:
+            process = run_validator_lane()
         _verify_frozen_validator_execution(validator_execution)
         return LaneExecution(
             role=LaneRole.VALIDATOR,

@@ -125,9 +125,10 @@ def test_validator_execution_configuration_binds_the_closed_stdin_launch_abi(
     )
     assert capture.environment_digest == digest_obj(
         {
-            "schema_version": "factory-validator-environment/3",
+            "schema_version": "factory-validator-environment/4",
             "ambient_environment": "closed",
-            "network": "denied",
+            "network": "loopback-connect-candidate-range",
+            "candidate_endpoint": "host-supervised-loopback-block",
             "launch_contract": launch_contract,
             "read_scope": [
                 "build-input",

@@ -121,7 +121,7 @@ def _acceptance_catalog(
 
 
 class _UnqualifiedBackend:
-    def qualify(self, root: str | Path) -> IsolationQualification:
+    def qualify(self, root: str | Path, network_policy=None) -> IsolationQualification:
         return IsolationQualification(
             backend="unqualified-test-backend",
             read_denied=True,
@@ -138,6 +138,7 @@ class _UnqualifiedBackend:
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
+        network_policy=None,
     ) -> IsolatedProcessResult:
         del stdin_bytes
         raise AssertionError("an unqualified backend must never launch a lane")
@@ -149,7 +150,7 @@ class _RecordingQualifiedBackend:
         self.validator_script_bytes = b""
         self.validator_environment: dict[str, str] = {}
 
-    def qualify(self, root: str | Path) -> IsolationQualification:
+    def qualify(self, root: str | Path, network_policy=None) -> IsolationQualification:
         return IsolationQualification(
             backend="recording-qualified-test-backend",
             read_denied=True,
@@ -166,6 +167,7 @@ class _RecordingQualifiedBackend:
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
+        network_policy=None,
     ) -> IsolatedProcessResult:
         del cwd, readable_paths, writable_paths
         values = dict(environment or {})
@@ -202,6 +204,7 @@ class _MutatingValidatorSnapshotBackend(_RecordingQualifiedBackend):
         writable_paths: Sequence[str | Path] = (),
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
+        network_policy=None,
     ) -> IsolatedProcessResult:
         if dict(environment or {}).get("FACTORY_ROLE") == "validator":
             source = next(
