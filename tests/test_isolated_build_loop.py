@@ -775,3 +775,70 @@ def test_build_loop_refuses_an_unqualified_custom_backend(tmp_path: Path) -> Non
             tester_command=(sys.executable, str(FIXTURES / "tester.py")),
             validator_command=(sys.executable, str(FIXTURES / "validator.py")),
         )
+
+
+@pytest.mark.isolation_integration
+def test_loopback_range_policy_scopes_exactly_to_its_block(tmp_path: Path) -> None:
+    """Validator loopback-range: in-range works; out-of-range, unrelated, external denied."""
+
+    from factory_runtime.isolation import DENY_ALL_NETWORK, NetworkPolicy
+
+    sandbox = MacOSSandbox()
+    # Deny-all lane (Coder/Tester/broker) qualification is unchanged and still passes.
+    deny = sandbox.qualify(tmp_path / "deny", DENY_ALL_NETWORK)
+    assert deny.satisfied and deny.network_denied and deny.network_policy == "deny-all"
+
+    # A contiguous loopback block clear of the ephemeral range used by qualification's own
+    # host listeners; qualify raises if a collision occurs, so a fixed low block is safe.
+    policy = NetworkPolicy(mode="loopback-range", ports=tuple(range(48120, 48128)))
+    loopback = sandbox.qualify(tmp_path / "loop", policy)
+    assert loopback.satisfied
+    assert loopback.network_policy == "loopback-range"
+    assert loopback.loopback_in_range_ok
+    assert loopback.loopback_out_of_range_denied
+    assert loopback.unrelated_listener_denied
+    assert loopback.external_denied
+    assert loopback.read_denied and loopback.write_denied
+
+
+@pytest.mark.isolation_integration
+def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
+    tmp_path: Path,
+) -> None:
+    """Directly prove a range-scoped lane cannot reach an unrelated live loopback port."""
+
+    import errno
+    import json
+    import socket
+
+    from factory_runtime.isolation import MacOSSandbox, NetworkPolicy
+
+    sandbox = MacOSSandbox()
+    policy = NetworkPolicy(mode="loopback-range", ports=tuple(range(48140, 48144)))
+    work = tmp_path / "work"
+    work.mkdir()
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    unrelated_port = listener.getsockname()[1]
+    probe = (
+        "import errno, json, socket\n"
+        "s=socket.socket(); s.settimeout(3)\n"
+        "import os\n"
+        "try:\n"
+        "    s.connect(('127.0.0.1', int(os.environ['P'])))\n"
+        "    print(json.dumps({'denied': False}))\n"
+        "except OSError as e:\n"
+        "    print(json.dumps({'denied': e.errno in (errno.EPERM, errno.EACCES)}))\n"
+    )
+    try:
+        result = sandbox.run(
+            (sys.executable, "-c", probe),
+            cwd=work,
+            writable_paths=(work,),
+            environment={"P": str(unrelated_port)},
+            network_policy=policy,
+        )
+    finally:
+        listener.close()
+    assert json.loads(result.stdout)["denied"] is True
