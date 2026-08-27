@@ -807,6 +807,44 @@ def test_directional_loopback_policies_scope_exactly_to_their_block(tmp_path: Pa
 
 
 @pytest.mark.isolation_integration
+def test_webrtc_policies_scope_tcp_signaling_and_symmetric_udp_exactly(tmp_path: Path) -> None:
+    """Candidate/validator WebRTC lanes: signaling TCP + own-block UDP work; all else EPERM."""
+
+    from factory_runtime.isolation import NetworkPolicy
+
+    sandbox = MacOSSandbox()
+    signaling = 48200
+    candidate_udp = tuple(range(48201, 48205))
+    validator_udp = tuple(range(48205, 48209))
+
+    candidate = NetworkPolicy(
+        mode="candidate-webrtc",
+        signaling_port=signaling,
+        own_udp_ports=candidate_udp,
+        peer_udp_ports=validator_udp,
+    )
+    cq = sandbox.qualify(tmp_path / "candidate", candidate)
+    assert cq.satisfied and cq.network_policy == "candidate-webrtc"
+    assert cq.permitted_use_ok  # bind signaling TCP + bind own UDP + send to peer UDP block
+    assert cq.wrong_direction_denied  # cannot connect out on signaling TCP; cannot bind peer UDP
+    assert cq.out_of_range_denied  # nothing past the block, TCP or UDP
+    assert cq.unrelated_listener_denied and cq.external_denied
+    assert cq.read_denied and cq.write_denied
+
+    validator = NetworkPolicy(
+        mode="validator-webrtc",
+        signaling_port=signaling,
+        own_udp_ports=validator_udp,
+        peer_udp_ports=candidate_udp,
+    )
+    vq = sandbox.qualify(tmp_path / "validator", validator)
+    assert vq.satisfied and vq.network_policy == "validator-webrtc"
+    assert vq.permitted_use_ok  # connect signaling TCP + bind own UDP + send to peer UDP block
+    assert vq.wrong_direction_denied  # cannot bind signaling TCP; cannot bind peer UDP
+    assert vq.out_of_range_denied and vq.unrelated_listener_denied and vq.external_denied
+
+
+@pytest.mark.isolation_integration
 def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
     tmp_path: Path,
 ) -> None:
@@ -856,6 +894,7 @@ def test_supervised_candidate_lifecycle_and_range_isolation(tmp_path: Path) -> N
 
     from factory_runtime.loopback_supervisor import (
         _listeners_in_range,
+        _udp_ports_still_held,
         supervised_candidate,
     )
 
@@ -873,14 +912,20 @@ def test_supervised_candidate_lifecycle_and_range_isolation(tmp_path: Path) -> N
         candidate_source=src,
         candidate_runtime=None,
         work_root=tmp_path / "work",
-        block_size=8,
+        udp_block_size=4,
     ) as endpoint:
-        assert endpoint.port_low <= int(endpoint.base_url.rsplit(":", 1)[1]) <= endpoint.port_high
+        # The partitioned block: signaling TCP port, candidate UDP block, validator UDP block,
+        # all disjoint, with the server reachable on the signaling port.
+        assert endpoint.signaling_port not in endpoint.candidate_udp_ports
+        assert not set(endpoint.candidate_udp_ports) & set(endpoint.validator_udp_ports)
+        assert int(endpoint.base_url.rsplit(":", 1)[1]) == endpoint.signaling_port
         body = urllib.request.urlopen(endpoint.base_url + "/", timeout=5).read(16)
         assert body
-        assert _listeners_in_range(endpoint.port_low, endpoint.port_high)
-        low, high = endpoint.port_low, endpoint.port_high
-    assert _listeners_in_range(low, high) == []
+        assert _listeners_in_range(endpoint.signaling_port, endpoint.signaling_port)
+        signaling = endpoint.signaling_port
+        candidate_udp = endpoint.candidate_udp_ports
+    assert _listeners_in_range(signaling, signaling) == []
+    assert _udp_ports_still_held(candidate_udp) == []
 
 
 def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatch) -> None:
