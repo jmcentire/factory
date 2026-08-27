@@ -194,6 +194,15 @@ class CodexHomeBackend(FakeBackend):
             "invocation": invocation,
             "codex_home": None if home is None else str(home),
             "auth_present": bool(home is not None and (home / "auth.json").is_file()),
+            # The parsed live content, not mere presence: codex 0.148.0 authenticates
+            # only from exactly {"auth_mode": "apikey", "OPENAI_API_KEY": <key>}, so a
+            # present-but-malformed file (placeholder key, wrong field name, empty
+            # body) is an authentication failure the presence bit cannot see.
+            "auth_content": (
+                json.loads((home / "auth.json").read_text(encoding="utf-8"))
+                if home is not None and (home / "auth.json").is_file()
+                else None
+            ),
             "marker_present": None,
         }
         failure = ""
@@ -741,7 +750,10 @@ def test_t2_successful_dispatch_retains_no_codex_auth_material(tmp_path: Path) -
     pins the post-repair cleanup invariant.
 
     Named mutation that reddens this test after repair: drop or skip the
-    end-of-dispatch Codex-home cleanup so auth.json (or key bytes) stays behind.
+    end-of-dispatch Codex-home cleanup so auth.json (or key bytes) stays behind;
+    or write a present-but-non-authenticating auth.json (placeholder key, wrong
+    field name, empty body) — the live-content assertion pins the exact shape
+    codex 0.148.0 authenticates from, with the real resolved key value.
     """
 
     backend = CodexHomeBackend(require_session_persistence=False)
@@ -756,6 +768,10 @@ def test_t2_successful_dispatch_retains_no_codex_auth_material(tmp_path: Path) -
     # Reachability: authentication material must have been live during invocations —
     # otherwise this dispatch never exercised the API-key auth path at all.
     assert all(item["auth_present"] for item in backend.observations), backend.observations
+    assert all(
+        item["auth_content"] == {"auth_mode": "apikey", "OPENAI_API_KEY": _OPENAI_KEY}
+        for item in backend.observations
+    ), backend.observations
     residue = _auth_residue(
         fixture["base"], key=_OPENAI_KEY, exclude=(fixture["secret_root"],)
     )
@@ -864,7 +880,9 @@ def test_t4_codex_family_billing_is_bootstrapped_not_env_delivered(
 
     Named mutation that reddens this test: (a) reintroduce a name-based refusal of codex-family +
     OPENAI_* billing keys at manifest load, or (b) inject the billing key (its name or value)
-    into the model process environment instead of writing it to CODEX_HOME/auth.json.
+    into the model process environment instead of writing it to CODEX_HOME/auth.json, or
+    (c) write a placeholder/wrong key value or a renamed field into auth.json — the
+    live-content assertion requires the resolved billing key under codex's fixed field.
     """
 
     backend = CodexHomeBackend(require_session_persistence=False)
@@ -892,6 +910,15 @@ def test_t4_codex_family_billing_is_bootstrapped_not_env_delivered(
     # reversal is what this case pins (bootstrap presence is covered by the codex cases + T2/T5).
     if adapter == "codex":
         assert all(item["auth_present"] for item in backend.observations), backend.observations
+        # Content, not presence: the resolved billing key's VALUE must sit under codex's
+        # fixed OPENAI_API_KEY auth.json field regardless of the billing_key_name that
+        # named the secret — a placeholder value or a renamed field is an invisible
+        # authentication break the presence bit alone would admit.
+        assert all(
+            item["auth_content"]
+            == {"auth_mode": "apikey", "OPENAI_API_KEY": secret_value}
+            for item in backend.observations
+        ), backend.observations
 
 
 def test_t4_env_delivery_to_nonbootstrapped_network_process_is_refused(

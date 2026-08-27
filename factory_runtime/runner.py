@@ -478,7 +478,9 @@ class CodexApiKeyBootstrap:
     Enforced containment (exactly this, no more): ``auth.json`` must live inside the
     model-writable home because Codex requires it there, so its absence from retained
     material is proven rather than assumed — ``conclude`` removes the file exactly once
-    after the dispatch loop (success or failure, after failure evidence is retained),
+    after the dispatch loop (success or failure — a failure of ``provision`` itself
+    included, since provision runs inside the dispatch's guarded region — after
+    failure evidence is retained),
     verifies the removal, and then scans every retained regular file under the
     workspace for the raw key bytes, failing the dispatch on any appearance.  Model
     stdout/stderr/structured output are separately gated by ``_require_no_secret_leak``
@@ -1130,8 +1132,11 @@ class HardenedModelRunner:
         # before the invocation loop, so Codex session rollouts survive for the
         # mandatory `codex exec resume` invocations; the billing key is withheld
         # from the model environment for the auth-file mode.  A provision failure
-        # here precedes every model attempt, so its default zero-attempt
-        # pre-model classification is truthful.
+        # precedes every model attempt, so its default zero-attempt pre-model
+        # classification is truthful — and provision runs inside the guarded
+        # region below so that failure (including a partial auth.json write whose
+        # first-chance unlink also failed) still reaches conclude's remove+verify+
+        # scan instead of leaving key bytes in the retained workspace.
         model_environment = dict(environment)
         bootstrap = CodexApiKeyBootstrap.for_dispatch(
             manifest,
@@ -1140,8 +1145,9 @@ class HardenedModelRunner:
         )
         if bootstrap is not None:
             model_environment.pop(bootstrap.billing_key_name, None)
-            bootstrap.provision()
         try:
+            if bootstrap is not None:
+                bootstrap.provision()
             for index, raw_prompt in enumerate(prompt_bytes, start=1):
                 _write_once(input_root / f"prompt-{index}.json", raw_prompt)
                 elapsed = self._monotonic() - objective_started
