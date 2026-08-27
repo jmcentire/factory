@@ -684,6 +684,8 @@ class FactoryOrchestrator:
                 ),
                 review_snapshot_durable_through=self.workflow.root / run_id,
                 repair_brief_bytes=repair_brief_bytes,
+                candidate_runtime_path=candidate_runtime_path,
+                candidate_launch=candidate_launch,
                 before_validation=enter_validation,
             )
         except Exception as exc:

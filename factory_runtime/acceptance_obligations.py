@@ -75,9 +75,15 @@ _VALIDATOR_LAUNCH_CONTRACT = {
     "additional_path_bindings": "forbidden",
 }
 _VALIDATOR_ENVIRONMENT_CONTRACT = {
-    "schema_version": "factory-validator-environment/3",
+    "schema_version": "factory-validator-environment/4",
     "ambient_environment": "closed",
-    "network": "denied",
+    # The Validator lane is no longer network-zero: under the host-supervisor sibling
+    # topology it runs connect-only inside the sealed candidate's exact per-attempt loopback
+    # block (no bind, no out-of-range, no external), so it can drive the candidate the host
+    # started as a separately sandboxed loopback-bind sibling. Declaring this honestly is why
+    # the contract — and therefore every acceptance catalog's environment_digest — advances.
+    "network": "loopback-connect-candidate-range",
+    "candidate_endpoint": "host-supervised-loopback-block",
     "launch_contract": _VALIDATOR_LAUNCH_CONTRACT,
     "read_scope": [
         "build-input",
