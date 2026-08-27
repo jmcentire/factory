@@ -34,6 +34,7 @@ from factory_runtime.authority import (
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
 from factory_runtime.target_state import (
@@ -623,11 +624,20 @@ class FactoryWorkflow:
             run_id,
             expected_ledger_head=current.ledger_head,
         )
-        request, _ = _read_json_object(request_path)
+        request, request_bytes = _read_json_object(request_path)
         try:
             validate_document("execution-request", request)
         except DocumentValidationError as exc:
             raise WorkflowError(str(exc)) from exc
+        # The adversarial review later byte-binds this exact retained document as
+        # the operator's intent, which requires the canonical serialization. Fail
+        # here, actionably, rather than retaining bytes no review can ever accept.
+        if request_bytes != canonical_document_bytes(request):
+            raise WorkflowError(
+                "execution request bytes must be the canonical JSON serialization "
+                "(sorted keys, compact separators, ensure_ascii=False, trailing "
+                "newline); re-serialize the request before Stage-E admission"
+            )
         if request["run_id"] != run_id:
             raise WorkflowError("execution request belongs to a different Factory run")
         if request["repository_id"] != self.policy.repository_id:
@@ -679,7 +689,10 @@ class FactoryWorkflow:
         evidence_dir = self.root / run_id / "evidence" / "intake"
         _write_once(
             evidence_dir / "execution-request.json",
-            _canonical_bytes(request),
+            # The adversarial review byte-binds this retained document; retain the
+            # same shared UTF-8 canonical form admission just verified, never a
+            # re-serialization that only agrees for ASCII content.
+            canonical_document_bytes(request),
             durable_root=self.root,
         )
         _write_once(

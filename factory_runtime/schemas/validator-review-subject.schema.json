@@ -1,381 +1,701 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "factory://schemas/validator-review-subject/1",
-  "title": "Factory Validator adversarial-review subject",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "factory://schemas/validator-review-subject/1",
+ "title": "Factory Validator adversarial-review subject",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "protocol",
+  "run_id",
+  "generation",
+  "target_digest",
+  "target_state_digest",
+  "resolved_commit",
+  "resolved_tree",
+  "reviewer_identity",
+  "base_source_snapshot",
+  "candidate_change_set",
+  "authority_context",
+  "operator_intent",
+  "review_targets",
+  "artifacts",
+  "validator_execution"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": "factory-validator-review-subject/1"
+  },
+  "protocol": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "protocol_id",
+    "protocol_digest",
+    "report_schema_version",
+    "required_dimensions",
+    "required_completeness_checks"
+   ],
+   "properties": {
+    "protocol_id": {
+     "const": "factory-validator-adversarial-review/1"
+    },
+    "protocol_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "report_schema_version": {
+     "const": "factory-validator-adversarial-review/1"
+    },
+    "required_dimensions": {
+     "type": "array",
+     "minItems": 8,
+     "maxItems": 8,
+     "uniqueItems": true,
+     "items": {
+      "$ref": "#/$defs/dimension"
+     }
+    },
+    "required_completeness_checks": {
+     "type": "array",
+     "minItems": 7,
+     "maxItems": 7,
+     "uniqueItems": true,
+     "items": {
+      "$ref": "#/$defs/completeness_check"
+     }
+    }
+   }
+  },
+  "run_id": {
+   "type": "string",
+   "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  },
+  "generation": {
+   "type": "integer",
+   "minimum": 1
+  },
+  "target_digest": {
+   "$ref": "#/$defs/digest"
+  },
+  "target_state_digest": {
+   "$ref": "#/$defs/digest"
+  },
+  "resolved_commit": {
+   "type": "string",
+   "minLength": 1
+  },
+  "resolved_tree": {
+   "type": "string",
+   "minLength": 1
+  },
+  "reviewer_identity": {
+   "type": "string",
+   "minLength": 1
+  },
+  "base_source_snapshot": {
+   "$ref": "#/$defs/base_source_snapshot"
+  },
+  "candidate_change_set": {
+   "$ref": "#/$defs/candidate_change_set"
+  },
+  "authority_context": {
+   "$ref": "#/$defs/authority_context"
+  },
+  "operator_intent": {
+   "$ref": "#/$defs/operator_intent"
+  },
+  "review_targets": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "requirements",
+    "architecture_items",
+    "operational_maturity_items"
+   ],
+   "properties": {
+    "requirements": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 4096,
+     "items": {
+      "$ref": "#/$defs/intent_reference"
+     }
+    },
+    "architecture_items": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 4096,
+     "items": {
+      "$ref": "#/$defs/intent_reference"
+     }
+    },
+    "operational_maturity_items": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 4096,
+     "items": {
+      "$ref": "#/$defs/intent_reference"
+     }
+    }
+   }
+  },
+  "artifacts": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "build-input",
+    "pattern-catalog",
+    "pattern-catalog-source",
+    "build-plan",
+    "build-plan-source",
+    "product-specification",
+    "architecture",
+    "operational-maturity",
+    "acceptance-obligation-catalog",
+    "acceptance-obligation-catalog-source",
+    "candidate",
+    "acceptance-tests",
+    "coder-output-snapshot",
+    "tester-output-snapshot",
+    "base-source-snapshot",
+    "candidate-change-set",
+    "validator-review-authority-context"
+   ],
+   "properties": {
+    "build-input": {
+     "$ref": "#/$defs/digest"
+    },
+    "pattern-catalog": {
+     "$ref": "#/$defs/digest"
+    },
+    "pattern-catalog-source": {
+     "$ref": "#/$defs/digest"
+    },
+    "build-plan": {
+     "$ref": "#/$defs/digest"
+    },
+    "build-plan-source": {
+     "$ref": "#/$defs/digest"
+    },
+    "product-specification": {
+     "$ref": "#/$defs/digest"
+    },
+    "architecture": {
+     "$ref": "#/$defs/digest"
+    },
+    "operational-maturity": {
+     "$ref": "#/$defs/digest"
+    },
+    "acceptance-obligation-catalog": {
+     "$ref": "#/$defs/digest"
+    },
+    "acceptance-obligation-catalog-source": {
+     "$ref": "#/$defs/digest"
+    },
+    "candidate": {
+     "$ref": "#/$defs/digest"
+    },
+    "acceptance-tests": {
+     "$ref": "#/$defs/digest"
+    },
+    "coder-output-snapshot": {
+     "$ref": "#/$defs/digest"
+    },
+    "tester-output-snapshot": {
+     "$ref": "#/$defs/digest"
+    },
+    "base-source-snapshot": {
+     "$ref": "#/$defs/digest"
+    },
+    "candidate-change-set": {
+     "$ref": "#/$defs/digest"
+    },
+    "validator-review-authority-context": {
+     "$ref": "#/$defs/digest"
+    }
+   }
+  },
+  "validator_execution": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "command_digest",
+    "configuration_digest",
+    "environment_digest"
+   ],
+   "properties": {
+    "command_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "configuration_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "environment_digest": {
+     "$ref": "#/$defs/digest"
+    }
+   }
+  }
+ },
+ "$defs": {
+  "digest": {
+   "type": "string",
+   "pattern": "^sha256:[0-9a-f]{64}$"
+  },
+  "nullable_digest": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "$ref": "#/$defs/digest"
+    }
+   ]
+  },
+  "content_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "name",
+    "declared_digest",
+    "content_digest",
+    "content_base64",
+    "content_utf8"
+   ],
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "declared_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "content_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "content_base64": {
+     "type": "string",
+     "maxLength": 2097152
+    },
+    "content_utf8": {
+     "type": [
+      "string",
+      "null"
+     ],
+     "maxLength": 1200000
+    }
+   }
+  },
+  "operator_intent": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
     "schema_version",
-    "protocol",
-    "run_id",
-    "generation",
-    "target_digest",
-    "target_state_digest",
+    "execution_request_digest",
+    "execution_request_source_digest",
+    "execution_request"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "factory-validator-operator-intent/1"
+    },
+    "execution_request_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "execution_request_source_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "execution_request": {
+     "$ref": "#/$defs/content_entry"
+    }
+   }
+  },
+  "intent_reference": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "artifact_id",
+    "artifact_digest",
+    "item_id",
+    "intent_digest"
+   ],
+   "properties": {
+    "artifact_id": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 1024
+    },
+    "artifact_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "item_id": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 1024
+    },
+    "intent_digest": {
+     "$ref": "#/$defs/digest"
+    }
+   }
+  },
+  "base_source_snapshot": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
     "resolved_commit",
     "resolved_tree",
-    "reviewer_identity",
-    "base_source_snapshot",
-    "candidate_change_set",
-    "authority_context",
-    "operator_intent",
-    "review_targets",
-    "artifacts",
-    "validator_execution"
-  ],
-  "properties": {
-    "schema_version": {"const": "factory-validator-review-subject/1"},
-    "protocol": {
+    "hash_algorithm",
+    "subpath",
+    "files",
+    "snapshot_digest"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "factory-base-source-snapshot/1"
+    },
+    "resolved_commit": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "resolved_tree": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "hash_algorithm": {
+     "enum": [
+      "sha1",
+      "sha256"
+     ]
+    },
+    "subpath": {
+     "type": "string",
+     "maxLength": 4096
+    },
+    "snapshot_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "files": {
+     "type": "array",
+     "maxItems": 4096,
+     "items": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "protocol_id",
-        "protocol_digest",
-        "report_schema_version",
-        "required_dimensions",
-        "required_completeness_checks"
+       "path",
+       "entry_type",
+       "git_mode",
+       "mode",
+       "object_id",
+       "content_digest",
+       "content_base64",
+       "content_utf8"
       ],
       "properties": {
-        "protocol_id": {"const": "factory-validator-adversarial-review/1"},
-        "protocol_digest": {"$ref": "#/$defs/digest"},
-        "report_schema_version": {"const": "factory-validator-adversarial-review/1"},
-        "required_dimensions": {
-          "type": "array",
-          "minItems": 8,
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/dimension"}
-        },
-        "required_completeness_checks": {
-          "type": "array",
-          "minItems": 7,
-          "maxItems": 7,
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/completeness_check"}
-        }
+       "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+       },
+       "entry_type": {
+        "enum": [
+         "file",
+         "symlink",
+         "gitlink"
+        ]
+       },
+       "git_mode": {
+        "enum": [
+         "100644",
+         "100755",
+         "120000",
+         "160000"
+        ]
+       },
+       "mode": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 511
+       },
+       "object_id": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40,64}$"
+       },
+       "content_digest": {
+        "$ref": "#/$defs/digest"
+       },
+       "content_base64": {
+        "type": "string",
+        "maxLength": 2097152
+       },
+       "content_utf8": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "maxLength": 524288
+       }
       }
-    },
-    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "generation": {"type": "integer", "minimum": 1},
-    "target_digest": {"$ref": "#/$defs/digest"},
-    "target_state_digest": {"$ref": "#/$defs/digest"},
-    "resolved_commit": {"type": "string", "minLength": 1},
-    "resolved_tree": {"type": "string", "minLength": 1},
-    "reviewer_identity": {"type": "string", "minLength": 1},
-    "base_source_snapshot": {"$ref": "#/$defs/base_source_snapshot"},
-    "candidate_change_set": {"$ref": "#/$defs/candidate_change_set"},
-    "authority_context": {"$ref": "#/$defs/authority_context"},
-    "operator_intent": {"$ref": "#/$defs/operator_intent"},
-    "review_targets": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["requirements", "architecture_items", "operational_maturity_items"],
-      "properties": {
-        "requirements": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 4096,
-          "items": {"$ref": "#/$defs/intent_reference"}
-        },
-        "architecture_items": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 4096,
-          "items": {"$ref": "#/$defs/intent_reference"}
-        },
-        "operational_maturity_items": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 4096,
-          "items": {"$ref": "#/$defs/intent_reference"}
-        }
-      }
-    },
-    "artifacts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "build-input",
-        "pattern-catalog",
-        "pattern-catalog-source",
-        "build-plan",
-        "build-plan-source",
-        "product-specification",
-        "architecture",
-        "operational-maturity",
-        "acceptance-obligation-catalog",
-        "acceptance-obligation-catalog-source",
-        "candidate",
-        "acceptance-tests",
-        "coder-output-snapshot",
-        "tester-output-snapshot",
-        "base-source-snapshot",
-        "candidate-change-set",
-        "validator-review-authority-context"
-      ],
-      "properties": {
-        "build-input": {"$ref": "#/$defs/digest"},
-        "pattern-catalog": {"$ref": "#/$defs/digest"},
-        "pattern-catalog-source": {"$ref": "#/$defs/digest"},
-        "build-plan": {"$ref": "#/$defs/digest"},
-        "build-plan-source": {"$ref": "#/$defs/digest"},
-        "product-specification": {"$ref": "#/$defs/digest"},
-        "architecture": {"$ref": "#/$defs/digest"},
-        "operational-maturity": {"$ref": "#/$defs/digest"},
-        "acceptance-obligation-catalog": {"$ref": "#/$defs/digest"},
-        "acceptance-obligation-catalog-source": {"$ref": "#/$defs/digest"},
-        "candidate": {"$ref": "#/$defs/digest"},
-        "acceptance-tests": {"$ref": "#/$defs/digest"},
-        "coder-output-snapshot": {"$ref": "#/$defs/digest"},
-        "tester-output-snapshot": {"$ref": "#/$defs/digest"},
-        "base-source-snapshot": {"$ref": "#/$defs/digest"},
-        "candidate-change-set": {"$ref": "#/$defs/digest"},
-        "validator-review-authority-context": {"$ref": "#/$defs/digest"}
-      }
-    },
-    "validator_execution": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["command_digest", "configuration_digest", "environment_digest"],
-      "properties": {
-        "command_digest": {"$ref": "#/$defs/digest"},
-        "configuration_digest": {"$ref": "#/$defs/digest"},
-        "environment_digest": {"$ref": "#/$defs/digest"}
-      }
+     }
     }
+   }
   },
-  "$defs": {
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "nullable_digest": {
-      "oneOf": [
-        {"type": "null"},
-        {"$ref": "#/$defs/digest"}
-      ]
+  "candidate_change_set": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "resolved_commit",
+    "resolved_tree",
+    "subpath",
+    "construction_mode",
+    "baseline_snapshot_digest",
+    "candidate_digest",
+    "changed_path_digest",
+    "changes",
+    "change_set_digest"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "factory-candidate-change-set/1"
     },
-    "content_entry": {
+    "resolved_commit": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "resolved_tree": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "subpath": {
+     "type": "string",
+     "maxLength": 4096
+    },
+    "construction_mode": {
+     "const": "regenerate"
+    },
+    "baseline_snapshot_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "candidate_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "changed_path_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "change_set_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "changes": {
+     "type": "array",
+     "maxItems": 4096,
+     "items": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "name",
-        "declared_digest",
-        "content_digest",
-        "content_base64",
-        "content_utf8"
+       "path",
+       "kind",
+       "old_type",
+       "new_type",
+       "old_mode",
+       "new_mode",
+       "old_digest",
+       "new_digest"
       ],
       "properties": {
-        "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-        "declared_digest": {"$ref": "#/$defs/digest"},
-        "content_digest": {"$ref": "#/$defs/digest"},
-        "content_base64": {"type": "string", "maxLength": 2097152},
-        "content_utf8": {"type": ["string", "null"], "maxLength": 1200000}
+       "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+       },
+       "kind": {
+        "enum": [
+         "added",
+         "modified",
+         "deleted",
+         "mode-changed",
+         "type-changed"
+        ]
+       },
+       "old_type": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "new_type": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "old_mode": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "minimum": 0,
+        "maximum": 511
+       },
+       "new_mode": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "minimum": 0,
+        "maximum": 511
+       },
+       "old_digest": {
+        "$ref": "#/$defs/nullable_digest"
+       },
+       "new_digest": {
+        "$ref": "#/$defs/nullable_digest"
+       }
       }
-    },
-    "operator_intent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "execution_request_digest",
-        "execution_request_source_digest",
-        "execution_request"
-      ],
-      "properties": {
-        "schema_version": {"const": "factory-validator-operator-intent/1"},
-        "execution_request_digest": {"$ref": "#/$defs/digest"},
-        "execution_request_source_digest": {"$ref": "#/$defs/digest"},
-        "execution_request": {"$ref": "#/$defs/content_entry"}
-      }
-    },
-    "intent_reference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["artifact_id", "artifact_digest", "item_id", "intent_digest"],
-      "properties": {
-        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 1024},
-        "artifact_digest": {"$ref": "#/$defs/digest"},
-        "item_id": {"type": "string", "minLength": 1, "maxLength": 1024},
-        "intent_digest": {"$ref": "#/$defs/digest"}
-      }
-    },
-    "base_source_snapshot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "resolved_commit",
-        "resolved_tree",
-        "hash_algorithm",
-        "subpath",
-        "files",
-        "snapshot_digest"
-      ],
-      "properties": {
-        "schema_version": {"const": "factory-base-source-snapshot/1"},
-        "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-        "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-        "hash_algorithm": {"enum": ["sha1", "sha256"]},
-        "subpath": {"type": "string", "maxLength": 4096},
-        "snapshot_digest": {"$ref": "#/$defs/digest"},
-        "files": {
-          "type": "array",
-          "maxItems": 4096,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "path",
-              "entry_type",
-              "git_mode",
-              "mode",
-              "object_id",
-              "content_digest",
-              "content_base64",
-              "content_utf8"
-            ],
-            "properties": {
-              "path": {"type": "string", "minLength": 1, "maxLength": 4096},
-              "entry_type": {"enum": ["file", "symlink", "gitlink"]},
-              "git_mode": {"enum": ["100644", "100755", "120000", "160000"]},
-              "mode": {"type": "integer", "minimum": 0, "maximum": 511},
-              "object_id": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-              "content_digest": {"$ref": "#/$defs/digest"},
-              "content_base64": {"type": "string", "maxLength": 2097152},
-              "content_utf8": {"type": ["string", "null"], "maxLength": 524288}
-            }
-          }
-        }
-      }
-    },
-    "candidate_change_set": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "resolved_commit",
-        "resolved_tree",
-        "subpath",
-        "construction_mode",
-        "baseline_snapshot_digest",
-        "candidate_digest",
-        "changed_path_digest",
-        "changes",
-        "change_set_digest"
-      ],
-      "properties": {
-        "schema_version": {"const": "factory-candidate-change-set/1"},
-        "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-        "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-        "subpath": {"type": "string", "maxLength": 4096},
-        "construction_mode": {"const": "regenerate"},
-        "baseline_snapshot_digest": {"$ref": "#/$defs/digest"},
-        "candidate_digest": {"$ref": "#/$defs/digest"},
-        "changed_path_digest": {"$ref": "#/$defs/digest"},
-        "change_set_digest": {"$ref": "#/$defs/digest"},
-        "changes": {
-          "type": "array",
-          "maxItems": 4096,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "path",
-              "kind",
-              "old_type",
-              "new_type",
-              "old_mode",
-              "new_mode",
-              "old_digest",
-              "new_digest"
-            ],
-            "properties": {
-              "path": {"type": "string", "minLength": 1, "maxLength": 4096},
-              "kind": {
-                "enum": ["added", "modified", "deleted", "mode-changed", "type-changed"]
-              },
-              "old_type": {"type": ["string", "null"]},
-              "new_type": {"type": ["string", "null"]},
-              "old_mode": {"type": ["integer", "null"], "minimum": 0, "maximum": 511},
-              "new_mode": {"type": ["integer", "null"], "minimum": 0, "maximum": 511},
-              "old_digest": {"$ref": "#/$defs/nullable_digest"},
-              "new_digest": {"$ref": "#/$defs/nullable_digest"}
-            }
-          }
-        }
-      }
-    },
-    "authority_context": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "resume_checkpoint_digest",
-        "resume_checkpoint_source_digest",
-        "resume_checkpoint",
-        "configuration_sources",
-        "changed_existing_tests",
-        "test_change_artifacts",
-        "test_change_sources",
-        "review_instruction_contract"
-      ],
-      "properties": {
-        "schema_version": {"const": "factory-validator-review-authority-context/1"},
-        "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
-        "resume_checkpoint_source_digest": {"$ref": "#/$defs/digest"},
-        "resume_checkpoint": {"$ref": "#/$defs/content_entry"},
-        "configuration_sources": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 64,
-          "items": {"$ref": "#/$defs/content_entry"}
-        },
-        "changed_existing_tests": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
-        },
-        "test_change_artifacts": {
-          "type": "object",
-          "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
-          "additionalProperties": {"$ref": "#/$defs/digest"}
-        },
-        "test_change_sources": {
-          "type": "array",
-          "maxItems": 8,
-          "items": {"$ref": "#/$defs/content_entry"}
-        },
-        "review_instruction_contract": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["protocol_digest", "instructions_digest", "instructions"],
-          "properties": {
-            "protocol_digest": {"$ref": "#/$defs/digest"},
-            "instructions_digest": {"$ref": "#/$defs/digest"},
-            "instructions": {"type": "string", "minLength": 1, "maxLength": 65536}
-          }
-        }
-      }
-    },
-    "dimension": {
-      "enum": [
-        "intent-conformance",
-        "architecture",
-        "redundancy",
-        "clarity",
-        "separation-of-concerns",
-        "test-adequacy",
-        "correctness-and-failure",
-        "scope-control"
-      ]
-    },
-    "completeness_check": {
-      "enum": [
-        "dimension-coverage",
-        "subject-binding",
-        "test-evidence",
-        "failure-mode-coverage",
-        "change-reach",
-        "authority-context",
-        "clean-claim-challenge"
-      ]
+     }
     }
+   }
+  },
+  "authority_context": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "resume_checkpoint_digest",
+    "resume_checkpoint_source_digest",
+    "resume_checkpoint",
+    "configuration_sources",
+    "changed_existing_tests",
+    "test_change_artifacts",
+    "test_change_sources",
+    "review_instruction_contract"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "factory-validator-review-authority-context/1"
+    },
+    "resume_checkpoint_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "resume_checkpoint_source_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "resume_checkpoint": {
+     "$ref": "#/$defs/content_entry"
+    },
+    "configuration_sources": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 64,
+     "items": {
+      "oneOf": [
+       {
+        "$ref": "#/$defs/content_entry"
+       },
+       {
+        "$ref": "#/$defs/digest_only_entry"
+       }
+      ]
+     }
+    },
+    "changed_existing_tests": {
+     "type": "array",
+     "uniqueItems": true,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+     }
+    },
+    "test_change_artifacts": {
+     "type": "object",
+     "propertyNames": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+     },
+     "additionalProperties": {
+      "$ref": "#/$defs/digest"
+     }
+    },
+    "test_change_sources": {
+     "type": "array",
+     "maxItems": 8,
+     "items": {
+      "$ref": "#/$defs/content_entry"
+     }
+    },
+    "review_instruction_contract": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "protocol_digest",
+      "instructions_digest",
+      "instructions"
+     ],
+     "properties": {
+      "protocol_digest": {
+       "$ref": "#/$defs/digest"
+      },
+      "instructions_digest": {
+       "$ref": "#/$defs/digest"
+      },
+      "instructions": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 65536
+      }
+     }
+    }
+   }
+  },
+  "dimension": {
+   "enum": [
+    "intent-conformance",
+    "architecture",
+    "redundancy",
+    "clarity",
+    "separation-of-concerns",
+    "test-adequacy",
+    "correctness-and-failure",
+    "scope-control"
+   ]
+  },
+  "completeness_check": {
+   "enum": [
+    "dimension-coverage",
+    "subject-binding",
+    "test-evidence",
+    "failure-mode-coverage",
+    "change-reach",
+    "authority-context",
+    "clean-claim-challenge"
+   ]
+  },
+  "digest_only_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "name",
+    "declared_digest",
+    "content_digest",
+    "kind"
+   ],
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "declared_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "content_digest": {
+     "$ref": "#/$defs/digest"
+    },
+    "kind": {
+     "enum": [
+      "directory-tree",
+      "large-file"
+     ]
+    }
+   }
   }
+ }
 }
