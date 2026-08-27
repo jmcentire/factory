@@ -215,6 +215,7 @@ def _parser() -> argparse.ArgumentParser:
     execute_attempt.add_argument("--checkpoint", required=True)
     execute_attempt.add_argument("--checkpoint-digest", required=True)
     execute_attempt.add_argument("--repair-brief", default="")
+    execute_attempt.add_argument("--acceptance-obligation-catalog-digest", default=None)
     execute_attempt.add_argument(
         "--config-source", action="append", default=[], metavar="NAME=PATH"
     )
@@ -1222,6 +1223,13 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             trusted_root_public_key=arguments.root_public_key,
             tessera=_tessera(arguments.tessera_bin),
             configuration_sources=configuration_sources,
+            # On first activation the checkpoint must already record the proposed
+            # catalog digest for the orchestrator's own re-verification, while the
+            # run projection still records none — the caller supplies the expected
+            # value exactly as verify-resume-checkpoint does.
+            expected_acceptance_obligation_catalog_digest=(
+                arguments.acceptance_obligation_catalog_digest
+            ),
             accepted_previous_checkpoint_digests=(
                 arguments.accepted_previous_checkpoint_digest
             ),
@@ -2531,7 +2539,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             else None
         )
         try:
-            outcome = orchestrator.build_and_validate(
+            build_outcome = orchestrator.build_and_validate(
                 arguments.run_id,
                 attempt_id=arguments.attempt_id,
                 target_manifest_path=arguments.target_manifest,
@@ -2583,13 +2591,13 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             raise ValueError(str(exc)) from exc
         _emit(
             {
-                "candidate_digest": outcome.candidate_digest,
-                "tests_digest": outcome.tests_digest,
-                "passed": outcome.passed,
-                "repair_signal": outcome.repair_signal,
-                "acceptance_report_digest": outcome.acceptance_report_digest,
-                "adversarial_review_digest": outcome.adversarial_review_digest,
-                "run_state": outcome.projection.state,
+                "candidate_digest": build_outcome.candidate_digest,
+                "tests_digest": build_outcome.tests_digest,
+                "passed": build_outcome.passed,
+                "repair_signal": build_outcome.repair_signal,
+                "acceptance_report_digest": build_outcome.acceptance_report_digest,
+                "adversarial_review_digest": build_outcome.adversarial_review_digest,
+                "run_state": build_outcome.projection.state,
             }
         )
         return
