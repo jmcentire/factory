@@ -26,7 +26,7 @@ DOCTRINE = (
     "## Directive — Validator\nvalidator text\n\n"
     "## Directive — Coder\ncoder text\n\n"
     "## Directive — Tester\ntester text\n"
-).encode("utf-8")
+).encode()
 
 MODEL = "claude-fable-5"
 RUNNER = "claude-code-cli"

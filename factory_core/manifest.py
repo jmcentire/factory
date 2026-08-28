@@ -62,12 +62,6 @@ def digest_bytes(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def digest_file(path: str) -> str:
-    """Content address of a file's bytes."""
-    with open(path, "rb") as fh:
-        return digest_bytes(fh.read())
-
-
 def digest_obj(obj: Any) -> str:
     """Content address of a JSON-serializable object via a canonical (sorted, compact)
     encoding, so identical logical content always yields the same address regardless of

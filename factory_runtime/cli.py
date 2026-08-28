@@ -555,6 +555,73 @@ def _parser() -> argparse.ArgumentParser:
         "--results", required=True, help="JSON array of BehavioralProbeResult"
     )
 
+    # FactoryOrchestrator.build_and_validate had no CLI door: the harness's shell-driven
+    # choreography (dispatch_lane.sh + run-model + promote.sh in sequence) is what production
+    # runs actually use, so this real, tested, single-call engine sat reachable only from
+    # tests/test_tessera_cli_integration.py. This subcommand is that door — a thin argument-
+    # marshaling layer over the same method, adding no new authority or behavior of its own.
+    build_and_validate = commands.add_parser(
+        "build-and-validate",
+        help="drive one Coder/Tester attempt through Validator evidence to preview "
+        "(FactoryOrchestrator.build_and_validate)",
+    )
+    _add_authority_arguments(build_and_validate)
+    build_and_validate.add_argument("--runs", required=True)
+    build_and_validate.add_argument("--run-id", required=True)
+    build_and_validate.add_argument("--attempt-id", required=True)
+    build_and_validate.add_argument("--target-manifest", required=True)
+    build_and_validate.add_argument("--pattern-catalog", required=True)
+    build_and_validate.add_argument("--build-plan", required=True)
+    build_and_validate.add_argument("--acceptance-catalog", required=True)
+    build_and_validate.add_argument("--acceptance-catalog-human-receipt", required=True)
+    build_and_validate.add_argument("--acceptance-catalog-validator-receipt", required=True)
+    build_and_validate.add_argument(
+        "--coder-command-arg", action="append", default=[],
+        help="one argv token of the Coder subprocess command; repeat in order",
+    )
+    build_and_validate.add_argument(
+        "--tester-command-arg", action="append", default=[],
+        help="one argv token of the Tester subprocess command; repeat in order",
+    )
+    build_and_validate.add_argument(
+        "--validator-command-arg", action="append", default=[],
+        help="one argv token of the Validator subprocess command; repeat in order",
+    )
+    build_and_validate.add_argument("--coder-trusted-path", action="append", default=[])
+    build_and_validate.add_argument("--tester-trusted-path", action="append", default=[])
+    build_and_validate.add_argument("--validator-trusted-path", action="append", default=[])
+    build_and_validate.add_argument("--resume-checkpoint", required=True)
+    build_and_validate.add_argument("--expected-resume-checkpoint-digest", required=True)
+    build_and_validate.add_argument(
+        "--resume-config-source", action="append", default=[], metavar="NAME=PATH"
+    )
+    build_and_validate.add_argument("--implementer-identity", required=True)
+    build_and_validate.add_argument("--tester-identity", required=True)
+    build_and_validate.add_argument("--verifier-identity", required=True)
+    build_and_validate.add_argument("--verifier-key", required=True)
+    build_and_validate.add_argument(
+        "--surface-evidence", required=True, help="JSON array of SurfaceEvidence objects"
+    )
+    build_and_validate.add_argument(
+        "--determinism-records", required=True, help="JSON array of DeterminismRecord objects"
+    )
+    build_and_validate.add_argument("--lane", required=True)
+    build_and_validate.add_argument(
+        "--independence", required=True, help="JSON IndependenceRecord"
+    )
+    build_and_validate.add_argument(
+        "--monitors", default="", help="JSON array of Monitor objects"
+    )
+    build_and_validate.add_argument("--monitor-declared-unit-count", type=int, default=0)
+    build_and_validate.add_argument(
+        "--correction", default="", help="JSON CorrectionRecord, if this is a repair"
+    )
+    build_and_validate.add_argument("--repair-brief", default=None)
+    build_and_validate.add_argument("--changed-existing-test", action="append", default=[])
+    build_and_validate.add_argument("--test-change-authorization", default=None)
+    build_and_validate.add_argument("--test-change-human-receipt", default=None)
+    build_and_validate.add_argument("--test-change-validator-receipt", default=None)
+
     return parser
 
 
@@ -2074,10 +2141,105 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         results = tuple(
             BehavioralProbeResult.from_dict(item) for item in _read_array(arguments.results)
         )
-        decision = decide_qualification(
+        qualification_decision = decide_qualification(
             arguments.role, results, current_configuration=configuration
         )
-        _emit(decision)
+        _emit(qualification_decision)
+        return
+    if arguments.command == "build-and-validate":
+        from factory_core.correction import CorrectionRecord
+        from factory_core.independence import IndependenceRecord
+        from factory_core.monitors import Monitor
+        from factory_runtime.evidence_plane import DeterminismRecord, SurfaceEvidence
+        from factory_runtime.orchestrator import FactoryOrchestrator, OrchestrationError
+
+        def parse_source_map(pairs: list[str]) -> dict[str, str]:
+            parsed: dict[str, str] = {}
+            for pair in pairs:
+                name, separator, path = pair.partition("=")
+                if not separator:
+                    raise ValueError(f"--resume-config-source must be NAME=PATH, got {pair!r}")
+                parsed[name] = path
+            return parsed
+
+        workflow = _load_workflow(arguments)
+        orchestrator = FactoryOrchestrator(workflow)
+        surface_evidence = tuple(
+            SurfaceEvidence(**item) for item in _read_array(arguments.surface_evidence)
+        )
+        determinism_records = tuple(
+            DeterminismRecord(**item) for item in _read_array(arguments.determinism_records)
+        )
+        monitors = tuple(
+            Monitor.from_dict(item) for item in _read_array(arguments.monitors)
+        )
+        correction = (
+            CorrectionRecord.from_dict(_read_object(arguments.correction))
+            if arguments.correction
+            else None
+        )
+        try:
+            outcome = orchestrator.build_and_validate(
+                arguments.run_id,
+                attempt_id=arguments.attempt_id,
+                target_manifest_path=arguments.target_manifest,
+                pattern_catalog_path=arguments.pattern_catalog,
+                build_plan_path=arguments.build_plan,
+                acceptance_catalog_path=arguments.acceptance_catalog,
+                acceptance_catalog_human_receipt_path=(
+                    arguments.acceptance_catalog_human_receipt
+                ),
+                acceptance_catalog_validator_receipt_path=(
+                    arguments.acceptance_catalog_validator_receipt
+                ),
+                coder_command=tuple(arguments.coder_command_arg),
+                tester_command=tuple(arguments.tester_command_arg),
+                validator_command=tuple(arguments.validator_command_arg),
+                coder_trusted_paths=tuple(arguments.coder_trusted_path),
+                tester_trusted_paths=tuple(arguments.tester_trusted_path),
+                validator_trusted_paths=tuple(arguments.validator_trusted_path),
+                resume_checkpoint_path=arguments.resume_checkpoint,
+                expected_resume_checkpoint_digest=(
+                    arguments.expected_resume_checkpoint_digest
+                ),
+                genesis_path=arguments.genesis,
+                resume_configuration_sources=parse_source_map(
+                    arguments.resume_config_source
+                ),
+                implementer_identity=arguments.implementer_identity,
+                tester_identity=arguments.tester_identity,
+                verifier_identity=arguments.verifier_identity,
+                verifier_key_path=arguments.verifier_key,
+                surface_evidence=surface_evidence,
+                determinism_records=determinism_records,
+                lane=arguments.lane,
+                independence=IndependenceRecord.from_dict(
+                    _read_object(arguments.independence)
+                ),
+                monitors=monitors,
+                monitor_declared_unit_count=arguments.monitor_declared_unit_count,
+                correction=correction,
+                repair_brief_path=arguments.repair_brief,
+                changed_existing_tests=tuple(arguments.changed_existing_test),
+                test_change_authorization_path=arguments.test_change_authorization,
+                test_change_human_receipt_path=arguments.test_change_human_receipt,
+                test_change_validator_receipt_path=arguments.test_change_validator_receipt,
+            )
+        except OrchestrationError as exc:
+            # Fail-closed: the orchestrator's own refusal, surfaced as a refused control
+            # (exit 2) rather than a traceback — never a silent partial-progress "success".
+            raise ValueError(str(exc)) from exc
+        _emit(
+            {
+                "candidate_digest": outcome.candidate_digest,
+                "tests_digest": outcome.tests_digest,
+                "passed": outcome.passed,
+                "repair_signal": outcome.repair_signal,
+                "acceptance_report_digest": outcome.acceptance_report_digest,
+                "adversarial_review_digest": outcome.adversarial_review_digest,
+                "run_state": outcome.projection.state,
+            }
+        )
         return
     raise ValueError(f"unsupported command: {arguments.command}")
 

@@ -17,8 +17,8 @@ from factory_runtime.instruction_control import compile_role_contract
 from scripts.assemble_role_doctrine import (
     _SOURCES,
     _TITLES,
-    AssemblyError,
     PROMPTS,
+    AssemblyError,
     assemble,
     demote,
     promote,

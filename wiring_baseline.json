@@ -72,10 +72,6 @@
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
   {
-    "finding": "zero-caller-export:factory_core/manifest.py:digest_file",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
     "finding": "zero-caller-export:factory_core/qualification.py:QualificationDecision",
     "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
   },
@@ -201,14 +197,6 @@
   },
   {
     "finding": "zero-caller-export:factory_runtime/lanes.py:temporary_build_loop_root",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/orchestrator.py:FactoryOrchestrator",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/orchestrator.py:OrchestrationError",
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
   {

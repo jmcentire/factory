@@ -111,7 +111,9 @@ def _full_pass_set(configuration: ConfigurationBinding, *, start: int = 100):
 
 def test_all_four_classes_fully_evidenced_and_passing_is_qualified() -> None:
     configuration = _config()
-    decision = decide_qualification(ROLE, _full_pass_set(configuration), current_configuration=configuration)
+    decision = decide_qualification(
+        ROLE, _full_pass_set(configuration), current_configuration=configuration
+    )
     assert decision.status == QUALIFIED
     assert decision.qualified is True
     assert decision.reasons == ()
