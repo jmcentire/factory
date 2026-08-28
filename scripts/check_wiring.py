@@ -31,6 +31,35 @@ array of ``{"finding", "justification"}`` objects) suppresses exact-match lines 
 missing baseline file is an empty baseline. False reds are preferred to false greens
 everywhere: anything the analysis cannot decide is reported, not skipped.
 
+Two hardening checks close gaps a cold frame-check review found in dogfood run 1
+(kindex `f8606a4025ad`):
+
+  baseline-added-with-finding   a new ``wiring_baseline.json`` entry whose referenced
+                                 file was ALSO changed in the same diff against HEAD —
+                                 shipping an orphan plus its own suppression in one
+                                 change defeats "new code turns the gate red." Requires
+                                 a git repository with a HEAD commit; silently skipped
+                                 (with a printed note, never a silent pass) otherwise.
+
+Stale baseline entries — an exact finding string the baseline suppresses but the
+current scan no longer produces — are reported as a non-blocking warning on stderr,
+never silently dropped: a rotted entry lies in wait to mask the exact same finding
+string reappearing later with nobody noticing the baseline no longer means what it
+once did.
+
+Scope decision (kindex `3910eaa6c7e5` item 4, deliberate, not an oversight): this
+audit stays at module-level granularity — top-level classes and functions — and does
+NOT extend to flagging never-called methods on an otherwise-reachable class. A
+top-level export is either imported somewhere on an entrypoint-reachable path or it
+is not; a method is routinely invoked only through polymorphism the static analysis
+cannot see (an ABC override, a Protocol implementation, a dataclass magic method, a
+framework callback resolved by name at runtime) — the false-positive rate would be
+far higher than at module level, and a fail-closed gate that regularly cries wolf
+trains its own operator to stop trusting reds, which is worse than the gap it would
+close. If method-level dead-service detection is built later, it belongs behind a
+separate, non-blocking, report-only diagnostic — never folded into this exit code —
+until a design exists for bounding that false-positive rate.
+
 Stdlib only, so the guard itself has no third-party surface to subvert.
 """
 
@@ -39,6 +68,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -396,6 +426,70 @@ def load_baseline(path: Path) -> frozenset[str]:
     return frozenset(lines)
 
 
+def _git_lines(root: Path, *args: str) -> list[str] | None:
+    """Run a read-only git command; ``None`` means "not applicable here", never an error.
+
+    Every caller must treat ``None`` as skip-this-check, not as evidence of anything —
+    a tree with no git repository, no HEAD commit, or no ``git`` binary is a legitimate
+    environment this tool also runs in (e.g. a packaged release checkout).
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def check_baseline_diff_guard(root: Path, baseline_path: Path) -> tuple[set[str], bool]:
+    """Flag a new baseline entry whose own finding was introduced in the same diff.
+
+    Returns ``(findings, applicable)``. ``applicable`` is ``False`` when this check
+    cannot run here (no git repo, no HEAD, baseline not tracked) — the caller reports
+    that plainly rather than folding it into "clean".
+    """
+    changed = _git_lines(root, "diff", "--name-only", "HEAD")
+    if changed is None:
+        return set(), False
+    rel_baseline = baseline_path.resolve().relative_to(root.resolve()).as_posix()
+    old_raw = _git_lines(root, "show", f"HEAD:{rel_baseline}")
+    try:
+        old_entries = (
+            {e.get("finding") for e in json.loads("\n".join(old_raw)) if isinstance(e, dict)}
+            if old_raw is not None
+            else set()
+        )
+    except (ValueError, TypeError):
+        old_entries = set()
+    try:
+        current_entries = {
+            e.get("finding")
+            for e in json.loads(baseline_path.read_text(encoding="utf-8"))
+            if isinstance(e, dict)
+        }
+    except (OSError, ValueError):
+        current_entries = set()
+    new_entries = {f for f in (current_entries - old_entries) if f}
+    changed_set = set(changed)
+    findings: set[str] = set()
+    for finding in new_entries:
+        parts = finding.split(":", 2)
+        if len(parts) != 3:
+            continue
+        _, finding_path, _ = parts
+        if finding_path in changed_set:
+            findings.add(f"baseline-added-with-finding:{finding_path}:-")
+    return findings, True
+
+
 def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
@@ -416,9 +510,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         baseline = load_baseline(baseline_path)
         findings = run(root)
+        diff_guard_findings, diff_guard_applicable = check_baseline_diff_guard(
+            root, baseline_path
+        )
+        findings |= diff_guard_findings
     except WiringError as exc:
         print(f"check_wiring: ERROR — {exc}", file=sys.stderr)
         return 2
+    stale = sorted(entry for entry in baseline if entry not in findings)
+    if stale:
+        plural = "y is" if len(stale) == 1 else "ies are"
+        print(
+            f"check_wiring: WARN — {len(stale)} baseline entr{plural} stale "
+            "(no longer produced by the scan) and should be removed:",
+            file=sys.stderr,
+        )
+        for line in stale:
+            print(f"  {line}", file=sys.stderr)
+    if not diff_guard_applicable:
+        print(
+            "check_wiring: NOTE — baseline-pre-seeding guard skipped (no git HEAD here).",
+            file=sys.stderr,
+        )
     emitted = sorted(line for line in findings if line not in baseline)
     for line in emitted:
         print(line)
