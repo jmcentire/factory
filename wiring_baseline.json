@@ -1,5 +1,9 @@
 [
   {
+    "finding": "unreachable-module:factory_core/qualification.py:-",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
     "finding": "unreachable-module:factory_runtime/runner_failure.py:-",
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
@@ -74,6 +78,30 @@
   {
     "finding": "zero-caller-export:factory_core/manifest.py:digest_file",
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:BehavioralProbeResult",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:ConfigurationBinding",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:QualificationDecision",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:QualificationError",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:RunClassQualification",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+  },
+  {
+    "finding": "zero-caller-export:factory_core/qualification.py:decide_qualification",
+    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
   },
   {
     "finding": "zero-caller-export:factory_core/roles.py:build_grants",
