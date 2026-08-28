@@ -36,6 +36,7 @@ from factory_runtime.loopback_endpoints import (
     reserve_loopback_endpoints,
 )
 from factory_runtime.native_test import (
+    ACCEPTANCE_CATALOG_FILENAME,
     CANDIDATE_SUBDIR,
     TESTER_SUBDIR,
     NativeTestExecution,
@@ -688,14 +689,18 @@ class IsolatedBuildLoop:
         tester: FrozenTree,
         native_execution: NativeTestExecution,
         candidate_loopback: Sequence[Mapping[str, object]],
+        acceptance_catalog_bytes: bytes,
     ) -> LaneExecution:
         """Run the target's declared native acceptance argv, target-agnostically.
 
-        Materialize the reviewed candidate and sealed Tester artifact into a fresh workspace,
-        expose only the declared loopback grant, and run the exact argv (no shell) rooted at the
-        candidate tree with a closed, declared environment. The whole process group is reaped and
-        the loopback block is proven leak-free on exit. The Factory learns nothing target-specific
-        and never launches the candidate or any fixture — the argv owns that.
+        Materialize the reviewed candidate, the sealed Tester artifact, and the single ratified
+        acceptance-obligation catalog into a fresh workspace, expose only the declared loopback
+        grant, and run the exact argv (no shell) rooted at the candidate tree with a closed,
+        declared environment. The target reads its ratified per-criterion assertions from the
+        materialized catalog through one declared path variable; the Factory encodes no criterion
+        count or individual digest here. The whole process group is reaped and the loopback block
+        is proven leak-free on exit. The Factory learns nothing target-specific and never launches
+        the candidate or any fixture — the argv owns that.
         """
 
         coder = verify_frozen_tree(coder.directory, expected_digest=coder.digest)
@@ -705,6 +710,8 @@ class IsolatedBuildLoop:
         tester_dir = workspace / TESTER_SUBDIR
         _copy_regular_tree(coder.files_directory, candidate_dir)
         _copy_regular_tree(tester.files_directory, tester_dir)
+        catalog_path = workspace / ACCEPTANCE_CATALOG_FILENAME
+        catalog_path.write_bytes(acceptance_catalog_bytes)
 
         environment = {
             "HOME": str(workspace),
@@ -716,6 +723,7 @@ class IsolatedBuildLoop:
             "FACTORY_OUTPUT_DIR": str(output),
             "FACTORY_CANDIDATE_DIR": str(candidate_dir),
             "FACTORY_TEST_DIR": str(tester_dir),
+            "FACTORY_ACCEPTANCE_CATALOG": str(catalog_path),
         }
         argv = list(native_execution.test_entrypoint)
         specs = [EndpointSpec.from_dict(spec) for spec in candidate_loopback]
@@ -769,6 +777,10 @@ class IsolatedBuildLoop:
         output.mkdir()
         work.mkdir()
         if native_execution is not None:
+            if acceptance_catalog_bytes is None:
+                raise LaneError(
+                    "native test execution requires the ratified acceptance catalog"
+                )
             return self._run_native_test(
                 lane=lane,
                 output=output,
@@ -776,6 +788,7 @@ class IsolatedBuildLoop:
                 tester=tester,
                 native_execution=native_execution,
                 candidate_loopback=candidate_loopback,
+                acceptance_catalog_bytes=acceptance_catalog_bytes,
             )
         if validator_execution is None:
             raise LaneError("Validator execution requires a frozen runner or a native test entry")
