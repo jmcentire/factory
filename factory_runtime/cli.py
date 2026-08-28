@@ -489,6 +489,41 @@ def _parser() -> argparse.ArgumentParser:
     promote.add_argument("--runs", required=True, help="the runs root directory")
     promote.add_argument("--run-id", required=True, help="the run to promote")
 
+    # The global-property layer above Gate L: the verdict is computed from the ratified
+    # coverage map and typed evidence channels only — prose is never an input — and the
+    # reserved completion token exists only through handover composition over a PASS.
+    verdict = commands.add_parser(
+        "verdict",
+        help="compute the mechanically unpersuadable global verdict over a ratified "
+        "coverage map; with handovers, compose the reserved completion token",
+    )
+    verdict.add_argument("--coverage", required=True, help="ratified coverage-map JSON")
+    verdict.add_argument(
+        "--promotion",
+        required=True,
+        help="the promotion_verdict.json Gate L wrote (the floor the verdict may only narrow)",
+    )
+    verdict.add_argument(
+        "--frame-check",
+        default="",
+        help="frame-check result JSON; absent means the first line is not demonstrated",
+    )
+    verdict.add_argument("--receipts", default="", help="characterization-receipt JSON array")
+    verdict.add_argument("--assumptions", default="", help="assumption-record JSON array")
+    verdict.add_argument(
+        "--handovers",
+        default="",
+        help="lane-handover JSON array; enables completion-token composition",
+    )
+    verdict.add_argument("--candidate", required=True, help="candidate digest (sha256:<hex>)")
+    verdict.add_argument(
+        "--evaluated-position",
+        required=True,
+        type=int,
+        help="this evaluation's ledger position (receipts at or after it are retroactive)",
+    )
+    verdict.add_argument("--validator", required=True, help="the validator seat identity")
+
     return parser
 
 
@@ -586,6 +621,20 @@ def _read_object(path: str) -> dict[str, Any]:
         _read_regular_bytes(source, label="JSON payload"),
         label=f"JSON payload {source}",
     )
+
+
+def _read_array(path: str) -> list[dict[str, Any]]:
+    """Load an optional JSON array of objects; an empty path is an empty array."""
+
+    if not path:
+        return []
+    source = Path(path)
+    raw = json.loads(
+        _read_regular_bytes(source, label="JSON payload").decode("utf-8")
+    )
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        raise ValueError(f"JSON payload {source} must be an array of objects")
+    return raw
 
 
 def _emit(value: Any) -> None:
@@ -1913,6 +1962,63 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             # Fail-closed: surface as a refused control (exit 2) so promote.sh closes nothing.
             raise ValueError(str(exc)) from exc
         _emit(decision)
+        return
+    if arguments.command == "verdict":
+        from factory_core.handover import Handover, compose_done, done_attestation_subject
+        from factory_core.verdict import (
+            AssumptionRecord,
+            CharacterizationReceipt,
+            CoverageMap,
+            FrameCheckResult,
+            PromotionFloor,
+            compute_verdict,
+            render_headline,
+            verdict_attestation_subject,
+        )
+
+        coverage = CoverageMap.from_dict(_read_object(arguments.coverage))
+        promotion = PromotionFloor.from_dict(_read_object(arguments.promotion))
+        frame_check = (
+            FrameCheckResult.from_dict(_read_object(arguments.frame_check))
+            if arguments.frame_check
+            else None
+        )
+        receipts = tuple(
+            CharacterizationReceipt.from_dict(item)
+            for item in _read_array(arguments.receipts)
+        )
+        assumptions = tuple(
+            AssumptionRecord.from_dict(item) for item in _read_array(arguments.assumptions)
+        )
+        computed = compute_verdict(
+            coverage,
+            promotion,
+            frame_check,
+            candidate_digest=arguments.candidate,
+            evaluated_position=arguments.evaluated_position,
+            receipts=receipts,
+            assumptions=assumptions,
+            validator=arguments.validator,
+        )
+        payload: dict[str, Any] = {
+            "verdict": computed.to_dict(),
+            "headline": render_headline(computed),
+            "attestation_subject_digest": digest_obj(
+                verdict_attestation_subject(computed, coverage)
+            ),
+        }
+        handover_items = _read_array(arguments.handovers)
+        if handover_items:
+            handovers = tuple(Handover.from_dict(item) for item in handover_items)
+            composition = compose_done(
+                coverage, handovers, computed, validator=arguments.validator
+            )
+            payload["composition"] = composition.to_dict()
+            if composition.reachable:
+                payload["done_attestation_subject_digest"] = digest_obj(
+                    done_attestation_subject(composition, coverage, computed)
+                )
+        _emit(payload)
         return
     raise ValueError(f"unsupported command: {arguments.command}")
 

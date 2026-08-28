@@ -329,13 +329,26 @@ class DenialProbe:
 
 @dataclass(frozen=True)
 class ToolPolicyBundle:
-    """Policy, external trust anchor, authorizations, probes, and phase authority."""
+    """Policy, external trust anchor, authorizations, probes, and phase authority.
+
+    ``single_operator_anchor`` is the ratified single-operator disposition
+    (2026-08-27): when the enrolled roster contains exactly one human, the
+    independent-approval seat is filled by an externally signed, content-addressed
+    envelope binding this exact policy digest — the runtime seam verifies the real
+    signature; the pure core verifies the envelope binds THIS policy. It preserves
+    what independent approval is for (the policy cannot be silently self-modified
+    mid-run) while refusing to pretend independent human judgment exists — every
+    decision over it carries a permanent disclosure report. With more than one
+    enrolled human the anchor is invalid authority: it can never substitute for a
+    real second human who exists.
+    """
 
     policy: ToolPolicy
     trusted_policy_digest: str
     provenance: ProvenanceBundle
     authorizations: tuple[ToolAuthorization, ...] = ()
     denial_probes: tuple[DenialProbe, ...] = ()
+    single_operator_anchor: EvidenceIntegrity | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -346,6 +359,11 @@ class ToolPolicyBundle:
                 authorization.to_dict() for authorization in self.authorizations
             ],
             "denial_probes": [probe.to_dict() for probe in self.denial_probes],
+            "single_operator_anchor": (
+                self.single_operator_anchor.to_dict()
+                if self.single_operator_anchor is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -354,6 +372,7 @@ class ToolPolicyBundle:
         raw_provenance = raw.get("provenance")
         if not isinstance(raw_policy, Mapping) or not isinstance(raw_provenance, Mapping):
             return None
+        anchor_raw = raw.get("single_operator_anchor")
         return cls(
             policy=ToolPolicy.from_dict(raw_policy),
             trusted_policy_digest=str(raw.get("trusted_policy_digest", "")),
@@ -366,12 +385,19 @@ class ToolPolicyBundle:
                 DenialProbe.from_dict(item)
                 for item in _mapping_sequence(raw.get("denial_probes"))
             ),
+            single_operator_anchor=EvidenceIntegrity.from_dict(
+                anchor_raw if isinstance(anchor_raw, Mapping) else None
+            ),
         )
 
 
 @dataclass(frozen=True)
 class ToolPolicyReport:
-    """Fail-closed verification of one exact run policy."""
+    """Fail-closed verification of one exact run policy.
+
+    ``reports`` carries non-blocking disclosures (the single-operator anchor line
+    among them) that every downstream decision must surface rather than absorb.
+    """
 
     satisfied: bool
     policy_digest: str
@@ -379,6 +405,7 @@ class ToolPolicyReport:
     verified_tool_ids: tuple[str, ...]
     verified_authorization_ids: tuple[str, ...]
     verified_denial_probe_ids: tuple[str, ...]
+    reports: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -388,6 +415,7 @@ class ToolPolicyReport:
             "verified_tool_ids": list(self.verified_tool_ids),
             "verified_authorization_ids": list(self.verified_authorization_ids),
             "verified_denial_probe_ids": list(self.verified_denial_probe_ids),
+            "reports": list(self.reports),
         }
 
 
@@ -410,6 +438,7 @@ def verify_tool_policy(
 
     policy = bundle.policy
     issues: list[str] = []
+    reports: list[str] = []
     verified_tools: list[str] = []
     verified_authorizations: list[str] = []
     verified_probes: list[str] = []
@@ -426,13 +455,38 @@ def verify_tool_policy(
         issues.append("tool-policy-not-active")
 
     signer = identity_policy.resolve_human(policy.signed_by)
-    approver = identity_policy.resolve_human(policy.independently_approved_by)
     if signer is None:
         issues.append("tool-policy-signer-not-enrolled")
-    if approver is None:
-        issues.append("tool-policy-independent-approver-not-enrolled")
-    if signer is not None and approver is not None and signer == approver:
-        issues.append("tool-policy-signer-equals-independent-approver")
+    # Single-operator disposition (ratified 2026-08-27): with exactly one enrolled
+    # human, an empty independent-approver seat may be filled by an externally
+    # signed anchor binding this exact policy digest. Every other combination keeps
+    # the two-distinct-humans rule: an anchor beside a multi-human roster can never
+    # dodge a real second human, an anchor beside a named approver is ambiguous
+    # authority, and the sole human naming themself independent approver is still a
+    # lie. All of these are invalid authority, not gaps — fail-closed.
+    single_operator = len(identity_policy.human_ids) == 1
+    anchor = bundle.single_operator_anchor
+    if anchor is not None and not single_operator:
+        issues.append("tool-policy-anchor-with-multiple-humans")
+    if anchor is not None and policy.independently_approved_by.strip():
+        issues.append("tool-policy-anchor-and-approver-both-present")
+    if single_operator and not policy.independently_approved_by.strip():
+        if anchor is None or not anchor.present:
+            issues.append("tool-policy-single-operator-anchor-missing")
+        elif not anchor.verifies_binding({"policy_digest": policy.content_digest}):
+            issues.append("tool-policy-single-operator-anchor-invalid")
+        elif signer is not None:
+            reports.append(
+                "tool-policy-single-operator-anchored:"
+                f"{signer}: independent human approval unavailable; "
+                "policy digest externally anchored"
+            )
+    else:
+        approver = identity_policy.resolve_human(policy.independently_approved_by)
+        if approver is None:
+            issues.append("tool-policy-independent-approver-not-enrolled")
+        if signer is not None and approver is not None and signer == approver:
+            issues.append("tool-policy-signer-equals-independent-approver")
 
     if not bundle.trusted_policy_digest:
         issues.append("tool-policy-trusted-digest-missing")
@@ -628,6 +682,7 @@ def verify_tool_policy(
         verified_tool_ids=tuple(sorted(set(verified_tools))),
         verified_authorization_ids=tuple(sorted(set(verified_authorizations))),
         verified_denial_probe_ids=tuple(sorted(set(verified_probes))),
+        reports=tuple(dict.fromkeys(reports)),
     )
 
 

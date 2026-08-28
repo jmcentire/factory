@@ -26,6 +26,16 @@ construction — the purity guard will (and must) reject it.
 - `factory_core/criticality.py` — surface control profile, declared side-effect closure, and
   unclassified-to-Critical resolution.
 - `factory_core/promotion.py` — oracle-adequacy × criticality promotion decision.
+- `factory_core/verdict.py` — the global-property layer above promotion: closed
+  content-addressed coverage map, ratified adequacy criteria, characterization
+  receipts, frame-check binary, assumption records, and the mechanically
+  unpersuadable monotone verdict with the forced first line ("does it do the thing
+  it was built to do?"); prose is never an input.
+- `factory_core/handover.py` — typed `__HANDOVER__` lane completions with explicit
+  scope boundaries, first-class retraction bound to a forcing event, the
+  reserved-token scan, and `compose_done` — the only path that mints `__DONE__`,
+  reachable solely when the handover scope-union covers the ratified verb set over a
+  PASS verdict.
 - `factory_core/provenance.py` — canonical phase-artifact/backreference verifier and
   absence-vs-integrity issue classification, including whole-artifact version binding.
 - `factory_core/build_plan.py` — qualified recipe-pattern catalog and disposable per-run build
@@ -126,7 +136,12 @@ make test-tessera   # real signing + runtime-through-preview proof
 - **Tool capability boundary** — every declared tool has exactly one signed tier and a
   phase-2/3 backreference; unknown/Verboten denies, Sign-off grants are scoped and expiring,
   and denial probes demonstrate enforcement. Platform credential/network removal remains an
-  external integration obligation.
+  external integration obligation. The run policy is signed by one enrolled human and
+  independently approved by a second; when the enrolled roster contains exactly one human
+  (ratified single-operator disposition, 2026-08-27), the independent-approval seat is
+  filled by an externally signed anchor binding the exact policy digest, and every decision
+  over it carries a permanent disclosure — an anchor can never substitute when a second
+  human exists, and self-approval remains invalid.
 - **Externally anchored resume and brokered execution** — grounding and dispatch verify an
   independently supplied checkpoint before mutable state. Networked model lanes receive only a
   bounded path-free projection in a closed named-secret environment, must pass canary/resume

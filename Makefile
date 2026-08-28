@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-authority check-harness check-denial-probes ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes ship
 
 .DEFAULT_GOAL := help
 
@@ -146,6 +146,9 @@ check-purity: check-python ## the anti-coupling guard (core imports nothing targ
 check-doctrine: check-python ## structural parity for active doctrine surfaces
 	$(PY) scripts/check_doctrine_sync.py
 
+check-wiring: check-python ## fail-closed wiring audit (every provided service reachable from an entrypoint)
+	$(PY) scripts/check_wiring.py
+
 check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's authority seam
 	$(PY) scripts/check_forbidden_authority.py
 
@@ -171,7 +174,7 @@ check-denial-probes: check-python ## every factory gate has a registered, collec
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-authority check-harness check-denial-probes lint typecheck test ## run every gate (purity -> doctrine -> authority -> harness -> denial-probes -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

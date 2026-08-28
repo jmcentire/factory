@@ -792,6 +792,9 @@ def decide_promotion(
         tool_report = verify_tool_policy(request.tool_policy, policy, request.evaluated_at)
         tool_policy_issues = tool_report.issues
         tool_policy_digest = tool_report.policy_digest
+        # Disclosures (e.g. the single-operator anchor line) are surfaced, never absorbed:
+        # the decision that rests on an anchored policy says so in its own record.
+        reports.extend(tool_report.reports)
         for issue in tool_policy_issues:
             if tool_policy_issue_is_gap(issue):
                 gap_all(f"tool-policy-gap:{issue}")
