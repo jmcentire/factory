@@ -524,6 +524,37 @@ def _parser() -> argparse.ArgumentParser:
     )
     verdict.add_argument("--validator", required=True, help="the validator seat identity")
 
+    # Behavioral qualification: does a role instruction actually govern behavior, not just
+    # which bytes it admitted (that half is instruction_control.py's job). Reuses the exact
+    # role-contract / effective-directive-contract documents prepare-lane-dispatch already
+    # produces, so the configuration binding is derived from the same digests the runtime
+    # already treats as authoritative rather than a parallel derivation.
+    qualify = commands.add_parser(
+        "qualify",
+        help="compute behavioral qualification for a role instruction from typed probe "
+        "and counter-probe evidence",
+    )
+    qualify.add_argument(
+        "--role", required=True, choices=("coder", "tester", "validator")
+    )
+    qualify.add_argument(
+        "--role-contract",
+        required=True,
+        help="compiled role-contract JSON (prepare-lane-dispatch --role-contract-output)",
+    )
+    qualify.add_argument(
+        "--effective-directives",
+        required=True,
+        help="effective-directive-contract JSON "
+        "(prepare-lane-dispatch --effective-directives-output)",
+    )
+    qualify.add_argument("--model", required=True)
+    qualify.add_argument("--runner", required=True)
+    qualify.add_argument("--tool-schema-digest", required=True)
+    qualify.add_argument(
+        "--results", required=True, help="JSON array of BehavioralProbeResult"
+    )
+
     return parser
 
 
@@ -2019,6 +2050,34 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                     done_attestation_subject(composition, coverage, computed)
                 )
         _emit(payload)
+        return
+    if arguments.command == "qualify":
+        from factory_core.qualification import (
+            BehavioralProbeResult,
+            ConfigurationBinding,
+            decide_qualification,
+        )
+
+        role_contract = _read_object(arguments.role_contract)
+        effective_directives = _read_object(arguments.effective_directives)
+        # The same digest convention prepare-lane-dispatch and validate_directive_readback
+        # already treat as authoritative (digest_obj over the whole compiled document) — the
+        # configuration binding does not invent a parallel derivation of "what the instruction
+        # currently is."
+        configuration = ConfigurationBinding(
+            model=arguments.model,
+            runner=arguments.runner,
+            prompt_digest=digest_obj(role_contract),
+            tool_schema_digest=arguments.tool_schema_digest,
+            directive_contract_digest=digest_obj(effective_directives),
+        )
+        results = tuple(
+            BehavioralProbeResult.from_dict(item) for item in _read_array(arguments.results)
+        )
+        decision = decide_qualification(
+            arguments.role, results, current_configuration=configuration
+        )
+        _emit(decision)
         return
     raise ValueError(f"unsupported command: {arguments.command}")
 
