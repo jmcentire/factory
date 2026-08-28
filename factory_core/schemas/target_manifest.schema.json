@@ -159,6 +159,12 @@
               "maximum": 8760
             }
           }
+        },
+        "test_entrypoint": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Optional target-native acceptance-test command as an exact argv (no shell). The generic Validator materializes the candidate and sealed Tester artifact, exposes only the declared loopback grant, and runs this argv in the target workspace. argv[0] is resolved on the sandbox PATH or given absolute; the target owns candidate launch and all fixtures."
         }
       }
     },

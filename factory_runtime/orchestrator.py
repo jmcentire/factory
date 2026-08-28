@@ -237,6 +237,7 @@ class FactoryOrchestrator:
         candidate_runtime_path: str | Path | None = None,
         candidate_launch: Sequence[str] = (),
         candidate_loopback: Sequence[Mapping[str, object]] = (),
+        native_test_entrypoint: Sequence[str] = (),
     ) -> BuildOutcome:
         if not _ATTEMPT_ID.fullmatch(attempt_id):
             raise OrchestrationError(
@@ -733,6 +734,7 @@ class FactoryOrchestrator:
                 candidate_runtime_path=candidate_runtime_path,
                 candidate_launch=candidate_launch,
                 candidate_loopback=candidate_loopback,
+                native_test_entrypoint=native_test_entrypoint,
                 before_validation=enter_validation,
             )
         except Exception as exc:
