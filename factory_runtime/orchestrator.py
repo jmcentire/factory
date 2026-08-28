@@ -234,6 +234,7 @@ class FactoryOrchestrator:
         test_change_validator_receipt_path: str | Path | None = None,
         candidate_runtime_path: str | Path | None = None,
         candidate_launch: Sequence[str] = (),
+        candidate_loopback: Sequence[Mapping[str, object]] = (),
     ) -> BuildOutcome:
         if not _ATTEMPT_ID.fullmatch(attempt_id):
             raise OrchestrationError(
@@ -686,6 +687,7 @@ class FactoryOrchestrator:
                 repair_brief_bytes=repair_brief_bytes,
                 candidate_runtime_path=candidate_runtime_path,
                 candidate_launch=candidate_launch,
+                candidate_loopback=candidate_loopback,
                 before_validation=enter_validation,
             )
         except Exception as exc:

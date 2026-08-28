@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import signal
 import socket
 import subprocess
 import sys
@@ -36,116 +37,51 @@ import socket
 _SANDBOX_DENIED = {errno.EPERM, errno.EACCES}
 
 
-def _denied(target, connect):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def _bind_errno(port, udp):
+    family = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    sock = socket.socket(socket.AF_INET, family)
+    try:
+        sock.bind(("127.0.0.1", port))
+        return None
+    except OSError as exc:
+        return exc.errno
+    finally:
+        sock.close()
+
+
+def _connect_errno(host, port, udp):
+    family = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    sock = socket.socket(socket.AF_INET, family)
     sock.settimeout(3)
     try:
-        if connect:
-            sock.connect(target)
+        if udp:
+            sock.sendto(b"factory-probe", (host, port))
         else:
-            sock.bind(target)
-        return False
+            sock.connect((host, port))
+        return None
     except OSError as exc:
-        return exc.errno in _SANDBOX_DENIED
+        return exc.errno
     finally:
         sock.close()
 
 
-def _allowed_bind(port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
-
-
-def _allowed_connect(port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(3)
-    try:
-        sock.connect(("127.0.0.1", port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
-
-
-def _udp_allowed_bind(port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.bind(("127.0.0.1", port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
-
-
-def _udp_allowed_send(host, port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
-    try:
-        sock.sendto(b"factory-probe", (host, port))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
-
-
-def _udp_denied_bind(port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.bind(("127.0.0.1", port))
-        return False
-    except OSError as exc:
-        return exc.errno in _SANDBOX_DENIED
-    finally:
-        sock.close()
-
-
-def _udp_denied_send(host, port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
-    try:
-        sock.sendto(b"factory-probe", (host, port))
-        return False
-    except OSError as exc:
-        return exc.errno in _SANDBOX_DENIED
-    finally:
-        sock.close()
-
-
-def _allow_probe(entry):
-    direction, protocol, port = entry["dir"], entry["proto"], int(entry["port"])
-    if protocol == "tcp" and direction == "bind":
-        return _allowed_bind(port)
-    if protocol == "tcp" and direction == "connect":
-        return _allowed_connect(port)
-    if protocol == "udp" and direction == "bind":
-        return _udp_allowed_bind(port)
-    if protocol == "udp" and direction == "connect":
-        return _udp_allowed_send("127.0.0.1", port)
-    raise SystemExit("unknown allow probe: " + json.dumps(entry))
-
-
-def _deny_probe(entry):
-    direction, protocol = entry["dir"], entry["proto"]
+def _permitted(entry):
+    # A granted bind must actually succeed. A granted connect need only pass the sandbox: a
+    # TCP RST / ECONNREFUSED still proves the kernel let the syscall through, so no live peer
+    # is required to qualify a connect grant.
+    udp = entry["proto"] == "udp"
     host = entry.get("host", "127.0.0.1")
-    port = int(entry["port"])
-    if protocol == "tcp" and direction == "bind":
-        return _denied((host, port), connect=False)
-    if protocol == "tcp" and direction == "connect":
-        return _denied((host, port), connect=True)
-    if protocol == "udp" and direction == "bind":
-        return _udp_denied_bind(port)
-    if protocol == "udp" and direction == "connect":
-        return _udp_denied_send(host, port)
-    raise SystemExit("unknown deny probe: " + json.dumps(entry))
+    if entry["dir"] == "bind":
+        return _bind_errno(int(entry["port"]), udp) is None
+    return _connect_errno(host, int(entry["port"]), udp) not in _SANDBOX_DENIED
+
+
+def _denied(entry):
+    udp = entry["proto"] == "udp"
+    host = entry.get("host", "127.0.0.1")
+    if entry["dir"] == "bind":
+        return _bind_errno(int(entry["port"]), udp) in _SANDBOX_DENIED
+    return _connect_errno(host, int(entry["port"]), udp) in _SANDBOX_DENIED
 
 
 result = {}
@@ -160,50 +96,9 @@ try:
 except OSError:
     result["write_denied"] = True
 
-mode = os.environ["FACTORY_NETWORK_MODE"]
-external_denied = _denied(("192.0.2.1", 9), connect=True)
-unrelated_denied = _denied(("127.0.0.1", int(os.environ["FACTORY_UNRELATED_PORT"])), connect=True)
-result["external_denied"] = external_denied
-result["unrelated_listener_denied"] = unrelated_denied
-if mode == "deny-all":
-    bind_denied = _denied(("127.0.0.1", 0), connect=False)
-    result["bind_denied"] = bind_denied
-    result["network_denied"] = bind_denied and unrelated_denied and external_denied
-    result["permitted_use_ok"] = False
-    result["wrong_direction_denied"] = True
-    result["out_of_range_denied"] = True
-elif mode in ("candidate-webrtc", "validator-webrtc"):
-    # Composite peer-local WebRTC lane. The exact permitted/denied endpoints are computed
-    # by the parent from the policy rules and passed as a categorized spec; the child proves
-    # every permitted use succeeds and every denial is an EPERM/EACCES sandbox refusal.
-    spec = json.loads(os.environ["FACTORY_PROBE_SPEC"])
-    result["network_denied"] = False
-    result["permitted_use_ok"] = all(_allow_probe(entry) for entry in spec["allow"])
-    by_category = {}
-    for entry in spec["deny"]:
-        by_category.setdefault(entry["category"], []).append(_deny_probe(entry))
-    result["wrong_direction_denied"] = all(by_category.get("wrong_direction", [True]))
-    result["out_of_range_denied"] = all(by_category.get("out_of_range", [True]))
-    result["external_denied"] = all(by_category.get("external", [True]))
-    result["unrelated_listener_denied"] = all(by_category.get("unrelated", [True]))
-elif mode == "loopback-connect":
-    # Validator: connect in-range works; binding (any port) and out-of-range connect denied.
-    result["network_denied"] = False
-    result["permitted_use_ok"] = _allowed_connect(int(os.environ["FACTORY_IN_RANGE_CONNECT_PORT"]))
-    result["wrong_direction_denied"] = _denied(("127.0.0.1", 0), connect=False)
-    result["out_of_range_denied"] = _denied(
-        ("127.0.0.1", int(os.environ["FACTORY_OUT_OF_RANGE_PORT"])), connect=True
-    )
-else:  # loopback-bind
-    # Candidate: bind in-range works; any outbound connect and out-of-range bind denied.
-    result["network_denied"] = False
-    result["permitted_use_ok"] = _allowed_bind(int(os.environ["FACTORY_IN_RANGE_BIND_PORT"]))
-    result["wrong_direction_denied"] = _denied(
-        ("127.0.0.1", int(os.environ["FACTORY_IN_RANGE_CONNECT_PORT"])), connect=True
-    )
-    result["out_of_range_denied"] = _denied(
-        ("127.0.0.1", int(os.environ["FACTORY_OUT_OF_RANGE_PORT"])), connect=False
-    )
+spec = json.loads(os.environ["FACTORY_PROBE_SPEC"])
+result["permitted_use_ok"] = all(_permitted(entry) for entry in spec["allow"])
+result["denied_ok"] = all(_denied(entry) for entry in spec["deny"])
 print(json.dumps(result, sort_keys=True))
 """
 
@@ -216,143 +111,98 @@ class IsolatedProcessResult:
     stderr: str
 
 
-_MAX_LOOPBACK_RANGE_PORTS = 64
+_MAX_LOOPBACK_PORTS = 64
+_PROTOCOLS = ("tcp", "udp")
+_OPERATIONS = ("bind", "connect")
+
+
+@dataclass(frozen=True)
+class LoopbackGrant:
+    """One exact, enumerated permission on a contiguous loopback port block.
+
+    Fully generic and transport-agnostic: it names a protocol (``tcp``/``udp``), an operation
+    (``bind`` — the lane may listen; or ``connect`` — the lane may reach out), and the exact
+    ports it applies to. SBPL has no port-range literal, so the block is emitted as one rule
+    per port. The Factory never interprets what a grant is *for*; a target declares the shape
+    it needs and the orchestrator allocates the concrete ports.
+    """
+
+    protocol: str
+    operation: str
+    ports: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if self.protocol not in _PROTOCOLS:
+            raise IsolationError(f"unsupported loopback protocol: {self.protocol}")
+        if self.operation not in _OPERATIONS:
+            raise IsolationError(f"unsupported loopback operation: {self.operation}")
+        ports = self.ports
+        if not ports:
+            raise IsolationError("a loopback grant requires at least one port")
+        if len(ports) > _MAX_LOOPBACK_PORTS:
+            raise IsolationError("loopback grant exceeds the per-attempt port ceiling")
+        if list(ports) != sorted(set(ports)):
+            raise IsolationError("loopback grant ports must be unique and ascending")
+        if ports[-1] - ports[0] + 1 != len(ports):
+            raise IsolationError("loopback grant ports must be a contiguous block")
+        for port in ports:
+            if not (1 <= port <= 65535):
+                raise IsolationError(f"loopback grant port out of range: {port}")
+
+    def identity(self) -> dict[str, object]:
+        return {"protocol": self.protocol, "operation": self.operation, "ports": list(self.ports)}
 
 
 @dataclass(frozen=True)
 class NetworkPolicy:
-    """A lane's exact, enforceable, directional network boundary.
+    """A lane's exact, enforceable network boundary as a set of loopback grants.
 
-    Three modes, each scoped to an exact per-attempt contiguous loopback TCP block that is
-    enumerated as one Seatbelt rule per port (SBPL has no range literal):
-
-    - ``deny-all`` (default): the only policy author (Coder/Tester) and broker lanes ever run
-      under. No bind, no connect, not even loopback.
-    - ``loopback-bind``: the sealed candidate's own sandbox. It may bind/listen only inside
-      the block and may make no outbound connection at all — it is a pure server.
-    - ``loopback-connect``: the validator's sandbox. It may connect only to endpoints inside
-      the block and may not bind — it drives the candidate but cannot itself stand up a peer.
-
-    Every endpoint outside the block, loopback or external, stays denied in every mode.
+    ``deny-all`` (no grants) is the default and the only policy Coder, Tester-authoring, and
+    broker lanes ever run under: no bind, no connect, not even loopback. A grant-bearing policy
+    is used only by the Validator attempt, scoped to exactly the loopback endpoints a target
+    declared and the orchestrator allocated for that attempt. Every endpoint outside the granted
+    ports — loopback or external, TCP or UDP — stays denied.
     """
 
-    mode: str = "deny-all"
-    ports: tuple[int, ...] = ()
-    signaling_port: int | None = None
-    own_udp_ports: tuple[int, ...] = ()
-    peer_udp_ports: tuple[int, ...] = ()
-
-    _MODES = (
-        "deny-all",
-        "loopback-bind",
-        "loopback-connect",
-        "candidate-webrtc",
-        "validator-webrtc",
-    )
-    _WEBRTC_MODES = ("candidate-webrtc", "validator-webrtc")
+    label: str = "deny-all"
+    grants: tuple[LoopbackGrant, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.mode not in self._MODES:
-            raise IsolationError(f"unsupported network policy mode: {self.mode}")
-        if self.mode in self._WEBRTC_MODES:
-            self._validate_webrtc()
-            return
-        if self.signaling_port is not None or self.own_udp_ports or self.peer_udp_ports:
-            raise IsolationError(f"{self.mode} network policy cannot carry WebRTC endpoints")
-        if self.mode == "deny-all":
-            if self.ports:
-                raise IsolationError("deny-all network policy cannot enumerate ports")
-            return
-        self._validate_block(self.ports)
+        if not self.label:
+            raise IsolationError("network policy requires a non-empty label")
+        total = sum(len(grant.ports) for grant in self.grants)
+        if total > 4 * _MAX_LOOPBACK_PORTS:
+            raise IsolationError("network policy exceeds the total per-attempt port ceiling")
 
-    @staticmethod
-    def _validate_block(ports: tuple[int, ...]) -> None:
-        if not ports:
-            raise IsolationError("loopback network policy requires at least one port")
-        if len(ports) > _MAX_LOOPBACK_RANGE_PORTS:
-            raise IsolationError("loopback range exceeds the per-attempt port ceiling")
-        if list(ports) != sorted(set(ports)):
-            raise IsolationError("loopback range ports must be unique and ascending")
-        if ports[-1] - ports[0] + 1 != len(ports):
-            raise IsolationError("loopback range ports must be a contiguous block")
-        for port in ports:
-            if not (1 <= port <= 65535):
-                raise IsolationError(f"loopback range port out of range: {port}")
-
-    def _validate_webrtc(self) -> None:
-        if self.ports:
-            raise IsolationError("a WebRTC policy expresses ports via its typed endpoints")
-        if self.signaling_port is None or not (1 <= self.signaling_port <= 65535):
-            raise IsolationError("a WebRTC policy requires a valid signaling TCP port")
-        self._validate_block(self.own_udp_ports)
-        self._validate_block(self.peer_udp_ports)
-        own = set(self.own_udp_ports)
-        peer = set(self.peer_udp_ports)
-        if own & peer:
-            raise IsolationError("candidate and validator UDP blocks must be disjoint")
-        if self.signaling_port in own or self.signaling_port in peer:
-            raise IsolationError("the signaling TCP port must lie outside both UDP blocks")
+    @classmethod
+    def declared_loopback(cls, grants: Sequence[LoopbackGrant]) -> NetworkPolicy:
+        grants = tuple(grants)
+        if not grants:
+            raise IsolationError("a declared-loopback policy requires at least one grant")
+        return cls(label="declared-loopback", grants=grants)
 
     @property
-    def allows_bind(self) -> bool:
-        return self.mode in ("loopback-bind", "candidate-webrtc", "validator-webrtc")
+    def loopback_ports(self) -> tuple[int, ...]:
+        """Every port this policy touches, ascending — the allocation/cleanup surface."""
 
-    @property
-    def allows_connect(self) -> bool:
-        return self.mode in ("loopback-connect", "candidate-webrtc", "validator-webrtc")
+        return tuple(sorted({port for grant in self.grants for port in grant.ports}))
 
     @property
     def identity(self) -> dict[str, object]:
         """Stable, content-addressable description recorded in qualification evidence."""
 
-        if self.mode in self._WEBRTC_MODES:
-            return {
-                "mode": self.mode,
-                "signaling_port": self.signaling_port,
-                "own_udp_ports": list(self.own_udp_ports),
-                "peer_udp_ports": list(self.peer_udp_ports),
-            }
-        return {"mode": self.mode, "ports": list(self.ports)}
+        return {"label": self.label, "grants": [grant.identity() for grant in self.grants]}
 
     def _network_clauses(self) -> str:
-        if self.mode == "deny-all":
-            return ""
-        if self.mode in self._WEBRTC_MODES:
-            return self._webrtc_clauses()
         lines: list[str] = []
-        for port in self.ports:
-            endpoint = _scheme_string(f"localhost:{port}")
-            if self.mode == "loopback-bind":
-                lines.append(f"(allow network-bind (local tcp {endpoint}))")
-                lines.append(f"(allow network-inbound (local tcp {endpoint}))")
-            else:  # loopback-connect
-                lines.append(f"(allow network-outbound (remote tcp {endpoint}))")
-        return "\n".join(lines)
-
-    def _webrtc_clauses(self) -> str:
-        """Exact, enumerated, directional TCP-signaling + symmetric-UDP peer-local rules.
-
-        Both peers gather host ICE candidates in their OWN UDP block (bind + inbound) and
-        send connectivity checks / media to the PEER block (outbound) — WebRTC peering is
-        symmetric, unlike the pure TCP directional lanes. The candidate additionally binds the
-        TCP signaling port it serves ``/offer`` on; the validator connects out to it. No
-        wildcard, no external address, no protocol-wide grant.
-        """
-
-        lines: list[str] = []
-        signaling = _scheme_string(f"localhost:{self.signaling_port}")
-        if self.mode == "candidate-webrtc":
-            lines.append(f"(allow network-bind (local tcp {signaling}))")
-            lines.append(f"(allow network-inbound (local tcp {signaling}))")
-        else:  # validator-webrtc
-            lines.append(f"(allow network-outbound (remote tcp {signaling}))")
-        for port in self.own_udp_ports:
-            endpoint = _scheme_string(f"localhost:{port}")
-            lines.append(f"(allow network-bind (local udp {endpoint}))")
-            lines.append(f"(allow network-inbound (local udp {endpoint}))")
-        for port in self.peer_udp_ports:
-            endpoint = _scheme_string(f"localhost:{port}")
-            lines.append(f"(allow network-outbound (remote udp {endpoint}))")
+        for grant in self.grants:
+            for port in grant.ports:
+                endpoint = _scheme_string(f"localhost:{port}")
+                if grant.operation == "bind":
+                    lines.append(f"(allow network-bind (local {grant.protocol} {endpoint}))")
+                    lines.append(f"(allow network-inbound (local {grant.protocol} {endpoint}))")
+                else:  # connect
+                    lines.append(f"(allow network-outbound (remote {grant.protocol} {endpoint}))")
         return "\n".join(lines)
 
 
@@ -361,35 +211,23 @@ DENY_ALL_NETWORK = NetworkPolicy()
 
 @dataclass(frozen=True)
 class IsolationQualification:
+    """Proof that a lane's exact boundary holds: filesystem denied, granted ops permitted,
+    and every undeclared loopback / external / wrong-operation endpoint refused with EPERM."""
+
     backend: str
     read_denied: bool
     write_denied: bool
-    network_denied: bool
-    network_policy: str = "deny-all"
-    permitted_use_ok: bool = False
-    wrong_direction_denied: bool = True
-    out_of_range_denied: bool = True
-    external_denied: bool = True
-    unrelated_listener_denied: bool = True
+    permitted_use_ok: bool
+    denied_ok: bool
+    policy_label: str = "deny-all"
 
     @property
     def satisfied(self) -> bool:
-        if self.network_policy == "deny-all":
-            return self.read_denied and self.write_denied and self.network_denied
-        # A directional loopback lane deliberately succeeds at its permitted use inside the
-        # block; the guarantee is that filesystem denial holds, the permitted direction works,
-        # and everything else is refused: the wrong direction (bind for a connect-only lane,
-        # or any outbound for a bind-only lane), any out-of-range endpoint, a live unrelated
-        # loopback listener, and every external address. ``network_denied`` is neither required
-        # nor expected here.
         return (
             self.read_denied
             and self.write_denied
             and self.permitted_use_ok
-            and self.wrong_direction_denied
-            and self.out_of_range_denied
-            and self.unrelated_listener_denied
-            and self.external_denied
+            and self.denied_ok
         )
 
 
@@ -457,8 +295,15 @@ class MacOSSandbox:
         environment: Mapping[str, str] | None = None,
         stdin_bytes: bytes | None = None,
         network_policy: NetworkPolicy = DENY_ALL_NETWORK,
+        reap_process_group: bool = False,
     ) -> IsolatedProcessResult:
-        """Run with no ambient environment or user-file access, under the given network policy."""
+        """Run with no ambient environment or user-file access, under the given network policy.
+
+        When ``reap_process_group`` is set the lane runs in its own session and the whole group
+        is signalled after it returns, so any process the lane launched in-lane (e.g. a target
+        candidate) cannot survive the lane. This is generic process hygiene, not lifecycle
+        supervision: it guarantees no lane descendant outlives the lane.
+        """
 
         if not command or not all(str(part) for part in command):
             raise IsolationError("isolated command cannot be empty")
@@ -502,7 +347,11 @@ class MacOSSandbox:
                 profile_path,
                 *[str(part) for part in command],
             ]
-            if stdin_bytes is None:
+            if reap_process_group:
+                returncode, stdout, stderr = self._run_reaped(
+                    invocation, working_directory, lane_environment, stdin_bytes
+                )
+            elif stdin_bytes is None:
                 completed_text = subprocess.run(
                     invocation,
                     cwd=working_directory,
@@ -540,6 +389,56 @@ class MacOSSandbox:
             stderr=stderr,
         )
 
+    def _run_reaped(
+        self,
+        invocation: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        stdin_bytes: bytes | None,
+    ) -> tuple[int, str, str]:
+        """Run the lane in its own session and reap the whole group when it returns."""
+
+        process = subprocess.Popen(
+            list(invocation),
+            cwd=cwd,
+            env=dict(env),
+            stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            out, err = process.communicate(input=stdin_bytes, timeout=self.timeout_seconds)
+            returncode = process.returncode
+        except subprocess.TimeoutExpired:
+            self._signal_group(process)
+            process.communicate()
+            raise
+        finally:
+            self._signal_group(process)
+        return (
+            returncode,
+            out.decode("utf-8", errors="replace"),
+            err.decode("utf-8", errors="replace"),
+        )
+
+    @staticmethod
+    def _signal_group(process: subprocess.Popen[bytes]) -> None:
+        try:
+            pgid = os.getpgid(process.pid)
+        except ProcessLookupError:
+            return
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
+                return
+            try:
+                process.wait(timeout=1.0 if sig == signal.SIGTERM else 3.0)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
     def qualify(
         self,
         root: str | Path,
@@ -570,38 +469,11 @@ class MacOSSandbox:
         deny_listener.listen(1)
         deny_port = deny_listener.getsockname()[1]
 
-        in_range_listener: socket.socket | None = None
-        webrtc_listeners: list[socket.socket] = []
         environment = {
             "FACTORY_FORBIDDEN_READ": str(secret),
             "FACTORY_FORBIDDEN_WRITE": str(outside_write),
-            "FACTORY_UNRELATED_PORT": str(deny_port),
-            "FACTORY_NETWORK_MODE": network_policy.mode,
+            "FACTORY_PROBE_SPEC": json.dumps(self._loopback_probe_spec(network_policy, deny_port)),
         }
-        if network_policy.mode in NetworkPolicy._WEBRTC_MODES:
-            spec, webrtc_listeners = self._webrtc_probe_spec(network_policy, deny_port)
-            environment["FACTORY_PROBE_SPEC"] = json.dumps(spec)
-        elif network_policy.mode != "deny-all":
-            # In-range endpoints for the permitted-use probe, plus one port just past the
-            # block to prove the block is exact. A connect-only lane needs a live in-range
-            # listener; a bind-only lane needs a free in-range port to bind and an in-range
-            # port to prove outbound is refused.
-            in_range_connect = network_policy.ports[0]
-            in_range_bind = network_policy.ports[-1]
-            out_of_range = network_policy.ports[-1] + 1
-            if deny_port in (in_range_connect, in_range_bind, out_of_range):
-                raise IsolationError("qualification port allocation collided; retry attempt")
-            if network_policy.mode == "loopback-connect":
-                in_range_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                in_range_listener.bind(("127.0.0.1", in_range_connect))
-                in_range_listener.listen(1)
-            environment.update(
-                {
-                    "FACTORY_IN_RANGE_CONNECT_PORT": str(in_range_connect),
-                    "FACTORY_IN_RANGE_BIND_PORT": str(in_range_bind),
-                    "FACTORY_OUT_OF_RANGE_PORT": str(out_of_range),
-                }
-            )
 
         try:
             process = self.run(
@@ -613,10 +485,6 @@ class MacOSSandbox:
             )
         finally:
             deny_listener.close()
-            if in_range_listener is not None:
-                in_range_listener.close()
-            for listener in webrtc_listeners:
-                listener.close()
         if process.returncode != 0:
             raise IsolationError(
                 "sandbox qualification process failed: "
@@ -630,13 +498,9 @@ class MacOSSandbox:
             backend="macos-seatbelt",
             read_denied=result.get("read_denied") is True,
             write_denied=result.get("write_denied") is True,
-            network_denied=result.get("network_denied") is True,
-            network_policy=network_policy.mode,
             permitted_use_ok=result.get("permitted_use_ok") is True,
-            wrong_direction_denied=result.get("wrong_direction_denied") is True,
-            out_of_range_denied=result.get("out_of_range_denied") is True,
-            external_denied=result.get("external_denied") is True,
-            unrelated_listener_denied=result.get("unrelated_listener_denied") is True,
+            denied_ok=result.get("denied_ok") is True,
+            policy_label=network_policy.label,
         )
         if not qualification.satisfied:
             raise IsolationError(f"sandbox denial qualification failed: {qualification}")
@@ -644,64 +508,58 @@ class MacOSSandbox:
             raise IsolationError("sandbox write-denial probe created the forbidden file")
         return qualification
 
-    def _webrtc_probe_spec(
+    def _loopback_probe_spec(
         self, policy: NetworkPolicy, deny_port: int
-    ) -> tuple[dict[str, object], list[socket.socket]]:
-        """Compute the exact permitted/denied endpoints a WebRTC policy claims.
+    ) -> dict[str, object]:
+        """Derive the exact permitted/denied endpoints any policy claims, generically.
 
-        Both peers must: gather (bind + receive) inside their own UDP block, send only to the
-        peer block, and signal over exactly one TCP port (bound by the candidate, connected to
-        by the validator). Everything else — the wrong direction, the other peer's UDP block,
-        the port just past a block, an unrelated live loopback listener, and every external
-        address — must be an EPERM/EACCES refusal.
+        For each granted (protocol, operation) the child proves the operation is permitted on a
+        granted port. Every denial the boundary must uphold is proved too: external TCP and UDP,
+        a live unrelated loopback listener, both operations on the port just past every grant
+        (undeclared loopback), and any ungranted operation on a protocol that does have grants
+        (an exact-scope check). ``deny-all`` yields no allow probes and full denial. No live peer
+        is needed — a granted connect qualifies as long as the sandbox does not refuse it.
         """
 
-        sig = int(policy.signaling_port or 0)
-        own = policy.own_udp_ports
-        peer = policy.peer_udp_ports
-        out_of_block = max(sig, own[-1], peer[-1]) + 1
-        if deny_port in (sig, out_of_block) or deny_port in own or deny_port in peer:
+        granted: dict[tuple[str, str], list[int]] = {}
+        for grant in policy.grants:
+            granted.setdefault((grant.protocol, grant.operation), []).extend(grant.ports)
+        all_ports = policy.loopback_ports
+        out_of_grant = (all_ports[-1] + 1) if all_ports else 49500
+        if out_of_grant > 65535:
+            out_of_grant = all_ports[0] - 1
+        if deny_port in all_ports or deny_port == out_of_grant:
             raise IsolationError("qualification port allocation collided; retry attempt")
 
-        listeners: list[socket.socket] = []
         allow: list[dict[str, object]] = [
-            {"dir": "bind", "proto": "udp", "port": own[-1]},
-            {"dir": "connect", "proto": "udp", "port": peer[0]},
+            {"proto": protocol, "dir": operation, "port": max(ports)}
+            for (protocol, operation), ports in sorted(granted.items())
         ]
         external = {"host": "192.0.2.1", "port": 9}
         deny: list[dict[str, object]] = [
-            {"category": "external", "dir": "connect", "proto": "tcp", **external},
-            {"category": "external", "dir": "connect", "proto": "udp", **external},
-            {"category": "unrelated", "dir": "connect", "proto": "tcp", "port": deny_port},
-            {"category": "out_of_range", "dir": "bind", "proto": "udp", "port": out_of_block},
-            {"category": "out_of_range", "dir": "connect", "proto": "udp", "port": out_of_block},
-            # The other peer's UDP block: may be sent to, never bound.
-            {"category": "wrong_direction", "dir": "bind", "proto": "udp", "port": peer[0]},
-            # Own UDP block is receive-only; outbound to it is not granted.
-            {"category": "wrong_direction", "dir": "connect", "proto": "udp", "port": own[0]},
+            {"proto": "tcp", "dir": "connect", **external},
+            {"proto": "udp", "dir": "connect", **external},
+            {"proto": "tcp", "dir": "connect", "port": deny_port},  # unrelated live listener
         ]
-        if policy.mode == "candidate-webrtc":
-            allow.append({"dir": "bind", "proto": "tcp", "port": sig})
-            deny.append(
-                {"category": "wrong_direction", "dir": "connect", "proto": "tcp", "port": sig}
+        for protocol in _PROTOCOLS:
+            for operation in _OPERATIONS:
+                # The port just past every grant — no protocol/operation may reach it.
+                deny.append({"proto": protocol, "dir": operation, "port": out_of_grant})
+            protocol_ports = sorted(
+                {
+                    port
+                    for grant in policy.grants
+                    if grant.protocol == protocol
+                    for port in grant.ports
+                }
             )
-            deny.append(
-                {"category": "out_of_range", "dir": "bind", "proto": "tcp", "port": out_of_block}
-            )
-        else:  # validator-webrtc — the candidate's signaling port is live for the connect probe
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("127.0.0.1", sig))
-            listener.listen(1)
-            listeners.append(listener)
-            allow.append({"dir": "connect", "proto": "tcp", "port": sig})
-            deny.append(
-                {"category": "wrong_direction", "dir": "bind", "proto": "tcp", "port": sig}
-            )
-            deny.append(
-                {"category": "out_of_range", "dir": "connect", "proto": "tcp", "port": out_of_block}
-            )
-        return {"allow": allow, "deny": deny}, listeners
+            if not protocol_ports:
+                continue
+            for operation in _OPERATIONS:
+                if (protocol, operation) not in granted:
+                    # An ungranted operation on a granted port proves the grant is exact.
+                    deny.append({"proto": protocol, "dir": operation, "port": protocol_ports[0]})
+        return {"allow": allow, "deny": deny}
 
     def _profile(
         self,
