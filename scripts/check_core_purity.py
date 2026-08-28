@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CORE_PACKAGE = "factory_core"
+RUNTIME_PACKAGE = "factory_runtime"
 
 # Third-party distributions the core is permitted to import. Keep this list minimal and
 # reviewed — it is part of the trust boundary.
@@ -46,6 +47,14 @@ THIRD_PARTY_ALLOWLIST = frozenset({"jsonschema"})
 
 # Any import whose top-level module starts with one of these is a hard failure (target code).
 TARGET_MODULE_PREFIXES = ("targets", "target_packs")
+
+# factory_runtime is platform infrastructure (POSIX durability, macOS Seatbelt, Tessera) and is
+# allowed platform specifics — but never a *target's application transport*. These libraries and
+# names belong to a specific target's stack (e.g. a WebRTC candidate), so the generic runtime
+# must express networking transport-agnostically (a declared loopback endpoint is just a
+# protocol + port) and let the target supply its own transport as data. This set is fixed here,
+# not target data: it names known application-transport couplings the runtime must never grow.
+RUNTIME_TRANSPORT_TOKENS = frozenset({"aiortc", "aioice", "uvloop", "tmux", "webrtc"})
 
 
 def load_denylist_tokens(denylist_path: Path) -> tuple[str, ...]:
@@ -156,47 +165,82 @@ def _scan_text(text: str, tokens: tuple[str, ...]) -> list[str]:
     return [tok for tok in tokens if tok in runs]
 
 
-def check_tokens(root: Path, baseline: dict, tokens: tuple[str, ...]) -> list[Finding]:
-    waived = {
-        (entry["file"], entry["token"])
-        for entry in baseline.get("allowed_occurrences", [])
-        if entry.get("file") and entry.get("token")
-    }
+def _node_texts(node: ast.AST) -> list[str]:
+    """Identifier/string surfaces to scan (comments are excluded — they are not AST nodes)."""
+
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        return [node.attr]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.keyword) and node.arg:
+        return [node.arg]
+    if isinstance(node, ast.alias):
+        return [node.name] + ([node.asname] if node.asname else [])
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    return []
+
+
+def _scan_py_tokens(
+    root: Path, tokens: tuple[str, ...], waived: set[tuple[str, str]], check: str
+) -> list[Finding]:
+    """Scan every .py identifier and string literal under ``root`` for ``tokens``."""
+
     findings: list[Finding] = []
+    if not tokens:
+        return findings
     for path in _iter_py_files(root):
         rel = str(path)
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
         except SyntaxError as exc:
-            findings.append(Finding("tokens", rel, exc.lineno or 0, f"unparseable: {exc.msg}"))
+            findings.append(Finding(check, rel, exc.lineno or 0, f"unparseable: {exc.msg}"))
             continue
+        rel_name = Path(rel).name
         for node in ast.walk(tree):
-            texts: list[str] = []
-            if isinstance(node, ast.Name):
-                texts.append(node.id)
-            elif isinstance(node, ast.Attribute):
-                texts.append(node.attr)
-            elif isinstance(node, ast.arg):
-                texts.append(node.arg)
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                texts.append(node.name)
-            elif isinstance(node, ast.keyword) and node.arg:
-                texts.append(node.arg)
-            elif isinstance(node, ast.alias):
-                texts.append(node.name)
-                if node.asname:
-                    texts.append(node.asname)
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                texts.append(node.value)
             line = getattr(node, "lineno", 0)
-            for text in texts:
+            for text in _node_texts(node):
                 for tok in _scan_text(text, tokens):
-                    rel_name = Path(rel).name
                     if (rel, tok) in waived or (rel_name, tok) in waived:
                         continue
-                    findings.append(Finding("tokens", rel, line,
+                    findings.append(Finding(check, rel, line,
                                             f"target token {tok!r} in {text!r} (not baselined)"))
     return findings
+
+
+def _waived_occurrences(baseline: dict) -> set[tuple[str, str]]:
+    return {
+        (entry["file"], entry["token"])
+        for entry in baseline.get("allowed_occurrences", [])
+        if entry.get("file") and entry.get("token")
+    }
+
+
+def check_tokens(root: Path, baseline: dict, tokens: tuple[str, ...]) -> list[Finding]:
+    return _scan_py_tokens(root, tokens, _waived_occurrences(baseline), "tokens")
+
+
+def check_runtime_transport_tokens(runtime_root: Path, baseline: dict) -> list[Finding]:
+    """Reject a target's application-transport names in the generic factory_runtime.
+
+    Unlike the factory_core denylist (which is target data, empty on a clean core), this token
+    set is fixed: these libraries/names are inherently a specific target's transport and must
+    never enter the generic runtime. A justified, reviewed exception may be baselined in
+    core_purity_baseline.json's ``allowed_occurrences``.
+    """
+
+    if not runtime_root.exists():
+        return []
+    return _scan_py_tokens(
+        runtime_root,
+        tuple(sorted(RUNTIME_TRANSPORT_TOKENS)),
+        _waived_occurrences(baseline),
+        "runtime-transport",
+    )
 
 
 # ---------------------------------------------------------------------------- #
@@ -229,7 +273,7 @@ def check_reverse_dependency(pyproject: Path, tokens: tuple[str, ...]) -> list[F
 # ---------------------------------------------------------------------------- #
 
 def run(root: Path, baseline_path: Path, pyproject: Path,
-        denylist_path: Path | None = None) -> list[Finding]:
+        denylist_path: Path | None = None, runtime_root: Path | None = None) -> list[Finding]:
     if not root.exists():
         return [Finding("root", str(root), 0, "core package directory not found (fail closed)")]
     if not baseline_path.exists():
@@ -238,12 +282,15 @@ def run(root: Path, baseline_path: Path, pyproject: Path,
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     if denylist_path is None:
         denylist_path = baseline_path.resolve().parent / "core_purity_denylist.json"
+    if runtime_root is None:
+        runtime_root = root.resolve().parent / RUNTIME_PACKAGE
     tokens = load_denylist_tokens(denylist_path)
     stdlib = frozenset(sys.stdlib_module_names)
     findings: list[Finding] = []
     findings += check_imports(root, stdlib, tokens)
     findings += check_tokens(root, baseline, tokens)
     findings += check_reverse_dependency(pyproject, tokens)
+    findings += check_runtime_transport_tokens(runtime_root, baseline)
     return findings
 
 
@@ -259,10 +306,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="path to core_purity_denylist.json (the token-denylist data file)")
     parser.add_argument("--pyproject", type=Path, default=repo_root / "pyproject.toml",
                         help="path to pyproject.toml")
+    parser.add_argument("--runtime", type=Path, default=repo_root / RUNTIME_PACKAGE,
+                        help="path to the factory_runtime package (scanned for transport tokens)")
     parser.add_argument("--quiet", action="store_true", help="only print on failure")
     args = parser.parse_args(argv)
 
-    findings = run(args.root, args.baseline, args.pyproject, args.denylist)
+    findings = run(args.root, args.baseline, args.pyproject, args.denylist, args.runtime)
     if findings:
         print(f"check_core_purity: FAIL — {len(findings)} finding(s):", file=sys.stderr)
         for f in findings:
