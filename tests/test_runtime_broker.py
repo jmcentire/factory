@@ -28,7 +28,7 @@ class _Isolation:
 
     def qualify(self, root: str | Path) -> IsolationQualification:
         Path(root).mkdir(parents=True, exist_ok=True)
-        return IsolationQualification("fixture", True, True, True)
+        return IsolationQualification("fixture", True, True, True, True)
 
     def run(
         self,

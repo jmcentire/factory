@@ -127,10 +127,9 @@ def test_validator_execution_configuration_binds_the_closed_stdin_launch_abi(
         {
             "schema_version": "factory-validator-environment/5",
             "ambient_environment": "closed",
-            "network": "loopback-webrtc-dual-block",
-            "network_protocols": ["tcp-signaling", "udp-ice"],
-            "candidate_endpoint": "host-supervised-webrtc-partitioned-block",
-            "ice_port_handoff": "supervisor-pinned-udp-block/1",
+            "network": "validator-only-declared-loopback",
+            "port_allocation": "orchestrator-per-attempt/1",
+            "candidate_launch": "in-lane-target-declared/1",
             "launch_contract": launch_contract,
             "read_scope": [
                 "build-input",

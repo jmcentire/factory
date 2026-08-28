@@ -26,10 +26,15 @@ from factory_runtime.isolation import (
     DENY_ALL_NETWORK,
     IsolatedProcessResult,
     IsolationQualification,
+    LoopbackGrant,
     MacOSSandbox,
     NetworkPolicy,
 )
-from factory_runtime.loopback_supervisor import supervised_candidate
+from factory_runtime.loopback_endpoints import (
+    EndpointSpec,
+    LoopbackReservation,
+    reserve_loopback_endpoints,
+)
 from factory_runtime.snapshot import (
     FrozenBlob,
     FrozenTree,
@@ -69,6 +74,7 @@ class IsolationBackend(Protocol):
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
         network_policy: NetworkPolicy = ...,
+        reap_process_group: bool = ...,
     ) -> IsolatedProcessResult: ...
 
 
@@ -122,6 +128,27 @@ class FrozenValidatorExecution:
 
 def _canonical_json(document: Mapping[str, object]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _loopback_grants(
+    specs: Sequence[EndpointSpec], reservation: LoopbackReservation
+) -> list[LoopbackGrant]:
+    """Map each declared endpoint spec onto its allocated per-attempt ports as grants."""
+
+    tcp_pool = list(reservation.tcp_ports)
+    udp_pool = list(reservation.udp_ports)
+    grants: list[LoopbackGrant] = []
+    for spec in specs:
+        pool = tcp_pool if spec.protocol == "tcp" else udp_pool
+        ports = tuple(pool[: spec.count])
+        del pool[: spec.count]
+        if len(ports) != spec.count:
+            raise LaneError("loopback reservation did not cover the declared endpoint shape")
+        for operation in spec.operations:
+            grants.append(
+                LoopbackGrant(protocol=spec.protocol, operation=operation, ports=ports)
+            )
+    return grants
 
 
 def freeze_validator_execution(
@@ -324,6 +351,7 @@ class IsolatedBuildLoop:
         repair_brief_bytes: bytes | None = None,
         candidate_runtime_path: str | Path | None = None,
         candidate_launch: Sequence[str] = (),
+        candidate_loopback: Sequence[Mapping[str, object]] = (),
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
         ]
@@ -491,6 +519,7 @@ class IsolatedBuildLoop:
                 Path(candidate_runtime_path) if candidate_runtime_path is not None else None
             ),
             candidate_launch=tuple(str(part) for part in candidate_launch),
+            candidate_loopback=tuple(dict(spec) for spec in candidate_loopback),
         )
         return ValidationExecution(
             coder=coder_result,
@@ -643,6 +672,7 @@ class IsolatedBuildLoop:
         review_subject_bytes: bytes,
         candidate_runtime_path: Path | None = None,
         candidate_launch: Sequence[str] = (),
+        candidate_loopback: Sequence[Mapping[str, object]] = (),
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -748,55 +778,50 @@ class IsolatedBuildLoop:
 
         def run_validator_lane(
             network_policy: NetworkPolicy = DENY_ALL_NETWORK,
+            extra_readable: Sequence[Path] = (),
+            reap_process_group: bool = False,
         ) -> IsolatedProcessResult:
             return self.sandbox.run(
                 validator_execution.command,
                 cwd=work,
-                readable_paths=readable_paths,
+                readable_paths=(*readable_paths, *extra_readable),
                 writable_paths=(work, output),
                 environment=environment,
                 stdin_bytes=validator_execution.source,
                 network_policy=network_policy,
+                reap_process_group=reap_process_group,
             )
 
-        if candidate_launch:
-            # Host-supervisor sibling topology for peer-local WebRTC: the sealed candidate runs
-            # as a separately sandboxed candidate-webrtc sibling (its own source + runtime only,
-            # never the Tester tree or catalog), gathering ICE in its own UDP block and serving
-            # /offer on its signaling port. The Validator runs under a validator-webrtc profile:
-            # it connects out to the signaling port and gathers ICE in a disjoint UDP block,
-            # sending only to the candidate's block. Both are exact, enumerated, per-attempt.
-            candidate_source = implementation / "artifact"
-            with supervised_candidate(
-                candidate_launch=candidate_launch,
-                candidate_source=candidate_source,
-                candidate_runtime=candidate_runtime_path,
-                work_root=lane / "candidate-work",
-                sandbox=self.sandbox if isinstance(self.sandbox, MacOSSandbox) else None,
-            ) as endpoint:
+        if candidate_launch and candidate_loopback:
+            # Minimal in-lane candidate launch: the Validator lane runs under a generic
+            # declared-loopback grant covering exactly the per-attempt ports the target asked
+            # for, and the target's own runner launches the candidate in-lane using those ports.
+            # The Factory names no transport, pins nothing, and supervises no sibling — it only
+            # allocates the ports, runs the lane, reaps the lane's group, and proves no listener
+            # or socket leaked. (Because the candidate shares the lane, candidate/test-file
+            # isolation is NOT claimed here.)
+            specs = [EndpointSpec.from_dict(spec) for spec in candidate_loopback]
+            with reserve_loopback_endpoints(specs) as reservation:
+                policy = NetworkPolicy.declared_loopback(_loopback_grants(specs, reservation))
                 environment.update(
                     {
-                        "FACTORY_CANDIDATE_BASE_URL": endpoint.base_url,
-                        "FACTORY_CANDIDATE_HOST": endpoint.host,
-                        "FACTORY_CANDIDATE_SIGNALING_PORT": str(endpoint.signaling_port),
-                        "FACTORY_ICE_HOST": endpoint.host,
-                        # The runner forwards this to the acceptance oracle as its pinned ICE
-                        # block; the oracle gathers only inside the Validator's UDP block.
-                        "FACTORY_VALIDATOR_ICE_UDP_PORTS": ",".join(
-                            str(p) for p in endpoint.validator_udp_ports
+                        "FACTORY_CANDIDATE_LAUNCH": json.dumps([str(p) for p in candidate_launch]),
+                        "FACTORY_CANDIDATE_RUNTIME": (
+                            str(candidate_runtime_path) if candidate_runtime_path else ""
                         ),
-                        "FACTORY_CANDIDATE_ICE_UDP_PORTS": ",".join(
-                            str(p) for p in endpoint.candidate_udp_ports
+                        "FACTORY_LOOPBACK_TCP_PORTS": ",".join(
+                            str(port) for port in reservation.tcp_ports
+                        ),
+                        "FACTORY_LOOPBACK_UDP_PORTS": ",".join(
+                            str(port) for port in reservation.udp_ports
                         ),
                     }
                 )
+                extra_readable = (
+                    (candidate_runtime_path,) if candidate_runtime_path is not None else ()
+                )
                 process = run_validator_lane(
-                    NetworkPolicy(
-                        mode="validator-webrtc",
-                        signaling_port=endpoint.signaling_port,
-                        own_udp_ports=endpoint.validator_udp_ports,
-                        peer_udp_ports=endpoint.candidate_udp_ports,
-                    )
+                    policy, extra_readable=extra_readable, reap_process_group=True
                 )
         else:
             process = run_validator_lane()

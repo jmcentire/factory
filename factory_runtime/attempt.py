@@ -49,7 +49,7 @@ class FactoryAttemptConfig:
             raise AttemptContractError("attempt config is not valid JSON") from exc
         if not isinstance(document, Mapping):
             raise AttemptContractError("attempt config must be a JSON object")
-        allowed = {
+        required = {
             "schema_version",
             "artifacts",
             "roles",
@@ -63,12 +63,15 @@ class FactoryAttemptConfig:
             "monitors",
             "monitor_declared_unit_count",
         }
+        # A target that exercises a networked candidate declares the loopback endpoint shape it
+        # needs (the Validator-only declared-loopback grant); targets without networking omit it.
+        optional = {"candidate_loopback"}
         if document.get("schema_version") == "factory-attempt/1":
             raise AttemptContractError(
                 "attempt config factory-attempt/1 predates the sealed candidate runtime/launch "
                 "contract; re-author as factory-attempt/2"
             )
-        if set(document) != allowed:
+        if (set(document) - optional) != required:
             raise AttemptContractError("attempt config fields are incomplete or open")
         if document["schema_version"] != _CONFIG_VERSION:
             raise AttemptContractError("attempt config has an unsupported schema_version")
@@ -104,6 +107,11 @@ class FactoryAttemptConfig:
         )
         if candidate_launch and not Path(candidate_launch[0]).is_absolute():
             raise AttemptContractError("candidate launch argv[0] must be an absolute path")
+        candidate_loopback = _candidate_loopback(document.get("candidate_loopback", []))
+        if candidate_loopback and not candidate_launch:
+            raise AttemptContractError(
+                "candidate_loopback declares endpoints but no candidate_launch was provided"
+            )
         if prebuilt_author_outputs is not None:
             # The runner-backed path has already created sealed Coder and Tester
             # trees.  Passing their runner commands into the deny-network build
@@ -160,6 +168,7 @@ class FactoryAttemptConfig:
             ),
             candidate_runtime_path=candidate_runtime_path,
             candidate_launch=candidate_launch,
+            candidate_loopback=candidate_loopback,
         )
         return cls(source_digest=digest_bytes(raw), invocation=invocation)
 
@@ -217,6 +226,7 @@ class FactoryAttemptInvocation:
     test_change_validator_receipt_path: Path | None = None
     candidate_runtime_path: Path | None = None
     candidate_launch: tuple[str, ...] = ()
+    candidate_loopback: tuple[Mapping[str, object], ...] = ()
 
 
 class FactoryAttemptExecutor:
@@ -279,6 +289,7 @@ class FactoryAttemptExecutor:
             repair_brief_path=repair_brief_path,
             candidate_runtime_path=values.candidate_runtime_path,
             candidate_launch=values.candidate_launch,
+            candidate_loopback=values.candidate_loopback,
             changed_existing_tests=values.changed_existing_tests,
             test_change_authorization_path=values.test_change_authorization_path,
             test_change_human_receipt_path=values.test_change_human_receipt_path,
@@ -331,6 +342,34 @@ def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise AttemptContractError(f"{label} must be a boolean")
     return value
+
+
+def _candidate_loopback(value: object) -> tuple[Mapping[str, object], ...]:
+    """Validate the target-declared loopback endpoint shape at admission (fail fast)."""
+
+    specs: list[Mapping[str, object]] = []
+    for entry in _array(value, "candidate loopback"):
+        spec = _mapping(entry, "candidate loopback endpoint")
+        if set(spec) != {"protocol", "operations", "count"}:
+            raise AttemptContractError(
+                "candidate loopback endpoint fields are incomplete or open"
+            )
+        protocol = _string(spec["protocol"], "loopback protocol")
+        if protocol not in ("tcp", "udp"):
+            raise AttemptContractError(f"unsupported loopback protocol: {protocol}")
+        operations = tuple(
+            _string(op, "loopback operation")
+            for op in _array(spec["operations"], "loopback operations")
+        )
+        if not operations or any(op not in ("bind", "connect") for op in operations):
+            raise AttemptContractError(
+                "loopback operations must be a non-empty subset of {bind, connect}"
+            )
+        count = _nonnegative(spec["count"], "loopback count")
+        if not (1 <= count <= 64):
+            raise AttemptContractError("loopback count must be between 1 and 64")
+        specs.append({"protocol": protocol, "operations": list(operations), "count": count})
+    return tuple(specs)
 
 
 def _source(sources: Mapping[str, Path], value: object, label: str) -> Path:

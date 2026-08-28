@@ -77,18 +77,17 @@ _VALIDATOR_LAUNCH_CONTRACT = {
 _VALIDATOR_ENVIRONMENT_CONTRACT = {
     "schema_version": "factory-validator-environment/5",
     "ambient_environment": "closed",
-    # Peer-local WebRTC acceptance. Under the host-supervisor sibling topology, one freshly
-    # allocated contiguous loopback block is partitioned into three disjoint parts: the
-    # candidate's TCP signaling port, the candidate's UDP ICE block, and the Validator's UDP ICE
-    # block. The candidate runs candidate-webrtc (bind signaling + own UDP block; send only to
-    # the Validator UDP block). The Validator runs validator-webrtc (connect to the signaling
-    # port; bind its own UDP block; send only to the candidate UDP block). No wildcard bind, no
-    # out-of-block endpoint, no external TCP or UDP. Declaring this honestly is why the contract
-    # — and therefore every acceptance catalog's environment_digest — advances.
-    "network": "loopback-webrtc-dual-block",
-    "network_protocols": ["tcp-signaling", "udp-ice"],
-    "candidate_endpoint": "host-supervised-webrtc-partitioned-block",
-    "ice_port_handoff": "supervisor-pinned-udp-block/1",
+    # Generic Validator-only declared-loopback grant. When a target declares a candidate the
+    # Validator must exercise, the Validator lane runs under a grant of exactly the per-attempt
+    # loopback ports the orchestrator allocated for that target's declared shape (TCP and/or UDP,
+    # bind and/or connect). The target launches the candidate in-lane using those ports. Every
+    # undeclared loopback endpoint and every external address, TCP or UDP, stays denied; Coder,
+    # Tester-authoring, and broker lanes remain network-denied. The Factory names no transport.
+    # Declaring this honestly is why the contract — and every acceptance catalog's
+    # environment_digest — advances.
+    "network": "validator-only-declared-loopback",
+    "port_allocation": "orchestrator-per-attempt/1",
+    "candidate_launch": "in-lane-target-declared/1",
     "launch_contract": _VALIDATOR_LAUNCH_CONTRACT,
     "read_scope": [
         "build-input",

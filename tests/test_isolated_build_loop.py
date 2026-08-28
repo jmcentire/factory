@@ -126,7 +126,8 @@ class _UnqualifiedBackend:
             backend="unqualified-test-backend",
             read_denied=True,
             write_denied=False,
-            network_denied=True,
+            permitted_use_ok=True,
+            denied_ok=True,
         )
 
     def run(
@@ -139,6 +140,7 @@ class _UnqualifiedBackend:
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
         network_policy=None,
+        reap_process_group: bool = False,
     ) -> IsolatedProcessResult:
         del stdin_bytes
         raise AssertionError("an unqualified backend must never launch a lane")
@@ -155,7 +157,8 @@ class _RecordingQualifiedBackend:
             backend="recording-qualified-test-backend",
             read_denied=True,
             write_denied=True,
-            network_denied=True,
+            permitted_use_ok=True,
+            denied_ok=True,
         )
 
     def run(
@@ -168,6 +171,7 @@ class _RecordingQualifiedBackend:
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
         network_policy=None,
+        reap_process_group: bool = False,
     ) -> IsolatedProcessResult:
         del cwd, readable_paths, writable_paths
         values = dict(environment or {})
@@ -205,6 +209,7 @@ class _MutatingValidatorSnapshotBackend(_RecordingQualifiedBackend):
         environment: dict[str, str] | None = None,
         stdin_bytes: bytes | None = None,
         network_policy=None,
+        reap_process_group: bool = False,
     ) -> IsolatedProcessResult:
         if dict(environment or {}).get("FACTORY_ROLE") == "validator":
             source = next(
@@ -781,82 +786,71 @@ def test_build_loop_refuses_an_unqualified_custom_backend(tmp_path: Path) -> Non
 
 
 @pytest.mark.isolation_integration
-def test_directional_loopback_policies_scope_exactly_to_their_block(tmp_path: Path) -> None:
-    """Deny-all unchanged; validator connect-only and candidate bind-only each exact."""
+def test_deny_all_and_declared_loopback_policies_qualify_exactly(tmp_path: Path) -> None:
+    """Deny-all proves full network denial; a declared-loopback grant proves exact scoping."""
 
-    from factory_runtime.isolation import DENY_ALL_NETWORK, NetworkPolicy
+    from factory_runtime.isolation import DENY_ALL_NETWORK, LoopbackGrant, NetworkPolicy
 
     sandbox = MacOSSandbox()
     deny = sandbox.qualify(tmp_path / "deny", DENY_ALL_NETWORK)
-    assert deny.satisfied and deny.network_denied and deny.network_policy == "deny-all"
+    assert deny.satisfied and deny.policy_label == "deny-all"
+    assert deny.read_denied and deny.write_denied
+    assert deny.permitted_use_ok  # no grants -> vacuously true
+    assert deny.denied_ok  # bind/connect, tcp/udp, external, unrelated all EPERM
 
-    connect = NetworkPolicy(mode="loopback-connect", ports=tuple(range(48120, 48128)))
-    vq = sandbox.qualify(tmp_path / "connect", connect)
-    assert vq.satisfied and vq.network_policy == "loopback-connect"
-    assert vq.permitted_use_ok  # in-range connect works
-    assert vq.wrong_direction_denied  # cannot bind
-    assert vq.out_of_range_denied and vq.unrelated_listener_denied and vq.external_denied
-
-    bind = NetworkPolicy(mode="loopback-bind", ports=tuple(range(48160, 48168)))
-    cq = sandbox.qualify(tmp_path / "bind", bind)
-    assert cq.satisfied and cq.network_policy == "loopback-bind"
-    assert cq.permitted_use_ok  # in-range bind works
-    assert cq.wrong_direction_denied  # cannot make any outbound connection
-    assert cq.out_of_range_denied and cq.unrelated_listener_denied and cq.external_denied
-    assert cq.read_denied and cq.write_denied
+    # An in-lane Validator+candidate grant: TCP signaling and a UDP block, each bind AND connect.
+    signaling = (48200,)
+    udp_block = tuple(range(48201, 48205))
+    policy = NetworkPolicy.declared_loopback(
+        [
+            LoopbackGrant("tcp", "bind", signaling),
+            LoopbackGrant("tcp", "connect", signaling),
+            LoopbackGrant("udp", "bind", udp_block),
+            LoopbackGrant("udp", "connect", udp_block),
+        ]
+    )
+    q = sandbox.qualify(tmp_path / "declared", policy)
+    assert q.satisfied and q.policy_label == "declared-loopback"
+    assert q.permitted_use_ok  # every granted (protocol, operation) works
+    assert q.denied_ok  # external tcp/udp, unrelated listener, out-of-grant all EPERM
+    assert q.read_denied and q.write_denied
 
 
 @pytest.mark.isolation_integration
-def test_webrtc_policies_scope_tcp_signaling_and_symmetric_udp_exactly(tmp_path: Path) -> None:
-    """Candidate/validator WebRTC lanes: signaling TCP + own-block UDP work; all else EPERM."""
+def test_declared_loopback_grant_denies_ungranted_operation_and_external(tmp_path: Path) -> None:
+    """A bind-only TCP grant may listen in-block but not connect out, bind out-of-block, or reach
+    an external address or an unrelated live loopback listener."""
 
-    from factory_runtime.isolation import NetworkPolicy
+    from factory_runtime.isolation import LoopbackGrant, NetworkPolicy
 
     sandbox = MacOSSandbox()
-    signaling = 48200
-    candidate_udp = tuple(range(48201, 48205))
-    validator_udp = tuple(range(48205, 48209))
-
-    candidate = NetworkPolicy(
-        mode="candidate-webrtc",
-        signaling_port=signaling,
-        own_udp_ports=candidate_udp,
-        peer_udp_ports=validator_udp,
+    policy = NetworkPolicy.declared_loopback(
+        [LoopbackGrant("tcp", "bind", tuple(range(48160, 48168)))]
     )
-    cq = sandbox.qualify(tmp_path / "candidate", candidate)
-    assert cq.satisfied and cq.network_policy == "candidate-webrtc"
-    assert cq.permitted_use_ok  # bind signaling TCP + bind own UDP + send to peer UDP block
-    assert cq.wrong_direction_denied  # cannot connect out on signaling TCP; cannot bind peer UDP
-    assert cq.out_of_range_denied  # nothing past the block, TCP or UDP
-    assert cq.unrelated_listener_denied and cq.external_denied
-    assert cq.read_denied and cq.write_denied
-
-    validator = NetworkPolicy(
-        mode="validator-webrtc",
-        signaling_port=signaling,
-        own_udp_ports=validator_udp,
-        peer_udp_ports=candidate_udp,
-    )
-    vq = sandbox.qualify(tmp_path / "validator", validator)
-    assert vq.satisfied and vq.network_policy == "validator-webrtc"
-    assert vq.permitted_use_ok  # connect signaling TCP + bind own UDP + send to peer UDP block
-    assert vq.wrong_direction_denied  # cannot bind signaling TCP; cannot bind peer UDP
-    assert vq.out_of_range_denied and vq.unrelated_listener_denied and vq.external_denied
+    q = sandbox.qualify(tmp_path / "bind-only", policy)
+    # permitted_use_ok proves the in-block bind works; denied_ok proves connect on the block
+    # (ungranted operation), any out-of-block port, UDP, external, and the unrelated live
+    # listener are all EPERM refusals.
+    assert q.satisfied
+    assert q.permitted_use_ok and q.denied_ok
+    assert q.read_denied and q.write_denied
 
 
 @pytest.mark.isolation_integration
 def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
     tmp_path: Path,
 ) -> None:
-    """Directly prove a range-scoped lane cannot reach an unrelated live loopback port."""
+    """Directly prove a grant-scoped lane cannot reach an unrelated live loopback port."""
 
     import json
     import socket
 
-    from factory_runtime.isolation import MacOSSandbox, NetworkPolicy
+    from factory_runtime.isolation import LoopbackGrant, MacOSSandbox, NetworkPolicy
 
     sandbox = MacOSSandbox()
-    policy = NetworkPolicy(mode="loopback-connect", ports=tuple(range(48140, 48144)))
+    policy = NetworkPolicy.declared_loopback(
+        [LoopbackGrant("tcp", "connect", tuple(range(48140, 48144)))]
+    )
     work = tmp_path / "work"
     work.mkdir()
     listener = socket.socket()
@@ -886,62 +880,42 @@ def test_loopback_range_profile_denies_a_second_live_listener_outside_range(
     assert json.loads(result.stdout)["denied"] is True
 
 
-@pytest.mark.isolation_integration
-def test_supervised_candidate_lifecycle_and_range_isolation(tmp_path: Path) -> None:
-    """Sealed candidate binds in-range, serves loopback, and leaves no survivor at teardown."""
+def test_reserve_loopback_endpoints_allocates_and_proves_no_leak(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A per-attempt reservation hands out disjoint TCP/UDP ports and asserts no leak on exit."""
 
-    import urllib.request
+    import factory_runtime.loopback_endpoints as endpoints
+    from factory_runtime.loopback_endpoints import EndpointSpec, reserve_loopback_endpoints
 
-    from factory_runtime.loopback_supervisor import (
-        _listeners_in_range,
-        _udp_ports_still_held,
-        supervised_candidate,
-    )
+    monkeypatch.setattr(endpoints, "_REGISTRY_DIR", tmp_path / "reg")
+    monkeypatch.setattr(endpoints, "_REGISTRY_FILE", tmp_path / "reg" / "active.json")
 
-    src = tmp_path / "candidate-src"
-    src.mkdir()
-    (src / "server.py").write_text(
-        "import http.server, os\n"
-        "port = int(os.environ['PORT'])\n"
-        "http.server.HTTPServer(('127.0.0.1', port),"
-        " http.server.SimpleHTTPRequestHandler).serve_forever()\n",
-        encoding="utf-8",
-    )
-    with supervised_candidate(
-        candidate_launch=[sys.executable, "server.py"],
-        candidate_source=src,
-        candidate_runtime=None,
-        work_root=tmp_path / "work",
-        udp_block_size=4,
-    ) as endpoint:
-        # The partitioned block: signaling TCP port, candidate UDP block, validator UDP block,
-        # all disjoint, with the server reachable on the signaling port.
-        assert endpoint.signaling_port not in endpoint.candidate_udp_ports
-        assert not set(endpoint.candidate_udp_ports) & set(endpoint.validator_udp_ports)
-        assert int(endpoint.base_url.rsplit(":", 1)[1]) == endpoint.signaling_port
-        body = urllib.request.urlopen(endpoint.base_url + "/", timeout=5).read(16)
-        assert body
-        assert _listeners_in_range(endpoint.signaling_port, endpoint.signaling_port)
-        signaling = endpoint.signaling_port
-        candidate_udp = endpoint.candidate_udp_ports
-    assert _listeners_in_range(signaling, signaling) == []
-    assert _udp_ports_still_held(candidate_udp) == []
+    specs = [
+        EndpointSpec("tcp", ("bind", "connect"), 1),
+        EndpointSpec("udp", ("bind", "connect"), 4),
+    ]
+    with reserve_loopback_endpoints(specs) as reservation:
+        assert len(reservation.tcp_ports) == 1
+        assert len(reservation.udp_ports) == 4
+        assert not set(reservation.tcp_ports) & set(reservation.udp_ports)
+        # No lane bound anything, so the block is clean at exit — no leak assertion fires.
 
 
 def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatch) -> None:
     """Concurrent attempts never receive an overlapping block."""
 
-    import factory_runtime.loopback_supervisor as sup
+    import factory_runtime.loopback_endpoints as endpoints
 
-    monkeypatch.setattr(sup, "_REGISTRY_DIR", tmp_path / "reg")
-    monkeypatch.setattr(sup, "_REGISTRY_FILE", tmp_path / "reg" / "active.json")
+    monkeypatch.setattr(endpoints, "_REGISTRY_DIR", tmp_path / "reg")
+    monkeypatch.setattr(endpoints, "_REGISTRY_FILE", tmp_path / "reg" / "active.json")
 
-    lo1, hi1, r1 = sup._allocate_block(8)
-    lo2, hi2, r2 = sup._allocate_block(8)
+    lo1, hi1, r1 = endpoints._allocate_block(8)
+    lo2, hi2, r2 = endpoints._allocate_block(8)
     try:
         assert hi1 < lo2 or hi2 < lo1  # disjoint
     finally:
         r1.close()
         r2.close()
-        sup._revoke(lo1, hi1)
-        sup._revoke(lo2, hi2)
+        endpoints._revoke(lo1, hi1)
+        endpoints._revoke(lo2, hi2)
