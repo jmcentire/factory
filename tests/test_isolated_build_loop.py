@@ -31,6 +31,7 @@ from factory_runtime.lanes import (
     freeze_validator_execution,
     temporary_build_loop_root,
 )
+from factory_runtime.native_test import native_test_execution_digests
 from factory_runtime.snapshot import tree_digest
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
@@ -687,7 +688,7 @@ def test_validator_launch_refuses_same_path_mutation_before_snapshot(tmp_path: P
     validator.write_text("print('substituted validator')\n", encoding="utf-8")
     backend = _RecordingQualifiedBackend()
 
-    with pytest.raises(LaneError, match="does not authorize frozen Validator command_digest"):
+    with pytest.raises(LaneError, match="does not authorize Validator command_digest"):
         IsolatedBuildLoop(root, sandbox=backend).execute(
             build_input_path=FIXTURES / "build-input.json",
             coder_command=(sys.executable, str(FIXTURES / "coder.py")),
@@ -919,3 +920,198 @@ def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatc
         r2.close()
         endpoints._revoke(lo1, hi1)
         endpoints._revoke(lo2, hi2)
+
+
+# --------------------------------------------------------------------------- #
+# Generic native-test executor
+# --------------------------------------------------------------------------- #
+
+def _native_acceptance_catalog(tmp_path: Path, argv: Sequence[str]) -> Path:
+    """An acceptance catalog whose trigger binds a native-test execution identity."""
+
+    build_input = json.loads((FIXTURES / "build-input.json").read_text())
+    phases = {
+        artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
+    }
+    execution = native_test_execution_digests(argv)
+    document = {
+        "schema_version": "factory-acceptance-obligation-catalog/1",
+        "catalog_id": "fixture-native-acceptance",
+        "version": "1",
+        "run_id": "fixture-run",
+        "generation": 1,
+        "target_state_digest": "sha256:" + ("8" * 64),
+        "phase_artifact_digests": phases,
+        "human_ratifier": "human:founder",
+        "validator_ratifier": "agent:validator",
+        "max_review_rounds": 2,
+        "triggers": [
+            {
+                "trigger_id": "validating-to-preview",
+                "from_state": "validating",
+                "to_state": "preview",
+                "command_digest": execution.command_digest,
+                "configuration_digest": execution.configuration_digest,
+                "environment_digest": execution.environment_digest,
+                "obligations": [
+                    {
+                        "obligation_id": "native-suite",
+                        "criterion": "The target's native acceptance suite passes.",
+                        "verifier_id": "validator-test-execution-v1",
+                        "intent_backreferences": [
+                            {
+                                "artifact_id": "synthetic-product-specification",
+                                "artifact_digest": phases["product-specification"],
+                                "item_id": "product:addition",
+                                "intent_digest": "sha256:" + ("7" * 64),
+                            }
+                        ],
+                        "required_evidence_ids": [
+                            "candidate",
+                            "acceptance-tests",
+                            "coder-output-snapshot",
+                            "tester-output-snapshot",
+                        ],
+                        "test_assertions": [
+                            {"test_id": "native-suite", "assertion_digest": "sha256:" + ("7" * 64)}
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    path = tmp_path / "native-acceptance-obligation-catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_native_test_execution_digests_bind_argv_exactly() -> None:
+    """Command/config digests track the exact argv; the environment digest is argv-independent."""
+
+    a = native_test_execution_digests(["make", "test"])
+    b = native_test_execution_digests(["make", "test"])
+    c = native_test_execution_digests(["make", "acceptance"])
+    assert a.digests == b.digests  # deterministic
+    assert a.command_digest != c.command_digest  # argv-sensitive
+    assert a.configuration_digest != c.configuration_digest
+    assert a.environment_digest == c.environment_digest  # environment contract is generic
+    for bad in ([], [""], ["make", ""]):
+        with pytest.raises(ValueError):
+            native_test_execution_digests(bad)
+
+
+# A candidate-shipped checker proving the generic executor contract: argv-only, cwd rooted at the
+# materialized candidate, closed env exposing exactly the declared keys + the loopback grant,
+# both artifacts materialized, and an output-evidence directory it may write.
+_NATIVE_CHECK = """\
+import json, os, socket, sys
+from pathlib import Path
+
+cand = Path(os.environ["FACTORY_CANDIDATE_DIR"])
+tests = Path(os.environ["FACTORY_TEST_DIR"])
+out = Path(os.environ["FACTORY_OUTPUT_DIR"])
+problems = []
+if Path.cwd() != cand:
+    problems.append(f"cwd {Path.cwd()} != candidate {cand}")
+if not (cand / "artifact" / "candidate.py").is_file():
+    problems.append("candidate artifact not materialized")
+if not (tests / "tests" / "test_candidate.py").is_file():
+    problems.append("sealed tester not materialized")
+tcp = os.environ.get("FACTORY_LOOPBACK_TCP_PORTS", "")
+if not tcp:
+    problems.append("loopback grant not exposed")
+else:
+    port = int(tcp.split(",")[0])
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", port))  # the declared grant must permit this for the whole attempt
+    except OSError as exc:
+        problems.append(f"grant bind failed: {exc}")
+    finally:
+        s.close()
+# external egress must stay denied even during native test
+ext = socket.socket(); ext.settimeout(2)
+try:
+    ext.connect(("192.0.2.1", 9))
+    problems.append("external egress was NOT denied")
+except OSError as exc:
+    import errno
+    if exc.errno not in (errno.EPERM, errno.EACCES):
+        problems.append(f"external egress not sandbox-denied: {exc.errno}")
+finally:
+    ext.close()
+out.mkdir(parents=True, exist_ok=True)
+(out / "acceptance-obligation-observations.json").write_text(
+    json.dumps({"problems": problems}), encoding="utf-8"
+)
+sys.exit(1 if problems else 0)
+"""
+
+
+@pytest.mark.isolation_integration
+def test_native_test_executor_runs_target_argv_under_grant(tmp_path: Path) -> None:
+    """The Validator materializes artifacts, exposes only the loopback grant, and runs the
+    target's argv (argv-only) rooted in the candidate workspace — no candidate launch itself."""
+
+    root = temporary_build_loop_root(tmp_path)
+    argv = (sys.executable, "native_check.py")
+    acceptance_catalog_path = _native_acceptance_catalog(tmp_path, argv)
+    execution = native_test_execution_digests(argv)
+    expected_execution = {
+        "command_digest": execution.command_digest,
+        "configuration_digest": execution.configuration_digest,
+        "environment_digest": execution.environment_digest,
+    }
+    coder = tmp_path / "sealed-coder"
+    tester = tmp_path / "sealed-tester"
+    (coder / "artifact").mkdir(parents=True)
+    (coder / "native_check.py").write_text(_NATIVE_CHECK, encoding="utf-8")
+    (coder / "artifact" / "candidate.py").write_text("value = 1\n", encoding="utf-8")
+    (tester / "tests").mkdir(parents=True)
+    (tester / "tests" / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+
+    result = IsolatedBuildLoop(root).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=argv,
+        acceptance_catalog_path=acceptance_catalog_path,
+        prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+        candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        native_test_entrypoint=argv,
+        before_validation=lambda *_: {"validator_execution": expected_execution},
+    )
+
+    observations = json.loads(
+        (result.validator.output_directory / "acceptance-obligation-observations.json").read_text()
+    )
+    assert observations["problems"] == [], observations["problems"]
+    assert result.validator.succeeded
+    assert result.passed is True
+
+
+@pytest.mark.isolation_integration
+def test_native_test_executor_refuses_unratified_argv(tmp_path: Path) -> None:
+    """The catalog must authorize the exact native argv; a mismatch fails closed."""
+
+    root = temporary_build_loop_root(tmp_path)
+    ratified = (sys.executable, "native_check.py")
+    acceptance_catalog_path = _native_acceptance_catalog(tmp_path, ratified)
+    coder = tmp_path / "sealed-coder"
+    tester = tmp_path / "sealed-tester"
+    (coder / "artifact").mkdir(parents=True)
+    (coder / "artifact" / "candidate.py").write_text("value = 1\n", encoding="utf-8")
+    (tester / "tests").mkdir(parents=True)
+    (tester / "tests" / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+
+    with pytest.raises(LaneError, match="does not authorize Validator"):
+        IsolatedBuildLoop(root).execute(
+            build_input_path=FIXTURES / "build-input.json",
+            coder_command=(),
+            tester_command=(),
+            validator_command=ratified,
+            acceptance_catalog_path=acceptance_catalog_path,
+            prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+            native_test_entrypoint=(sys.executable, "other_entry.py"),  # not what the catalog bound
+            before_validation=lambda *_: {"validator_execution": {}},
+        )

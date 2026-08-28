@@ -65,7 +65,8 @@ class FactoryAttemptConfig:
         }
         # A target that exercises a networked candidate declares the loopback endpoint shape it
         # needs (the Validator-only declared-loopback grant); targets without networking omit it.
-        optional = {"candidate_loopback"}
+        # A target may also declare a native acceptance-test argv the Validator runs generically.
+        optional = {"candidate_loopback", "test_entrypoint"}
         if document.get("schema_version") == "factory-attempt/1":
             raise AttemptContractError(
                 "attempt config factory-attempt/1 predates the sealed candidate runtime/launch "
@@ -108,9 +109,14 @@ class FactoryAttemptConfig:
         if candidate_launch and not Path(candidate_launch[0]).is_absolute():
             raise AttemptContractError("candidate launch argv[0] must be an absolute path")
         candidate_loopback = _candidate_loopback(document.get("candidate_loopback", []))
-        if candidate_loopback and not candidate_launch:
+        native_test_entrypoint = tuple(
+            _string(item, "test entrypoint argument")
+            for item in _array(document.get("test_entrypoint", []), "test entrypoint")
+        )
+        if candidate_loopback and not (candidate_launch or native_test_entrypoint):
             raise AttemptContractError(
-                "candidate_loopback declares endpoints but no candidate_launch was provided"
+                "candidate_loopback declares endpoints but neither candidate_launch nor "
+                "test_entrypoint was provided"
             )
         if prebuilt_author_outputs is not None:
             # The runner-backed path has already created sealed Coder and Tester
@@ -169,6 +175,7 @@ class FactoryAttemptConfig:
             candidate_runtime_path=candidate_runtime_path,
             candidate_launch=candidate_launch,
             candidate_loopback=candidate_loopback,
+            native_test_entrypoint=native_test_entrypoint,
         )
         return cls(source_digest=digest_bytes(raw), invocation=invocation)
 
@@ -227,6 +234,7 @@ class FactoryAttemptInvocation:
     candidate_runtime_path: Path | None = None
     candidate_launch: tuple[str, ...] = ()
     candidate_loopback: tuple[Mapping[str, object], ...] = ()
+    native_test_entrypoint: tuple[str, ...] = ()
 
 
 class FactoryAttemptExecutor:
@@ -290,6 +298,7 @@ class FactoryAttemptExecutor:
             candidate_runtime_path=values.candidate_runtime_path,
             candidate_launch=values.candidate_launch,
             candidate_loopback=values.candidate_loopback,
+            native_test_entrypoint=values.native_test_entrypoint,
             changed_existing_tests=values.changed_existing_tests,
             test_change_authorization_path=values.test_change_authorization_path,
             test_change_human_receipt_path=values.test_change_human_receipt_path,

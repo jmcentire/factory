@@ -35,6 +35,12 @@ from factory_runtime.loopback_endpoints import (
     LoopbackReservation,
     reserve_loopback_endpoints,
 )
+from factory_runtime.native_test import (
+    CANDIDATE_SUBDIR,
+    TESTER_SUBDIR,
+    NativeTestExecution,
+    native_test_execution_digests,
+)
 from factory_runtime.snapshot import (
     FrozenBlob,
     FrozenTree,
@@ -352,6 +358,7 @@ class IsolatedBuildLoop:
         candidate_runtime_path: str | Path | None = None,
         candidate_launch: Sequence[str] = (),
         candidate_loopback: Sequence[Mapping[str, object]] = (),
+        native_test_entrypoint: Sequence[str] = (),
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
         ]
@@ -394,30 +401,42 @@ class IsolatedBuildLoop:
         )
         if acceptance_catalog_bytes is None:
             raise LaneError("Validator execution requires a ratified acceptance catalog")
+        native_argv = tuple(str(part) for part in native_test_entrypoint)
+        frozen_validator: FrozenValidatorExecution | None = None
+        native_execution: NativeTestExecution | None = None
         try:
             acceptance_document = json.loads(acceptance_catalog_bytes)
             if not isinstance(acceptance_document, Mapping):
                 raise LaneError("acceptance-obligation catalog must be an object")
             acceptance_catalog = AcceptanceObligationCatalog.from_dict(acceptance_document)
             trigger = acceptance_catalog.select("validating", "preview")
-            frozen_validator = freeze_validator_execution(
-                self.root / "validator-execution",
-                validator_command,
-                validator_trusted_paths,
-            )
+            if native_argv:
+                # Target-agnostic native-test executor: the ratified execution identity is the
+                # target-declared argv + the generic executor contract, not a frozen Factory
+                # Python source. The Validator will materialize artifacts, expose only the
+                # declared loopback grant, and run the argv.
+                native_execution = native_test_execution_digests(native_argv)
+                execution_digests = native_execution.digests
+            else:
+                frozen_validator = freeze_validator_execution(
+                    self.root / "validator-execution",
+                    validator_command,
+                    validator_trusted_paths,
+                )
+                execution_digests = frozen_validator.capture.digests
         except (json.JSONDecodeError, AcceptanceObligationError) as exc:
             raise LaneError(f"Validator execution contract is invalid: {exc}") from exc
         actual_execution = dict(
             zip(
                 ("command_digest", "configuration_digest", "environment_digest"),
-                frozen_validator.capture.digests,
+                execution_digests,
                 strict=True,
             )
         )
         for field, actual in actual_execution.items():
             if trigger[field] != actual:
                 raise LaneError(
-                    f"ratified acceptance catalog does not authorize frozen Validator {field}"
+                    f"ratified acceptance catalog does not authorize Validator {field}"
                 )
 
         coder = self._prepare_lane(
@@ -520,6 +539,7 @@ class IsolatedBuildLoop:
             ),
             candidate_launch=tuple(str(part) for part in candidate_launch),
             candidate_loopback=tuple(dict(spec) for spec in candidate_loopback),
+            native_execution=native_execution,
         )
         return ValidationExecution(
             coder=coder_result,
@@ -659,11 +679,77 @@ class IsolatedBuildLoop:
             output_directory=output,
         )
 
+    def _run_native_test(
+        self,
+        *,
+        lane: Path,
+        output: Path,
+        coder: FrozenTree,
+        tester: FrozenTree,
+        native_execution: NativeTestExecution,
+        candidate_loopback: Sequence[Mapping[str, object]],
+    ) -> LaneExecution:
+        """Run the target's declared native acceptance argv, target-agnostically.
+
+        Materialize the reviewed candidate and sealed Tester artifact into a fresh workspace,
+        expose only the declared loopback grant, and run the exact argv (no shell) rooted at the
+        candidate tree with a closed, declared environment. The whole process group is reaped and
+        the loopback block is proven leak-free on exit. The Factory learns nothing target-specific
+        and never launches the candidate or any fixture — the argv owns that.
+        """
+
+        coder = verify_frozen_tree(coder.directory, expected_digest=coder.digest)
+        tester = verify_frozen_tree(tester.directory, expected_digest=tester.digest)
+        workspace = lane / "native-test-workspace"
+        candidate_dir = workspace / CANDIDATE_SUBDIR
+        tester_dir = workspace / TESTER_SUBDIR
+        _copy_regular_tree(coder.files_directory, candidate_dir)
+        _copy_regular_tree(tester.files_directory, tester_dir)
+
+        environment = {
+            "HOME": str(workspace),
+            "TMPDIR": str(workspace),
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "FACTORY_OUTPUT_DIR": str(output),
+            "FACTORY_CANDIDATE_DIR": str(candidate_dir),
+            "FACTORY_TEST_DIR": str(tester_dir),
+        }
+        argv = list(native_execution.test_entrypoint)
+        specs = [EndpointSpec.from_dict(spec) for spec in candidate_loopback]
+
+        def run(network_policy: NetworkPolicy) -> IsolatedProcessResult:
+            return self.sandbox.run(
+                argv,
+                cwd=candidate_dir,
+                readable_paths=(workspace,),
+                writable_paths=(workspace, output),
+                environment=environment,
+                network_policy=network_policy,
+                reap_process_group=True,
+            )
+
+        if specs:
+            with reserve_loopback_endpoints(specs) as reservation:
+                policy = NetworkPolicy.declared_loopback(_loopback_grants(specs, reservation))
+                environment["FACTORY_LOOPBACK_TCP_PORTS"] = ",".join(
+                    str(port) for port in reservation.tcp_ports
+                )
+                environment["FACTORY_LOOPBACK_UDP_PORTS"] = ",".join(
+                    str(port) for port in reservation.udp_ports
+                )
+                process = run(policy)
+        else:
+            process = run(DENY_ALL_NETWORK)
+        return LaneExecution(role=LaneRole.VALIDATOR, process=process, output_directory=output)
+
     def _run_validator(
         self,
         coder: FrozenTree,
         tester: FrozenTree,
-        validator_execution: FrozenValidatorExecution,
+        validator_execution: FrozenValidatorExecution | None,
         input_bytes: bytes,
         expected_input_digest: str,
         plan_bytes: bytes | None,
@@ -673,6 +759,7 @@ class IsolatedBuildLoop:
         candidate_runtime_path: Path | None = None,
         candidate_launch: Sequence[str] = (),
         candidate_loopback: Sequence[Mapping[str, object]] = (),
+        native_execution: NativeTestExecution | None = None,
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -681,6 +768,17 @@ class IsolatedBuildLoop:
         input_directory.mkdir(parents=True)
         output.mkdir()
         work.mkdir()
+        if native_execution is not None:
+            return self._run_native_test(
+                lane=lane,
+                output=output,
+                coder=coder,
+                tester=tester,
+                native_execution=native_execution,
+                candidate_loopback=candidate_loopback,
+            )
+        if validator_execution is None:
+            raise LaneError("Validator execution requires a frozen runner or a native test entry")
         build_input = input_directory / "build-input.json"
         build_input.write_bytes(input_bytes)
         readable_inputs: list[Path] = [build_input]
