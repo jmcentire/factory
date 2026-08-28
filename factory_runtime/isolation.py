@@ -8,6 +8,7 @@ real denial probes before a lane is trusted.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -16,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -407,15 +409,19 @@ class MacOSSandbox:
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        # start_new_session makes the child its own session/group leader, so its pgid == pid.
+        # Capture it now: communicate() reaps the leader, after which its pgid is unrecoverable
+        # while children (e.g. a launched candidate) may still hold the group — and the port.
+        pgid = process.pid
         try:
             out, err = process.communicate(input=stdin_bytes, timeout=self.timeout_seconds)
             returncode = process.returncode
         except subprocess.TimeoutExpired:
-            self._signal_group(process)
+            self._reap_group(pgid)
             process.communicate()
             raise
         finally:
-            self._signal_group(process)
+            self._reap_group(pgid)
         return (
             returncode,
             out.decode("utf-8", errors="replace"),
@@ -423,21 +429,33 @@ class MacOSSandbox:
         )
 
     @staticmethod
-    def _signal_group(process: subprocess.Popen[bytes]) -> None:
-        try:
-            pgid = os.getpgid(process.pid)
-        except ProcessLookupError:
-            return
-        for sig in (signal.SIGTERM, signal.SIGKILL):
+    def _reap_group(pgid: int) -> None:
+        """Reap the lane's whole process group, deterministically, by its captured group id.
+
+        Signalling only the session leader is not enough: a graceful child (e.g. a server doing
+        a SIGTERM shutdown) can outlive the leader and keep a port bound. So SIGTERM the group,
+        then SIGKILL it, and poll ``killpg(pgid, 0)`` until the group has no members — only then
+        is the no-leak assertion race-free. The pgid is captured before the leader is reaped.
+        """
+
+        deadline_term = time.monotonic() + 2.0
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGTERM)
+        while time.monotonic() < deadline_term:
             try:
-                os.killpg(pgid, sig)
+                os.killpg(pgid, 0)
             except ProcessLookupError:
                 return
+            time.sleep(0.05)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGKILL)
+        deadline_kill = time.monotonic() + 3.0
+        while time.monotonic() < deadline_kill:
             try:
-                process.wait(timeout=1.0 if sig == signal.SIGTERM else 3.0)
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
                 return
-            except subprocess.TimeoutExpired:
-                continue
+            time.sleep(0.05)
 
     def qualify(
         self,
