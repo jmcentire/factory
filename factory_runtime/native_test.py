@@ -35,6 +35,13 @@ CONTRACT_VERSION = "factory-native-test-executor/1"
 CANDIDATE_SUBDIR = "candidate"
 TESTER_SUBDIR = "tester"
 
+# The single ratified acceptance-obligation catalog is materialized verbatim into the workspace
+# under this fixed name and exposed through one declared path variable. The target reads the
+# ratified per-criterion assertions (triggers -> obligations -> test_assertions) from it; the
+# Factory encodes no criterion count and no individual digest, so the same executor scales to any
+# number of ratified criteria without a contract change.
+ACCEPTANCE_CATALOG_FILENAME = "acceptance-catalog.json"
+
 # The exact environment keys the executor exposes to the argv. Everything else is stripped; there
 # is no ambient environment. ``FACTORY_LOOPBACK_*`` are present only when a loopback grant exists.
 ENVIRONMENT_KEYS = (
@@ -47,6 +54,7 @@ ENVIRONMENT_KEYS = (
     "FACTORY_OUTPUT_DIR",
     "FACTORY_CANDIDATE_DIR",
     "FACTORY_TEST_DIR",
+    "FACTORY_ACCEPTANCE_CATALOG",
     "FACTORY_LOOPBACK_TCP_PORTS",
     "FACTORY_LOOPBACK_UDP_PORTS",
 )
@@ -60,9 +68,10 @@ NATIVE_TEST_EXECUTOR_CONTRACT: dict[str, object] = {
     "environment": "closed-declared/1",
     "environment_keys": list(ENVIRONMENT_KEYS),
     "artifact_materialization": {
-        "schema": "candidate-plus-sealed-tester/1",
+        "schema": "candidate-plus-sealed-tester-plus-catalog/1",
         "candidate_subdir": CANDIDATE_SUBDIR,
         "tester_subdir": TESTER_SUBDIR,
+        "acceptance_catalog_file": ACCEPTANCE_CATALOG_FILENAME,
         "regular_files_only": True,
     },
     "output_evidence": "output-dir-plus-captured-streams/1",
@@ -101,6 +110,7 @@ def _environment_contract() -> dict[str, object]:
         "candidate_dir_key": "FACTORY_CANDIDATE_DIR",
         "tester_dir_key": "FACTORY_TEST_DIR",
         "output_dir_key": "FACTORY_OUTPUT_DIR",
+        "acceptance_catalog_key": "FACTORY_ACCEPTANCE_CATALOG",
         "loopback_port_keys": ["FACTORY_LOOPBACK_TCP_PORTS", "FACTORY_LOOPBACK_UDP_PORTS"],
     }
 

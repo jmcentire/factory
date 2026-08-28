@@ -4,7 +4,7 @@ import json
 import platform
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -926,13 +926,25 @@ def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatc
 # Generic native-test executor
 # --------------------------------------------------------------------------- #
 
-def _native_acceptance_catalog(tmp_path: Path, argv: Sequence[str]) -> Path:
-    """An acceptance catalog whose trigger binds a native-test execution identity."""
+def _native_acceptance_catalog(
+    tmp_path: Path,
+    argv: Sequence[str],
+    test_assertions: Sequence[Mapping[str, str]] | None = None,
+) -> Path:
+    """An acceptance catalog whose trigger binds a native-test execution identity.
+
+    ``test_assertions`` lets a test bind an arbitrary number of ratified criteria so the generic
+    catalog-input path can be exercised at counts other than one.
+    """
 
     build_input = json.loads((FIXTURES / "build-input.json").read_text())
     phases = {
         artifact["phase"]: digest_obj(artifact) for artifact in build_input["phase_artifacts"]
     }
+    if test_assertions is None:
+        test_assertions = [
+            {"test_id": "native-suite", "assertion_digest": "sha256:" + ("7" * 64)}
+        ]
     execution = native_test_execution_digests(argv)
     document = {
         "schema_version": "factory-acceptance-obligation-catalog/1",
@@ -972,9 +984,7 @@ def _native_acceptance_catalog(tmp_path: Path, argv: Sequence[str]) -> Path:
                             "coder-output-snapshot",
                             "tester-output-snapshot",
                         ],
-                        "test_assertions": [
-                            {"test_id": "native-suite", "assertion_digest": "sha256:" + ("7" * 64)}
-                        ],
+                        "test_assertions": list(test_assertions),
                     }
                 ],
             }
@@ -1017,6 +1027,22 @@ if not (cand / "artifact" / "candidate.py").is_file():
     problems.append("candidate artifact not materialized")
 if not (tests / "tests" / "test_candidate.py").is_file():
     problems.append("sealed tester not materialized")
+# The single ratified catalog must be materialized and reachable through one declared path var,
+# and the target must be able to derive its per-criterion assertions with no hardcoded count.
+acceptance_digests = {}
+catalog_env = os.environ.get("FACTORY_ACCEPTANCE_CATALOG", "")
+if not catalog_env:
+    problems.append("acceptance catalog path not exposed")
+elif not Path(catalog_env).is_file():
+    problems.append("acceptance catalog not materialized")
+else:
+    catalog = json.loads(Path(catalog_env).read_text())
+    for trigger in catalog.get("triggers", []):
+        for obligation in trigger.get("obligations", []):
+            for item in obligation.get("test_assertions", []):
+                acceptance_digests[str(item["test_id"])] = str(item["assertion_digest"])
+    if not acceptance_digests:
+        problems.append("no ratified test assertions readable from catalog")
 tcp = os.environ.get("FACTORY_LOOPBACK_TCP_PORTS", "")
 if not tcp:
     problems.append("loopback grant not exposed")
@@ -1042,7 +1068,8 @@ finally:
     ext.close()
 out.mkdir(parents=True, exist_ok=True)
 (out / "acceptance-obligation-observations.json").write_text(
-    json.dumps({"problems": problems}), encoding="utf-8"
+    json.dumps({"problems": problems, "acceptance_digests": acceptance_digests}),
+    encoding="utf-8",
 )
 sys.exit(1 if problems else 0)
 """
@@ -1055,7 +1082,17 @@ def test_native_test_executor_runs_target_argv_under_grant(tmp_path: Path) -> No
 
     root = temporary_build_loop_root(tmp_path)
     argv = (sys.executable, "native_check.py")
-    acceptance_catalog_path = _native_acceptance_catalog(tmp_path, argv)
+    # Bind several ratified criteria to prove the generic catalog-input path scales past one.
+    ratified_assertions = [
+        {"test_id": f"native-suite-{n}", "assertion_digest": "sha256:" + (str(n) * 64)}
+        for n in range(1, 4)
+    ]
+    expected_digests = {
+        item["test_id"]: item["assertion_digest"] for item in ratified_assertions
+    }
+    acceptance_catalog_path = _native_acceptance_catalog(
+        tmp_path, argv, test_assertions=ratified_assertions
+    )
     execution = native_test_execution_digests(argv)
     expected_execution = {
         "command_digest": execution.command_digest,
@@ -1086,6 +1123,8 @@ def test_native_test_executor_runs_target_argv_under_grant(tmp_path: Path) -> No
         (result.validator.output_directory / "acceptance-obligation-observations.json").read_text()
     )
     assert observations["problems"] == [], observations["problems"]
+    # The target read every ratified criterion from the materialized catalog — no hardcoded count.
+    assert observations["acceptance_digests"] == expected_digests
     assert result.validator.succeeded
     assert result.passed is True
 
