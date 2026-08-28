@@ -124,3 +124,46 @@ def test_main_returns_zero_on_clean_core() -> None:
         "--quiet",
     ])
     assert code == 0
+
+
+RUNTIME = REPO_ROOT / "factory_runtime"
+
+
+def test_clean_runtime_has_no_transport_tokens() -> None:
+    findings = PURITY.run(CORE, BASELINE, PYPROJECT, DENYLIST, RUNTIME)
+    assert not [f for f in findings if f.check == "runtime-transport"], (
+        "the generic runtime must name no target application transport:\n"
+        + "\n".join(str(f) for f in findings if f.check == "runtime-transport")
+    )
+
+
+def test_red_when_a_runtime_transport_token_is_injected(tmp_path) -> None:
+    runtime_copy = tmp_path / "factory_runtime"
+    shutil.copytree(RUNTIME, runtime_copy)
+    # An identifier/import coupling the runtime to a target's WebRTC/ICE stack.
+    (runtime_copy / "_injected.py").write_text(
+        "import aiortc  # target transport coupling!\n"
+        "def gather_ice_via_uvloop():\n"
+        "    return 'webrtc'\n",
+        encoding="utf-8",
+    )
+    findings = PURITY.run(CORE, BASELINE, PYPROJECT, DENYLIST, runtime_copy)
+    transport = [f for f in findings if f.check == "runtime-transport"]
+    assert transport, "an injected target transport token must be caught in factory_runtime"
+    caught = {f.detail.split("'")[1] for f in transport}
+    assert {"aiortc", "uvloop", "webrtc"} <= caught
+
+
+def test_runtime_transport_token_can_be_baselined(tmp_path) -> None:
+    runtime_copy = tmp_path / "factory_runtime"
+    shutil.copytree(RUNTIME, runtime_copy)
+    (runtime_copy / "_injected.py").write_text("value = 'tmux'\n", encoding="utf-8")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {"allowed_occurrences": [{"file": "_injected.py", "token": "tmux"}]}
+        ),
+        encoding="utf-8",
+    )
+    findings = PURITY.run(CORE, baseline, PYPROJECT, DENYLIST, runtime_copy)
+    assert not [f for f in findings if f.check == "runtime-transport"]
