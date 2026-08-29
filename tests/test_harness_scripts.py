@@ -2357,6 +2357,109 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
         raise AssertionError(f"TERM-tolerant advisory child {pid} survived supervisor")
 
 
+def test_advisory_supervisor_reports_rather_than_refuses_when_teardown_is_denied(
+    tmp_path: Path,
+) -> None:
+    """EPERM from killpg must not overwrite an established termination verdict.
+
+    This is the forcing test for the 2026-08-28 flake: `_signal_group` caught only
+    ESRCH, so a denied group signal escaped as an OSError, was caught by the refusal
+    wrapper, and turned an exit-124 wall-ceiling termination into an exit-70
+    "supervisor refused". A cleanup failure was overwriting the verdict that had
+    already been decided — a true local statement erasing a true global one.
+
+    EPERM is also not success: it means the group is no longer ours to signal, whose
+    likeliest cause is leader-pid reuse. So the run must still report 124 *and* the
+    receipt must say the teardown was unverified. Both halves are asserted, because
+    silently swallowing the error would pass a test that only checked the exit code.
+    """
+
+    import harness.supervise_advisory as supervisor
+
+    denied: list[int] = []
+    real_killpg = os.killpg
+
+    def denying_killpg(pgid: int, signum: int) -> None:
+        # Deny only the follow-up KILL, which is the real shape of the flake: the
+        # leader has already exited, its pid has been reused by another owner, and the
+        # group we reach for is no longer ours. The principal is genuinely dead; only
+        # the proof of teardown is missing. Denying SIGTERM too would model a different
+        # and legitimately fatal case — a principal that truly cannot be killed, which
+        # the supervisor is right to refuse over.
+        if signum == signal.SIGKILL:
+            denied.append(signum)
+            raise PermissionError(1, "Operation not permitted")
+        return real_killpg(pgid, signum)
+
+    child = tmp_path / "child.py"
+    child.write_text("import time\nwhile True: time.sleep(1)\n")
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    receipt = tmp_path / "receipt"
+
+    original = supervisor.os.killpg
+    supervisor.os.killpg = denying_killpg  # type: ignore[assignment]
+    try:
+        code = supervisor.supervise(
+            [sys.executable, str(child)],
+            cwd=tmp_path,
+            stdin_path=prompt,
+            stdout_path=tmp_path / "stdout",
+            stderr_path=tmp_path / "stderr",
+            input_snapshot_path=tmp_path / "input-snapshot",
+            receipt_path=receipt,
+            stdin_mode="prompt",
+            wall_seconds=0.5,
+            max_input_bytes=1048576,
+            max_output_bytes=4096,
+        )
+    finally:
+        supervisor.os.killpg = original  # type: ignore[assignment]
+
+    assert denied, "the test did not actually exercise the denied-signal path"
+    assert code == 124, "a denied teardown must not erase the wall-ceiling verdict"
+    body = json.loads(receipt.read_text())
+    assert body["termination_reason"] == "advisory wall-time ceiling exceeded"
+    assert body["teardown_verified"] is False
+    assert any(c.startswith("group-signal-denied:") for c in body["teardown_conditions"])
+
+
+def test_advisory_supervisor_receipt_reports_a_verified_teardown_on_the_clean_path(
+    tmp_path: Path,
+) -> None:
+    """The negative half: an ordinary ceiling termination reports teardown_verified.
+
+    Without this, `teardown_verified: False` could be hardcoded and the test above
+    would still pass — the disposition has to discriminate to be worth emitting.
+    """
+
+    import harness.supervise_advisory as supervisor
+
+    child = tmp_path / "child.py"
+    child.write_text("import time\nwhile True: time.sleep(1)\n")
+    prompt = tmp_path / "prompt"
+    prompt.write_text("audit\n")
+    receipt = tmp_path / "receipt"
+
+    code = supervisor.supervise(
+        [sys.executable, str(child)],
+        cwd=tmp_path,
+        stdin_path=prompt,
+        stdout_path=tmp_path / "stdout",
+        stderr_path=tmp_path / "stderr",
+        input_snapshot_path=tmp_path / "input-snapshot",
+        receipt_path=receipt,
+        stdin_mode="prompt",
+        wall_seconds=0.5,
+        max_input_bytes=1048576,
+        max_output_bytes=4096,
+    )
+    assert code == 124
+    body = json.loads(receipt.read_text())
+    assert body["teardown_verified"] is True
+    assert body["teardown_conditions"] == []
+
+
 def test_advisory_supervisor_can_close_stdin_for_argv_prompt_clients(tmp_path: Path) -> None:
     reader = tmp_path / "reader.py"
     reader.write_text("import sys\nprint(len(sys.stdin.buffer.read()))\n")

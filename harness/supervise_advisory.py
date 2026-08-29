@@ -170,28 +170,51 @@ def _process_group_exists(pgid: int) -> bool:
     return True
 
 
-def _signal_group(pgid: int, signum: signal.Signals) -> None:
+def _signal_group(pgid: int, signum: signal.Signals) -> str:
+    """Signal the group, returning a condition string when the outcome is unproven.
+
+    ESRCH is success: the group is gone, which is the state teardown wants. EPERM is
+    NOT success and must not be treated as one — it means this group is no longer ours
+    to signal, whose most likely cause is that the leader was reaped and its pid reused
+    by another owner. Swallowing it would claim a teardown that never happened.
+
+    It must not become a refusal either. By the time teardown runs, the ceiling has
+    already fired and the termination verdict is established; letting a cleanup error
+    escape would overwrite that true global statement with a true local one, which is
+    the same inversion this codebase refuses everywhere else. So the condition is
+    returned and reported, never raised and never dropped.
+    """
+
     try:
         os.killpg(pgid, signum)
     except ProcessLookupError:
-        pass
+        return ""
+    except PermissionError:
+        return f"group-signal-denied:{signum.name}"
+    return ""
 
 
-def _stop_tree(process: subprocess.Popen[bytes]) -> None:
-    # The client is a session/process-group leader. Its group survives when the
-    # principal exits, so pre-exited parents cannot hide TERM-tolerant children by
-    # re-parenting them before the ceiling fires.
-    _signal_group(process.pid, signal.SIGTERM)
+def _stop_tree(process: subprocess.Popen[bytes]) -> tuple[str, ...]:
+    """Tear the tree down, returning any conditions that left the teardown unproven.
+
+    The client is a session/process-group leader. Its group survives when the principal
+    exits, so pre-exited parents cannot hide TERM-tolerant children by re-parenting them
+    before the ceiling fires.
+    """
+
+    conditions: list[str] = []
+    conditions.append(_signal_group(process.pid, signal.SIGTERM))
     deadline = time.monotonic() + 0.5
     while _process_group_exists(process.pid) and time.monotonic() < deadline:
         time.sleep(min(0.05, deadline - time.monotonic()))
     process.poll()  # reap a terminated leader so an empty group is removed before KILL
-    _signal_group(process.pid, signal.SIGKILL)
+    conditions.append(_signal_group(process.pid, signal.SIGKILL))
     if process.poll() is None:
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("advisory principal survived SIGKILL") from exc
+    return tuple(dict.fromkeys(condition for condition in conditions if condition))
 
 
 def _drain_terminated_streams(
@@ -267,6 +290,7 @@ def supervise(
     stdout = bytearray()
     stderr = bytearray()
     termination_reason = ""
+    teardown_conditions: tuple[str, ...] = ()
     output_truncated = False
     started = time.monotonic()
     received_signal: list[int] = []
@@ -304,11 +328,11 @@ def supervise(
                 if received_signal:
                     signal_name = signal.Signals(received_signal[0]).name
                     termination_reason = f"advisory supervisor interrupted by {signal_name}"
-                    _stop_tree(process)
+                    teardown_conditions += _stop_tree(process)
                     break
                 if time.monotonic() - started >= wall_seconds:
                     termination_reason = "advisory wall-time ceiling exceeded"
-                    _stop_tree(process)
+                    teardown_conditions += _stop_tree(process)
                     break
                 if not selector.get_map():
                     time.sleep(0.05)
@@ -329,13 +353,13 @@ def supervise(
                         destination.extend(chunk[: max(0, remaining)])
                         termination_reason = "advisory output ceiling exceeded"
                         output_truncated = True
-                        _stop_tree(process)
+                        teardown_conditions += _stop_tree(process)
                         break
                     destination.extend(chunk)
                 if termination_reason:
                     break
             if process.poll() is None or _process_group_exists(process.pid):
-                _stop_tree(process)
+                teardown_conditions += _stop_tree(process)
             returncode = process.wait(timeout=2)
             if termination_reason and termination_reason != "advisory output ceiling exceeded":
                 output_truncated = (
@@ -372,7 +396,7 @@ def supervise(
     _write_json_once(
         receipt_path,
         {
-            "schema_version": "factory-advisory-supervisor-receipt/3",
+            "schema_version": "factory-advisory-supervisor-receipt/4",
             "input_admitted": True,
             "stdin_mode": stdin_mode,
             "input_descriptor_mode": (
@@ -386,6 +410,11 @@ def supervise(
             "stderr_byte_count": len(stderr_bytes),
             "combined_output_truncated": output_truncated,
             "termination_reason": termination_reason,
+            # Recovery is not silence. A teardown the supervisor could not prove is a
+            # degraded disposition, not a clean one, and it is emitted so a rising rate
+            # is visible before it is an incident.
+            "teardown_verified": not teardown_conditions,
+            "teardown_conditions": list(teardown_conditions),
             "client_returncode": returncode,
             "supervisor_exit_code": supervisor_exit_code,
         },
@@ -431,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
                 _write_json_once(
                     Path(arguments.receipt),
                     {
-                        "schema_version": "factory-advisory-supervisor-receipt/3",
+                        "schema_version": "factory-advisory-supervisor-receipt/4",
                         "input_admitted": input_admitted,
                         "stdin_mode": arguments.stdin_mode,
                         "input_descriptor_mode": "not-presented",
@@ -443,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
                         "stderr_byte_count": len(message.encode()),
                         "combined_output_truncated": False,
                         "termination_reason": "supervisor-refused",
+                        # A refusal happens before or instead of a teardown, so there is
+                        # nothing proven about the tree. Report that as unverified rather
+                        # than claiming a clean teardown that never ran.
+                        "teardown_verified": False,
+                        "teardown_conditions": ["supervisor-refused-before-teardown"],
                         "client_returncode": None,
                         "supervisor_exit_code": 70,
                     },

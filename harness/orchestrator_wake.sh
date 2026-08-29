@@ -589,10 +589,11 @@ expected_supervisor_keys = {
     "input_byte_count", "stdout_digest", "stdout_byte_count", "stderr_digest",
     "stderr_byte_count", "combined_output_truncated", "termination_reason",
     "client_returncode", "supervisor_exit_code",
+    "teardown_verified", "teardown_conditions",
 }
 if not isinstance(supervisor_receipt, dict) or set(supervisor_receipt) != expected_supervisor_keys:
     raise SystemExit("advisory supervisor receipt has unknown or missing fields")
-if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/3":
+if supervisor_receipt.get("schema_version") != "factory-advisory-supervisor-receipt/4":
     raise SystemExit("unsupported advisory supervisor receipt")
 digest_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
 for field in ("input_digest", "stdout_digest", "stderr_digest"):
@@ -611,6 +612,12 @@ if (
     not in {"read-only", "not-presented"}
     or not isinstance(supervisor_receipt.get("combined_output_truncated"), bool)
     or not isinstance(supervisor_receipt.get("termination_reason"), str)
+    or not isinstance(supervisor_receipt.get("teardown_verified"), bool)
+    or not isinstance(supervisor_receipt.get("teardown_conditions"), list)
+    or not all(
+        isinstance(condition, str)
+        for condition in supervisor_receipt.get("teardown_conditions", [])
+    )
     or (
         supervisor_receipt.get("client_returncode") is not None
         and (
