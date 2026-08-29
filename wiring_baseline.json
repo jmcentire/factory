@@ -36,10 +36,6 @@
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
   {
-    "finding": "zero-caller-export:factory_core/handover.py:DoneComposition",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
     "finding": "zero-caller-export:factory_core/handover.py:HandoverError",
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
@@ -109,10 +105,6 @@
   },
   {
     "finding": "zero-caller-export:factory_core/verdict.py:VerdictError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:verdict_rank",
     "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
   },
   {

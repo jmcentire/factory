@@ -555,6 +555,37 @@ def _parser() -> argparse.ArgumentParser:
         "--results", required=True, help="JSON array of BehavioralProbeResult"
     )
 
+    # Post-run audit of defects that survive on a PASS. Deliberately takes the same primary
+    # artifacts as `verdict` and re-derives, rather than parsing a serialised Verdict: a
+    # postmortem is derived from primary sources or it is fiction. Read-only and non-gating —
+    # it runs after disposition and can never narrow, block, or alter one.
+    audit = commands.add_parser(
+        "audit",
+        help="emit closed-vocabulary codes for defects that survive on a PASS "
+        "(non-gating; runs after disposition)",
+    )
+    audit.add_argument("--run-id", required=True, help="the run this audit describes")
+    audit.add_argument("--coverage", required=True, help="ratified coverage-map JSON")
+    audit.add_argument("--promotion", required=True, help="the promotion_verdict.json floor")
+    audit.add_argument("--frame-check", default="", help="frame-check result JSON")
+    audit.add_argument("--receipts", default="", help="characterization-receipt JSON array")
+    audit.add_argument("--assumptions", default="", help="assumption-record JSON array")
+    audit.add_argument("--handovers", default="", help="lane-handover JSON array")
+    audit.add_argument("--candidate", required=True, help="candidate digest (sha256:<hex>)")
+    audit.add_argument("--evaluated-position", required=True, type=int)
+    audit.add_argument("--validator", required=True, help="the validator seat identity")
+
+    # The read side. No minimum-N gate: every count carries its denominator instead, because
+    # withholding a signal until it is "significant" starves the runs that would make it so.
+    audit_table = commands.add_parser(
+        "audit-table",
+        help="frequency table over accumulated audit rows, every count carrying its "
+        "denominator and grouped by vocabulary digest",
+    )
+    audit_table.add_argument(
+        "--rows", required=True, help="JSON array of audit rows, or a .jsonl file"
+    )
+
     # FactoryOrchestrator.build_and_validate had no CLI door: the harness's shell-driven
     # choreography (dispatch_lane.sh + run-model + promote.sh in sequence) is what production
     # runs actually use, so this real, tested, single-call engine sat reachable only from
@@ -2117,6 +2148,76 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                     done_attestation_subject(composition, coverage, computed)
                 )
         _emit(payload)
+        return
+    if arguments.command == "audit":
+        from factory_core.audit import AuditReport, audit_run, vocabulary_digest
+        from factory_core.handover import Handover, compose_done
+        from factory_core.verdict import (
+            AssumptionRecord,
+            CharacterizationReceipt,
+            CoverageMap,
+            FrameCheckResult,
+            PromotionFloor,
+            compute_verdict,
+        )
+
+        coverage = CoverageMap.from_dict(_read_object(arguments.coverage))
+        promotion = PromotionFloor.from_dict(_read_object(arguments.promotion))
+        frame_check = (
+            FrameCheckResult.from_dict(_read_object(arguments.frame_check))
+            if arguments.frame_check
+            else None
+        )
+        computed = compute_verdict(
+            coverage,
+            promotion,
+            frame_check,
+            candidate_digest=arguments.candidate,
+            evaluated_position=arguments.evaluated_position,
+            receipts=tuple(
+                CharacterizationReceipt.from_dict(item)
+                for item in _read_array(arguments.receipts)
+            ),
+            assumptions=tuple(
+                AssumptionRecord.from_dict(item)
+                for item in _read_array(arguments.assumptions)
+            ),
+            validator=arguments.validator,
+        )
+        handovers = tuple(
+            Handover.from_dict(item) for item in _read_array(arguments.handovers)
+        )
+        composition = compose_done(
+            coverage, handovers, computed, validator=arguments.validator
+        )
+        audit_report: AuditReport = audit_run(
+            run_id=arguments.run_id,
+            coverage=coverage,
+            verdict=computed,
+            composition=composition,
+            handovers=handovers,
+        )
+        _emit(
+            {
+                "run_id": audit_report.run_id,
+                "codes": list(audit_report.codes),
+                "vocab_digest": vocabulary_digest(),
+                "rows": list(audit_report.rows()),
+                "gating": "none — this audit runs after disposition and narrows nothing",
+            }
+        )
+        return
+    if arguments.command == "audit-table":
+        from factory_core.audit import AuditError, frequency_table
+
+        try:
+            table = frequency_table(_read_array(arguments.rows))
+        except AuditError as error:
+            # A malformed row is a store-integrity problem, not a rendering problem. Refuse
+            # the whole table rather than emit a partial count: a table missing rows it
+            # could not parse reads exactly like a table of a quieter system.
+            raise SystemExit(f"audit-table: {error}") from error
+        _emit({"table": list(table)})
         return
     if arguments.command == "qualify":
         from factory_core.qualification import (
