@@ -928,10 +928,16 @@ def test_loopback_block_allocation_is_non_overlapping(tmp_path: Path, monkeypatc
 
 def _native_acceptance_catalog(
     tmp_path: Path,
-    argv: Sequence[str],
+    *,
+    candidate_launch: Sequence[str],
+    test_entrypoint: Sequence[str],
+    readiness_entrypoint: Sequence[str] = (),
+    readiness_timeout_seconds: float = 30.0,
+    readiness_interval_seconds: float = 0.5,
+    readiness_max_attempts: int = 120,
     test_assertions: Sequence[Mapping[str, str]] | None = None,
 ) -> Path:
-    """An acceptance catalog whose trigger binds a native-test execution identity.
+    """An acceptance catalog whose trigger binds a two-profile native-test execution identity.
 
     ``test_assertions`` lets a test bind an arbitrary number of ratified criteria so the generic
     catalog-input path can be exercised at counts other than one.
@@ -945,7 +951,14 @@ def _native_acceptance_catalog(
         test_assertions = [
             {"test_id": "native-suite", "assertion_digest": "sha256:" + ("7" * 64)}
         ]
-    execution = native_test_execution_digests(argv)
+    execution = native_test_execution_digests(
+        candidate_launch,
+        test_entrypoint,
+        readiness_entrypoint=readiness_entrypoint,
+        readiness_timeout_seconds=readiness_timeout_seconds,
+        readiness_interval_seconds=readiness_interval_seconds,
+        readiness_max_attempts=readiness_max_attempts,
+    )
     document = {
         "schema_version": "factory-acceptance-obligation-catalog/1",
         "catalog_id": "fixture-native-acceptance",
@@ -995,162 +1008,382 @@ def _native_acceptance_catalog(
     return path
 
 
-def test_native_test_execution_digests_bind_argv_exactly() -> None:
-    """Command/config digests track the exact argv; the environment digest is argv-independent."""
+def test_native_test_execution_digests_bind_all_argv() -> None:
+    """Command/config digests track every exact argv; the environment digest is argv-independent."""
 
-    a = native_test_execution_digests(["make", "test"])
-    b = native_test_execution_digests(["make", "test"])
-    c = native_test_execution_digests(["make", "acceptance"])
+    a = native_test_execution_digests(["python", "server.py"], ["make", "test"])
+    b = native_test_execution_digests(["python", "server.py"], ["make", "test"])
+    c = native_test_execution_digests(["python", "server.py"], ["make", "acceptance"])
+    d = native_test_execution_digests(["python", "other.py"], ["make", "test"])
+    e = native_test_execution_digests(
+        ["python", "server.py"], ["make", "test"], readiness_entrypoint=["python", "ready.py"]
+    )
     assert a.digests == b.digests  # deterministic
-    assert a.command_digest != c.command_digest  # argv-sensitive
-    assert a.configuration_digest != c.configuration_digest
-    assert a.environment_digest == c.environment_digest  # environment contract is generic
-    for bad in ([], [""], ["make", ""]):
-        with pytest.raises(ValueError):
-            native_test_execution_digests(bad)
+    assert a.command_digest != c.command_digest  # test argv-sensitive
+    assert a.command_digest != d.command_digest  # candidate argv-sensitive
+    assert a.command_digest != e.command_digest  # readiness argv-sensitive
+    assert a.configuration_digest != e.configuration_digest
+    assert a.environment_digest == c.environment_digest == e.environment_digest  # generic env
+    # Both required argvs must be non-empty; readiness is optional but rejects empty parts.
+    with pytest.raises(ValueError):
+        native_test_execution_digests([], ["make", "test"])
+    with pytest.raises(ValueError):
+        native_test_execution_digests(["python", "server.py"], [])
+    with pytest.raises(ValueError):
+        native_test_execution_digests(["python", "server.py"], ["make", ""])
+    with pytest.raises(ValueError):
+        native_test_execution_digests(
+            ["python", "server.py"], ["make", "test"], readiness_entrypoint=["ready", ""]
+        )
 
 
-# A candidate-shipped checker proving the generic executor contract: argv-only, cwd rooted at the
-# materialized candidate, closed env exposing exactly the declared keys + the loopback grant,
-# both artifacts materialized, and an output-evidence directory it may write.
-_NATIVE_CHECK = """\
-import json, os, socket, sys
+# Two disjoint profiles. The candidate (Profile A) binds the declared loopback port and probes that
+# it cannot read the sibling test root; the test (Profile B) connects over loopback and probes that
+# it cannot read the sibling candidate root, and derives the ratified assertions from the catalog.
+_CANDIDATE_SERVER = '''
+import json, os, socket
 from pathlib import Path
-
 cand = Path(os.environ["FACTORY_CANDIDATE_DIR"])
-tests = Path(os.environ["FACTORY_TEST_DIR"])
-out = Path(os.environ["FACTORY_OUTPUT_DIR"])
-problems = []
-if Path.cwd() != cand:
-    problems.append(f"cwd {Path.cwd()} != candidate {cand}")
-if not (cand / "artifact" / "candidate.py").is_file():
-    problems.append("candidate artifact not materialized")
-if not (tests / "tests" / "test_candidate.py").is_file():
-    problems.append("sealed tester not materialized")
-# The single ratified catalog must be materialized and reachable through one declared path var,
-# and the target must be able to derive its per-criterion assertions with no hardcoded count.
-acceptance_digests = {}
-catalog_env = os.environ.get("FACTORY_ACCEPTANCE_CATALOG", "")
-if not catalog_env:
-    problems.append("acceptance catalog path not exposed")
-elif not Path(catalog_env).is_file():
-    problems.append("acceptance catalog not materialized")
-else:
-    catalog = json.loads(Path(catalog_env).read_text())
-    for trigger in catalog.get("triggers", []):
-        for obligation in trigger.get("obligations", []):
-            for item in obligation.get("test_assertions", []):
-                acceptance_digests[str(item["test_id"])] = str(item["assertion_digest"])
-    if not acceptance_digests:
-        problems.append("no ratified test assertions readable from catalog")
-tcp = os.environ.get("FACTORY_LOOPBACK_TCP_PORTS", "")
-if not tcp:
-    problems.append("loopback grant not exposed")
-else:
-    port = int(tcp.split(",")[0])
-    s = socket.socket()
+out = Path(os.environ["FACTORY_OUTPUT_DIR"]); out.mkdir(parents=True, exist_ok=True)
+sibling = cand.parent / "test"
+try:
+    list(sibling.iterdir()); test_read = "ALLOWED"
+except OSError as exc:
+    test_read = "denied:%s" % (exc.errno,)
+try:
+    (sibling / "acceptance-catalog.json").read_text(); catalog_read = "ALLOWED"
+except OSError as exc:
+    catalog_read = "denied:%s" % (exc.errno,)
+(out / "candidate-probe.json").write_text(
+    json.dumps({"test_root_read": test_read, "catalog_read": catalog_read})
+)
+port = int(os.environ["FACTORY_LOOPBACK_TCP_PORTS"].split(",")[0])
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(8)
+while True:
+    conn, _ = srv.accept()
     try:
-        s.bind(("127.0.0.1", port))  # the declared grant must permit this for the whole attempt
-    except OSError as exc:
-        problems.append(f"grant bind failed: {exc}")
+        conn.sendall(b"READY\\n"); data = conn.recv(64); conn.sendall(b"ECHO:" + data)
     finally:
-        s.close()
-# external egress must stay denied even during native test
+        conn.close()
+'''
+
+# A candidate that delays binding, so a readiness gate must retry before the test can connect.
+_CANDIDATE_DELAYED = 'import time\ntime.sleep(2.5)\n' + _CANDIDATE_SERVER
+
+# A candidate that never binds (stays alive) — a readiness gate must time out, not hang forever.
+_CANDIDATE_IDLE = '''
+import time
+while True:
+    time.sleep(1)
+'''
+
+# A candidate that exits immediately — readiness must detect early candidate exit.
+_CANDIDATE_EXIT = 'import sys\nsys.exit(3)\n'
+
+_RUN_TESTS = '''
+import errno, json, os, socket, time
+from pathlib import Path
+tests = Path(os.environ["FACTORY_TEST_DIR"])
+out = Path(os.environ["FACTORY_OUTPUT_DIR"]); out.mkdir(parents=True, exist_ok=True)
+problems = []
+sibling = tests.parent / "candidate"
+try:
+    list(sibling.iterdir()); problems.append("candidate_root readable from test")
+except OSError:
+    pass
+catalog = json.loads(Path(os.environ["FACTORY_ACCEPTANCE_CATALOG"]).read_text())
+digests = {
+    str(i["test_id"]): str(i["assertion_digest"])
+    for t in catalog["triggers"] for o in t["obligations"] for i in o["test_assertions"]
+}
+port = int(os.environ["FACTORY_LOOPBACK_TCP_PORTS"].split(",")[0])
+deadline = time.time() + 15; hello = b""
+while time.time() < deadline:
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        hello = s.recv(64); s.sendall(b"ping"); s.recv(64); s.close(); break
+    except OSError:
+        time.sleep(0.2)
+if hello != b"READY\\n":
+    problems.append("candidate not reachable over loopback")
 ext = socket.socket(); ext.settimeout(2)
 try:
-    ext.connect(("192.0.2.1", 9))
-    problems.append("external egress was NOT denied")
+    ext.connect(("192.0.2.1", 9)); problems.append("external egress not denied")
 except OSError as exc:
-    import errno
     if exc.errno not in (errno.EPERM, errno.EACCES):
-        problems.append(f"external egress not sandbox-denied: {exc.errno}")
+        problems.append("egress errno %s" % (exc.errno,))
 finally:
     ext.close()
-out.mkdir(parents=True, exist_ok=True)
-(out / "acceptance-obligation-observations.json").write_text(
-    json.dumps({"problems": problems, "acceptance_digests": acceptance_digests}),
-    encoding="utf-8",
+(out / "observations.json").write_text(
+    json.dumps({"problems": problems, "acceptance_digests": digests})
 )
-sys.exit(1 if problems else 0)
-"""
+raise SystemExit(1 if problems else 0)
+'''
+
+# Readiness probe (test-side): reachable candidate -> exit 0. Never reads the candidate tree.
+_READY = '''
+import os, socket, sys
+port = int(os.environ["FACTORY_LOOPBACK_TCP_PORTS"].split(",")[0])
+try:
+    s = socket.create_connection(("127.0.0.1", port), timeout=1); s.recv(16); s.close()
+except OSError:
+    sys.exit(1)
+sys.exit(0)
+'''
+
+_CANDIDATE_LAUNCH = (sys.executable, "candidate_server.py")
+_TEST_ENTRY = (sys.executable, "run_tests.py")
+_READY_ENTRY = (sys.executable, "check_ready.py")
 
 
-@pytest.mark.isolation_integration
-def test_native_test_executor_runs_target_argv_under_grant(tmp_path: Path) -> None:
-    """The Validator materializes artifacts, exposes only the loopback grant, and runs the
-    target's argv (argv-only) rooted in the candidate workspace — no candidate launch itself."""
+def _stage_native_target(
+    tmp_path: Path,
+    *,
+    candidate_source: str = _CANDIDATE_SERVER,
+    with_readiness: bool = False,
+) -> tuple[Path, Path]:
+    """Materialize a sealed Coder candidate tree and a sealed Tester test tree (disjoint roots)."""
 
-    root = temporary_build_loop_root(tmp_path)
-    argv = (sys.executable, "native_check.py")
-    # Bind several ratified criteria to prove the generic catalog-input path scales past one.
-    ratified_assertions = [
-        {"test_id": f"native-suite-{n}", "assertion_digest": "sha256:" + (str(n) * 64)}
-        for n in range(1, 4)
-    ]
-    expected_digests = {
-        item["test_id"]: item["assertion_digest"] for item in ratified_assertions
-    }
-    acceptance_catalog_path = _native_acceptance_catalog(
-        tmp_path, argv, test_assertions=ratified_assertions
+    coder = tmp_path / "sealed-coder"
+    tester = tmp_path / "sealed-tester"
+    coder.mkdir(parents=True)
+    tester.mkdir(parents=True)
+    (coder / "candidate_server.py").write_text(candidate_source, encoding="utf-8")
+    (tester / "run_tests.py").write_text(_RUN_TESTS, encoding="utf-8")
+    if with_readiness:
+        (tester / "check_ready.py").write_text(_READY, encoding="utf-8")
+    return coder, tester
+
+
+def _expected_execution(
+    candidate_launch: Sequence[str],
+    test_entrypoint: Sequence[str],
+    readiness_entrypoint: Sequence[str] = (),
+    readiness_timeout_seconds: float = 30.0,
+    readiness_interval_seconds: float = 0.5,
+    readiness_max_attempts: int = 120,
+) -> dict[str, str]:
+    execution = native_test_execution_digests(
+        candidate_launch,
+        test_entrypoint,
+        readiness_entrypoint=readiness_entrypoint,
+        readiness_timeout_seconds=readiness_timeout_seconds,
+        readiness_interval_seconds=readiness_interval_seconds,
+        readiness_max_attempts=readiness_max_attempts,
     )
-    execution = native_test_execution_digests(argv)
-    expected_execution = {
+    return {
         "command_digest": execution.command_digest,
         "configuration_digest": execution.configuration_digest,
         "environment_digest": execution.environment_digest,
     }
-    coder = tmp_path / "sealed-coder"
-    tester = tmp_path / "sealed-tester"
-    (coder / "artifact").mkdir(parents=True)
-    (coder / "native_check.py").write_text(_NATIVE_CHECK, encoding="utf-8")
-    (coder / "artifact" / "candidate.py").write_text("value = 1\n", encoding="utf-8")
-    (tester / "tests").mkdir(parents=True)
-    (tester / "tests" / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+
+
+@pytest.mark.isolation_integration
+def test_native_two_profile_isolation_and_loopback(tmp_path: Path) -> None:
+    """Candidate and test run in disjoint profiles, communicate only over the declared loopback,
+    neither can read the other's tree, and the test derives every ratified criterion (no readiness
+    declared: the harness self-retries)."""
+
+    root = temporary_build_loop_root(tmp_path)
+    coder, tester = _stage_native_target(tmp_path)
+    ratified_assertions = [
+        {"test_id": f"native-suite-{n}", "assertion_digest": "sha256:" + (str(n) * 64)}
+        for n in range(1, 4)
+    ]
+    expected_digests = {a["test_id"]: a["assertion_digest"] for a in ratified_assertions}
+    catalog = _native_acceptance_catalog(
+        tmp_path,
+        candidate_launch=_CANDIDATE_LAUNCH,
+        test_entrypoint=_TEST_ENTRY,
+        test_assertions=ratified_assertions,
+    )
 
     result = IsolatedBuildLoop(root).execute(
         build_input_path=FIXTURES / "build-input.json",
         coder_command=(),
         tester_command=(),
-        validator_command=argv,
-        acceptance_catalog_path=acceptance_catalog_path,
+        validator_command=_TEST_ENTRY,
+        acceptance_catalog_path=catalog,
         prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
         candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
-        native_test_entrypoint=argv,
-        before_validation=lambda *_: {"validator_execution": expected_execution},
+        candidate_launch=_CANDIDATE_LAUNCH,
+        native_test_entrypoint=_TEST_ENTRY,
+        before_validation=lambda *_: {
+            "validator_execution": _expected_execution(_CANDIDATE_LAUNCH, _TEST_ENTRY)
+        },
     )
 
     observations = json.loads(
-        (result.validator.output_directory / "acceptance-obligation-observations.json").read_text()
+        (result.validator.output_directory / "test" / "observations.json").read_text()
     )
     assert observations["problems"] == [], observations["problems"]
-    # The target read every ratified criterion from the materialized catalog — no hardcoded count.
     assert observations["acceptance_digests"] == expected_digests
+    candidate_probe = json.loads(
+        (result.validator.output_directory / "candidate" / "candidate-probe.json").read_text()
+    )
+    assert candidate_probe["test_root_read"].startswith("denied"), candidate_probe
+    assert candidate_probe["catalog_read"].startswith("denied"), candidate_probe
     assert result.validator.succeeded
     assert result.passed is True
 
 
 @pytest.mark.isolation_integration
-def test_native_test_executor_refuses_unratified_argv(tmp_path: Path) -> None:
-    """The catalog must authorize the exact native argv; a mismatch fails closed."""
+def test_native_readiness_gate_success(tmp_path: Path) -> None:
+    """A declared readiness argv retries a slow-binding candidate, then the test runs and passes."""
 
     root = temporary_build_loop_root(tmp_path)
-    ratified = (sys.executable, "native_check.py")
-    acceptance_catalog_path = _native_acceptance_catalog(tmp_path, ratified)
-    coder = tmp_path / "sealed-coder"
-    tester = tmp_path / "sealed-tester"
-    (coder / "artifact").mkdir(parents=True)
-    (coder / "artifact" / "candidate.py").write_text("value = 1\n", encoding="utf-8")
-    (tester / "tests").mkdir(parents=True)
-    (tester / "tests" / "test_candidate.py").write_text("assert True\n", encoding="utf-8")
+    coder, tester = _stage_native_target(
+        tmp_path, candidate_source=_CANDIDATE_DELAYED, with_readiness=True
+    )
+    catalog = _native_acceptance_catalog(
+        tmp_path,
+        candidate_launch=_CANDIDATE_LAUNCH,
+        test_entrypoint=_TEST_ENTRY,
+        readiness_entrypoint=_READY_ENTRY,
+    )
+    result = IsolatedBuildLoop(root).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=_TEST_ENTRY,
+        acceptance_catalog_path=catalog,
+        prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+        candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        candidate_launch=_CANDIDATE_LAUNCH,
+        native_test_entrypoint=_TEST_ENTRY,
+        native_readiness_entrypoint=_READY_ENTRY,
+        before_validation=lambda *_: {
+            "validator_execution": _expected_execution(
+                _CANDIDATE_LAUNCH, _TEST_ENTRY, _READY_ENTRY
+            )
+        },
+    )
+    evidence = json.loads(
+        (result.validator.output_directory / "test" / "native-readiness.json").read_text()
+    )
+    assert evidence["outcome"] == "ready", evidence
+    assert result.passed is True
 
+
+@pytest.mark.isolation_integration
+def test_native_readiness_timeout_is_evidenced(tmp_path: Path) -> None:
+    """A candidate that never serves makes readiness time out; the test is skipped and evidenced."""
+
+    root = temporary_build_loop_root(tmp_path)
+    coder, tester = _stage_native_target(
+        tmp_path, candidate_source=_CANDIDATE_IDLE, with_readiness=True
+    )
+    catalog = _native_acceptance_catalog(
+        tmp_path,
+        candidate_launch=_CANDIDATE_LAUNCH,
+        test_entrypoint=_TEST_ENTRY,
+        readiness_entrypoint=_READY_ENTRY,
+        readiness_timeout_seconds=2.0,
+        readiness_interval_seconds=0.3,
+        readiness_max_attempts=6,
+    )
+    result = IsolatedBuildLoop(root).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=_TEST_ENTRY,
+        acceptance_catalog_path=catalog,
+        prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+        candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        candidate_launch=_CANDIDATE_LAUNCH,
+        native_test_entrypoint=_TEST_ENTRY,
+        native_readiness_entrypoint=_READY_ENTRY,
+        native_readiness_timeout_seconds=2.0,
+        native_readiness_interval_seconds=0.3,
+        native_readiness_max_attempts=6,
+        before_validation=lambda *_: {
+            "validator_execution": _expected_execution(
+                _CANDIDATE_LAUNCH, _TEST_ENTRY, _READY_ENTRY,
+                readiness_timeout_seconds=2.0,
+                readiness_interval_seconds=0.3,
+                readiness_max_attempts=6,
+            )
+        },
+    )
+    evidence = json.loads(
+        (result.validator.output_directory / "test" / "native-readiness.json").read_text()
+    )
+    assert evidence["outcome"] == "readiness-timeout", evidence
+    # The test entrypoint never ran, so it left no observations.
+    assert not (result.validator.output_directory / "test" / "observations.json").exists()
+    assert result.validator.succeeded is False
+    assert result.passed is False
+
+
+@pytest.mark.isolation_integration
+def test_native_readiness_detects_early_candidate_exit(tmp_path: Path) -> None:
+    """If the candidate exits before serving, readiness reports candidate-early-exit and stops."""
+
+    root = temporary_build_loop_root(tmp_path)
+    coder, tester = _stage_native_target(
+        tmp_path, candidate_source=_CANDIDATE_EXIT, with_readiness=True
+    )
+    catalog = _native_acceptance_catalog(
+        tmp_path,
+        candidate_launch=_CANDIDATE_LAUNCH,
+        test_entrypoint=_TEST_ENTRY,
+        readiness_entrypoint=_READY_ENTRY,
+        readiness_timeout_seconds=5.0,
+        readiness_interval_seconds=0.3,
+        readiness_max_attempts=20,
+    )
+    result = IsolatedBuildLoop(root).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=_TEST_ENTRY,
+        acceptance_catalog_path=catalog,
+        prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+        candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        candidate_launch=_CANDIDATE_LAUNCH,
+        native_test_entrypoint=_TEST_ENTRY,
+        native_readiness_entrypoint=_READY_ENTRY,
+        native_readiness_timeout_seconds=5.0,
+        native_readiness_interval_seconds=0.3,
+        native_readiness_max_attempts=20,
+        before_validation=lambda *_: {
+            "validator_execution": _expected_execution(
+                _CANDIDATE_LAUNCH, _TEST_ENTRY, _READY_ENTRY,
+                readiness_timeout_seconds=5.0,
+                readiness_interval_seconds=0.3,
+                readiness_max_attempts=20,
+            )
+        },
+    )
+    evidence = json.loads(
+        (result.validator.output_directory / "test" / "native-readiness.json").read_text()
+    )
+    assert evidence["outcome"] == "candidate-early-exit", evidence
+    assert result.passed is False
+
+
+@pytest.mark.isolation_integration
+def test_native_test_executor_refuses_unratified_argv(tmp_path: Path) -> None:
+    """The catalog must authorize the exact native argvs; a test-entry mismatch fails closed."""
+
+    root = temporary_build_loop_root(tmp_path)
+    coder, tester = _stage_native_target(tmp_path)
+    # The catalog binds the ratified test entrypoint; the run declares a different one.
+    catalog = _native_acceptance_catalog(
+        tmp_path, candidate_launch=_CANDIDATE_LAUNCH, test_entrypoint=_TEST_ENTRY
+    )
     with pytest.raises(LaneError, match="does not authorize Validator"):
         IsolatedBuildLoop(root).execute(
             build_input_path=FIXTURES / "build-input.json",
             coder_command=(),
             tester_command=(),
-            validator_command=ratified,
-            acceptance_catalog_path=acceptance_catalog_path,
+            validator_command=_TEST_ENTRY,
+            acceptance_catalog_path=catalog,
             prebuilt_author_outputs={LaneRole.CODER: coder, LaneRole.TESTER: tester},
+            candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+            candidate_launch=_CANDIDATE_LAUNCH,
             native_test_entrypoint=(sys.executable, "other_entry.py"),  # not what the catalog bound
             before_validation=lambda *_: {"validator_execution": {}},
         )

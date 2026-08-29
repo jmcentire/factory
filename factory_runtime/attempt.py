@@ -66,7 +66,15 @@ class FactoryAttemptConfig:
         # A target that exercises a networked candidate declares the loopback endpoint shape it
         # needs (the Validator-only declared-loopback grant); targets without networking omit it.
         # A target may also declare a native acceptance-test argv the Validator runs generically.
-        optional = {"candidate_loopback", "test_entrypoint"}
+        optional = {
+            "candidate_loopback",
+            "test_entrypoint",
+            "readiness_entrypoint",
+            "readiness_timeout_seconds",
+            "readiness_interval_seconds",
+            "readiness_max_attempts",
+            "runtime_read_paths",
+        }
         if document.get("schema_version") == "factory-attempt/1":
             raise AttemptContractError(
                 "attempt config factory-attempt/1 predates the sealed candidate runtime/launch "
@@ -112,6 +120,27 @@ class FactoryAttemptConfig:
         native_test_entrypoint = tuple(
             _string(item, "test entrypoint argument")
             for item in _array(document.get("test_entrypoint", []), "test entrypoint")
+        )
+        native_readiness_entrypoint = tuple(
+            _string(item, "readiness entrypoint argument")
+            for item in _array(document.get("readiness_entrypoint", []), "readiness entrypoint")
+        )
+        if native_readiness_entrypoint and not native_test_entrypoint:
+            raise AttemptContractError(
+                "readiness_entrypoint requires a test_entrypoint to gate"
+            )
+        native_readiness_timeout_seconds = _positive_number(
+            document.get("readiness_timeout_seconds", 30.0), "readiness_timeout_seconds"
+        )
+        native_readiness_interval_seconds = _positive_number(
+            document.get("readiness_interval_seconds", 0.5), "readiness_interval_seconds"
+        )
+        native_readiness_max_attempts = _nonnegative(
+            document.get("readiness_max_attempts", 120), "readiness_max_attempts"
+        )
+        native_runtime_read_paths = tuple(
+            _absolute_directory(item, "runtime read path")
+            for item in _array(document.get("runtime_read_paths", []), "runtime read paths")
         )
         if candidate_loopback and not (candidate_launch or native_test_entrypoint):
             raise AttemptContractError(
@@ -176,6 +205,11 @@ class FactoryAttemptConfig:
             candidate_launch=candidate_launch,
             candidate_loopback=candidate_loopback,
             native_test_entrypoint=native_test_entrypoint,
+            native_readiness_entrypoint=native_readiness_entrypoint,
+            native_readiness_timeout_seconds=native_readiness_timeout_seconds,
+            native_readiness_interval_seconds=native_readiness_interval_seconds,
+            native_readiness_max_attempts=native_readiness_max_attempts,
+            native_runtime_read_paths=native_runtime_read_paths,
         )
         return cls(source_digest=digest_bytes(raw), invocation=invocation)
 
@@ -235,6 +269,11 @@ class FactoryAttemptInvocation:
     candidate_launch: tuple[str, ...] = ()
     candidate_loopback: tuple[Mapping[str, object], ...] = ()
     native_test_entrypoint: tuple[str, ...] = ()
+    native_readiness_entrypoint: tuple[str, ...] = ()
+    native_readiness_timeout_seconds: float = 30.0
+    native_readiness_interval_seconds: float = 0.5
+    native_readiness_max_attempts: int = 120
+    native_runtime_read_paths: tuple[Path, ...] = ()
 
 
 class FactoryAttemptExecutor:
@@ -299,6 +338,11 @@ class FactoryAttemptExecutor:
             candidate_launch=values.candidate_launch,
             candidate_loopback=values.candidate_loopback,
             native_test_entrypoint=values.native_test_entrypoint,
+            native_readiness_entrypoint=values.native_readiness_entrypoint,
+            native_readiness_timeout_seconds=values.native_readiness_timeout_seconds,
+            native_readiness_interval_seconds=values.native_readiness_interval_seconds,
+            native_readiness_max_attempts=values.native_readiness_max_attempts,
+            native_runtime_read_paths=values.native_runtime_read_paths,
             changed_existing_tests=values.changed_existing_tests,
             test_change_authorization_path=values.test_change_authorization_path,
             test_change_human_receipt_path=values.test_change_human_receipt_path,
@@ -351,6 +395,22 @@ def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise AttemptContractError(f"{label} must be a boolean")
     return value
+
+
+def _positive_number(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise AttemptContractError(f"{label} must be a positive number")
+    return float(value)
+
+
+def _absolute_directory(value: object, label: str) -> Path:
+    text = _string(value, label)
+    path = Path(text)
+    if not path.is_absolute():
+        raise AttemptContractError(f"{label} must be an absolute path")
+    if not path.is_dir():
+        raise AttemptContractError(f"{label} must be an existing directory: {path}")
+    return path.resolve()
 
 
 def _candidate_loopback(value: object) -> tuple[Mapping[str, object], ...]:

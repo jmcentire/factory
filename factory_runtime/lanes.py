@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from factory_runtime.isolation import (
     LoopbackGrant,
     MacOSSandbox,
     NetworkPolicy,
+    SandboxProcessHandle,
 )
 from factory_runtime.loopback_endpoints import (
     EndpointSpec,
@@ -37,8 +39,8 @@ from factory_runtime.loopback_endpoints import (
 )
 from factory_runtime.native_test import (
     ACCEPTANCE_CATALOG_FILENAME,
-    CANDIDATE_SUBDIR,
-    TESTER_SUBDIR,
+    CANDIDATE_ROOT_NAME,
+    TEST_ROOT_NAME,
     NativeTestExecution,
     native_test_execution_digests,
 )
@@ -83,6 +85,19 @@ class IsolationBackend(Protocol):
         network_policy: NetworkPolicy = ...,
         reap_process_group: bool = ...,
     ) -> IsolatedProcessResult: ...
+
+    def spawn(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        stdout_path: str | Path,
+        stderr_path: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: dict[str, str] | None = None,
+        network_policy: NetworkPolicy = ...,
+    ) -> SandboxProcessHandle: ...
 
 
 @dataclass(frozen=True)
@@ -360,6 +375,11 @@ class IsolatedBuildLoop:
         candidate_launch: Sequence[str] = (),
         candidate_loopback: Sequence[Mapping[str, object]] = (),
         native_test_entrypoint: Sequence[str] = (),
+        native_readiness_entrypoint: Sequence[str] = (),
+        native_readiness_timeout_seconds: float = 30.0,
+        native_readiness_interval_seconds: float = 0.5,
+        native_readiness_max_attempts: int = 120,
+        native_runtime_read_paths: Sequence[str | Path] = (),
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
         ]
@@ -413,10 +433,22 @@ class IsolatedBuildLoop:
             trigger = acceptance_catalog.select("validating", "preview")
             if native_argv:
                 # Target-agnostic native-test executor: the ratified execution identity is the
-                # target-declared argv + the generic executor contract, not a frozen Factory
-                # Python source. The Validator will materialize artifacts, expose only the
-                # declared loopback grant, and run the argv.
-                native_execution = native_test_execution_digests(native_argv)
+                # target-declared candidate-launch, optional readiness, and test argvs + the
+                # generic two-profile executor contract, not a frozen Factory Python source. The
+                # Validator materializes the candidate and test into disjoint roots, exposes only
+                # the declared loopback grant, and runs each argv in its own profile.
+                if not candidate_launch:
+                    raise LaneError(
+                        "native test execution requires a declared candidate launch argv"
+                    )
+                native_execution = native_test_execution_digests(
+                    candidate_launch,
+                    native_argv,
+                    readiness_entrypoint=native_readiness_entrypoint,
+                    readiness_timeout_seconds=native_readiness_timeout_seconds,
+                    readiness_interval_seconds=native_readiness_interval_seconds,
+                    readiness_max_attempts=native_readiness_max_attempts,
+                )
                 execution_digests = native_execution.digests
             else:
                 frozen_validator = freeze_validator_execution(
@@ -425,7 +457,7 @@ class IsolatedBuildLoop:
                     validator_trusted_paths,
                 )
                 execution_digests = frozen_validator.capture.digests
-        except (json.JSONDecodeError, AcceptanceObligationError) as exc:
+        except (json.JSONDecodeError, AcceptanceObligationError, ValueError) as exc:
             raise LaneError(f"Validator execution contract is invalid: {exc}") from exc
         actual_execution = dict(
             zip(
@@ -541,6 +573,7 @@ class IsolatedBuildLoop:
             candidate_launch=tuple(str(part) for part in candidate_launch),
             candidate_loopback=tuple(dict(spec) for spec in candidate_loopback),
             native_execution=native_execution,
+            native_runtime_read_paths=tuple(native_runtime_read_paths),
         )
         return ValidationExecution(
             coder=coder_result,
@@ -690,68 +723,173 @@ class IsolatedBuildLoop:
         native_execution: NativeTestExecution,
         candidate_loopback: Sequence[Mapping[str, object]],
         acceptance_catalog_bytes: bytes,
+        runtime_read_paths: Sequence[str | Path] = (),
     ) -> LaneExecution:
-        """Run the target's declared native acceptance argv, target-agnostically.
+        """Run the target's declared acceptance suite in two disjoint Seatbelt profiles.
 
-        Materialize the reviewed candidate, the sealed Tester artifact, and the single ratified
-        acceptance-obligation catalog into a fresh workspace, expose only the declared loopback
-        grant, and run the exact argv (no shell) rooted at the candidate tree with a closed,
-        declared environment. The target reads its ratified per-criterion assertions from the
-        materialized catalog through one declared path variable; the Factory encodes no criterion
-        count or individual digest here. The whole process group is reaped and the loopback block
-        is proven leak-free on exit. The Factory learns nothing target-specific and never launches
-        the candidate or any fixture — the argv owns that.
+        The Coder candidate and the Tester artifact are materialized into *separate* roots. The
+        Validator launches and supervises the candidate in Profile A (reads the candidate root +
+        declared read-only runtime, binds the declared loopback grant) and runs the target's
+        readiness (optional) and test argvs in Profile B (reads the test root + acceptance catalog
+        + runtime, connects the grant). No filesystem path crosses between them: the candidate
+        never sees the test tree and the test never sees the candidate tree — they communicate only
+        through the declared loopback endpoints. Readiness is a target-declared argv whose exit code
+        is the only signal the Factory reads (it parses no protocol). Both process groups are reaped
+        and the loopback block is proven leak-free on exit. The Factory learns nothing
+        target-specific and the target owns every launch.
         """
 
         coder = verify_frozen_tree(coder.directory, expected_digest=coder.digest)
         tester = verify_frozen_tree(tester.directory, expected_digest=tester.digest)
-        workspace = lane / "native-test-workspace"
-        candidate_dir = workspace / CANDIDATE_SUBDIR
-        tester_dir = workspace / TESTER_SUBDIR
-        _copy_regular_tree(coder.files_directory, candidate_dir)
-        _copy_regular_tree(tester.files_directory, tester_dir)
-        catalog_path = workspace / ACCEPTANCE_CATALOG_FILENAME
-        catalog_path.write_bytes(acceptance_catalog_bytes)
+        candidate_root = lane / CANDIDATE_ROOT_NAME
+        test_root = lane / TEST_ROOT_NAME
+        _copy_regular_tree(coder.files_directory, candidate_root)
+        _copy_regular_tree(tester.files_directory, test_root)
+        (test_root / ACCEPTANCE_CATALOG_FILENAME).write_bytes(acceptance_catalog_bytes)
+        catalog_path = test_root / ACCEPTANCE_CATALOG_FILENAME
 
-        environment = {
-            "HOME": str(workspace),
-            "TMPDIR": str(workspace),
-            "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            "LANG": "C.UTF-8",
-            "LC_ALL": "C.UTF-8",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "FACTORY_OUTPUT_DIR": str(output),
-            "FACTORY_CANDIDATE_DIR": str(candidate_dir),
-            "FACTORY_TEST_DIR": str(tester_dir),
-            "FACTORY_ACCEPTANCE_CATALOG": str(catalog_path),
-        }
-        argv = list(native_execution.test_entrypoint)
+        candidate_output = output / "candidate"
+        test_output = output / "test"
+        candidate_output.mkdir(parents=True)
+        test_output.mkdir(parents=True)
+
+        runtime_roots = tuple(Path(path).resolve() for path in runtime_read_paths)
         specs = [EndpointSpec.from_dict(spec) for spec in candidate_loopback]
 
-        def run(network_policy: NetworkPolicy) -> IsolatedProcessResult:
-            return self.sandbox.run(
-                argv,
-                cwd=candidate_dir,
-                readable_paths=(workspace,),
-                writable_paths=(workspace, output),
-                environment=environment,
-                network_policy=network_policy,
-                reap_process_group=True,
+        def candidate_env(ports: Mapping[str, str]) -> dict[str, str]:
+            return {
+                "FACTORY_OUTPUT_DIR": str(candidate_output),
+                "FACTORY_CANDIDATE_DIR": str(candidate_root),
+                "FACTORY_ICE_HOST": "127.0.0.1",
+                **ports,
+            }
+
+        def test_env(ports: Mapping[str, str], *, with_catalog: bool) -> dict[str, str]:
+            env = {
+                "FACTORY_OUTPUT_DIR": str(test_output),
+                "FACTORY_TEST_DIR": str(test_root),
+                "FACTORY_ICE_HOST": "127.0.0.1",
+                **ports,
+            }
+            if with_catalog:
+                env["FACTORY_ACCEPTANCE_CATALOG"] = str(catalog_path)
+            return env
+
+        def drive(policy: NetworkPolicy, ports: Mapping[str, str]) -> IsolatedProcessResult:
+            handle = self.sandbox.spawn(
+                native_execution.candidate_launch,
+                cwd=candidate_root,
+                stdout_path=candidate_output / "candidate.stdout.log",
+                stderr_path=candidate_output / "candidate.stderr.log",
+                readable_paths=(candidate_root, *runtime_roots),
+                writable_paths=(candidate_root, candidate_output),
+                environment=candidate_env(ports),
+                network_policy=policy,
             )
+            try:
+                if native_execution.has_readiness:
+                    disposition = self._await_native_readiness(
+                        handle=handle,
+                        native_execution=native_execution,
+                        test_root=test_root,
+                        readiness_output=test_output,
+                        runtime_roots=runtime_roots,
+                        policy=policy,
+                        env=test_env(ports, with_catalog=False),
+                    )
+                    if disposition is not None:
+                        return disposition
+                return self.sandbox.run(
+                    native_execution.test_entrypoint,
+                    cwd=test_root,
+                    readable_paths=(test_root, *runtime_roots),
+                    writable_paths=(test_root, test_output),
+                    environment=test_env(ports, with_catalog=True),
+                    network_policy=policy,
+                    reap_process_group=True,
+                )
+            finally:
+                handle.reap()
 
         if specs:
             with reserve_loopback_endpoints(specs) as reservation:
                 policy = NetworkPolicy.declared_loopback(_loopback_grants(specs, reservation))
-                environment["FACTORY_LOOPBACK_TCP_PORTS"] = ",".join(
-                    str(port) for port in reservation.tcp_ports
-                )
-                environment["FACTORY_LOOPBACK_UDP_PORTS"] = ",".join(
-                    str(port) for port in reservation.udp_ports
-                )
-                process = run(policy)
+                ports = {
+                    "FACTORY_LOOPBACK_TCP_PORTS": ",".join(
+                        str(port) for port in reservation.tcp_ports
+                    ),
+                    "FACTORY_LOOPBACK_UDP_PORTS": ",".join(
+                        str(port) for port in reservation.udp_ports
+                    ),
+                }
+                process = drive(policy, ports)
         else:
-            process = run(DENY_ALL_NETWORK)
+            process = drive(DENY_ALL_NETWORK, {})
         return LaneExecution(role=LaneRole.VALIDATOR, process=process, output_directory=output)
+
+    def _await_native_readiness(
+        self,
+        *,
+        handle: SandboxProcessHandle,
+        native_execution: NativeTestExecution,
+        test_root: Path,
+        readiness_output: Path,
+        runtime_roots: tuple[Path, ...],
+        policy: NetworkPolicy,
+        env: dict[str, str],
+    ) -> IsolatedProcessResult | None:
+        """Gate the test on the target-declared readiness argv; return a failure result or ``None``.
+
+        The Factory reads only the readiness exit code (0 == ready), retrying under the declared
+        bounds. It also detects early candidate exit. On success ``None`` is returned and the test
+        runs; otherwise a failed result carrying the disposition is returned and the test is
+        skipped. Readiness runs in the test-side profile and never reads the candidate tree.
+        """
+
+        deadline = time.monotonic() + native_execution.readiness_timeout_seconds
+        attempts = 0
+        last: IsolatedProcessResult | None = None
+        outcome = "readiness-timeout"
+        while attempts < native_execution.readiness_max_attempts:
+            if handle.poll() is not None:
+                outcome = "candidate-early-exit"
+                break
+            attempts += 1
+            last = self.sandbox.run(
+                native_execution.readiness_entrypoint,
+                cwd=test_root,
+                readable_paths=(test_root, *runtime_roots),
+                writable_paths=(test_root, readiness_output),
+                environment=env,
+                network_policy=policy,
+                reap_process_group=True,
+            )
+            if last.returncode == 0:
+                outcome = "ready"
+                break
+            if time.monotonic() >= deadline:
+                outcome = "readiness-timeout"
+                break
+            time.sleep(native_execution.readiness_interval_seconds)
+        evidence = {
+            "outcome": outcome,
+            "attempts": attempts,
+            "last_returncode": None if last is None else last.returncode,
+            "last_stdout": "" if last is None else last.stdout[-4096:],
+            "last_stderr": "" if last is None else last.stderr[-4096:],
+            "candidate_returncode": handle.poll(),
+        }
+        (readiness_output / "native-readiness.json").write_text(
+            json.dumps(evidence, sort_keys=True), encoding="utf-8"
+        )
+        if outcome == "ready":
+            return None
+        return IsolatedProcessResult(
+            command=native_execution.readiness_entrypoint,
+            returncode=1,
+            stdout="",
+            stderr=f"native readiness failed: {outcome} after {attempts} attempt(s)",
+        )
 
     def _run_validator(
         self,
@@ -768,6 +906,7 @@ class IsolatedBuildLoop:
         candidate_launch: Sequence[str] = (),
         candidate_loopback: Sequence[Mapping[str, object]] = (),
         native_execution: NativeTestExecution | None = None,
+        native_runtime_read_paths: Sequence[str | Path] = (),
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -789,6 +928,7 @@ class IsolatedBuildLoop:
                 native_execution=native_execution,
                 candidate_loopback=candidate_loopback,
                 acceptance_catalog_bytes=acceptance_catalog_bytes,
+                runtime_read_paths=native_runtime_read_paths,
             )
         if validator_execution is None:
             raise LaneError("Validator execution requires a frozen runner or a native test entry")
