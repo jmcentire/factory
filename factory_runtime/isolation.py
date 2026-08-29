@@ -21,6 +21,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 
 class IsolationError(RuntimeError):
@@ -111,6 +112,62 @@ class IsolatedProcessResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass
+class SandboxProcessHandle:
+    """A non-blocking handle to a supervised sandboxed process (e.g. a long-running candidate).
+
+    The process runs in its own session/group under Seatbelt; ``reap`` signals the whole group,
+    closes the captured stream files, and removes the persisted profile. Stream output is written
+    to the caller's files rather than pipes, so a long-running server cannot deadlock on a full
+    pipe buffer while the Validator does other work.
+    """
+
+    command: tuple[str, ...]
+    popen: subprocess.Popen[bytes]
+    pgid: int
+    profile_path: str
+    stdout_path: Path
+    stderr_path: Path
+    _streams: tuple[IO[bytes], ...] = ()
+
+    def poll(self) -> int | None:
+        return self.popen.poll()
+
+    @property
+    def returncode(self) -> int | None:
+        return self.popen.returncode
+
+    def reap(self) -> None:
+        """Tear down the supervised process group deterministically.
+
+        Unlike the blocking path, the session leader (``sandbox-exec``) has never been waited on
+        while the candidate ran, so it can be a zombie whose group ``killpg(.., 0)`` probe returns
+        EPERM. SIGKILL the whole group, wait on the leader to clear that zombie, then poll the group
+        until it drains — tolerating a transient EPERM by re-signalling. The loopback reservation's
+        own no-leak assertion remains the authoritative guard that the port was freed.
+        """
+
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.pgid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            self.popen.wait(timeout=5)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(self.pgid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(self.pgid, signal.SIGKILL)
+            time.sleep(0.05)
+        for stream in self._streams:
+            with contextlib.suppress(Exception):
+                stream.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self.profile_path)
 
 
 _MAX_LOOPBACK_PORTS = 64
@@ -426,6 +483,88 @@ class MacOSSandbox:
             returncode,
             out.decode("utf-8", errors="replace"),
             err.decode("utf-8", errors="replace"),
+        )
+
+    def spawn(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        stdout_path: str | Path,
+        stderr_path: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: Mapping[str, str] | None = None,
+        network_policy: NetworkPolicy = DENY_ALL_NETWORK,
+    ) -> SandboxProcessHandle:
+        """Start a supervised sandboxed process non-blocking and return a handle.
+
+        Used for a long-running candidate that must run concurrently with a separate test profile.
+        The process is its own session leader (pgid == pid), captured before any wait, so the whole
+        group can be reaped later even if the leader exits while children hold a port. Streams are
+        written to files, never pipes, so the caller need not drain them.
+        """
+
+        if not command or not all(str(part) for part in command):
+            raise IsolationError("isolated command cannot be empty")
+        working_directory = Path(cwd).resolve()
+        if not working_directory.is_dir():
+            raise IsolationError(f"isolated working directory does not exist: {working_directory}")
+        readable = tuple(Path(path).resolve() for path in readable_paths)
+        writable = tuple(Path(path).resolve() for path in writable_paths)
+        if not any(
+            working_directory == path or working_directory.is_relative_to(path)
+            for path in writable
+        ):
+            raise IsolationError("isolated working directory must be inside a writable grant")
+        for path in (*readable, *writable):
+            if not path.exists():
+                raise IsolationError(f"isolated path grant does not exist: {path}")
+
+        profile = self._profile(readable, writable, network_policy)
+        fd, profile_path = tempfile.mkstemp(
+            prefix=".factory-sandbox-", suffix=".sb", dir=working_directory
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(profile)
+            handle.flush()
+            os.fsync(handle.fileno())
+        lane_environment = {
+            "HOME": str(working_directory),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": str(working_directory),
+            **dict(environment or {}),
+        }
+        invocation = [str(self.executable), "-f", profile_path, *[str(part) for part in command]]
+        out_handle = open(stdout_path, "wb")
+        err_handle = open(stderr_path, "wb")
+        try:
+            process = subprocess.Popen(
+                invocation,
+                cwd=working_directory,
+                env=lane_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=out_handle,
+                stderr=err_handle,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            out_handle.close()
+            err_handle.close()
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(profile_path)
+            raise IsolationError(f"isolated process spawn failed: {exc}") from exc
+        return SandboxProcessHandle(
+            command=tuple(str(part) for part in command),
+            popen=process,
+            pgid=process.pid,
+            profile_path=profile_path,
+            stdout_path=Path(stdout_path),
+            stderr_path=Path(stderr_path),
+            _streams=(out_handle, err_handle),
         )
 
     @staticmethod
