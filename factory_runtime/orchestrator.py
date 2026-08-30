@@ -22,6 +22,7 @@ from factory_runtime.acceptance_obligations import (
     retain_acceptance_obligation_report,
     validator_execution_digests,
     verify_and_retain_acceptance_catalog,
+    verify_retained_native_execution,
     verify_retained_validator_execution,
 )
 from factory_runtime.adversarial_review import (
@@ -48,6 +49,11 @@ from factory_runtime.lanes import (
     LaneExecution,
     LaneRole,
     ValidationExecution,
+)
+from factory_runtime.native_test import (
+    NATIVE_EXECUTION_IDENTITY_KEY,
+    native_execution_identity_digest,
+    native_test_execution_digests,
 )
 from factory_runtime.preflight import run_preflight
 from factory_runtime.resume import (
@@ -456,9 +462,32 @@ class FactoryOrchestrator:
             / acceptance_catalog.content_digest.removeprefix("sha256:")
             / "catalog.json"
         )
-        command_digest, configuration_digest, environment_digest = validator_execution_digests(
-            validator_command,
-            trusted_paths=validator_trusted_paths,
+        native_execution_identity = ""
+        if native_test_entrypoint:
+            # Native two-profile executor: the ratified execution identity is the target-declared
+            # candidate-launch, optional readiness, and test argvs + the generic executor
+            # contract, not a frozen validator-runner. Same identity lanes.execute() re-checks.
+            native_execution = native_test_execution_digests(
+                candidate_launch,
+                native_test_entrypoint,
+                readiness_entrypoint=native_readiness_entrypoint,
+                readiness_timeout_seconds=native_readiness_timeout_seconds,
+                readiness_interval_seconds=native_readiness_interval_seconds,
+                readiness_max_attempts=native_readiness_max_attempts,
+            )
+            command_digest, configuration_digest, environment_digest = native_execution.digests
+            native_execution_identity = native_execution_identity_digest(native_execution)
+        else:
+            command_digest, configuration_digest, environment_digest = validator_execution_digests(
+                validator_command,
+                trusted_paths=validator_trusted_paths,
+            )
+        # The explicit positive discriminator recorded on every native VALIDATING/PREVIEW entry;
+        # empty for a legacy frozen-runner execution. Spread into each execution-evidence record.
+        native_execution_artifacts = (
+            {NATIVE_EXECUTION_IDENTITY_KEY: native_execution_identity}
+            if native_execution_identity
+            else {}
         )
         trigger = acceptance_catalog.select("validating", "preview")
         expected_execution = {
@@ -550,13 +579,27 @@ class FactoryOrchestrator:
             tests_digest = digest_artifact_tree(tester_snapshot.files_directory / "tests")
             coder_snapshot_digest = coder_snapshot.digest
             tester_snapshot_digest = tester_snapshot.digest
-            validator_execution_snapshot_digest = verify_retained_validator_execution(
-                self.workflow.root / run_id,
-                attempt_id=attempt_id,
-                command_digest=command_digest,
-                configuration_digest=configuration_digest,
-                environment_digest=environment_digest,
-            )
+            if native_test_entrypoint:
+                # The native two-profile executor freezes no validator-runner manifest; it retains
+                # a positive, content-addressed native execution identity instead. Verify that
+                # retained manifest re-derives the ratified digests (fail-closed on missing,
+                # tampered, or downgraded evidence). Its address is the execution snapshot.
+                validator_execution_snapshot_digest = verify_retained_native_execution(
+                    self.workflow.root / run_id,
+                    attempt_id=attempt_id,
+                    command_digest=command_digest,
+                    configuration_digest=configuration_digest,
+                    environment_digest=environment_digest,
+                    identity_digest=native_execution_identity,
+                )
+            else:
+                validator_execution_snapshot_digest = verify_retained_validator_execution(
+                    self.workflow.root / run_id,
+                    attempt_id=attempt_id,
+                    command_digest=command_digest,
+                    configuration_digest=configuration_digest,
+                    environment_digest=environment_digest,
+                )
             journal = ChecklistJournal(
                 attempt_root / "checklist.jsonl",
                 subject_digest=candidate_digest,
@@ -601,6 +644,7 @@ class FactoryOrchestrator:
                     "validator-execution-configuration": configuration_digest,
                     "validator-execution-environment": environment_digest,
                     "validator-execution-snapshot": validator_execution_snapshot_digest,
+                    **native_execution_artifacts,
                 },
                 payload={"tester_identity": tester_identity},
                 implementer_identity=implementer_identity,
@@ -961,6 +1005,7 @@ class FactoryOrchestrator:
                     "validator-execution-configuration": configuration_digest,
                     "validator-execution-environment": environment_digest,
                     "validator-execution-snapshot": validator_execution_snapshot_digest,
+                    **native_execution_artifacts,
                 },
                 monitors=monitors,
                 monitor_declared_unit_count=monitor_declared_unit_count,
@@ -1035,6 +1080,7 @@ class FactoryOrchestrator:
                     "validator-execution-configuration": configuration_digest,
                     "validator-execution-environment": environment_digest,
                     "validator-execution-snapshot": validator_execution_snapshot_digest,
+                    **native_execution_artifacts,
                     "evidence-bundle": envelope.payload_digest,
                     "evidence-envelope": envelope.envelope_digest,
                 },

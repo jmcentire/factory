@@ -865,7 +865,7 @@ def _guard_manifest(tmp_path: Path, pinned_digest: str) -> Path:
     path.write_text(
         "\n".join(
             (
-                'schema_version = "factory-target-manifest/1"',
+                'schema_version = "factory-target-manifest/2"',
                 'target_id = "guard-target"',
                 "[repo]",
                 'url = "https://example.invalid/acme/widget.git"',
@@ -885,6 +885,10 @@ def _guard_manifest(tmp_path: Path, pinned_digest: str) -> Path:
                 f'pattern_catalog_digest = "{pinned_digest}"',
                 "max_attempts = 2",
                 'construction_modes = ["brownfield"]',
+                "[build.signal]",
+                "signal_pass_deadline = 2",
+                "signal_pass_warn = 1",
+                "signal_wall_clock_cap_hours = 24",
                 "",
             )
         ),

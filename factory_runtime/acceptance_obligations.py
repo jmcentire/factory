@@ -537,6 +537,110 @@ def verify_retained_validator_execution(
     return snapshot_digest
 
 
+def verify_retained_native_execution(
+    run_dir: str | Path,
+    *,
+    attempt_id: str,
+    command_digest: str,
+    configuration_digest: str,
+    environment_digest: str,
+    identity_digest: str,
+) -> str:
+    """Reopen the attempt-local native two-profile execution manifest and re-derive its identity.
+
+    The native executor freezes no validator-runner tree; instead it retains a content-addressed
+    manifest of the exact target-declared argvs and readiness bounds. This verifier re-derives the
+    native command/configuration/environment digests from those retained bytes and fails closed on
+    a missing, tampered, or downgraded manifest, or on any digest that disagrees with the ledger.
+    """
+
+    # Imported here to avoid a module import cycle (native_test has no acceptance-obligation deps).
+    from factory_runtime.native_test import (
+        NATIVE_EXECUTION_MANIFEST_SCHEMA,
+        native_test_execution_digests,
+    )
+
+    if not _ATTEMPT_ID.fullmatch(attempt_id):
+        raise AcceptanceObligationError("native execution has an invalid attempt id")
+    for label, value in (
+        ("native command digest", command_digest),
+        ("native configuration digest", configuration_digest),
+        ("native environment digest", environment_digest),
+        ("native execution identity", identity_digest),
+    ):
+        if not isinstance(value, str) or not _DIGEST.fullmatch(value):
+            raise AcceptanceObligationError(f"{label} is not a canonical content address")
+    manifest_dir = (
+        Path(run_dir)
+        / "evidence"
+        / "build-attempts"
+        / attempt_id
+        / "validator-execution"
+        / "native-manifests"
+        / identity_digest.removeprefix("sha256:")
+    )
+    try:
+        manifest = verify_frozen_blob(
+            manifest_dir,
+            expected_digest=identity_digest,
+            label="native-manifests",
+        )
+        manifest_bytes = manifest.payload_path.read_bytes()
+        document = json.loads(manifest_bytes.decode("utf-8"))
+    except (SnapshotError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AcceptanceObligationError(
+            f"retained native execution manifest is invalid: {exc}"
+        ) from exc
+    if not isinstance(document, Mapping):
+        raise AcceptanceObligationError("retained native execution manifest must be an object")
+    document = dict(document)
+    if set(document) != {
+        "schema_version",
+        "candidate_launch",
+        "readiness_entrypoint",
+        "test_entrypoint",
+        "readiness_timeout_seconds",
+        "readiness_interval_seconds",
+        "readiness_max_attempts",
+        "command_digest",
+        "configuration_digest",
+        "environment_digest",
+    } or document.get("schema_version") != NATIVE_EXECUTION_MANIFEST_SCHEMA:
+        raise AcceptanceObligationError("retained native execution manifest is malformed")
+    # Re-derive the identity from the retained argvs/bounds; it must match the ledger digests.
+    try:
+        rederived = native_test_execution_digests(
+            document["candidate_launch"],
+            document["test_entrypoint"],
+            readiness_entrypoint=document["readiness_entrypoint"],
+            readiness_timeout_seconds=document["readiness_timeout_seconds"],
+            readiness_interval_seconds=document["readiness_interval_seconds"],
+            readiness_max_attempts=document["readiness_max_attempts"],
+        )
+    except (ValueError, TypeError) as exc:
+        raise AcceptanceObligationError(
+            f"retained native execution manifest does not re-derive: {exc}"
+        ) from exc
+    expected = (command_digest, configuration_digest, environment_digest)
+    if rederived.digests != expected:
+        raise AcceptanceObligationError(
+            "retained native execution identity differs from its ratified digest tuple"
+        )
+    if (
+        document["command_digest"],
+        document["configuration_digest"],
+        document["environment_digest"],
+    ) != expected:
+        raise AcceptanceObligationError(
+            "retained native execution manifest embeds a different digest tuple"
+        )
+    if digest_obj(document) != identity_digest:
+        raise AcceptanceObligationError(
+            "retained native execution manifest does not re-derive its identity address"
+        )
+    return identity_digest
+
+
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 
@@ -1399,6 +1503,7 @@ __all__ = [
     "validator_execution_digests",
     "verify_acceptance_obligation_report",
     "verify_retained_acceptance_obligation_report",
+    "verify_retained_native_execution",
     "verify_retained_validator_execution",
     "verify_and_retain_acceptance_catalog",
 ]

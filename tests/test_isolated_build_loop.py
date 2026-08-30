@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -11,7 +12,11 @@ import pytest
 
 import factory_runtime.snapshot as snapshot_module
 from factory_core.manifest import digest_bytes, digest_obj
-from factory_runtime.acceptance_obligations import validator_execution_digests
+from factory_runtime.acceptance_obligations import (
+    AcceptanceObligationError,
+    validator_execution_digests,
+    verify_retained_native_execution,
+)
 from factory_runtime.adversarial_review import (
     build_review_authority_context,
     build_validator_review_subject,
@@ -31,8 +36,14 @@ from factory_runtime.lanes import (
     freeze_validator_execution,
     temporary_build_loop_root,
 )
-from factory_runtime.native_test import native_test_execution_digests
-from factory_runtime.snapshot import tree_digest
+from factory_runtime.native_test import (
+    NATIVE_EXECUTION_IDENTITY_KEY,
+    native_execution_identity_digest,
+    native_execution_manifest_document,
+    native_test_execution_digests,
+)
+from factory_runtime.snapshot import freeze_blob, tree_digest
+from factory_runtime.state import _verify_validator_execution_variant
 
 FIXTURES = Path(__file__).parent / "fixtures" / "runtime_agents"
 
@@ -1387,3 +1398,167 @@ def test_native_test_executor_refuses_unratified_argv(tmp_path: Path) -> None:
             native_test_entrypoint=(sys.executable, "other_entry.py"),  # not what the catalog bound
             before_validation=lambda *_: {"validator_execution": {}},
         )
+
+
+# --------------------------------------------------------------------------- #
+# Native execution-evidence identity (positive, fail-closed variant verification)
+# --------------------------------------------------------------------------- #
+
+_NATIVE_EXEC = native_test_execution_digests(
+    (sys.executable, "launch.py"),
+    (sys.executable, "-m", "pytest", "-q", "run_tests.py"),
+    readiness_entrypoint=(sys.executable, "check_ready.py"),
+)
+_OTHER_EXEC = native_test_execution_digests(
+    (sys.executable, "launch.py"),
+    (sys.executable, "-m", "pytest", "-q", "other_tests.py"),
+)
+
+
+def _stage_native_manifest(tmp_path: Path, execution, attempt_id: str = "attempt-01"):
+    run_dir = tmp_path / "nativerun"
+    dest = run_dir / "evidence" / "build-attempts" / attempt_id / "validator-execution"
+    dest.mkdir(parents=True)
+    document = native_execution_manifest_document(execution)
+    data = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    blob = freeze_blob(dest, durable_through=dest.parent, label="native-manifests", data=data)
+    return run_dir, blob.digest
+
+
+def _native_supplied(execution, identity: str) -> dict[str, str]:
+    return {
+        "validator-execution-manifest": execution.command_digest,
+        "validator-execution-configuration": execution.configuration_digest,
+        "validator-execution-environment": execution.environment_digest,
+        "validator-execution-snapshot": identity,
+        NATIVE_EXECUTION_IDENTITY_KEY: identity,
+    }
+
+
+def test_native_execution_evidence_valid_projection(tmp_path: Path) -> None:
+    """A retained native manifest re-derives its identity and passes the variant verifier."""
+
+    run_dir, identity = _stage_native_manifest(tmp_path, _NATIVE_EXEC)
+    assert identity == native_execution_identity_digest(_NATIVE_EXEC)
+    assert (
+        verify_retained_native_execution(
+            run_dir,
+            attempt_id="attempt-01",
+            command_digest=_NATIVE_EXEC.command_digest,
+            configuration_digest=_NATIVE_EXEC.configuration_digest,
+            environment_digest=_NATIVE_EXEC.environment_digest,
+            identity_digest=identity,
+        )
+        == identity
+    )
+    assert (
+        _verify_validator_execution_variant(
+            run_dir, attempt_id="attempt-01", supplied=_native_supplied(_NATIVE_EXEC, identity)
+        )
+        == identity
+    )
+
+
+def test_native_execution_evidence_missing(tmp_path: Path) -> None:
+    """No retained native manifest fails closed."""
+
+    run_dir = tmp_path / "nativerun"
+    (run_dir / "evidence" / "build-attempts" / "attempt-01" / "validator-execution").mkdir(
+        parents=True
+    )
+    identity = native_execution_identity_digest(_NATIVE_EXEC)
+    with pytest.raises(AcceptanceObligationError):
+        verify_retained_native_execution(
+            run_dir,
+            attempt_id="attempt-01",
+            command_digest=_NATIVE_EXEC.command_digest,
+            configuration_digest=_NATIVE_EXEC.configuration_digest,
+            environment_digest=_NATIVE_EXEC.environment_digest,
+            identity_digest=identity,
+        )
+
+
+def test_native_execution_evidence_wrong_binding(tmp_path: Path) -> None:
+    """A manifest that re-derives to a different digest tuple than the ledger claims is rejected."""
+
+    run_dir, identity = _stage_native_manifest(tmp_path, _NATIVE_EXEC)
+    with pytest.raises(AcceptanceObligationError):
+        verify_retained_native_execution(
+            run_dir,
+            attempt_id="attempt-01",
+            command_digest=_OTHER_EXEC.command_digest,  # not what the retained manifest re-derives
+            configuration_digest=_OTHER_EXEC.configuration_digest,
+            environment_digest=_OTHER_EXEC.environment_digest,
+            identity_digest=identity,
+        )
+
+
+def test_native_execution_evidence_tampered(tmp_path: Path) -> None:
+    """Mutating the retained manifest bytes breaks the content address and fails closed."""
+
+    run_dir, identity = _stage_native_manifest(tmp_path, _NATIVE_EXEC)
+    blob_dir = (
+        run_dir / "evidence" / "build-attempts" / "attempt-01" / "validator-execution"
+        / "native-manifests" / identity.removeprefix("sha256:")
+    )
+    payload = max((p for p in blob_dir.rglob("*") if p.is_file()), key=lambda p: p.stat().st_size)
+    payload.chmod(0o644)
+    payload.write_bytes(payload.read_bytes() + b" ")
+    with pytest.raises(AcceptanceObligationError):
+        verify_retained_native_execution(
+            run_dir,
+            attempt_id="attempt-01",
+            command_digest=_NATIVE_EXEC.command_digest,
+            configuration_digest=_NATIVE_EXEC.configuration_digest,
+            environment_digest=_NATIVE_EXEC.environment_digest,
+            identity_digest=identity,
+        )
+
+
+def test_native_execution_evidence_snapshot_must_equal_identity(tmp_path: Path) -> None:
+    """A native entry whose snapshot is not its identity address is refused (mixed evidence)."""
+
+    run_dir, identity = _stage_native_manifest(tmp_path, _NATIVE_EXEC)
+    supplied = _native_supplied(_NATIVE_EXEC, identity)
+    supplied["validator-execution-snapshot"] = "sha256:" + ("0" * 64)  # grafted foreign snapshot
+    with pytest.raises(AcceptanceObligationError):
+        _verify_validator_execution_variant(
+            run_dir, attempt_id="attempt-01", supplied=supplied
+        )
+
+
+def test_native_execution_evidence_downgrade_rejected(tmp_path: Path) -> None:
+    """Stripping the native discriminator falls to the legacy verifier, which has no manifest."""
+
+    run_dir, identity = _stage_native_manifest(tmp_path, _NATIVE_EXEC)
+    supplied = _native_supplied(_NATIVE_EXEC, identity)
+    del supplied[NATIVE_EXECUTION_IDENTITY_KEY]  # downgrade to legacy discriminator
+    with pytest.raises(AcceptanceObligationError):
+        _verify_validator_execution_variant(
+            run_dir, attempt_id="attempt-01", supplied=supplied
+        )
+
+
+def test_legacy_validator_execution_still_verifies(tmp_path: Path) -> None:
+    """A frozen validator-runner execution (no native key) still verifies through the variant."""
+
+    root = tmp_path / "legacy-validator-execution"
+    script = tmp_path / "legacy_runner.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    frozen = freeze_validator_execution(root, (sys.executable, str(script)), (script,))
+    # Relocate the frozen artifacts under an attempt's validator-execution dir the verifier expects.
+    attempt = tmp_path / "legacyrun" / "evidence" / "build-attempts" / "attempt-01"
+    attempt.mkdir(parents=True)
+    shutil.move(str(root), str(attempt / "validator-execution"))
+    run_dir = tmp_path / "legacyrun"
+    supplied = {
+        "validator-execution-manifest": frozen.capture.command_digest,
+        "validator-execution-configuration": frozen.capture.configuration_digest,
+        "validator-execution-environment": frozen.capture.environment_digest,
+        "validator-execution-snapshot": str(frozen.capture.document["snapshot_tree_digest"]),
+    }
+    assert NATIVE_EXECUTION_IDENTITY_KEY not in supplied
+    result = _verify_validator_execution_variant(
+        run_dir, attempt_id="attempt-01", supplied=supplied
+    )
+    assert result == supplied["validator-execution-snapshot"]

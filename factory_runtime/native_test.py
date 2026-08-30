@@ -146,6 +146,41 @@ class NativeTestExecution:
         return bool(self.readiness_entrypoint)
 
 
+# The retained native-execution evidence variant. Its presence as a ledger artifact key is the
+# explicit positive discriminator that a VALIDATING/PREVIEW entry was produced by the two-profile
+# native executor rather than a frozen validator-runner; the checked projection dispatches on it.
+NATIVE_EXECUTION_MANIFEST_SCHEMA = "factory-native-execution-identity/1"
+NATIVE_EXECUTION_IDENTITY_KEY = "native-execution-identity"
+
+
+def native_execution_manifest_document(execution: NativeTestExecution) -> dict[str, object]:
+    """The retained, content-addressed native execution identity.
+
+    It embeds the exact target-declared argvs and readiness bounds plus the three ratified
+    digests, so a verifier can re-derive the native command/configuration/environment digests from
+    the retained bytes alone and fail closed on any tampering or downgrade.
+    """
+
+    return {
+        "schema_version": NATIVE_EXECUTION_MANIFEST_SCHEMA,
+        "candidate_launch": list(execution.candidate_launch),
+        "readiness_entrypoint": list(execution.readiness_entrypoint),
+        "test_entrypoint": list(execution.test_entrypoint),
+        "readiness_timeout_seconds": execution.readiness_timeout_seconds,
+        "readiness_interval_seconds": execution.readiness_interval_seconds,
+        "readiness_max_attempts": execution.readiness_max_attempts,
+        "command_digest": execution.command_digest,
+        "configuration_digest": execution.configuration_digest,
+        "environment_digest": execution.environment_digest,
+    }
+
+
+def native_execution_identity_digest(execution: NativeTestExecution) -> str:
+    """Content address of the retained native execution manifest — the ledger identity marker."""
+
+    return digest_obj(native_execution_manifest_document(execution))
+
+
 def _environment_contract() -> dict[str, object]:
     return {
         "schema_version": "factory-native-test-environment/2",
