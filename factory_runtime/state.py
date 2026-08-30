@@ -552,6 +552,60 @@ def _recorded_build_attempt_ids(records: Iterable[Mapping[str, Any]]) -> set[str
     return seen
 
 
+def _verify_validator_execution_variant(
+    run_dir: Path,
+    *,
+    attempt_id: str,
+    supplied: Mapping[str, str],
+) -> str:
+    """Verify the correct retained Validator-execution evidence variant, fail-closed.
+
+    The presence of the native-execution identity key is the explicit positive discriminator: a
+    native two-profile execution is verified against its retained native manifest (re-derived from
+    the retained argvs), and a legacy execution against its frozen validator-runner manifest — the
+    latter path is unchanged. Missing, mixed, downgraded, or tampered evidence is rejected: a
+    stripped identity key falls through to the legacy verifier whose manifest a native run never
+    retained, and a native entry whose snapshot is not its identity address is refused outright.
+    """
+
+    from factory_runtime.acceptance_obligations import (
+        AcceptanceObligationError,
+        verify_retained_native_execution,
+        verify_retained_validator_execution,
+    )
+    from factory_runtime.native_test import NATIVE_EXECUTION_IDENTITY_KEY
+
+    snapshot = supplied["validator-execution-snapshot"]
+    if NATIVE_EXECUTION_IDENTITY_KEY in supplied:
+        identity = supplied[NATIVE_EXECUTION_IDENTITY_KEY]
+        if snapshot != identity:
+            raise AcceptanceObligationError(
+                "native execution snapshot must equal the native execution identity address"
+            )
+        retained = verify_retained_native_execution(
+            run_dir,
+            attempt_id=attempt_id,
+            command_digest=supplied["validator-execution-manifest"],
+            configuration_digest=supplied["validator-execution-configuration"],
+            environment_digest=supplied["validator-execution-environment"],
+            identity_digest=identity,
+        )
+    else:
+        retained = verify_retained_validator_execution(
+            run_dir,
+            attempt_id=attempt_id,
+            command_digest=supplied["validator-execution-manifest"],
+            configuration_digest=supplied["validator-execution-configuration"],
+            environment_digest=supplied["validator-execution-environment"],
+            expected_snapshot_digest=snapshot,
+        )
+    if retained != snapshot:
+        raise AcceptanceObligationError(
+            "retained Validator execution snapshot changed during admission"
+        )
+    return retained
+
+
 def _latest_build_attempt_id(records: Iterable[Mapping[str, Any]]) -> str:
     """Return the most recent ledgered BUILDING attempt from a verified record sequence."""
 
@@ -1375,25 +1429,15 @@ class RunStore:
                 VALIDATOR_EXECUTION_ARTIFACT_KEYS,
                 context=str(destination),
             )
-            try:
-                from factory_runtime.acceptance_obligations import (
-                    AcceptanceObligationError,
-                    verify_retained_validator_execution,
-                )
+            from factory_runtime.acceptance_obligations import AcceptanceObligationError
 
+            try:
                 active_attempt_id = _latest_build_attempt_id(verified_entries)
-                retained_snapshot_digest = verify_retained_validator_execution(
+                _verify_validator_execution_variant(
                     self._run_dir(run_id),
                     attempt_id=active_attempt_id,
-                    command_digest=supplied["validator-execution-manifest"],
-                    configuration_digest=supplied["validator-execution-configuration"],
-                    environment_digest=supplied["validator-execution-environment"],
-                    expected_snapshot_digest=supplied["validator-execution-snapshot"],
+                    supplied=supplied,
                 )
-                if retained_snapshot_digest != supplied["validator-execution-snapshot"]:
-                    raise AcceptanceObligationError(
-                        "retained Validator execution snapshot changed during admission"
-                    )
             except AcceptanceObligationError as exc:
                 raise RunStateError(
                     f"{destination} Validator execution evidence is invalid: {exc}"
@@ -2439,27 +2483,13 @@ class RunStore:
                         context=f"ledger entry {index} validating",
                     )
                     validation_evidence = {key: str(digests[key]) for key in validation_keys}
-                    try:
-                        from factory_runtime.acceptance_obligations import (
-                            AcceptanceObligationError,
-                            verify_retained_validator_execution,
-                        )
+                    from factory_runtime.acceptance_obligations import AcceptanceObligationError
 
-                        verify_retained_validator_execution(
+                    try:
+                        _verify_validator_execution_variant(
                             self._run_dir(run_id),
                             attempt_id=active_attempt_id,
-                            command_digest=validation_evidence[
-                                "validator-execution-manifest"
-                            ],
-                            configuration_digest=validation_evidence[
-                                "validator-execution-configuration"
-                            ],
-                            environment_digest=validation_evidence[
-                                "validator-execution-environment"
-                            ],
-                            expected_snapshot_digest=validation_evidence[
-                                "validator-execution-snapshot"
-                            ],
+                            supplied={str(key): str(value) for key, value in digests.items()},
                         )
                     except AcceptanceObligationError as exc:
                         raise RunStateError(

@@ -42,6 +42,8 @@ from factory_runtime.native_test import (
     CANDIDATE_ROOT_NAME,
     TEST_ROOT_NAME,
     NativeTestExecution,
+    native_execution_identity_digest,
+    native_execution_manifest_document,
     native_test_execution_digests,
 )
 from factory_runtime.snapshot import (
@@ -449,6 +451,24 @@ class IsolatedBuildLoop:
                     readiness_interval_seconds=native_readiness_interval_seconds,
                     readiness_max_attempts=native_readiness_max_attempts,
                 )
+                # Retain the positive native execution identity as a content-addressed manifest, so
+                # the orchestrator and every checked state projection can re-derive and verify it
+                # exactly like the frozen validator-runner manifest of a legacy execution.
+                native_manifest_bytes = _canonical_json(
+                    native_execution_manifest_document(native_execution)
+                )
+                native_identity = native_execution_identity_digest(native_execution)
+                (self.root / "validator-execution").mkdir(parents=True, exist_ok=True)
+                native_manifest = freeze_blob(
+                    self.root / "validator-execution",
+                    durable_through=self.root,
+                    label="native-manifests",
+                    data=native_manifest_bytes,
+                )
+                if native_manifest.digest != native_identity:
+                    raise LaneError(
+                        "native execution manifest differs from its derived identity address"
+                    )
                 execution_digests = native_execution.digests
             else:
                 frozen_validator = freeze_validator_execution(
