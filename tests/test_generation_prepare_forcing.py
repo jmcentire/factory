@@ -237,3 +237,23 @@ def test_prepare_refuses_a_resigned_manifest(tmp_path: Path) -> None:
     with pytest.raises(GenerationError) as excinfo:
         _prepare(tmp_path, target_path, catalog_path, plan_path)
     assert "target-manifest-run-digest-mismatch" in str(excinfo.value)
+
+
+def test_refused_prepare_retains_only_the_residual_blocker_snapshot(tmp_path: Path) -> None:
+    """Plan §1.1d refuse-then-freeze: a refused attempt leaves ONLY the
+    generation-readiness snapshot (the per-attempt residual-blocker artifact,
+    marked refused) — never the five input blobs the attempt will not consume.
+    The preflight's read-only readiness reuse depends on this."""
+    store, target_path, catalog_path, plan_path = _prepared_inputs(
+        tmp_path, with_signal=False
+    )
+    with pytest.raises(GenerationError):
+        _prepare(tmp_path, target_path, catalog_path, plan_path)
+    generation_root = tmp_path / "run-1" / "evidence" / "generation"
+    retained = sorted(p.name for p in generation_root.iterdir())
+    assert retained == ["generation-readiness"]
+    blobs = list((generation_root / "generation-readiness").iterdir())
+    assert len(blobs) == 1
+    document = json.loads((blobs[0] / "payload").read_text(encoding="utf-8"))
+    assert document["refused"] is True
+    assert "signal-knobs-undeclared" in document["report"]["issues"]

@@ -242,8 +242,14 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
         subject = row.get("subject") or {}
         if row["kind"] == "delete":
             path = subject.get("path")
+            if not path and subject.get("class"):
+                # A behavior-class deletion inside a surviving file (the plan's
+                # own ledger rows use this form, e.g. the freeze-then-refuse
+                # ordering). Identity-only: its enforcement is the forcing test
+                # the note names, not a tree claim.
+                continue
             if not path:
-                failures.append(f"{label}: landed delete without a subject path")
+                failures.append(f"{label}: landed delete without a subject path or class")
             elif not _exists_at_tag(repo, pre_tag, path):
                 failures.append(f"{label}: {path} did not exist at {pre_tag} — not a deletion")
             elif (repo / path).exists():

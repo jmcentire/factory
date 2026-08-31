@@ -340,3 +340,27 @@ def test_required_metrics_floor_pins_the_reference_corpus(tmp_path: Path) -> Non
     r = _run(tmp_path, baseline=baseline)
     assert r.returncode == 1
     assert "thinned below its ratified floor" in r.stderr
+
+
+def test_class_subject_delete_makes_no_tree_claim(tmp_path: Path) -> None:
+    """A behavior-class deletion inside a surviving file is identity-only —
+    its enforcement is the forcing test its note names; a bare delete with
+    neither path nor class still fails."""
+    ok = _run(
+        tmp_path,
+        ledger_rows=[
+            {"phase": "x", "axis": "x", "kind": "delete",
+             "subject": {"class": "some-behavior-class"},
+             "note": "enforced by test_x", "status": "landed"}
+        ],
+    )
+    assert ok.returncode == 0, ok.stderr
+    bare = _run(
+        tmp_path,
+        ledger_rows=[
+            {"phase": "x", "axis": "x", "kind": "delete", "subject": {},
+             "note": "n", "status": "landed"}
+        ],
+    )
+    assert bare.returncode == 1
+    assert "without a subject path or class" in bare.stderr

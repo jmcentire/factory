@@ -279,6 +279,34 @@ class GenerationPreparer:
 
         run_root = self.runs_root / run_id
         generation_root = run_root / "evidence" / "generation"
+        if not report.ready:
+            # Refuse-then-freeze (plan §1.1d): a refused attempt retains ONLY
+            # its readiness snapshot — the per-attempt residual-blocker
+            # artifact (§0.3's precedent) — never the five input blobs. The
+            # preflight's read-only readiness reuse depends on refusal being
+            # otherwise side-effect-free, and the late-discovery freeze of
+            # inputs that will never be consumed was removal-ledger work.
+            refusal_document = {
+                "schema_version": "factory-generation-readiness/1",
+                "run_id": run_id,
+                "attempt_number": attempt_number,
+                "attempt_limit": plan.max_build_attempts,
+                "target_digest": target.content_digest,
+                "pattern_catalog_digest": catalog.content_digest,
+                "build_plan_digest": plan.content_digest,
+                "build_input_digest": build_input_digest,
+                "refused": True,
+                "report": report.to_dict(),
+            }
+            freeze_blob(
+                generation_root,
+                durable_through=run_root,
+                label="generation-readiness",
+                data=_canonical_bytes(refusal_document),
+            )
+            raise GenerationError(
+                "generation readiness refused: " + ", ".join(report.issues)
+            )
         target_snapshot = freeze_blob(
             generation_root,
             durable_through=run_root,
@@ -336,8 +364,6 @@ class GenerationPreparer:
             raise GenerationError("internal generation artifact tuple is incomplete")
         if input_snapshot.digest != build_input_digest:
             raise GenerationError("canonical build input address is inconsistent")
-        if not report.ready:
-            raise GenerationError("generation readiness refused: " + ", ".join(report.issues))
         return PreparedGeneration(
             target=target,
             catalog=catalog,
