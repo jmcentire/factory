@@ -63,6 +63,25 @@ _MAX_INLINE_JSON_BYTES = 65_536
 _MAX_BOUNDARY_FILE_BYTES = 5_242_880
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+#: The WPX red_now's second arm (round-7 mutation B): every real dispatch derives
+#: its forbidden runner roots from EXACTLY these target-state fields — a dropped
+#: field silently strips that root from every lane's forbidden set, so the field
+#: tuple is pinned by a forcing test and the derivation is behaviorally tested.
+_FORBIDDEN_ROOT_FIELDS = ("control_root", "source_root", "workdir", "object_store")
+
+
+def _derive_forbidden_runner_roots(target_state: Mapping[str, Any]) -> list[Path]:
+    forbidden: list[Path] = []
+    for field in _FORBIDDEN_ROOT_FIELDS:
+        value = target_state.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"target-state has no forbidden runner root {field}")
+        path = Path(value).resolve(strict=True)
+        if path not in forbidden:
+            forbidden.append(path)
+    return forbidden
+
+
 
 def _tessera(path: str) -> TesseraCli:
     return TesseraCli((str(Path(path).expanduser()),))
@@ -1804,14 +1823,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             resume_checkpoint_digest=resume.checkpoint_digest,
             dependencies=state_dependencies,
         )
-        forbidden: list[Path] = []
-        for field in ("control_root", "source_root", "workdir", "object_store"):
-            value = projection_state.target_state.get(field)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"target-state has no forbidden runner root {field}")
-            path = Path(value).resolve(strict=True)
-            if path not in forbidden:
-                forbidden.append(path)
+        forbidden = _derive_forbidden_runner_roots(projection_state.target_state)
         workspace = Path(arguments.workspace)
         if not workspace.is_absolute():
             raise ValueError("runner workspace must be an absolute host-owned path")

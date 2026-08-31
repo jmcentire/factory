@@ -673,3 +673,34 @@ def test_long_action_refuses_unknown_run_without_creating_a_namespace(
 
     assert called is False
     assert not (tmp_path / "future-run").exists()
+
+
+def test_forbidden_runner_roots_derivation_covers_the_control_root(tmp_path) -> None:
+    """Round-7 mutation B closed: the WPX red_now's CLI arm. The field tuple is
+    pinned (a one-token deletion reds HERE, not silently in every dispatch), the
+    derivation puts every root — control_root first — in the forbidden set, and
+    the fail-closed branch refuses a target-state missing any field."""
+    from factory_runtime.cli import _FORBIDDEN_ROOT_FIELDS, _derive_forbidden_runner_roots
+
+    assert _FORBIDDEN_ROOT_FIELDS == (
+        "control_root",
+        "source_root",
+        "workdir",
+        "object_store",
+    )
+
+    roots = {}
+    for name in _FORBIDDEN_ROOT_FIELDS:
+        directory = tmp_path / name
+        directory.mkdir()
+        roots[name] = str(directory)
+    derived = _derive_forbidden_runner_roots(roots)
+    assert (tmp_path / "control_root").resolve() in derived
+    assert len(derived) == 4
+
+    incomplete = dict(roots)
+    del incomplete["control_root"]
+    with pytest.raises(ValueError, match="no forbidden runner root control_root"):
+        _derive_forbidden_runner_roots(incomplete)
+    with pytest.raises(ValueError, match="control_root"):
+        _derive_forbidden_runner_roots({**roots, "control_root": ""})
