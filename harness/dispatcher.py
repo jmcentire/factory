@@ -38,6 +38,7 @@ from legacy_abandonment import (  # noqa: E402 - load the adjacent harness modul
     LegacyAbandonmentError,
     verify_legacy_abandonment,
 )
+from watchdog import SignalWatchdog  # noqa: E402 - adjacent harness module
 
 TRIGGER_PATTERNS: dict[str, str] = {
     "blocking_question": r"BLOCKING QUESTION|blocked on|awaiting (?:the )?Validator",
@@ -197,6 +198,18 @@ class Dispatcher:
         )
         self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
+        # Plan §0.4c: the signal-deadline watchdog rides this seam. Knobs come
+        # only from the frozen generation blob via the CLI door; passes only
+        # from the verified ledger via pass-count — never ambient environment,
+        # never a line count.
+        self.signal_watchdog = SignalWatchdog(
+            root=root,
+            runs_root=self.runs_root,
+            run_id=run,
+            factory_cli=self.factory_cli,
+            replay_authority_args=self.replay_authority_args,
+            harness_dir=self.harness,
+        )
 
     def counts(self) -> tuple[int, int]:
         receipts = len(read_lines(self.root.parent.parent / "receipts" / "chain.jsonl"))
@@ -539,8 +552,10 @@ class Dispatcher:
                         "legacy or unversioned harness refused before monitoring",
                     )
                     return
-                if metadata.get("status") == "closed":
-                    self.event("dispatcher_stop", "run closed")
+                if metadata.get("status") in {"closed", "no"}:
+                    # Round-3 carryover: a host-recorded terminal NO is terminal —
+                    # a NO run is never babysat forever.
+                    self.event("dispatcher_stop", f"run {metadata.get('status')}")
                     return
             except (OSError, json.JSONDecodeError):
                 self.event("dispatcher_stop", "harness.json unreadable — refusing to babysit")
@@ -553,6 +568,7 @@ class Dispatcher:
                     self.check_validator_failure_modes(tail)
             self.check_alignment_audit()
             self.check_leases()
+            self.signal_watchdog.check(self.event, self._block)
             self.snapshot_minutes()
             time.sleep(self.interval)
 

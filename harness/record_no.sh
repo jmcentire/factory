@@ -46,11 +46,16 @@ ROOT="$FACTORY_CONTROL_ROOT"
 }
 
 python3 - "$ROOT/harness.json" "$D/terminal_no_kinds.json" "$KIND" "$REASON" <<'PY'
-import datetime, json, os, pathlib, stat, sys, tempfile
+import datetime, fcntl, json, os, pathlib, stat, sys, tempfile
 
 run_path, kinds_path, kind, reason = (
     pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4],
 )
+
+# Shared advisory run-root lock with promote.sh's close (round-3 carryover):
+# the two host writers of terminal dispositions never interleave.
+_lock = os.open(str(run_path.parent / '.harness.write.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(_lock, fcntl.LOCK_EX)
 
 def read_regular(path: pathlib.Path) -> str:
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))

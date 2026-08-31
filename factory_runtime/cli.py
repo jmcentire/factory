@@ -158,6 +158,15 @@ def _parser() -> argparse.ArgumentParser:
     pass_count.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(pass_count)
 
+    signal_knobs = commands.add_parser(
+        "signal-knobs",
+        help="signal-deadline knobs from the FROZEN generation target manifest (plan 0.4c) "
+        "— never from ambient environment",
+    )
+    signal_knobs.add_argument("--runs", required=True)
+    signal_knobs.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(signal_knobs)
+
     rebuild = commands.add_parser(
         "rebuild-projection",
         help="rebuild run.json only from a verified ledger",
@@ -1019,6 +1028,26 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 {
                     "run_id": arguments.run_id,
                     "passes": store.validating_pass_count(arguments.run_id),
+                }
+            )
+        )
+        return
+    if arguments.command == "signal-knobs":
+        from factory_runtime.generation import verify_prepared_generation
+
+        store = _load_replay_store(arguments)
+        projection = store.load(arguments.run_id)
+        target, _, _, _ = verify_prepared_generation(arguments.runs, projection)
+        signal = target.build.get("signal")
+        if not isinstance(signal, dict):
+            raise SystemExit("signal-knobs: frozen target manifest declares no signal knobs")
+        print(
+            json.dumps(
+                {
+                    "run_id": arguments.run_id,
+                    "signal_pass_deadline": signal["signal_pass_deadline"],
+                    "signal_pass_warn": signal["signal_pass_warn"],
+                    "signal_wall_clock_cap_hours": signal["signal_wall_clock_cap_hours"],
                 }
             )
         )

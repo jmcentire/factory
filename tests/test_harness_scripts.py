@@ -7538,3 +7538,21 @@ def test_promote_refuses_a_no_run_terminal_is_terminal(tmp_path: Path) -> None:
     assert r.returncode != 0
     assert _harness_doc(root)["status"] == "no"
     assert [row["kind"] for row in _refusal_events(root)] == ["refusal-promote"]
+
+
+def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
+    """Round-3 carryover: a host-recorded terminal NO is terminal — the
+    dispatcher stops on status 'no' exactly as it stops on 'closed'."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "events.jsonl").write_text("")
+    (root / "harness.json").write_text(
+        json.dumps({"schema_version": "factory-harness/2", "status": "no"})
+    )
+    d = mod.Dispatcher("r1", root, 1)  # type: ignore[attr-defined]
+    d.run_loop()
+    events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
+    stops = [e for e in events if e.get("kind") == "dispatcher_stop"]
+    assert stops and "run no" in stops[0]["detail"]

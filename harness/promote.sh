@@ -185,8 +185,14 @@ fi
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
 # half-written harness.json. Exit 70 on write-failure so it is distinct from BLOCKED (1).
 if ! python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" <<'PY' 2>>"$REJECTION"
-import datetime, hashlib, json, os, pathlib, stat, sys, tempfile
+import datetime, fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
+
 run_path = pathlib.Path(sys.argv[1])
+# Round-3 carryover: promote's close and record_no's terminal write share one
+# advisory run-root lock (crash-released flock) so the two host writers can
+# never interleave a read-modify-write on harness.json.
+_lock = os.open(str(run_path.parent / '.harness.write.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(_lock, fcntl.LOCK_EX)
 run = sys.argv[2]  # the run id — a string, not a path
 verdict_file = pathlib.Path(sys.argv[3])
 

@@ -70,6 +70,7 @@ Founder ruling (18b8c02bc10c): *"t_signal cap value should be configurable with 
 - **Goodhart surface, stated rather than implied:** only host refusal paths write events.jsonl kinds (0.1) and the NO-relevant kind-set is committed closed data (0.3) — the dev loop cannot mint a signal by pass 4 to satisfy the knob; and the deadline-expiry NO is excluded from the rewarded set (0.2).
 
 **Enforcement:** host code on an existing seam (dispatcher.py already tails `events.jsonl`, already enforces a per-seat deadline via gate F); watchdog failure is itself an events.jsonl kind the postmortem derives.
+**Goodhart scoping, round-3 carryover (refusal-promote reward class):** `refusal-promote` is NO-relevant=true, so an operator-triggered promote refusal on a healthy run disarms the deadline for that run — acceptable while promote is operator-invoked (a human chose to attempt the close; the refusal is a genuine signal). WHEN automated promote retries wire in (Phase 4+), the retry loop must not be able to mint its own disarm: either automated-retry refusals carry a distinct non-NO-relevant kind, or retries are bounded by the same admission table — decided at that wiring, recorded here so it cannot ship implicitly.
 
 ### 0.5 Write-path-exclusivity denial probe
 Register a gates.tsv denial probe that no lane sandbox root contains the control root. The "lanes have no write path" claim is currently asserted, not enforced.
