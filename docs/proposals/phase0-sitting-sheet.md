@@ -65,7 +65,7 @@ d. Factory self-contained; external mirrors are thin pointers (done — reconcil
 
 ## 6. Gate blast-tier assignment (one-time; contested → MAX until you downgrade)
 
-All 17 registered gates (A–K, F3/F4/R2/R3, NOB, ACC, WPX) are proposed **Critical
+All 24 registered gates (every gates.tsv row: A–Q, F3/F4/R2/R3, NOB, ACC, WPX) are proposed **Critical
 tier** — the fail-closed default. Tier routing activates with Phase 5's endgame
 tier-selection; until then every run pays full weight regardless, so downgrades here
 cost nothing yet and can wait for real run data.

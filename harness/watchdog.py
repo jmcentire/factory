@@ -241,8 +241,32 @@ class SignalWatchdog:
 
         signal_present = self._no_relevant_signal_present()
         if passes >= deadline and not signal_present and not state.get("fired"):
-            # Residual-blocker refinement lands with Phase 1's preflight; until
-            # then no-signal-and-not-terminal is the fail-closed firing form.
+            # Plan 0.4 semantics, restored (round-6 6-11): "or residual blockers
+            # must be absent — a healthy green run that legitimately needs 6
+            # passes with no residual blockers is not a violation." The retained
+            # generation-readiness snapshot is the residual-blocker authority;
+            # its door refusing (no snapshot, unreadable) fires FAIL-CLOSED —
+            # only a demonstrated-empty issue list exempts, and the exemption is
+            # an emitted event, never silence.
+            try:
+                readiness = self._cli_json("readiness-issues")
+                residual_blockers = list(readiness.get("issues", ()))
+                readiness_known = True
+            except (WatchdogError, ValueError, TypeError):
+                residual_blockers = []
+                readiness_known = False
+            if readiness_known and not residual_blockers:
+                if not state.get("healthy_exempted"):
+                    state["healthy_exempted"] = True
+                    emit(
+                        "signal_deadline_healthy_exemption",
+                        f"pass {passes}/{deadline}: deadline reached with no "
+                        f"residual blockers — healthy green run, not a violation "
+                        f"(plan 0.4 semantics); backstop remains armed",
+                        wake=False,
+                    )
+                self._write_state(state)
+                return "healthy-exempt"
             record = self.runner(
                 [
                     "bash",

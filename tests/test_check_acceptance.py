@@ -351,10 +351,36 @@ def test_class_subject_delete_makes_no_tree_claim(tmp_path: Path) -> None:
         ledger_rows=[
             {"phase": "x", "axis": "x", "kind": "delete",
              "subject": {"class": "some-behavior-class"},
-             "note": "enforced by test_x", "status": "landed"}
+             "note": "enforced by tests/test_check_acceptance.py::"
+                     "test_class_subject_delete_makes_no_tree_claim",
+             "status": "landed"}
         ],
     )
     assert ok.returncode == 0, ok.stderr
+    # Round-7 structural closure: the named forcing test is VERIFIED, and a class
+    # row naming none (or naming a ghost) is refused — an identity row with no
+    # enforcement pointer proves nothing.
+    unnamed = _run(
+        tmp_path,
+        ledger_rows=[
+            {"phase": "x", "axis": "x", "kind": "delete",
+             "subject": {"class": "some-behavior-class"},
+             "note": "enforced by vibes", "status": "landed"}
+        ],
+    )
+    assert unnamed.returncode == 1
+    assert "names no forcing test" in unnamed.stderr
+    ghost = _run(
+        tmp_path,
+        ledger_rows=[
+            {"phase": "x", "axis": "x", "kind": "delete",
+             "subject": {"class": "some-behavior-class"},
+             "note": "enforced by tests/test_no_such_file.py::test_missing",
+             "status": "landed"}
+        ],
+    )
+    assert ghost.returncode == 1
+    assert "does not exist" in ghost.stderr
     bare = _run(
         tmp_path,
         ledger_rows=[

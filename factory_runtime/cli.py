@@ -158,6 +158,16 @@ def _parser() -> argparse.ArgumentParser:
     pass_count.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(pass_count)
 
+    readiness_issues = commands.add_parser(
+        "readiness-issues",
+        help="read the retained generation-readiness snapshot's residual blockers "
+        "(plan 0.4 healthy-green exemption: the watchdog's deadline fires only when "
+        "residual blockers are PRESENT)",
+    )
+    readiness_issues.add_argument("--runs", required=True)
+    readiness_issues.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(readiness_issues)
+
     preflight = commands.add_parser(
         "preflight",
         help="feasibility preflight: the early NO from ratified facts (plan 1.1) — "
@@ -1040,6 +1050,40 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 {
                     "run_id": arguments.run_id,
                     "passes": store.validating_pass_count(arguments.run_id),
+                }
+            )
+        )
+        return
+    if arguments.command == "readiness-issues":
+        from factory_runtime.generation import GenerationError, _generation_blob
+
+        store = _load_replay_store(arguments)
+        readiness_projection = store.load(arguments.run_id)
+        readiness_digest = dict(readiness_projection.generation_artifact_digests).get(
+            "generation-readiness"
+        )
+        if not readiness_digest:
+            raise SystemExit(
+                "readiness-issues: run has no retained generation-readiness snapshot"
+            )
+        try:
+            readiness_blob = _generation_blob(
+                Path(arguments.runs),
+                arguments.run_id,
+                "generation-readiness",
+                readiness_digest,
+            )
+        except GenerationError as exc:
+            raise SystemExit(f"readiness-issues: {exc}") from exc
+        readiness_doc = json.loads(readiness_blob.payload_path.read_text(encoding="utf-8"))
+        print(
+            json.dumps(
+                {
+                    "run_id": arguments.run_id,
+                    "refused": bool(readiness_doc.get("refused", False)),
+                    "issues": list(
+                        (readiness_doc.get("report") or {}).get("issues", [])
+                    ),
                 }
             )
         )

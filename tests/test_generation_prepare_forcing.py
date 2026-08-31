@@ -59,7 +59,9 @@ def _phase(phase: str, artifact_id: str) -> PhaseArtifact:
     )
 
 
-def _target_toml(catalog_digest: str, *, with_signal: bool) -> str:
+def _target_toml(
+    catalog_digest: str, *, with_signal: bool, deadline: int = 1
+) -> str:
     lines = [
         'schema_version = "factory-target-manifest/2"',
         'target_id = "synthetic-prepare-forcing"',
@@ -83,7 +85,7 @@ def _target_toml(catalog_digest: str, *, with_signal: bool) -> str:
         lines += [
             "",
             "[build.signal]",
-            "signal_pass_deadline = 1",
+            f"signal_pass_deadline = {deadline}",
             "signal_pass_warn = 1",
             "signal_wall_clock_cap_hours = 24",
         ]
@@ -99,7 +101,9 @@ class _Clock:
         return self.value
 
 
-def _prepared_inputs(root: Path, *, with_signal: bool) -> tuple[RunStore, Path, Path, Path]:
+def _prepared_inputs(
+    root: Path, *, with_signal: bool, deadline: int = 1
+) -> tuple[RunStore, Path, Path, Path]:
     store = RunStore(root, clock=_Clock())
     artifacts = (
         _phase(PHASE_PRODUCT_SPECIFICATION, "product"),
@@ -118,7 +122,8 @@ def _prepared_inputs(root: Path, *, with_signal: bool) -> tuple[RunStore, Path, 
     catalog_path.write_text(json.dumps(catalog.body()), encoding="utf-8")
     target_path = root / "target.toml"
     target_path.write_text(
-        _target_toml(catalog.content_digest, with_signal=with_signal), encoding="utf-8"
+        _target_toml(catalog.content_digest, with_signal=with_signal, deadline=deadline),
+        encoding="utf-8"
     )
     target = load_target_manifest(target_path)
     create_intake_run(
@@ -211,14 +216,30 @@ def test_prepare_accepts_a_declared_signal_target(tmp_path: Path) -> None:
 
 
 def test_prepare_refuses_a_knobless_target(tmp_path: Path) -> None:
-    """Round-4 D1: 'mandatory at readiness' must be a prepare()-level refusal,
-    not a deletable extend call — this test is red under the unwiring mutation."""
+    """Round-4 D1, strengthened by round-6 6-4: build.signal is REQUIRED at
+    schema/2, so a knobless manifest refuses at PARSE — the earliest firing
+    point — and no frozen tuple can ever carry undeclared knobs. The verify-side
+    re-check is defense-in-depth, no longer the only wall."""
+    from factory_core.target import TargetManifestError
+
+    with pytest.raises(TargetManifestError, match="signal"):
+        _prepared_inputs(tmp_path, with_signal=False)
+
+
+def test_schema_refuses_a_wall_clock_cap_beyond_the_8760h_maximum(tmp_path: Path) -> None:
+    """Round-6 note: the 8760h maximum was referenced by zero tests — a cap of
+    9000 hours (unbounded-in-practice) must refuse at parse."""
+    from factory_core.target import TargetManifestError, load_target_manifest
+
     store, target_path, catalog_path, plan_path = _prepared_inputs(
-        tmp_path, with_signal=False
+        tmp_path, with_signal=True
     )
-    with pytest.raises(GenerationError) as excinfo:
-        _prepare(tmp_path, target_path, catalog_path, plan_path)
-    assert "signal-knobs-undeclared" in str(excinfo.value)
+    raised = target_path.read_text(encoding="utf-8").replace(
+        "signal_wall_clock_cap_hours = 24", "signal_wall_clock_cap_hours = 9000"
+    )
+    target_path.write_text(raised, encoding="utf-8")
+    with pytest.raises(TargetManifestError, match="schema violation"):
+        load_target_manifest(target_path)
 
 
 def test_prepare_refuses_a_resigned_manifest(tmp_path: Path) -> None:
@@ -243,8 +264,11 @@ def test_refused_prepare_retains_only_the_residual_blocker_snapshot(tmp_path: Pa
     generation-readiness snapshot (the per-attempt residual-blocker artifact,
     marked refused) — never the five input blobs the attempt will not consume.
     The preflight's read-only readiness reuse depends on this."""
+    # Schema/2 refuses knobless manifests at parse, so the readiness-level
+    # refusal this test needs comes from a schema-valid manifest whose deadline
+    # exceeds max_attempts (a _signal_knob_issues readiness issue).
     store, target_path, catalog_path, plan_path = _prepared_inputs(
-        tmp_path, with_signal=False
+        tmp_path, with_signal=True, deadline=5
     )
     with pytest.raises(GenerationError):
         _prepare(tmp_path, target_path, catalog_path, plan_path)
@@ -255,7 +279,7 @@ def test_refused_prepare_retains_only_the_residual_blocker_snapshot(tmp_path: Pa
     assert len(blobs) == 1
     document = json.loads((blobs[0] / "payload").read_text(encoding="utf-8"))
     assert document["refused"] is True
-    assert "signal-knobs-undeclared" in document["report"]["issues"]
+    assert "signal-pass-deadline-exceeds-max-attempts" in document["report"]["issues"]
 
 
 def test_attempt_two_reprepare_of_unchanged_manifest_succeeds(tmp_path: Path) -> None:

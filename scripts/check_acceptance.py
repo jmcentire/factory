@@ -41,13 +41,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AMBIENT_OVERRIDES = ("REMOVAL_LEDGER", "ACCEPTANCE_BASELINE", "ACCEPTANCE_PRE_TAG")
-LEDGER_KINDS = {"add", "delete", "de-rate", "demote", "gate-retire"}
+LEDGER_KINDS = {"add", "delete", "de-rate", "demote", "gate-retire", "note"}
 LEDGER_STATUSES = {"planned", "landed"}
 FORBIDDEN_LEDGER_FIELDS = {"removed_loc", "loc", "lines"}
 
@@ -239,14 +240,39 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
             continue
         if row.get("status") != "landed":
             continue  # planned rows make no tree claim yet (scoped verification)
+        if row["kind"] == "note":
+            continue  # corrections/annotations: no tree claim, census owned by tests
         subject = row.get("subject") or {}
         if row["kind"] == "delete":
             path = subject.get("path")
             if not path and subject.get("class"):
-                # A behavior-class deletion inside a surviving file (the plan's
-                # own ledger rows use this form, e.g. the freeze-then-refuse
-                # ordering). Identity-only: its enforcement is the forcing test
-                # the note names, not a tree claim.
+                # A behavior-class deletion inside a surviving file. Round-7's
+                # structural finding: "its enforcement is the forcing test the
+                # note names" was itself unenforced — so VERIFY the named tests.
+                # Every tests/<file>.py (optionally ::test_name) token in the
+                # note must exist on disk, and a named test function must appear
+                # in that file; a class row naming NO test at all is refused —
+                # an identity row with no enforcement pointer proves nothing.
+                named = re.findall(
+                    r"(tests/[A-Za-z0-9_./-]+\.py)(?:::([A-Za-z0-9_]+))?",
+                    str(row.get("note", "")),
+                )
+                if not named:
+                    failures.append(
+                        f"{label}: behavior-class delete names no forcing test in "
+                        f"its note — enforcement pointer required"
+                    )
+                for test_path, test_name in named:
+                    if not (repo / test_path).is_file():
+                        failures.append(
+                            f"{label}: named forcing test file {test_path} does not exist"
+                        )
+                    elif test_name and f"def {test_name}" not in (
+                        repo / test_path
+                    ).read_text(encoding="utf-8"):
+                        failures.append(
+                            f"{label}: {test_path} does not define {test_name}"
+                        )
                 continue
             if not path:
                 failures.append(f"{label}: landed delete without a subject path or class")

@@ -24,7 +24,7 @@
     },
     "construction-no-candidate": {
       "class": "signal",
-      "description": "a host-counted lane dispatch ended without a reviewable candidate (plan 0.4b): itself a NO-relevant signal \u2014 it fires the deadline and cannot burn unbounded wall-clock invisible to the instrument; emitted by the 0.4c watchdog/dispatcher"
+      "description": "a host-counted lane dispatch ended without a reviewable candidate (plan 0.4b): itself a NO-relevant signal \u2014 it fires the deadline and cannot burn unbounded wall-clock invisible to the instrument; RESERVED \u2014 no emitter is wired yet (the lane-completion accounting in dispatch_lane.sh wires it; round-6 6-10 corrected this description, which previously claimed an emitter that did not exist)"
     }
   }
 }

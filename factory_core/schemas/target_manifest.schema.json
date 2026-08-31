@@ -104,9 +104,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "pattern_catalog_digest",
+        "construction_modes",
         "max_attempts",
-        "construction_modes"
+        "pattern_catalog_digest",
+        "signal"
       ],
       "properties": {
         "pattern_catalog_digest": {
@@ -139,7 +140,7 @@
             "signal_pass_warn",
             "signal_wall_clock_cap_hours"
           ],
-          "description": "Signal-deadline knobs (remediation plan 0.4): pass-denominated deadline and warn (founder defaults 4/3; deadline must not exceed build.max_attempts) plus the mandatory wall-clock cap on elapsed-since-last-pass-advance. Optional at parse until the factory-target-manifest/2 bump; generation readiness refuses a run whose target omits them (signal-knobs-undeclared) \u2014 configurable never means disable-able.",
+          "description": "Signal-deadline knobs (remediation plan 0.4): pass-denominated deadline and warn (founder defaults 4/3; deadline must not exceed build.max_attempts) plus the mandatory wall-clock cap on elapsed-since-last-pass-advance. REQUIRED at schema/2 (round-6 6-4): a knobless manifest refuses at parse, so no frozen tuple can ever carry undeclared knobs and the verify-side re-check is defense-in-depth, not the only wall. Configurable never means disable-able.",
           "properties": {
             "signal_pass_deadline": {
               "type": "integer",

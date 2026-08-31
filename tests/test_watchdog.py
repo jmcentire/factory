@@ -43,13 +43,21 @@ class FakeRunner:
     """Answers the two CLI doors and record_no; scriptable per test."""
 
     def __init__(self, *, passes: int = 0, deadline: int = 4, warn: int = 3,
-                 cap_hours: float = 24.0, record_no_rc: int = 0) -> None:
+                 cap_hours: float = 24.0, record_no_rc: int = 0,
+                 residual_issues: list[str] | None = None,
+                 readiness_rc: int = 0) -> None:
         self.passes = passes
         self.deadline = deadline
         self.warn = warn
         self.cap_hours = cap_hours
         self.record_no_rc = record_no_rc
         self.record_no_calls: list[list[str]] = []
+        # plan 0.4 healthy-green exemption: default carries a residual blocker so
+        # the deadline tests keep firing; the exemption test empties it.
+        self.residual_issues = (
+            ["build-plan-oracle-links-empty"] if residual_issues is None else residual_issues
+        )
+        self.readiness_rc = readiness_rc
 
     def __call__(self, argv, capture_output=True, text=True):
         joined = " ".join(str(a) for a in argv)
@@ -60,6 +68,13 @@ class FakeRunner:
                 "signal_wall_clock_cap_hours": self.cap_hours,
             }
             return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+        if "readiness-issues" in joined:
+            if self.readiness_rc:
+                return subprocess.CompletedProcess(argv, self.readiness_rc, "", "no snapshot")
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"refused": bool(self.residual_issues),
+                                     "issues": self.residual_issues}), ""
+            )
         if "pass-count" in joined:
             return subprocess.CompletedProcess(
                 argv, 0, json.dumps({"passes": self.passes}), ""
@@ -192,12 +207,53 @@ def test_pass_advance_resets_the_stall(tmp_path: Path) -> None:
     assert not recorder.blocks
 
 
-def test_watchdog_reads_no_ambient_environment_for_knobs() -> None:
-    """The WAKE_TIMEOUT anti-precedent: knob values come only from the frozen
-    blob via the CLI door — the module contains no environment read at all."""
+def test_watchdog_reads_no_ambient_environment_for_knobs(tmp_path: Path) -> None:
+    """Round-6 6-9: the two-substring grep was alias-bypassable — this is now (a)
+    an AST scan: no attribute/name reachable from the os/environ vocabulary anywhere
+    in the module (import aliasing cannot hide an attribute access from the tree),
+    and (b) BEHAVIORAL: knob-looking environment variables set for the process do
+    not move the knobs the watchdog acts on — they come from the CLI door alone."""
+    import ast
+    import os
+
     source = (HARNESS / "watchdog.py").read_text(encoding="utf-8")
-    assert "os.environ" not in source
-    assert "getenv" not in source
+    tree = ast.parse(source)
+    banned_attrs = {"environ", "getenv", "environb", "putenv"}
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in banned_attrs:
+            offenders.append(f"attribute .{node.attr} at line {node.lineno}")
+        if isinstance(node, ast.Name) and node.id in banned_attrs:
+            offenders.append(f"name {node.id} at line {node.lineno}")
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in node.names]
+            if "os" in names or (isinstance(node, ast.ImportFrom) and node.module == "os"):
+                offenders.append(f"os import at line {node.lineno}")
+    assert not offenders, offenders
+
+    poisoned = {
+        "FACTORY_SIGNAL_PASS_DEADLINE": "1",
+        "SIGNAL_PASS_DEADLINE": "1",
+        "WAKE_TIMEOUT": "1",
+        "SIGNAL_WALL_CLOCK_CAP_HOURS": "0.0001",
+    }
+    saved = {k: os.environ.get(k) for k in poisoned}
+    os.environ.update(poisoned)
+    try:
+        runner = FakeRunner(passes=2, deadline=4, warn=3)
+        clock = [1000.0]
+        watchdog, _ = make_watchdog(tmp_path, runner, clock)
+        rec = Recorder()
+        # env says deadline=1 (would fire at passes=2); the CLI door says 4 — the
+        # watchdog must act on the door's knobs and stay quiet.
+        assert watchdog.check(rec.emit, rec.block) == "ok"
+        assert runner.record_no_calls == []
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def test_backstop_persists_across_watchdog_restarts(tmp_path: Path) -> None:
@@ -408,3 +464,70 @@ def test_dispatcher_run_loop_invokes_the_watchdog_and_halts_on_no(tmp_path: Path
     assert calls["n"] == 1
     events = (root / "events.jsonl").read_text()
     assert "dispatcher_stop" in events and "run no" in events
+
+
+def test_deadline_with_no_residual_blockers_exempts_instead_of_firing(tmp_path: Path) -> None:
+    """Round-6 6-11 / plan 0.4 semantics restored: a healthy green run at the
+    deadline with a demonstrated-EMPTY residual-blocker list is exempt — the
+    exemption is an emitted event (never silence), no NO is recorded, and the
+    wall-clock backstop stays armed."""
+    runner = FakeRunner(passes=4, residual_issues=[])
+    clock = [1000.0]
+    watchdog, _ = make_watchdog(tmp_path, runner, clock)
+    rec = Recorder()
+    assert watchdog.check(rec.emit, rec.block) == "healthy-exempt"
+    assert runner.record_no_calls == []
+    assert "signal_deadline_healthy_exemption" in rec.kinds()
+    clock[0] += 10.0
+    watchdog.check(rec.emit, rec.block)  # exemption event fires once, not per check
+    assert rec.kinds().count("signal_deadline_healthy_exemption") == 1
+
+
+def test_deadline_fires_fail_closed_when_the_readiness_door_refuses(tmp_path: Path) -> None:
+    """Only a demonstrated-empty issue list exempts: a refusing readiness door
+    (no snapshot, unreadable) fires the deadline exactly as before."""
+    runner = FakeRunner(passes=4, readiness_rc=2)
+    clock = [1000.0]
+    watchdog, _ = make_watchdog(tmp_path, runner, clock)
+    rec = Recorder()
+    assert watchdog.check(rec.emit, rec.block) == "deadline-fired"
+    assert len(runner.record_no_calls) == 1
+
+
+def test_real_cli_pass_count_ignores_dispatch_receipt_lines(tmp_path: Path) -> None:
+    """Round-7's actual 6-3 mutation was a cli.py fallback to dispatches.jsonl line
+    counts — the FakeRunner consumer test cannot see it. This drives the REAL CLI:
+    a run with zero VALIDATING admissions and a run root full of dispatch receipt
+    lines must report passes 0, and the handler may not name the receipts file."""
+    import subprocess as sp
+    import sys
+
+    repo = HARNESS.parent
+    venv_python = repo / ".venv" / "bin" / "python"
+    interpreter = str(venv_python) if venv_python.exists() else sys.executable
+
+    from factory_core.manifest import digest_obj
+    from factory_runtime.state import RunStore
+    from tests.conftest import create_intake_run
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    create_intake_run(
+        store,
+        run_id="r1",
+        target_digest="sha256:" + "a" * 64,
+        source_digest=digest_obj({"source": "r1"}),
+    )
+    (runs / "r1" / "dispatches.jsonl").write_text("{}\n" * 50, encoding="utf-8")
+    result = sp.run(
+        [interpreter, "-m", "factory_runtime.cli", "pass-count",
+         "--runs", str(runs), "--run-id", "r1"],
+        capture_output=True, text=True, cwd=repo,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["passes"] == 0
+    handler = (repo / "factory_runtime" / "cli.py").read_text(encoding="utf-8")
+    start = handler.index('if arguments.command == "pass-count":')
+    end = handler.index("return", start)
+    assert "dispatches" not in handler[start:end]
