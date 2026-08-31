@@ -60,7 +60,7 @@ def test_satisfiable_frame_is_a_clean_go() -> None:
     assert report.go and not report.hard_no
     assert report.ceiling == "pass"
     # liveness is probed at the CLI door; no plan was supplied for the 1.5 joins
-    assert report.not_applicable == ("plan-joins", "run-liveness")
+    assert report.not_applicable == ("plan-joins", "signal-deadline", "run-liveness")
 
 
 def test_uncovered_territory_without_criterion_is_pass_unreachable() -> None:
@@ -162,6 +162,7 @@ def test_could_not_check_is_loud_and_distinct_from_passed() -> None:
         "attempt-ceilings",
         "critical-roster",
         "plan-joins",
+        "signal-deadline",
         "run-liveness",
     }
     assert report.ceiling == "unknown"
@@ -433,3 +434,69 @@ def test_additive_fields_keep_ratified_digests_stable() -> None:
     step = BuildStep.from_dict(_step())
     assert "delivers_verbs" not in step.to_dict()
     assert "promises_probes" not in step.to_dict()
+
+
+def test_signal_deadline_expired_refuses_the_next_admission() -> None:
+    """Plan 4.1d's named forcing test: the admission refuses with the exact
+    reason code when pass-index >= deadline, no NO-relevant signal, and
+    residual blockers present."""
+    from factory_runtime.preflight import SignalDeadlineFacts
+
+    report = run_preflight(
+        signal_deadline=SignalDeadlineFacts(
+            passes=4,
+            deadline=4,
+            signal_known=True,
+            signal_present=False,
+            blockers_known=True,
+            residual_blockers=("build-plan-oracle-links-empty",),
+        )
+    )
+    assert not report.go
+    expired = [f for f in report.hard_no if f.code == "preflight-signal-deadline-expired"]
+    assert expired and expired[0].subject == "pass-4-of-4"
+
+
+def test_healthy_long_green_run_admits_normally() -> None:
+    """The second half of the plan's forcing pair: at the deadline with NO
+    residual blockers, the run admits — with the exemption noted, never silent."""
+    from factory_runtime.preflight import SignalDeadlineFacts
+
+    report = run_preflight(
+        signal_deadline=SignalDeadlineFacts(
+            passes=6, deadline=4, signal_known=True, signal_present=False,
+            blockers_known=True, residual_blockers=(),
+        )
+    )
+    assert report.go
+    assert "preflight-signal-deadline-healthy-exemption" in [
+        f.code for f in report.notes
+    ]
+
+
+def test_signal_deadline_unverifiable_is_loud_not_green() -> None:
+    from factory_runtime.preflight import SignalDeadlineFacts
+
+    report = run_preflight(
+        signal_deadline=SignalDeadlineFacts(
+            passes=4, deadline=4, signal_known=False, signal_present=False,
+            blockers_known=False, residual_blockers=(),
+        )
+    )
+    assert report.go  # cannot hard-NO on facts it could not read...
+    assert "preflight-signal-deadline-unverifiable" in [
+        f.code for f in report.disclosures
+    ]  # ...but it says so out loud
+
+
+def test_signal_present_satisfies_the_deadline() -> None:
+    from factory_runtime.preflight import SignalDeadlineFacts
+
+    report = run_preflight(
+        signal_deadline=SignalDeadlineFacts(
+            passes=5, deadline=4, signal_known=True, signal_present=True,
+            blockers_known=True, residual_blockers=("x",),
+        )
+    )
+    assert report.go
+    assert "preflight-signal-deadline-satisfied" in [f.code for f in report.notes]

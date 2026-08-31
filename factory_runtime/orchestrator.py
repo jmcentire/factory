@@ -255,9 +255,16 @@ class FactoryOrchestrator:
             # A malformed plan dies with its exact shape error at prepare();
             # the preflight only refuses on facts it could actually read.
             preflight_plan_attempts = None
+        # 4.1d: the signal-deadline condition is a host refusal at THIS admission
+        # door — the next BUILDING/model admission, never only a pager. The
+        # BUILDING row of the full transition table will absorb it when that
+        # migration reaches it; until then this preflight IS the admission.
+        from factory_runtime.preflight import probe_signal_deadline
+
         preflight_report = run_preflight(
             target_build=dict(preflight_target.build),
             plan_max_build_attempts=preflight_plan_attempts,
+            signal_deadline=probe_signal_deadline(self.workflow.root, run_id),
         )
         if not preflight_report.go:
             raise OrchestrationError(

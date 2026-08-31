@@ -45,6 +45,25 @@ from factory_runtime.generation import _signal_knob_issues
 
 
 @dataclass(frozen=True)
+class SignalDeadlineFacts:
+    """Signal-deadline facts probed at the model-admission door (plan 4.1d).
+
+    The 0.4 mechanical consequence: pass-index >= deadline with no NO-relevant
+    signal and residual blockers present is a HOST REFUSAL of the next
+    BUILDING/model admission — never only a pager. ``signal_known`` and
+    ``blockers_known`` keep the tri-state honest: an unreadable registry or
+    readiness snapshot is "could not check", loud, never a silent pass.
+    """
+
+    passes: int = 0
+    deadline: int | None = None
+    signal_known: bool = False
+    signal_present: bool = False
+    blockers_known: bool = False
+    residual_blockers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class LivenessFacts:
     """Dead-run facts probed from the filesystem (impure prober below);
     the preflight core stays a pure function over these."""
@@ -97,6 +116,7 @@ def run_preflight(
     plan_max_build_attempts: int | None = None,
     plan: BuildPlan | None = None,
     liveness: LivenessFacts | None = None,
+    signal_deadline: SignalDeadlineFacts | None = None,
 ) -> PreflightReport:
     """Compute the intake verdict from ratification-time facts only."""
 
@@ -378,6 +398,68 @@ def run_preflight(
                     )
                 )
 
+    # --- signal-deadline admission (plan 4.1d — the 0.4 mechanical consequence) ---
+    if signal_deadline is None:
+        not_applicable.append("signal-deadline")
+    elif signal_deadline.deadline is None:
+        not_applicable.append("signal-deadline")
+        disclosures.append(
+            PreflightFinding(
+                "preflight-signal-deadline-unfrozen",
+                "signal-deadline",
+                "no frozen deadline exists yet (pre-first-recorded-attempt): the "
+                "deadline admission was NOT checked",
+            )
+        )
+    elif signal_deadline.passes >= signal_deadline.deadline:
+        if signal_deadline.signal_known and signal_deadline.signal_present:
+            notes.append(
+                PreflightFinding(
+                    "preflight-signal-deadline-satisfied",
+                    "signal-deadline",
+                    f"pass {signal_deadline.passes}/{signal_deadline.deadline}: a "
+                    f"NO-relevant signal exists — the deadline is satisfied",
+                )
+            )
+        elif signal_deadline.blockers_known and not signal_deadline.residual_blockers:
+            notes.append(
+                PreflightFinding(
+                    "preflight-signal-deadline-healthy-exemption",
+                    "signal-deadline",
+                    f"pass {signal_deadline.passes}/{signal_deadline.deadline} with "
+                    f"no residual blockers: a healthy green run that legitimately "
+                    f"needs more passes is not a violation (plan 0.4 semantics)",
+                )
+            )
+        elif not signal_deadline.signal_known or not signal_deadline.blockers_known:
+            disclosures.append(
+                PreflightFinding(
+                    "preflight-signal-deadline-unverifiable",
+                    "signal-deadline",
+                    f"pass {signal_deadline.passes}/{signal_deadline.deadline} but "
+                    f"the signal registry or readiness snapshot could not be read: "
+                    f"the deadline admission was NOT verified — loud, not green",
+                )
+            )
+        else:
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-signal-deadline-expired",
+                    f"pass-{signal_deadline.passes}-of-{signal_deadline.deadline}",
+                    "signal deadline expired with no NO-relevant signal and "
+                    "residual blockers present: the next BUILDING/model admission "
+                    "is refused by the host — never only a pager (plan 0.4/4.1d)",
+                )
+            )
+    else:
+        notes.append(
+            PreflightFinding(
+                "preflight-signal-deadline-within",
+                "signal-deadline",
+                f"pass {signal_deadline.passes}/{signal_deadline.deadline}",
+            )
+        )
+
     # --- dead-run liveness (§1.1: detection only; time predictions are never
     # residual blockers) ----------------------------------------------------------
     if liveness is None:
@@ -503,4 +585,85 @@ def probe_liveness(runs_root: str | Any, run_id: str) -> LivenessFacts:
         guard_residue=guards,
         ledger_error=ledger_error,
         chain_error=chain_error,
+    )
+
+
+def probe_signal_deadline(
+    runs_root: str | Any, run_id: str, harness_dir: str | Any | None = None
+) -> SignalDeadlineFacts:
+    """Filesystem prober for the signal-deadline admission (impure seam, 4.1d).
+
+    Passes come from the verified run ledger; the deadline from the frozen
+    generation blob; NO-relevance from the committed baseline mirror the
+    watchdog also consumes (the registries own the fact; the baseline cites
+    it, contradiction-checked by check_acceptance); residual blockers from the
+    retained generation-readiness snapshot. Every unreadable input degrades to
+    its known=False tri-state — could-not-check is loud downstream, never green.
+    """
+
+    import json as _json
+    from pathlib import Path as _Path
+
+    from factory_runtime.generation import _frozen_signal_deadline, _generation_blob
+    from factory_runtime.state import RunStateError, RunStore
+
+    root = _Path(str(runs_root))
+    passes = 0
+    deadline: int | None = None
+    blockers_known = False
+    residual: tuple[str, ...] = ()
+    try:
+        store = RunStore(root)
+        projection = store.load(run_id)
+        passes = store.validating_pass_count(run_id)
+        deadline = _frozen_signal_deadline(root, run_id, projection)
+        readiness_digest = dict(projection.generation_artifact_digests).get(
+            "generation-readiness", ""
+        )
+        if readiness_digest:
+            blob = _generation_blob(root, run_id, "generation-readiness", readiness_digest)
+            document = _json.loads(blob.payload_path.read_text(encoding="utf-8"))
+            residual = tuple(
+                str(issue) for issue in (document.get("report") or {}).get("issues", [])
+            )
+            blockers_known = True
+    except (RunStateError, OSError, ValueError) as _exc:  # noqa: F841
+        deadline = None
+
+    signal_known = False
+    signal_present = False
+    harness = (
+        _Path(str(harness_dir))
+        if harness_dir is not None
+        else _Path(__file__).resolve().parent.parent / "harness"
+    )
+    baseline_path = harness.parent / "acceptance_baseline.json"
+    try:
+        baseline = _json.loads(baseline_path.read_text(encoding="utf-8"))
+        kinds = baseline.get("no_relevant_kinds")
+        if isinstance(kinds, dict):
+            relevant = {kind for kind, flag in kinds.items() if flag is True}
+            signal_known = True
+            events_path = root / run_id / "events.jsonl"
+            try:
+                for line in events_path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        row = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict) and row.get("kind") in relevant:
+                        signal_present = True
+                        break
+            except OSError:
+                signal_present = False  # no events file: genuinely no signal yet
+    except (OSError, _json.JSONDecodeError):
+        signal_known = False
+
+    return SignalDeadlineFacts(
+        passes=passes,
+        deadline=deadline,
+        signal_known=signal_known,
+        signal_present=signal_present,
+        blockers_known=blockers_known,
+        residual_blockers=residual,
     )

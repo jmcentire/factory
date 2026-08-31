@@ -1094,10 +1094,20 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             if arguments.build_plan
             else None
         )
-        from factory_runtime.preflight import LivenessFacts, probe_liveness
+        from factory_runtime.preflight import (
+            LivenessFacts,
+            SignalDeadlineFacts,
+            probe_liveness,
+            probe_signal_deadline,
+        )
 
         preflight_liveness: LivenessFacts | None = (
             probe_liveness(arguments.runs, arguments.run_id)
+            if arguments.runs and arguments.run_id
+            else None
+        )
+        preflight_signal: SignalDeadlineFacts | None = (
+            probe_signal_deadline(arguments.runs, arguments.run_id)
             if arguments.runs and arguments.run_id
             else None
         )
@@ -1111,6 +1121,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             ),
             plan=preflight_plan,
             liveness=preflight_liveness,
+            signal_deadline=preflight_signal,
         )
         print(json.dumps(preflight_report.to_dict(), indent=2))
         if not preflight_report.go:
