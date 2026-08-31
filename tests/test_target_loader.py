@@ -30,6 +30,11 @@ rules_path = "compliance/rules.json"
 pattern_catalog_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 max_attempts = 2
 construction_modes = ["regenerate", "brownfield"]
+
+[build.signal]
+signal_pass_deadline = 2
+signal_pass_warn = 1
+signal_wall_clock_cap_hours = 24
 """
 
 

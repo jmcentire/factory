@@ -170,6 +170,11 @@ def _ratified_run(root: Path) -> tuple[RunStore, tuple[PhaseArtifact, ...]]:
                 "max_attempts = 1",
                 'construction_modes = ["regenerate", "brownfield"]',
                 "",
+                "[build.signal]",
+                "signal_pass_deadline = 1",
+                "signal_pass_warn = 1",
+                "signal_wall_clock_cap_hours = 24",
+                "",
             )
         ),
         encoding="utf-8",

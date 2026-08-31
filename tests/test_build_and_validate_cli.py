@@ -217,6 +217,11 @@ def _build_fixture(tmp_path: Path, binary: Path):
                 "max_attempts = 2",
                 'construction_modes = ["regenerate", "brownfield"]',
                 "",
+                "[build.signal]",
+                "signal_pass_deadline = 2",
+                "signal_pass_warn = 1",
+                "signal_wall_clock_cap_hours = 24",
+                "",
             )
         ),
         encoding="utf-8",

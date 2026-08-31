@@ -130,6 +130,58 @@ def _phase_artifacts(
     return tuple(artifacts)
 
 
+def _signal_knob_issues(
+    build: Mapping[str, object],
+    frozen_attempt_limit: int | None,
+) -> tuple[str, ...]:
+    """Validate the target ABI's signal-deadline knobs (remediation plan §0.4a).
+
+    The three knobs live inside the target manifest, so they are frozen into the
+    generation tuple transitively: any knob edit changes the manifest digest and
+    fires target-manifest-run-digest-mismatch. The named raised-after-start issue
+    here additionally catches a re-signed ABI whose deadline exceeds the attempt
+    ceiling frozen at the first attempt — a mid-run re-sign that only raises the
+    deadline must fail the comparison and disarm nothing. The finer per-axis
+    comparison (each knob its own named axis) lands with Phase 3's replacement of
+    whole-tuple equality. Declaration is mandatory at readiness — configurable
+    never means disable-able — while schema-level requirement waits for the
+    factory-target-manifest/2 bump (refuse-at-parse is Phase 2.1's earliest
+    firing point).
+    """
+
+    signal = build.get("signal")
+    if not isinstance(signal, Mapping):
+        return ("signal-knobs-undeclared",)
+    deadline = signal.get("signal_pass_deadline")
+    warn = signal.get("signal_pass_warn")
+    cap = signal.get("signal_wall_clock_cap_hours")
+    if not (
+        isinstance(deadline, int)
+        and not isinstance(deadline, bool)
+        and deadline >= 1
+        and isinstance(warn, int)
+        and not isinstance(warn, bool)
+        and warn >= 1
+        and isinstance(cap, (int, float))
+        and not isinstance(cap, bool)
+        and cap > 0
+    ):
+        return ("signal-knobs-invalid",)
+    issues: list[str] = []
+    max_attempts = build.get("max_attempts")
+    if (
+        isinstance(max_attempts, int)
+        and not isinstance(max_attempts, bool)
+        and deadline > max_attempts
+    ):
+        issues.append("signal-pass-deadline-exceeds-max-attempts")
+    if warn > deadline:
+        issues.append("signal-warn-exceeds-deadline")
+    if frozen_attempt_limit and deadline > frozen_attempt_limit:
+        issues.append("deadline-knob-raised-after-start")
+    return tuple(issues)
+
+
 class GenerationPreparer:
     """Compile and freeze one per-attempt input tuple before any author lane starts."""
 
@@ -212,6 +264,7 @@ class GenerationPreparer:
             and plan.max_build_attempts > projection.build_attempt_limit
         ):
             issues.append("build-plan-attempt-limit-raised-after-start")
+        issues.extend(_signal_knob_issues(target.build, projection.build_attempt_limit))
         unique_issues = tuple(dict.fromkeys(issues))
         report = replace(report, ready=not unique_issues, issues=unique_issues)
 
