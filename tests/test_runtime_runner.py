@@ -1473,3 +1473,58 @@ def test_networked_backend_wall_limit_covers_a_child_that_never_reads_stdin(
 
     assert time.monotonic() - started < 5
     assert result.termination_reason == "wall-limit"
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt qualification")
+def test_lane_grant_containing_the_control_root_is_refused(tmp_path: Path) -> None:
+    """Plan §0.5: 'lanes have no write path to the control root' as its own
+    registered probe — the claim was asserted, now it is enforced evidence.
+    Both grant directions refuse: a writable grant overlapping the control
+    root, and a readable one (events.jsonl is not lane-readable either)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    control_root = tmp_path / ".factory" / "runs" / "r1"
+    control_root.mkdir(parents=True)
+    (control_root / "events.jsonl").write_text("", encoding="utf-8")
+    (workspace / "out").mkdir()
+    backend = MacOSNetworkedRunner()
+    backend.qualify(
+        workspace / "qualification",
+        allowed_executables=(sys.executable,),
+        forbidden_paths=(control_root,),
+    )
+    limits = RunnerLimits(10, 5, 2, 3, 65_536, 1, 0)
+    environment = {
+        "HOME": str(workspace),
+        "TMPDIR": str(workspace),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    command = (
+        sys.executable,
+        "-c",
+        "pass",
+        "--output-last-message",
+        str(control_root / "events.jsonl"),
+    )
+    with pytest.raises(RunnerError, match="overlaps a forbidden"):
+        backend.run(
+            command,
+            cwd=workspace,
+            readable_paths=(),
+            writable_paths=(control_root,),
+            environment=environment,
+            stdin=b"",
+            limits=limits,
+        )
+    with pytest.raises(RunnerError, match="overlaps a forbidden"):
+        backend.run(
+            command,
+            cwd=workspace,
+            readable_paths=(control_root / "events.jsonl",),
+            writable_paths=(workspace / "out",),
+            environment=environment,
+            stdin=b"",
+            limits=limits,
+        )

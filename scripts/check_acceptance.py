@@ -154,6 +154,21 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
             f"the registry owns NO-relevance and must declare it"
         )
 
+    # Round-3 G3 (pre-wired; values ratified at the Phase 0 sitting): once the
+    # baseline commits required_metrics, the reference corpus cannot be
+    # silently emptied — each named metric must retain its minimum row count.
+    for requirement in baseline.get("required_metrics") or []:
+        metric = requirement.get("metric")
+        minimum = requirement.get("min_rows", 1)
+        have = sum(
+            1 for row in (baseline.get("baseline_rows") or []) if row.get("metric") == metric
+        )
+        if have < int(minimum):
+            failures.append(
+                f"required metric {metric!r} has {have} baseline rows (< {minimum}) — "
+                f"the reference corpus was thinned below its ratified floor"
+            )
+
     # --- baseline rows: cited or explicitly underived -------------------------------
     def _verify_citation(label: str, artifact: dict) -> None:
         raw_path = str(artifact.get("path", ""))

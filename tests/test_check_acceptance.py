@@ -320,3 +320,23 @@ def test_gate_retire_flow_with_parametrized_probe(tmp_path: Path) -> None:
     git("commit", "-qm", "probe dies with its gate")
     clean = run_checker()
     assert clean.returncode == 0, clean.stderr
+
+
+def test_required_metrics_floor_pins_the_reference_corpus(tmp_path: Path) -> None:
+    """Round-3 G3 pre-wire: with required_metrics ratified into the baseline,
+    thinning the corpus below the floor fails ship."""
+    baseline = _good_baseline()
+    baseline["required_metrics"] = [
+        {"metric": "first_no_relevant_signal_hours", "min_rows": 4},
+        {"metric": "max_healthy_inter_pass_advance_gap_hours", "min_rows": 1},
+    ]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 0, r.stderr
+
+    baseline["baseline_rows"] = [
+        row for row in baseline["baseline_rows"]
+        if row["metric"] != "max_healthy_inter_pass_advance_gap_hours"
+    ]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "thinned below its ratified floor" in r.stderr
