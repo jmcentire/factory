@@ -35,14 +35,14 @@ ROOT="$FACTORY_CONTROL_ROOT"
 # verdict is already a recorded terminal signal.
 refusal_event() {
   python3 "$D/attention_gate.py" refusal-event --root "$ROOT" --kind refusal-endgame \
-    --source endgame.sh --detail "$1" --exit-code 70 || \
+    --source endgame.sh --detail "$1" --exit-code "${2:-70}" || \
     echo "endgame: refusal event could not be recorded" >&2
 }
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
-  { rc=$?; refusal_event "target-state verification refused"; exit "$rc"; }
+  { rc=$?; refusal_event "target-state verification refused" "$rc"; exit "$rc"; }
 
 RESOURCES=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN") || \
-  { rc=$?; refusal_event "resource verification refused"; exit "$rc"; }
+  { rc=$?; refusal_event "resource verification refused" "$rc"; exit "$rc"; }
 CANDIDATE=$(printf '%s' "$RESOURCES" | python3 -c '
 import json, pathlib, sys
 resource_id = sys.argv[1]
@@ -63,7 +63,7 @@ path = raw_path.resolve(strict=True)
 if not path.is_dir():
     raise SystemExit("endgame: candidate resource path is invalid")
 print(path)
-' "$CANDIDATE_RESOURCE") || { rc=$?; refusal_event "candidate resource resolution refused"; exit "$rc"; }
+' "$CANDIDATE_RESOURCE") || { rc=$?; refusal_event "candidate resource resolution refused" "$rc"; exit "$rc"; }
 git -C "$CANDIDATE" cat-file -e "$SHA^{commit}" 2>/dev/null || {
   refusal_event "final SHA is not a commit in the candidate resource"
   echo "endgame: $SHA is not a commit in run resource $CANDIDATE_RESOURCE" >&2

@@ -228,9 +228,11 @@ machine; shepherding is gone.
 
 ### B. `~/Code/tools` — the standards and the playbook
 
-- **`HARNESS.md` mirror** — keep in sync with the canonical `~/Code/factory/docs/HARNESS.md`.
+- **`HARNESS.md` mirror** — ~~keep in sync with the canonical `~/Code/factory/docs/HARNESS.md`.
   When the factory copy is ratified (status moves from "unratified proposal" to wired into
-  `lane_env` + `make ship`), the mirror ratifies in the same act.
+  `lane_env` + `make ship`), the mirror ratifies in the same act.~~
+  *(Retired 2026-08-30, mirror reconciliation: the `~/Code/tools` copies are thin pointers
+  now — there is no mirror to sync. Historical text struck, not rewritten.)*
 - **`CODE-REVIEW-STANDARD.md`** — add two rules as first-class review standards:
   1. *Guard the action, not the artifact* (the review skill's dominant failure: the check
      guards the fix's artifact instead of the prohibited action). Every guard must name the

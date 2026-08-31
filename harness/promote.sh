@@ -93,7 +93,8 @@ REJECTION="$ROOT/promotion_rejection.txt"
 # A close is about this exact target and only this run's resources. The operator's ambient
 # checkout, branches, worktrees, stashes, and PRs are not inspected. Every run-created or
 # contacted resource must already have an admissible explicit terminal disposition.
-factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || exit $?
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
+  { rc=$?; refusal_event "target-state verification refused" "$rc"; exit "$rc"; }
 if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --for-close \
   >/dev/null 2>"$REJECTION"; then
   refusal_event "run-owned resources lack a terminal disposition"
@@ -238,6 +239,7 @@ except OSError:
 print(f"promote: {run} closed — sole-advancement via decide_promotion verdict")
 PY
 then
+  refusal_event "harness.json close write failed: run NOT closed" 70
   echo "promote: harness.json close write failed — run NOT closed" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 70

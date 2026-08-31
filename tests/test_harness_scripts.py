@@ -7209,3 +7209,89 @@ def test_endgame_refusal_leaves_derivable_signal(tmp_path: Path) -> None:
     assert r.returncode != 0
     rows = _refusal_events(root)
     assert [row["kind"] for row in rows] == ["refusal-endgame"]
+
+
+def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
+    """Structural chokepoint (plan §0.1 per-path scope, verification round 2):
+    every fail-closed exit in promote.sh after the helper definition must have a
+    refusal_event call in its immediate block, so an uninstrumented refusal exit
+    cannot be added without turning this red. Exit 1 (BLOCKED) is exempt — it
+    renders a verdict file, which is already a recorded terminal signal. Exits
+    before the helper (usage, factory_load_context) are the stated pre-root
+    boundary."""
+    import re as _re
+
+    lines = (HARNESS / "promote.sh").read_text(encoding="utf-8").splitlines()
+    helper_at = next(i for i, line in enumerate(lines) if line.startswith("refusal_event()"))
+    exit_statement = _re.compile(r"(?:^|[;{|&]\s*)exit (?:2|64|66|70)\b")
+    missing = []
+    for i, line in enumerate(lines):
+        if i <= helper_at + 3:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if exit_statement.search(stripped):
+            window = "\n".join(lines[max(0, i - 6) : i + 1])
+            if "refusal_event" not in window:
+                missing.append(f"{i + 1}: {stripped}")
+    assert not missing, "fail-closed exits without a refusal event:\n" + "\n".join(missing)
+
+
+def test_endgame_refusal_exits_all_route_through_refusal_event() -> None:
+    """Same structural chokepoint for endgame.sh. The RED/GREEN verdict exit
+    (`exit \"$FAILED\"`) is exempt — a rendered verdict is a recorded signal."""
+    import re as _re
+
+    lines = (HARNESS / "endgame.sh").read_text(encoding="utf-8").splitlines()
+    helper_at = next(i for i, line in enumerate(lines) if line.startswith("refusal_event()"))
+    exit_statement = _re.compile(r"(?:^|[;{|&]\s*)exit (?:70|\"\$rc\")")
+    missing = []
+    for i, line in enumerate(lines):
+        if i <= helper_at + 3:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if exit_statement.search(stripped):
+            window = "\n".join(lines[max(0, i - 6) : i + 1])
+            if "refusal_event" not in window:
+                missing.append(f"{i + 1}: {stripped}")
+    assert not missing, "refusal exits without a refusal event:\n" + "\n".join(missing)
+
+
+def test_promote_blocked_decision_emits_no_refusal_event(tmp_path: Path) -> None:
+    """BLOCKED is a rendered verdict, not a silent death — the discriminating
+    sibling: no refusal event on exit 1."""
+    root = _make_run(tmp_path)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps({"request": {}, "policy": {}, "profile": {}}, indent=2),
+        encoding="utf-8",
+    )
+    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
+    assert r.returncode == 1
+    assert (root / "promotion_verdict.json").exists()
+    assert _refusal_events(root) == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="chflags uchg is the darwin write-block")
+def test_promote_close_write_failure_leaves_refusal_event(tmp_path: Path) -> None:
+    """The :243 silent-death class from verification round 2: a green verdict
+    whose harness.json close write fails must leave a refusal event (exit 70)."""
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+    subprocess.run(["chflags", "uchg", str(root / "harness.json")], check=True)
+    try:
+        r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
+    finally:
+        subprocess.run(["chflags", "nouchg", str(root / "harness.json")], check=False)
+    assert r.returncode == 70, (r.returncode, r.stderr)
+    assert _run_status(root) == "open"
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-promote"]
+    assert rows[0]["exit_code"] == 70

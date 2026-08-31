@@ -1,10 +1,10 @@
 {
  "audit": "control-classification (remediation plan Phase 0.6, axis 7a)",
  "date": "2026-08-30",
- "method": "18 file-group classifiers + per-group no-theatre skeptic challenge; disputed stamps reclassified fail-closed to LLM-ATTESTED; workflow wf_044be42d-098, 36 agents",
+ "method": "18 file-group classifiers + per-group no-theatre skeptic challenge; disputed stamps reclassified fail-closed to LLM-ATTESTED; workflow wf_044be42d-098, 36 agents; amended 2026-08-30 (round-2): attention_gate.py citations re-derived after the Phase 0.1 insertion via difflib line mapping, writer-control row added class-at-birth",
  "status": "DRAFT - pending founder ratification and GLM-seat verification",
  "tally": {
-  "HOST-MECHANICAL": 1154,
+  "HOST-MECHANICAL": 1155,
   "LLM-ATTESTED": 139,
   "BYTE-CRYPTOGRAPHIC": 19,
   "HUMAN-SIGNED": 10
@@ -9309,9 +9309,18 @@
    "group": "harness-coord"
   },
   {
+   "control": "Refusal-event closed writer (append_refusal_event)",
+   "file": "harness/attention_gate.py",
+   "line": 478,
+   "clazz": "HOST-MECHANICAL",
+   "evidence": "Phase 0.1 addition, stamped at birth: locked/fsynced append through _append_jsonl with a committed closed kind registry; unregistered kinds and malformed strings degrade (refusal-unregistered, truncation) rather than raising, so a refusal signal is never swallowed.",
+   "llm_disobedience_answer": "Host shell refusal paths invoke it; the registry is committed data; an LLM lane has no write path to the control root (0.5 probe) and cannot mint or suppress kinds.",
+   "group": "harness-coord"
+  },
+  {
    "control": "lane admission blocked while any applicable .blocking has bytes",
    "file": "harness/attention_gate.py",
-   "line": 486,
+   "line": 551,
    "clazz": "HOST-MECHANICAL",
    "evidence": "Under the attention lock, one nonzero byte in the lane's (and for dispatch roles the validator's) blocking file raises BlockingEventPending (exit 81).",
    "llm_disobedience_answer": "the check runs in host code before the lane process starts; the lane never gets a chance to ignore it",
@@ -9320,7 +9329,7 @@
   {
    "control": "per-role dispatch mutex (crash-released, non-blocking flock)",
    "file": "harness/attention_gate.py",
-   "line": 510,
+   "line": 575,
    "clazz": "HOST-MECHANICAL",
    "evidence": "LOCK_EX|LOCK_NB on the role lock file; a second concurrent dispatch gets 'role dispatch is already active'.",
    "llm_disobedience_answer": "kernel flock arbitration",
@@ -9329,7 +9338,7 @@
   {
    "control": "dispatch admission: blockers checked at the same ordering point as the mutex",
    "file": "harness/attention_gate.py",
-   "line": 527,
+   "line": 592,
    "clazz": "HOST-MECHANICAL",
    "evidence": "Blocker check and role-mutex acquisition both occur while holding the run-local attention lock, closing the write/admit race.",
    "llm_disobedience_answer": "lock-ordered host code",
@@ -9338,7 +9347,7 @@
   {
    "control": "inherited dispatch-lock verification (fd>=3, canonical inode, ownership, re-admission)",
    "file": "harness/attention_gate.py",
-   "line": 550,
+   "line": 615,
    "clazz": "HOST-MECHANICAL",
    "evidence": "fstat/lstat dev-ino equality against the canonical lock path, flock re-acquisition proof, and a repeat blocker check \u2014 an env var and caller fd are explicitly not treated as authority.",
    "llm_disobedience_answer": "kernel inode identity and flock; a fabricated FACTORY_DISPATCH_LOCK_FD is refused",
