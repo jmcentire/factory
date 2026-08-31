@@ -595,6 +595,16 @@ defects*). Run every gate; never read a clean gate as a clean bill of health.
   that get discovered by accident.
 - Write each item's evidence into the manifest **when it is obtained.** Do not reconstruct a
   long run from working memory at the end.
+- **Native-test readiness timeout is classified from the mechanical facts only, never by
+  inferring a cause.** The generic executor emits argv, timings/bounds, the readiness command's
+  exit/stdout/stderr, and candidate liveness (and any optional structured output the command
+  chose to emit — never required). When readiness does not reach exit 0, report exactly what the
+  retained evidence proves: *the candidate remained alive (or exited, with its code); the
+  readiness command timed out; the acceptance tests did not start.* The **cause is unknown**
+  unless retained evidence independently proves it — do not attribute it to the candidate, the
+  Tester artifact, or the environment from a timeout alone. A proven candidate defect (e.g. an
+  independently reproduced implementation race) is corrected through the **next Coder artifact**,
+  never by editing the Tester artifact, the oracle, or the acceptance criteria.
 
 ---
 

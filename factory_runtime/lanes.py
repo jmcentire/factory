@@ -866,7 +866,8 @@ class IsolatedBuildLoop:
         skipped. Readiness runs in the test-side profile and never reads the candidate tree.
         """
 
-        deadline = time.monotonic() + native_execution.readiness_timeout_seconds
+        started = time.monotonic()
+        deadline = started + native_execution.readiness_timeout_seconds
         attempts = 0
         last: IsolatedProcessResult | None = None
         outcome = "readiness-timeout"
@@ -891,24 +892,48 @@ class IsolatedBuildLoop:
                 outcome = "readiness-timeout"
                 break
             time.sleep(native_execution.readiness_interval_seconds)
+        candidate_alive = handle.poll() is None
+        # Generic, protocol-agnostic executor evidence only: the declared argv, the elapsed/bound
+        # timings, the readiness command's exit/stdout/stderr, and candidate liveness. The Factory
+        # asserts nothing about *why* readiness did not succeed; a cause is knowable only from
+        # retained evidence that independently proves it, never inferred from a timeout.
         evidence = {
             "outcome": outcome,
+            "readiness_argv": list(native_execution.readiness_entrypoint),
             "attempts": attempts,
+            "readiness_timeout_seconds": native_execution.readiness_timeout_seconds,
+            "readiness_interval_seconds": native_execution.readiness_interval_seconds,
+            "readiness_max_attempts": native_execution.readiness_max_attempts,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
             "last_returncode": None if last is None else last.returncode,
             "last_stdout": "" if last is None else last.stdout[-4096:],
             "last_stderr": "" if last is None else last.stderr[-4096:],
             "candidate_returncode": handle.poll(),
+            "candidate_alive": candidate_alive,
+            "acceptance_tests_started": outcome == "ready",
         }
         (readiness_output / "native-readiness.json").write_text(
             json.dumps(evidence, sort_keys=True), encoding="utf-8"
         )
         if outcome == "ready":
             return None
+        # Report only what the mechanical facts prove; do not attribute a cause.
+        if outcome == "candidate-early-exit":
+            summary = (
+                "native readiness: candidate exited before serving "
+                f"(rc={handle.poll()}); acceptance tests did not start"
+            )
+        else:
+            summary = (
+                "native readiness: candidate remained alive; readiness command timed out after "
+                f"{attempts} attempt(s) / {evidence['elapsed_seconds']}s; acceptance tests did not "
+                "start; cause unknown unless retained evidence independently proves it"
+            )
         return IsolatedProcessResult(
             command=native_execution.readiness_entrypoint,
             returncode=1,
             stdout="",
-            stderr=f"native readiness failed: {outcome} after {attempts} attempt(s)",
+            stderr=summary,
         )
 
     def _run_validator(
