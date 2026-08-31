@@ -24,7 +24,18 @@ case "$ROLE" in coder|tester) ;; *) echo "role must be coder|tester" >&2; exit 6
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
-fail() { echo "no oracle yet — $1" >&2; exit 70; }
+# Phase 0.1 (remediation plan): every refusal writes one events.jsonl row before exiting,
+# through the closed writer, so the earliest deaths leave a derivable signal. A refusal
+# before the run root resolves (factory_load_context itself failing) has no event sink —
+# that pre-root gap is a stated residual, covered by the process exit code alone.
+fail() {
+  if [ -n "${ROOT:-}" ] && [ -d "${ROOT:-}" ]; then
+    python3 "$D/attention_gate.py" refusal-event --root "$ROOT" --kind refusal-dispatch \
+      --source dispatch_lane.sh --detail "$1" --exit-code 70 || \
+      echo "dispatch: refusal event could not be recorded" >&2
+  fi
+  echo "no oracle yet — $1" >&2; exit 70
+}
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG" || fail "run is not a checked Stage-E-authorized v5 run"

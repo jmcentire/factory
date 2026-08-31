@@ -905,6 +905,9 @@ def test_dispatch_refuses_unconfirmed_interpretation(tmp_path: Path) -> None:
         _dispatch_env(stub, root),
     )
     assert r.returncode == 70 and "structured dispatch" in r.stderr
+    # Phase 0.1 forcing: the dispatch refusal leaves its signal.
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-dispatch"]
 
 
 def test_dispatch_refuses_omitted_effective_directive_before_model_use(
@@ -1630,6 +1633,8 @@ def test_phase1_gate_passes_on_adequate_artifacts(tmp_path: Path) -> None:
     r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "phase1 gate: clean" in r.stdout
+    # GO sibling for the refusal instrumentation: a clean gate emits nothing.
+    assert _refusal_events(tmp_path / ".factory" / "runs" / "r1") == []
 
 
 def test_phase1_gate_refuses_requirement_that_names_its_oracle(tmp_path: Path) -> None:
@@ -1662,6 +1667,12 @@ def test_phase1_gate_refuses_missing_oracle_contract(tmp_path: Path) -> None:
     r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False))
     assert r.returncode == 71
     assert "oracle-contract.md" in r.stdout
+    # Phase 0.1 forcing: exactly one registered refusal event, UTC host ts.
+    rows = _refusal_events(tmp_path / ".factory" / "runs" / "r1")
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "refusal-phase1-gate"
+    assert rows[0]["exit_code"] == 71
+    assert str(rows[0]["ts"]).endswith("+00:00")
 
 
 def test_phase1_gate_ignores_ambient_gap_override_and_still_refuses(tmp_path: Path) -> None:
@@ -1669,8 +1680,10 @@ def test_phase1_gate_ignores_ambient_gap_override_and_still_refuses(tmp_path: Pa
     tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False)
     r = p1(tmp, PHASE1_ALLOW_GAPS="1")
     assert r.returncode == 71
-    events = tmp / ".factory" / "runs" / "r1" / "events.jsonl"
-    assert not events.exists()
+    # The override changes nothing, and the refusal now leaves its signal
+    # (Phase 0.1): exactly one registered refusal event — never a permission.
+    rows = _refusal_events(tmp / ".factory" / "runs" / "r1")
+    assert [row["kind"] for row in rows] == ["refusal-phase1-gate"]
     assert "Fix and re-ratify" in r.stdout
 
 
@@ -6806,6 +6819,9 @@ def test_promote_fail_closes_when_inputs_missing(tmp_path: Path) -> None:
     assert _run_status(root) == "open"
     # No verdict is rendered for a run with no evidence.
     assert not (root / "promotion_verdict.json").exists()
+    # Phase 0.1 forcing: the silent-death close now leaves its signal.
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-promote"]
 
 
 def test_promote_fail_closes_when_cli_unreachable(tmp_path: Path) -> None:
@@ -7109,3 +7125,87 @@ def test_lane_env_ground_min_invalid_value_refuses(tmp_path: Path) -> None:
     )
     assert r.returncode == 76, r.stdout + r.stderr
     assert "invalid HARNESS_MAX_GROUND_MIN" in r.stderr
+
+
+# --------------------------------------------------------------------------
+# Phase 0.1 (remediation plan) — refusal-path event instrumentation.
+# Every refusal exit writes exactly one events.jsonl row with a kind from the
+# committed closed registry, so the earliest deaths leave a derivable signal.
+# The registry gates naming only; a registry gap can never swallow the death.
+# --------------------------------------------------------------------------
+
+
+def _refusal_events(root: Path) -> list[dict[str, object]]:
+    path = root / "events.jsonl"
+    if not path.exists():
+        return []
+    return [row for row in read_chain(path) if row.get("class") == "refusal"]
+
+
+def test_refusal_kind_registry_is_closed_over_harness_usage() -> None:
+    """Axis-2 additions are data-file diffs visible in git, never runtime-invented
+    kinds: every --kind a harness script passes must be in the committed registry."""
+    registry = json.loads(
+        (HARNESS / "refusal_event_kinds.json").read_text(encoding="utf-8")
+    )["kinds"]
+    used: set[str] = set()
+    for script in sorted(HARNESS.glob("*.sh")):
+        tokens = script.read_text(encoding="utf-8").split()
+        used.update(
+            tokens[i + 1]
+            for i, token in enumerate(tokens[:-1])
+            if token == "--kind"
+        )
+    assert used, "no harness script passes --kind — instrumentation is unwired"
+    assert used <= set(registry), f"unregistered kinds in harness scripts: {used - set(registry)}"
+    assert "refusal-unregistered" in registry
+
+
+def test_refusal_event_unregistered_kind_degrades_never_swallows(tmp_path: Path) -> None:
+    """An unregistered kind maps to refusal-unregistered with the attempted kind
+    preserved — the registry gates naming, never whether the death is recorded."""
+    root = tmp_path / "runroot"
+    root.mkdir()
+    r = run(
+        [
+            "python3",
+            str(HARNESS / "attention_gate.py"),
+            "refusal-event",
+            "--root",
+            str(root),
+            "--kind",
+            "refusal-not-a-registered-kind",
+            "--source",
+            "test",
+            "--detail",
+            "boom",
+        ],
+        tmp_path,
+    )
+    assert r.returncode == 0, r.stderr
+    rows = _refusal_events(root)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "refusal-unregistered"
+    assert "refusal-not-a-registered-kind" in str(rows[0]["detail"])
+    assert "boom" in str(rows[0]["detail"])
+
+
+def test_endgame_refusal_leaves_derivable_signal(tmp_path: Path) -> None:
+    """An endgame that cannot even resolve its candidate resource still leaves
+    exactly one registered refusal event before dying."""
+    root = _make_run(tmp_path)
+    r = run(
+        [
+            "bash",
+            str(HARNESS / "endgame.sh"),
+            "r1",
+            "a" * 40,
+            "--candidate-resource",
+            "no-such-resource",
+        ],
+        tmp_path,
+        _factory_cli_env(),
+    )
+    assert r.returncode != 0
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-endgame"]

@@ -30,9 +30,19 @@ FACTORY_CLI="${FACTORY_CLI:-factory}"
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
-factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null
+# Phase 0.1 (remediation plan): refusal exits leave a derivable events.jsonl signal
+# through the closed writer. The RED/GREEN verdict path is not instrumented — a rendered
+# verdict is already a recorded terminal signal.
+refusal_event() {
+  python3 "$D/attention_gate.py" refusal-event --root "$ROOT" --kind refusal-endgame \
+    --source endgame.sh --detail "$1" --exit-code 70 || \
+    echo "endgame: refusal event could not be recorded" >&2
+}
+factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
+  { rc=$?; refusal_event "target-state verification refused"; exit "$rc"; }
 
-RESOURCES=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN")
+RESOURCES=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN") || \
+  { rc=$?; refusal_event "resource verification refused"; exit "$rc"; }
 CANDIDATE=$(printf '%s' "$RESOURCES" | python3 -c '
 import json, pathlib, sys
 resource_id = sys.argv[1]
@@ -53,13 +63,14 @@ path = raw_path.resolve(strict=True)
 if not path.is_dir():
     raise SystemExit("endgame: candidate resource path is invalid")
 print(path)
-' "$CANDIDATE_RESOURCE")
+' "$CANDIDATE_RESOURCE") || { rc=$?; refusal_event "candidate resource resolution refused"; exit "$rc"; }
 git -C "$CANDIDATE" cat-file -e "$SHA^{commit}" 2>/dev/null || {
+  refusal_event "final SHA is not a commit in the candidate resource"
   echo "endgame: $SHA is not a commit in run resource $CANDIDATE_RESOURCE" >&2
   exit 70
 }
 RESOLVED=$(git -C "$CANDIDATE" rev-parse --verify "$SHA^{commit}")
-[ "$RESOLVED" = "$SHA" ] || { echo "endgame: final SHA did not resolve exactly" >&2; exit 70; }
+[ "$RESOLVED" = "$SHA" ] || { refusal_event "final SHA did not resolve exactly"; echo "endgame: final SHA did not resolve exactly" >&2; exit 70; }
 
 RESOURCE_ID="endgame-checkout-${SHA:0:12}-$$"
 FRESH="$ROOT/endgame/$RESOURCE_ID"
@@ -86,6 +97,7 @@ resource_event '{}' planned
 mkdir -p "$FRESH"
 if ! git -C "$CANDIDATE" archive "$SHA" | tar -x -C "$FRESH"; then
   resource_event '{"reason":"candidate archive failed","residue":true}' failed || true
+  refusal_event "candidate archive failed"
   exit 70
 fi
 ( cd "$FRESH" && git init --quiet -b endgame/subject && git add -A && \

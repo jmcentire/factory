@@ -38,11 +38,21 @@ FACTORY_CLI="${FACTORY_CLI:-factory}"
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG" || exit $?
 ROOT="$FACTORY_CONTROL_ROOT"
+# Phase 0.1 (remediation plan): every fail-closed refusal writes one events.jsonl row
+# through the closed writer before exiting, so a run that dies at the close leaves a
+# derivable signal. BLOCKED (exit 1) is not instrumented here: it renders a verdict
+# file, which is already a recorded terminal signal.
+refusal_event() {
+  python3 "$D/attention_gate.py" refusal-event --root "$ROOT" --kind refusal-promote \
+    --source promote.sh --detail "$1" --exit-code "${2:-2}" || \
+    echo "promote: refusal event could not be recorded" >&2
+}
 [ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ] || {
+  refusal_event "no checked harness.json" 64
   echo "promote: no checked harness.json at $ROOT" >&2; exit 64;
 }
 python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
-  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY' || exit 66
+  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY' || { refusal_event "harness metadata check refused" 66; exit 66; }
 import json, os, stat, sys
 path, run, target_state, commit, checkout = sys.argv[1:]
 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -86,6 +96,7 @@ REJECTION="$ROOT/promotion_rejection.txt"
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || exit $?
 if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" --for-close \
   >/dev/null 2>"$REJECTION"; then
+  refusal_event "run-owned resources lack a terminal disposition"
   echo "promote: run-owned resources lack a terminal disposition" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 2
@@ -101,19 +112,21 @@ fi
 # A no-op FACTORY_CLI (e.g. `true`) writes nothing and the close fail-closes below.
 rm -f "$VERDICT_FILE" "$VERDICT_STDOUT"
 if ! $FACTORY_CLI promote --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" >"$VERDICT_STDOUT" 2>"$REJECTION"; then
+  refusal_event "no verdict rendered: decide_promotion could not ground a decision"
   echo "promote: refused — no verdict rendered (decide_promotion could not ground a decision)" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 2
 fi
 # The CLI writes promotion_verdict.json (the audited record) and emits the same decision to
 # stdout. A missing verdict file means the CLI exited 0 without rendering one — fail-closed.
-[ -f "$VERDICT_FILE" ] || { echo "promote: factory CLI exited 0 but wrote no $VERDICT_FILE" >&2; exit 2; }
+[ -f "$VERDICT_FILE" ] || { refusal_event "factory CLI exited 0 but wrote no verdict file"; echo "promote: factory CLI exited 0 but wrote no $VERDICT_FILE" >&2; exit 2; }
 # BINDING (Opus F2): the verdict file must be THIS invocation's output, not a forgery. The
 # CLI writes the file and prints the identical decision to stdout; a byte-for-byte match
 # proves the file was produced by the CLI call we just made. A stale/forged file that
 # somehow survived the rm -f above (or a CLI that writes one thing and prints another) is
 # caught here and fail-closes.
 if ! diff -q "$VERDICT_FILE" "$VERDICT_STDOUT" >/dev/null 2>&1; then
+  refusal_event "verdict file does not match CLI stdout: stale/forged verdict refused"
   echo "promote: verdict file does not match CLI stdout — refusing a stale/forged verdict" >&2
   exit 2
 fi
@@ -136,6 +149,7 @@ PY
 )
 rc=$?
 if [ "$rc" -ne 0 ]; then
+  refusal_event "verdict unreadable"
   echo "promote: verdict unreadable — $ALLOWED" >&2; exit 2
 fi
 if [ "$ALLOWED" != "true" ]; then
@@ -153,6 +167,7 @@ fi
 # still-open run, while a race between the first check and this point is caught here.
 if ! $FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
   --for-close --seal --actor gate-l >/dev/null 2>"$REJECTION"; then
+  refusal_event "terminal resource seal refused: run not closed"
   echo "promote: terminal resource seal refused — run not closed" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
   exit 2

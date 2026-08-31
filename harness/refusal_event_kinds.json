@@ -1,0 +1,11 @@
+{
+  "schema_version": "factory-refusal-kinds/1",
+  "comment": "Closed registry of refusal-event kinds (remediation plan Phase 0.1). Every refusal exit in the harness writes exactly one events.jsonl row whose kind is listed here. Additions are data-file diffs visible in git; runtime code never invents a kind. The writer maps any unregistered kind to refusal-unregistered so a refusal signal is never swallowed by a registry gap.",
+  "kinds": {
+    "refusal-dispatch": "dispatch_lane.sh fail(): lane dispatch refused before launch",
+    "refusal-phase1-gate": "phase1_gate.sh gate G: artifact adequacy gate refused; lanes must not launch",
+    "refusal-promote": "promote.sh fail-closed exit: refused control, no verdict rendered",
+    "refusal-endgame": "endgame.sh refusal exit: endgame could not complete its judgment",
+    "refusal-unregistered": "a refusal path supplied a kind absent from this registry; the attempted kind is recorded in detail"
+  }
+}

@@ -453,6 +453,71 @@ def append_blocking_event(
         os.close(lock_fd)
 
 
+_REFUSAL_KINDS_PATH = pathlib.Path(__file__).resolve().parent / "refusal_event_kinds.json"
+_REFUSAL_FALLBACK_KIND = "refusal-unregistered"
+
+
+def _registered_refusal_kinds() -> dict[str, str]:
+    """Load the committed closed kind registry; unreadable/invalid returns {}.
+
+    An empty result routes every kind through the fallback rather than raising:
+    a registry problem must never swallow the refusal signal it exists to name.
+    """
+
+    try:
+        with open(_REFUSAL_KINDS_PATH, encoding="utf-8") as handle:
+            document = json.load(handle)
+        kinds = document["kinds"]
+        if not isinstance(kinds, dict):
+            return {}
+        return {str(k): str(v) for k, v in kinds.items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def append_refusal_event(
+    root: pathlib.Path,
+    *,
+    kind: str,
+    source: str,
+    detail: str = "",
+    exit_code: int = 70,
+) -> dict[str, object]:
+    """Durably append one refusal event so the earliest deaths leave a derivable signal.
+
+    Remediation plan Phase 0.1: every refusal exit writes one host-timestamped
+    events.jsonl row before exiting, inside this module's serialized-writer
+    discipline (the per-file lock in _append_jsonl — the common ordering
+    primitive with every other events.jsonl producer). Kinds come only from
+    the committed closed registry; an unregistered kind degrades to
+    refusal-unregistered with the attempted kind preserved in detail — the
+    registry gates naming, never whether the death is recorded.
+    """
+
+    root = pathlib.Path(root)
+    registered = _registered_refusal_kinds()
+    admitted_kind = kind if kind in registered else _REFUSAL_FALLBACK_KIND
+    if admitted_kind != kind:
+        attempted = f"unregistered kind {kind!r}"
+        detail = f"{attempted}: {detail}" if detail else attempted
+
+    def _truncated(value: str, maximum: int) -> str:
+        # Truncate rather than raise: a malformed caller string must never
+        # swallow the refusal signal itself.
+        return value.encode("utf-8")[:maximum].decode("utf-8", errors="ignore")
+
+    row: dict[str, object] = {
+        "ts": dt.datetime.now(dt.UTC).isoformat(),
+        "kind": admitted_kind,
+        "class": "refusal",
+        "source": _truncated(source, 256),
+        "detail": _truncated(detail, 4096),
+        "exit_code": int(exit_code),
+    }
+    _append_jsonl(root / "events.jsonl", row)
+    return row
+
+
 def _file_has_bytes(path: pathlib.Path) -> bool:
     try:
         descriptor = os.open(
@@ -592,9 +657,23 @@ def main() -> int:
     check = subparsers.add_parser("check")
     check.add_argument("--root", type=pathlib.Path, required=True)
     check.add_argument("--lane", choices=sorted(_LANES), required=True)
+    refusal = subparsers.add_parser("refusal-event")
+    refusal.add_argument("--root", type=pathlib.Path, required=True)
+    refusal.add_argument("--kind", required=True)
+    refusal.add_argument("--source", required=True)
+    refusal.add_argument("--detail", default="")
+    refusal.add_argument("--exit-code", type=int, default=70)
     arguments = parser.parse_args()
     try:
-        if arguments.command == "check":
+        if arguments.command == "refusal-event":
+            append_refusal_event(
+                arguments.root,
+                kind=arguments.kind,
+                source=arguments.source,
+                detail=arguments.detail,
+                exit_code=arguments.exit_code,
+            )
+        elif arguments.command == "check":
             check_lane_admission(arguments.root, arguments.lane)
         elif arguments.command == "verify-held":
             verify_dispatch_lock(arguments.root, arguments.role, arguments.fd)

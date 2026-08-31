@@ -149,6 +149,11 @@ if [ "$FAILURES" -gt 0 ]; then
   echo
   echo "phase1 gate: $FAILURES failure(s). Lanes must not launch."
   echo "Fix and re-ratify the artifacts before dispatch."
+  # Phase 0.1: gate G's refusal leaves a derivable signal before exiting.
+  python3 "$(cd "$(dirname "$0")" && pwd -P)/attention_gate.py" refusal-event \
+    --root "$ROOT" --kind refusal-phase1-gate --source phase1_gate.sh \
+    --detail "phase1 gate: $FAILURES failure(s); lanes must not launch" --exit-code 71 || \
+    echo "phase1: refusal event could not be recorded" >&2
   exit 71
 fi
 echo
