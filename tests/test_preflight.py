@@ -500,3 +500,13 @@ def test_signal_present_satisfies_the_deadline() -> None:
     )
     assert report.go
     assert "preflight-signal-deadline-satisfied" in [f.code for f in report.notes]
+
+
+def test_zero_enrolled_humans_is_authority_unreachable_hard_no() -> None:
+    """4.1 intake authority-reachability: with no enrolled human, every receipt
+    signer is unresolvable — nothing can ever ratify, so this is a hard NO at
+    hour zero, not a Critical-scoped disclosure. The GO sibling is every test
+    that passes a nonempty roster."""
+    report = run_preflight(profile=_profile(), policy=_policy(()))
+    assert not report.go
+    assert "preflight-authority-unreachable" in [f.code for f in report.hard_no]

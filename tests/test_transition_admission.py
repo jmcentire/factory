@@ -142,3 +142,28 @@ def test_both_state_paths_consume_the_same_row(tmp_path, monkeypatch) -> None:
         )
     with pytest.raises(RunStateError, match="nonce count"):
         store.rebuild_projection("r1")  # derive path walks the same poisoned rule
+
+
+def test_every_byte_admitting_row_names_a_callable_validator() -> None:
+    """4.1's rule for LLM entry rows, as a contract rather than a count: a row
+    that admits externally produced bytes must name its mechanical validator,
+    and the name must resolve to a callable in ADMISSION_VALIDATORS. No current
+    row admits bytes — this test is the reason the first one that does cannot
+    land unvalidated."""
+    from factory_runtime.transition_admission import ADMISSION_VALIDATORS
+
+    for version, row in TRANSITION_ADMISSION.items():
+        if row.admits_external_bytes:
+            assert row.named_validator, (
+                f"{version}: byte-admitting row names no validator"
+            )
+            validator = ADMISSION_VALIDATORS.get(row.named_validator)
+            assert callable(validator), (
+                f"{version}: named validator {row.named_validator!r} does not "
+                f"resolve to a callable"
+            )
+        else:
+            assert not row.named_validator, (
+                f"{version}: a validator name on a non-byte-admitting row is "
+                f"dead configuration"
+            )

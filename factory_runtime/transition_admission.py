@@ -36,6 +36,14 @@ class _NonceAdmissionRow:
     #: extra nonces tolerated per activation (catalog / test-change) from
     #: dual-ratified history's validator nonce.
     activation_dual_extra: bool
+    #: 4.1's rule for LLM entry rows (a CONTRACT, not a count): a row that admits
+    #: externally produced bytes MUST name its mechanical validator, and the named
+    #: validator must resolve to a callable in ADMISSION_VALIDATORS — enforced by
+    #: a forcing test that enumerates every row. No current row admits bytes; the
+    #: contract is mechanical from day one so the first byte-admitting row cannot
+    #: land unvalidated.
+    admits_external_bytes: bool = False
+    named_validator: str = ""
 
 
 TRANSITION_ADMISSION: dict[str, _NonceAdmissionRow] = {
@@ -85,3 +93,9 @@ def allowed_authority_nonce_counts(
         for extra in row.phase_extras:
             allowed.add(base + extra)
     return frozenset(allowed)
+
+
+#: The registry a byte-admitting row's ``named_validator`` must resolve into.
+#: Populated as byte-admitting rows migrate into the table; a name absent here
+#: while a row claims it is a red forcing test, never a silent pass.
+ADMISSION_VALIDATORS: dict[str, object] = {}

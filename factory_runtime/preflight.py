@@ -242,6 +242,20 @@ def run_preflight(
                     "any Critical surface is disturbed",
                 )
             )
+        # 4.1 intake authority-reachability: a roster with ZERO enrolled humans
+        # cannot ratify ANY phase, activate any catalog, or approve anything —
+        # every authority destination is structurally unreachable, so this is a
+        # hard NO at hour zero, not a Critical-scoped disclosure.
+        if not policy.human_ids:
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-authority-unreachable",
+                    "enrolled-humans",
+                    "no enrolled human exists: every required receipt signer is "
+                    "unresolvable, so no ratification, activation, or approval "
+                    "destination is reachable and __DONE__ is provably unreachable",
+                )
+            )
         # Computed DIRECTLY from roster size — an emitted insufficient-approvers
         # from a late null probe cannot distinguish expected-empty from
         # impossible; this can (the n=1/I2 collision surfaced at T=0).
