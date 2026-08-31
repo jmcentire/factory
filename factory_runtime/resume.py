@@ -21,6 +21,7 @@ from factory_runtime.authority import (
     load_genesis,
     verify_receipt,
 )
+from factory_runtime.durability import load_chain_key
 from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
@@ -147,7 +148,9 @@ def _configuration_digests(sources: Mapping[str, str | Path]) -> dict[str, str]:
 
 def _entries(path: Path, *, label: str) -> tuple[Mapping[str, Any], ...]:
     try:
-        return tuple(Ledger(str(path)).verified_entries())
+        return tuple(
+            Ledger(str(path), chain_key=load_chain_key(path)).verified_entries()
+        )
     except LedgerIntegrityError as exc:
         raise ResumeVerificationError(f"{label} verification failed: {exc}") from exc
 

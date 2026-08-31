@@ -18,45 +18,108 @@
     "failure_signature"
   ],
   "properties": {
-    "schema_version": {"const": "factory-repair-brief/1"},
-    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
-    "failed_attempt_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "authorized_attempt_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "predecessor_ledger_head": {"$ref": "#/$defs/digest"},
+    "schema_version": {
+      "const": "factory-repair-brief/1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "failed_attempt_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "authorized_attempt_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "predecessor_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
     "phase_artifact_digests": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/digest"},
-      "required": ["product-specification", "architecture", "operational-maturity"]
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      },
+      "required": [
+        "product-specification",
+        "architecture",
+        "operational-maturity"
+      ]
     },
-    "candidate_digest": {"$ref": "#/$defs/digest"},
-    "oracle_digest": {"$ref": "#/$defs/digest"},
-    "summary": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "candidate_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "oracle_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
     "actions": {
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
-      "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      }
     },
     "intent_backreferences": {
       "type": "array",
       "minItems": 1,
       "maxItems": 32,
-      "items": {"$ref": "#/$defs/backreference"}
+      "items": {
+        "$ref": "#/$defs/backreference"
+      }
     },
-    "failure_signature": {"type": "string", "minLength": 1, "maxLength": 256}
+    "failure_signature": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
   },
   "$defs": {
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "backreference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["artifact_id", "artifact_digest", "item_id", "intent_digest"],
+      "required": [
+        "artifact_id",
+        "artifact_digest",
+        "item_id",
+        "intent_digest"
+      ],
       "properties": {
-        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 256},
-        "artifact_digest": {"$ref": "#/$defs/digest"},
-        "item_id": {"type": "string", "minLength": 1, "maxLength": 256},
-        "intent_digest": {"$ref": "#/$defs/digest"}
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "item_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "intent_digest": {
+          "$ref": "#/$defs/digest"
+        }
       }
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

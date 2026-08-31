@@ -435,6 +435,16 @@ def _require_released_v4_transition_inputs(
         raise TransitionObligationError("blocked transition requires a typed reason")
 
 
+def _is_ledger_head(value: Any) -> bool:
+    """A ledger-head address: unkeyed sha256 (migration-only) or keyed hmac-sha256
+    (plan 2.2). Artifact content digests stay sha256-only — only HEADS gained a mode."""
+    text = str(value)
+    if text.startswith("hmac-sha256:"):
+        tail = text[len("hmac-sha256:"):]
+        return len(tail) == 64 and all(c in "0123456789abcdef" for c in tail)
+    return _is_digest(text)
+
+
 def _is_digest(value: Any) -> bool:
     text = str(value)
     return (
@@ -473,7 +483,7 @@ def _verify_obligation(
 
     passed = False
     if verifier_id == "ledger-prefix-binding-check":
-        passed = _is_digest(prior_ledger_head)
+        passed = _is_ledger_head(prior_ledger_head)
     elif verifier_id == "target-subject-digest-check":
         passed = (
             bool(target_state)

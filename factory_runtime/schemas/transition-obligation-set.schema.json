@@ -19,23 +19,58 @@
     "obligations"
   ],
   "properties": {
-    "schema_version": {"const": "factory-transition-obligation-set/1"},
-    "catalog_digest": {"$ref": "#/$defs/digest"},
-    "selector_id": {"$ref": "#/$defs/id"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "from_state": {"type": "string", "minLength": 1},
-    "to_state": {"type": "string", "minLength": 1},
-    "prior_ledger_head": {"$ref": "#/$defs/digest"},
+    "schema_version": {
+      "const": "factory-transition-obligation-set/1"
+    },
+    "catalog_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "selector_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "from_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "to_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prior_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
     "target_state_digest": {
-      "oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]
+      "oneOf": [
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
+      ]
     },
     "phase_artifact_digests": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/digest"}
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      }
     },
     "acceptance_obligation_catalog_digest": {
-      "oneOf": [{"const": ""}, {"$ref": "#/$defs/digest"}]
+      "oneOf": [
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
+      ]
     },
     "obligations": {
       "type": "array",
@@ -44,17 +79,40 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["obligation_id", "verifier_id", "criterion"],
+        "required": [
+          "obligation_id",
+          "verifier_id",
+          "criterion"
+        ],
         "properties": {
-          "obligation_id": {"$ref": "#/$defs/id"},
-          "verifier_id": {"$ref": "#/$defs/id"},
-          "criterion": {"type": "string", "minLength": 1, "maxLength": 4096}
+          "obligation_id": {
+            "$ref": "#/$defs/id"
+          },
+          "verifier_id": {
+            "$ref": "#/$defs/id"
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
         }
       }
     }
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
+    }
   }
 }

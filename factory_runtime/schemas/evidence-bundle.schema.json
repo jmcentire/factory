@@ -27,18 +27,42 @@
     "monitors"
   ],
   "properties": {
-    "schema_version": {"const": "factory-evidence-bundle/3"},
-    "run_id": {"$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"},
-    "target_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-    "source_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-    "candidate_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-    "acceptance_tests_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-    "generation_artifacts": {"$ref": "factory://schemas/evidence-bundle/2#/properties/generation_artifacts"},
-    "review_snapshots": {"$ref": "factory://schemas/evidence-bundle/2#/properties/review_snapshots"},
-    "build_attempt": {"$ref": "factory://schemas/evidence-bundle/2#/properties/build_attempt"},
-    "ledger_head": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-    "phase_artifacts": {"$ref": "factory://schemas/evidence-bundle/2#/properties/phase_artifacts"},
-    "trusted_artifact_digests": {"$ref": "factory://schemas/evidence-bundle/2#/properties/trusted_artifact_digests"},
+    "schema_version": {
+      "const": "factory-evidence-bundle/3"
+    },
+    "run_id": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"
+    },
+    "target_digest": {
+      "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+    },
+    "source_digest": {
+      "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+    },
+    "candidate_digest": {
+      "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+    },
+    "acceptance_tests_digest": {
+      "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+    },
+    "generation_artifacts": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/generation_artifacts"
+    },
+    "review_snapshots": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/review_snapshots"
+    },
+    "build_attempt": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/build_attempt"
+    },
+    "ledger_head": {
+      "$ref": "factory://schemas/evidence-bundle/2#/$defs/ledger_head"
+    },
+    "phase_artifacts": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/phase_artifacts"
+    },
+    "trusted_artifact_digests": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/trusted_artifact_digests"
+    },
     "preview_admission": {
       "type": "object",
       "additionalProperties": false,
@@ -54,21 +78,49 @@
         "artifact_digests"
       ],
       "properties": {
-        "run_schema_version": {"const": "factory-run/5"},
-        "run_id": {"$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"},
-        "generation": {"type": "integer", "minimum": 1},
-        "source": {"const": "validating"},
-        "destination": {"const": "preview"},
-        "validating_ledger_head": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-        "authority_genesis_digest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
+        "run_schema_version": {
+          "const": "factory-run/5"
+        },
+        "run_id": {
+          "$ref": "factory://schemas/evidence-bundle/2#/properties/run_id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "const": "validating"
+        },
+        "destination": {
+          "const": "preview"
+        },
+        "validating_ledger_head": {
+          "$ref": "factory://schemas/evidence-bundle/2#/$defs/ledger_head"
+        },
+        "authority_genesis_digest": {
+          "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+        },
         "identities": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["implementer", "tester", "verifier"],
+          "required": [
+            "implementer",
+            "tester",
+            "verifier"
+          ],
           "properties": {
-            "implementer": {"type": "string", "minLength": 1},
-            "tester": {"type": "string", "minLength": 1},
-            "verifier": {"type": "string", "minLength": 1}
+            "implementer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tester": {
+              "type": "string",
+              "minLength": 1
+            },
+            "verifier": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         },
         "artifact_digests": {
@@ -92,33 +144,88 @@
             "validator-execution-snapshot"
           ],
           "properties": {
-            "candidate": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "acceptance-tests": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "coder-output-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "tester-output-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "acceptance-obligation-report": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-review-subject": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-adversarial-review": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "base-source-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "candidate-change-set": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-review-authority-context": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-review-observations-source": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-execution-manifest": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-execution-configuration": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-execution-environment": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"},
-            "validator-execution-snapshot": {"$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"}
+            "candidate": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "acceptance-tests": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "coder-output-snapshot": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "tester-output-snapshot": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "acceptance-obligation-report": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-review-subject": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-adversarial-review": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "base-source-snapshot": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "candidate-change-set": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-review-authority-context": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-review-observations-source": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-execution-manifest": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-execution-configuration": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-execution-environment": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            },
+            "validator-execution-snapshot": {
+              "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"
+            }
           }
         }
       }
     },
-    "claims": {"$ref": "factory://schemas/evidence-bundle/2#/properties/claims"},
-    "checklist_results": {"$ref": "factory://schemas/evidence-bundle/2#/properties/checklist_results"},
-    "surface_evidence": {"$ref": "factory://schemas/evidence-bundle/2#/properties/surface_evidence"},
-    "determinism_records": {"$ref": "factory://schemas/evidence-bundle/2#/properties/determinism_records"},
-    "lane": {"$ref": "factory://schemas/evidence-bundle/2#/properties/lane"},
-    "independence": {"$ref": "factory://schemas/evidence-bundle/2#/properties/independence"},
-    "monitors": {"$ref": "factory://schemas/evidence-bundle/2#/properties/monitors"},
-    "monitor_declared_unit_count": {"$ref": "factory://schemas/evidence-bundle/2#/properties/monitor_declared_unit_count"},
-    "correction": {"$ref": "factory://schemas/evidence-bundle/2#/properties/correction"}
+    "claims": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/claims"
+    },
+    "checklist_results": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/checklist_results"
+    },
+    "surface_evidence": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/surface_evidence"
+    },
+    "determinism_records": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/determinism_records"
+    },
+    "lane": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/lane"
+    },
+    "independence": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/independence"
+    },
+    "monitors": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/monitors"
+    },
+    "monitor_declared_unit_count": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/monitor_declared_unit_count"
+    },
+    "correction": {
+      "$ref": "factory://schemas/evidence-bundle/2#/properties/correction"
+    }
+  },
+  "$defs": {
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
+    }
   }
 }

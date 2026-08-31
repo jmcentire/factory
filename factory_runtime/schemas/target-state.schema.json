@@ -111,10 +111,10 @@
       ]
     },
     "contact_ledger_head": {
-      "$ref": "#/$defs/digest"
+      "$ref": "#/$defs/ledger_head"
     },
     "resource_ledger_head": {
-      "$ref": "#/$defs/digest"
+      "$ref": "#/$defs/ledger_head"
     },
     "created_at": {
       "type": "integer",
@@ -137,6 +137,11 @@
     "object_id": {
       "type": "string",
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

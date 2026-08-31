@@ -32,51 +32,107 @@
     "issued_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-resume-checkpoint/1"},
-    "checkpoint_id": {"$ref": "#/$defs/id"},
+    "schema_version": {
+      "const": "factory-resume-checkpoint/1"
+    },
+    "checkpoint_id": {
+      "$ref": "#/$defs/id"
+    },
     "previous_checkpoint_digest": {
       "oneOf": [
-        {"const": ""},
-        {"$ref": "#/$defs/digest"}
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
       ]
     },
-    "repository_id": {"type": "string", "minLength": 1},
-    "run_id": {"$ref": "#/$defs/id"},
+    "repository_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
     "trusted_root_public_key": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
-    "genesis_envelope_digest": {"$ref": "#/$defs/digest"},
-    "genesis_payload_digest": {"$ref": "#/$defs/digest"},
-    "target_resolution_request_digest": {"$ref": "#/$defs/digest"},
-    "target_resolution_receipt_digest": {"$ref": "#/$defs/digest"},
-    "execution_request_digest": {"$ref": "#/$defs/digest"},
-    "execution_receipt_digest": {"$ref": "#/$defs/digest"},
-    "target_manifest_digest": {"$ref": "#/$defs/digest"},
-    "target_state_digest": {"$ref": "#/$defs/digest"},
-    "source_digest": {"$ref": "#/$defs/digest"},
-    "generation": {"type": "integer", "minimum": 1},
+    "genesis_envelope_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "genesis_payload_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "target_resolution_request_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "target_resolution_receipt_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "execution_request_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "execution_receipt_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "target_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "target_state_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "source_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
     "acceptance_obligation_catalog_digest": {
       "oneOf": [
-        {"const": ""},
-        {"$ref": "#/$defs/digest"}
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
       ]
     },
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
-    "run_ledger_length": {"type": "integer", "minimum": 3},
-    "resource_ledger_head": {"$ref": "#/$defs/digest"},
-    "resource_ledger_length": {"type": "integer", "minimum": 1},
+    "run_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
+    "run_ledger_length": {
+      "type": "integer",
+      "minimum": 3
+    },
+    "resource_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
+    "resource_ledger_length": {
+      "type": "integer",
+      "minimum": 1
+    },
     "resource_seal_digest": {
       "oneOf": [
-        {"const": ""},
-        {"$ref": "#/$defs/digest"}
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
       ]
     },
     "configuration_digests": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"$ref": "#/$defs/id"},
-      "additionalProperties": {"$ref": "#/$defs/digest"}
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      }
     },
     "retention": {
       "type": "object",
@@ -89,11 +145,20 @@
         "erasure_authority"
       ],
       "properties": {
-        "policy_id": {"$ref": "#/$defs/id"},
-        "mode": {
-          "enum": ["retain-indefinitely", "retain-until", "erase-on-close"]
+        "policy_id": {
+          "$ref": "#/$defs/id"
         },
-        "retain_until": {"type": "integer", "minimum": 0},
+        "mode": {
+          "enum": [
+            "retain-indefinitely",
+            "retain-until",
+            "erase-on-close"
+          ]
+        },
+        "retain_until": {
+          "type": "integer",
+          "minimum": 0
+        },
         "metadata_classes": {
           "type": "array",
           "minItems": 1,
@@ -108,10 +173,16 @@
             ]
           }
         },
-        "erasure_authority": {"type": "string", "minLength": 1}
+        "erasure_authority": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
-    "issued_at": {"type": "integer", "minimum": 1}
+    "issued_at": {
+      "type": "integer",
+      "minimum": 1
+    }
   },
   "$defs": {
     "id": {
@@ -121,6 +192,11 @@
     "digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

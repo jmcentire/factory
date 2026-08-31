@@ -42,6 +42,7 @@ from factory_core.provenance import (
     ProvenanceReport,
 )
 from factory_runtime.authority import AuthorityPolicy
+from factory_runtime.durability import load_chain_key
 from factory_runtime.generation import GenerationError, verify_prepared_generation
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.snapshot import SnapshotError, tree_digest, verify_frozen_tree
@@ -434,7 +435,7 @@ class ChecklistJournal:
         self.path = Path(path)
         self.subject_digest = subject_digest
         self._clock = clock or (lambda: int(time.time()))
-        self._ledger = Ledger(str(self.path))
+        self._ledger = Ledger(str(self.path), chain_key=load_chain_key(self.path))
 
     def record(
         self,

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from factory_core.manifest import Ledger, LedgerEntry, LedgerIntegrityError, digest_obj
+from factory_runtime.durability import load_chain_key
 from factory_runtime.schema import DocumentValidationError, validate_document
 
 _RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -242,7 +243,7 @@ class ResourceLedger:
     def _ledger(self) -> Ledger:
         if self.path.is_symlink():
             raise ResourceLedgerError("resource ledger cannot be a symlink")
-        return Ledger(str(self.path))
+        return Ledger(str(self.path), chain_key=load_chain_key(self.path))
 
     def _validated_snapshot(self) -> tuple[list[dict[str, Any]], str]:
         """Validate one resource-ledger snapshot and return its records and exact head."""

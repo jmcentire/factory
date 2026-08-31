@@ -18,33 +18,80 @@
     "dependency_set_digest"
   ],
   "properties": {
-    "schema_version": {"const": "factory-state-dependency-capsule/1"},
-    "purpose": {"enum": ["lane-dispatch", "orchestrator-wake"]},
-    "profile_digest": {"$ref": "#/$defs/digest"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "role": {"enum": ["coder", "tester", "validator", "orchestrator"]},
-    "target_state_digest": {"$ref": "#/$defs/digest"},
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
-    "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
+    "schema_version": {
+      "const": "factory-state-dependency-capsule/1"
+    },
+    "purpose": {
+      "enum": [
+        "lane-dispatch",
+        "orchestrator-wake"
+      ]
+    },
+    "profile_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "role": {
+      "enum": [
+        "coder",
+        "tester",
+        "validator",
+        "orchestrator"
+      ]
+    },
+    "target_state_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "run_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
+    "resume_checkpoint_digest": {
+      "$ref": "#/$defs/digest"
+    },
     "dependencies": {
       "type": "array",
       "minItems": 1,
       "maxItems": 32,
-      "items": {"$ref": "#/$defs/dependency"}
+      "items": {
+        "$ref": "#/$defs/dependency"
+      }
     },
-    "dependency_set_digest": {"$ref": "#/$defs/digest"}
+    "dependency_set_digest": {
+      "$ref": "#/$defs/digest"
+    }
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "dependency": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["dependency_id", "kind", "trust_class", "content_digest", "byte_count"],
+      "required": [
+        "dependency_id",
+        "kind",
+        "trust_class",
+        "content_digest",
+        "byte_count"
+      ],
       "properties": {
-        "dependency_id": {"$ref": "#/$defs/id"},
-        "kind": {"$ref": "#/$defs/id"},
+        "dependency_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "$ref": "#/$defs/id"
+        },
         "trust_class": {
           "enum": [
             "untrusted-data",
@@ -54,9 +101,20 @@
             "authority-reference"
           ]
         },
-        "content_digest": {"$ref": "#/$defs/digest"},
-        "byte_count": {"type": "integer", "minimum": 0, "maximum": 5242880}
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5242880
+        }
       }
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

@@ -74,3 +74,46 @@ def fsync_directory_chain(start: str | Path, *, through: str | Path) -> None:
                 f"durability directory chain did not reach declared root {boundary}"
             )
         current = parent
+
+
+# --------------------------------------------------------------------------- #
+# Ledger chain-key resolution (plan 2.2)
+# --------------------------------------------------------------------------- #
+
+CHAIN_ROOT_KEY_FILENAME = ".chain-root.key"
+_CHAIN_KEY_WALK_CAP = 8
+
+
+def load_chain_key(ledger_path: str | Path) -> bytes | None:
+    """Resolve the per-ledger HMAC chain key from the durability seam.
+
+    Root key material lives in ``.chain-root.key`` at (an ancestor of) the runs root —
+    an asset retained under the founder-root signature with the authority genesis, so
+    key-FILE loss degrades to re-derivation from that retained asset, never to a
+    permanently unverifiable ledger. The per-ledger key is
+    HMAC-SHA256(root, relative-ledger-path), binding each ledger file's identity: the
+    run ledger, resource ledger, and evidence ledger of one run all key differently,
+    and the derivation is recoverable from (root material, path) alone.
+
+    Absent root material returns ``None`` — the deprecated migration-only unkeyed mode
+    (the core is loud about it). FAIL-CLOSED CONSEQUENCE, DOCUMENTED: if the root
+    asset is ever unrecoverable, every keyed ledger under it refuses verification
+    permanently; recover the root from the founder-root retention, never regenerate it.
+    """
+    import hashlib
+    import hmac as _hmac
+
+    path = _absolute_lexical(ledger_path)
+    ancestor = path.parent
+    for _ in range(_CHAIN_KEY_WALK_CAP):
+        root_file = ancestor / CHAIN_ROOT_KEY_FILENAME
+        if root_file.is_file() and not root_file.is_symlink():
+            material = root_file.read_bytes().strip()
+            if not material:
+                raise DurabilityError(f"chain root key file is empty: {root_file}")
+            relative = path.relative_to(ancestor).as_posix()
+            return _hmac.new(material, relative.encode("utf-8"), hashlib.sha256).digest()
+        if ancestor.parent == ancestor:
+            break
+        ancestor = ancestor.parent
+    return None

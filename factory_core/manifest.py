@@ -36,6 +36,7 @@ import hmac
 import json
 import os
 import stat
+import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -307,8 +308,24 @@ class Ledger:
     to prove the whole history is untampered.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, chain_key: bytes | None = None) -> None:
         self.path = path
+        # 2.2: HMAC chain key. Keyed entry addresses are "hmac-sha256:<hex>" =
+        # HMAC-SHA256(key, canonical body); the PREFIX is the mode — a keyed ledger
+        # verified unkeyed (or vice versa) fails at entry 0 with no mode flag to lie
+        # about. ``None`` is deprecated migration-only: a lane whose closed environment
+        # never receives the key cannot forge entries whose addresses re-derive, so
+        # whole-history rewrite requires the host-held key.
+        self.chain_key = chain_key
+
+    def _address(self, body: dict[str, Any]) -> str:
+        if self.chain_key is None:
+            return digest_obj(body)
+        _refuse_unaddressable(body)
+        canonical = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        return "hmac-sha256:" + hmac.new(self.chain_key, canonical, hashlib.sha256).hexdigest()
 
     @staticmethod
     def _parse_records(fh: Any) -> list[dict[str, Any]]:
@@ -328,13 +345,12 @@ class Ledger:
             raise LedgerIntegrityError(f"ledger is unreadable: {exc}") from exc
         return records
 
-    @staticmethod
-    def _verify_records(records: list[dict[str, Any]]) -> tuple[bool, str]:
+    def _verify_records(self, records: list[dict[str, Any]]) -> tuple[bool, str]:
         prev = ""
         for i, record in enumerate(records):
             stored = record.get("entry_hash", "")
             body = {k: val for k, val in record.items() if k != "entry_hash"}
-            recomputed = digest_obj(body)
+            recomputed = self._address(body)
             if not _const_time_eq(recomputed, stored):
                 return False, (
                     f"entry {i}: content-address mismatch (tampered body); "
@@ -461,7 +477,15 @@ class Ledger:
                             + "\n  ".join(violations)
                         )
 
-                    addr = entry.content_digest()
+                    if self.chain_key is None and not records:
+                        warnings.warn(
+                            "constructing a NEW unkeyed ledger is migration-only "
+                            "(plan 2.2): pass chain_key so entry addresses require "
+                            "the host-held key to forge",
+                            FutureWarning,
+                            stacklevel=2,
+                        )
+                    addr = self._address(entry.body())
                     record = {"entry_hash": addr, **entry.body()}
                     fh.seek(0, os.SEEK_END)
                     fh.write(json.dumps(record, sort_keys=True) + "\n")
@@ -515,6 +539,6 @@ class Ledger:
         return True, "chain intact"
 
 
-def verify_ledger(path: str) -> tuple[bool, str]:
+def verify_ledger(path: str, *, chain_key: bytes | None = None) -> tuple[bool, str]:
     """Convenience wrapper: verify the hash-chain of the ledger at ``path``."""
-    return Ledger(path).verify_chain()
+    return Ledger(path, chain_key=chain_key).verify_chain()

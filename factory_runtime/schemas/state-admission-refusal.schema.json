@@ -20,24 +20,72 @@
     "created_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-state-admission-refusal/2"},
-    "receipt_id": {"$ref": "#/$defs/id"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
-    "role": {"enum": ["coder", "tester", "validator"]},
-    "purpose": {"const": "lane-dispatch"},
-    "refusal_code": {"$ref": "#/$defs/id"},
-    "dependency_id": {
-      "oneOf": [{"$ref": "#/$defs/id"}, {"const": ""}]
+    "schema_version": {
+      "const": "factory-state-admission-refusal/2"
     },
-    "state_profile_digest": {"$ref": "#/$defs/digest"},
-    "model_attempts": {"const": 0},
-    "broker_effects": {"const": 0},
-    "created_at": {"type": "integer", "minimum": 1}
+    "receipt_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "run_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
+    "role": {
+      "enum": [
+        "coder",
+        "tester",
+        "validator"
+      ]
+    },
+    "purpose": {
+      "const": "lane-dispatch"
+    },
+    "refusal_code": {
+      "$ref": "#/$defs/id"
+    },
+    "dependency_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/id"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "state_profile_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "model_attempts": {
+      "const": 0
+    },
+    "broker_effects": {
+      "const": 0
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 1
+    }
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
+    }
   }
 }

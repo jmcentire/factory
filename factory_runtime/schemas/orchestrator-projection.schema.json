@@ -16,37 +16,90 @@
     "sections"
   ],
   "properties": {
-    "schema_version": {"const": "factory-orchestrator-projection/1"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "target_state_digest": {"$ref": "#/$defs/digest"},
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
-    "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
-    "state_profile_digest": {"$ref": "#/$defs/digest"},
-    "state_capsule_digest": {"$ref": "#/$defs/digest"},
+    "schema_version": {
+      "const": "factory-orchestrator-projection/1"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_state_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "run_ledger_head": {
+      "$ref": "#/$defs/ledger_head"
+    },
+    "resume_checkpoint_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_profile_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_capsule_digest": {
+      "$ref": "#/$defs/digest"
+    },
     "sections": {
       "type": "array",
       "minItems": 9,
       "maxItems": 9,
-      "items": {"$ref": "#/$defs/section"}
+      "items": {
+        "$ref": "#/$defs/section"
+      }
     }
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "section": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["section_id", "trust_class", "content_digest", "byte_count", "content"],
+      "required": [
+        "section_id",
+        "trust_class",
+        "content_digest",
+        "byte_count",
+        "content"
+      ],
       "properties": {
-        "section_id": {"$ref": "#/$defs/id"},
-        "trust_class": {
-          "enum": ["untrusted-data", "context", "verified-state", "configuration-reference", "authority-reference"]
+        "section_id": {
+          "$ref": "#/$defs/id"
         },
-        "content_digest": {"$ref": "#/$defs/digest"},
-        "byte_count": {"type": "integer", "minimum": 0, "maximum": 131072},
-        "content": {"type": "string", "maxLength": 131072}
+        "trust_class": {
+          "enum": [
+            "untrusted-data",
+            "context",
+            "verified-state",
+            "configuration-reference",
+            "authority-reference"
+          ]
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 131072
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 131072
+        }
       }
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

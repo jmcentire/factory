@@ -138,7 +138,7 @@
       "$ref": "#/$defs/digest"
     },
     "run_ledger_head": {
-      "$ref": "#/$defs/digest"
+      "$ref": "#/$defs/ledger_head"
     },
     "resume_checkpoint_digest": {
       "$ref": "#/$defs/digest"
@@ -456,6 +456,11 @@
         "no-artifact",
         "supervisor-error"
       ]
+    },
+    "ledger_head": {
+      "type": "string",
+      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
+      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }

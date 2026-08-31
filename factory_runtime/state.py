@@ -25,6 +25,7 @@ from factory_core.manifest import (
     SegregationPolicy,
     digest_obj,
 )
+from factory_runtime.durability import load_chain_key
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.transition_obligations import (
@@ -733,7 +734,7 @@ class RunStore:
         path = self._run_dir(run_id) / "ledger.jsonl"
         if path.is_symlink():
             raise RunStateError(f"run ledger cannot be a symlink: {run_id}")
-        return Ledger(str(path))
+        return Ledger(str(path), chain_key=load_chain_key(path))
 
     def _projection_path(self, run_id: str) -> Path:
         path = self._run_dir(run_id) / "run.json"
