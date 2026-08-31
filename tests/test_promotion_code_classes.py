@@ -127,8 +127,10 @@ def test_class_partitions_are_disjoint_and_complete() -> None:
     assert CONFIGURATION_DETERMINED_CODES & SURFACE_SCOPED_CODES == frozenset()
     # 1.1c dropped the eight Gate M envelope labels (7 construction-evidence + the
     # surface-scoped candidate-receipt-required) and added the three derivation reports.
-    # ...and the path:-namespace reservation added one configuration code.
-    assert len(PROMOTION_CODE_CLASSES) == 118
+    # ...the path:-namespace reservation added one configuration code, and 4.2
+    # change 1 dropped the ten oracle/flake envelope codes (the chain is the sole
+    # value authority; binding truth moved to the seam, outside this vocabulary).
+    assert len(PROMOTION_CODE_CLASSES) == 108
     assert len(CONFIGURATION_DETERMINED_CODES) == 26
     assert len(SURFACE_SCOPED_CODES) == 5
 

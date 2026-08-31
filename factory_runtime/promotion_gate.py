@@ -52,13 +52,12 @@ do not close a full forward re-chain or a mint-by-append, which need an external
   indexing. The producers already write a real hash-chain (``receipt.sh``/``mutate.sh``/
   ``flake.sh`` set ``prev_hash`` to the prior entry's hash); the seam verifies what they write
   (Opus cross-family review residuals R2 + R3, 2026-08-14).
-- ``verify_chain_anchor`` finds each cited envelope's real chain entry by id and confirms the
-  envelope body matches a deterministic PROJECTION of that entry (oracle: oracle_adequate;
-  flake: deterministic + flake_count + retry_count<-automatic_retry_count). A forged envelope
-  is self-consistent (passes the core) but does not match the real entry's projection, so the
-  seam fail-closes. The build projection was deleted in 1.1c: the disturbed-surface set is
-  host-derived inside ``decide_promotion`` from changed paths + the plan-declared surface map,
-  so there is no agent-attested build envelope left to ground (or to forge).
+- ``_verify_chain_bindings`` (4.2 change 1 — the envelope layer is DELETED) resolves each
+  cited receipt id in the verified chain and compares the chain-attested values
+  (oracle: oracle_adequate; flake: deterministic + flake_count + automatic_retry_count)
+  directly against the observation's self-reports. There is no envelope body left to
+  forge; a lane that writes one is mechanically ignored by the input schema. The build
+  projection died earlier (1.1c): disturbed surfaces are host-derived in decide_promotion.
 
 The prior Opus review's F3 "cannot be built without a receipt-schema decision" was FALSIFIED:
 every field the envelope attests is already carried in the corresponding chain entry, and the
@@ -176,7 +175,7 @@ def _load_chain(chain_path: Path) -> dict[str, dict[str, Any]]:
       cannot substitute a green receipt for a red one.
 
     A missing chain file returns ``{}`` (no chain to anchor against — a present envelope then
-    fail-closes in ``verify_chain_anchor``). A corrupt/unreadable chain, a tampered entry, a
+    fail-closes in ``_verify_chain_bindings``). A corrupt/unreadable chain, a tampered entry, a
     broken linkage, or a duplicate id all raise ``PromotionGateError`` — the seam refuses to
     ground a decision on a chain that is not a verified, link-consistent, id-unique chain.
     """
@@ -238,64 +237,68 @@ def _load_chain(chain_path: Path) -> dict[str, dict[str, Any]]:
     return entries
 
 
-def _envelope_projection(entry: dict[str, Any], kind: str) -> dict[str, Any]:
-    """Re-derive the envelope body the core expects, as a projection of the real chain entry.
+def _verify_chain_bindings(request: PromotionRequest, chain: dict[str, dict[str, Any]]) -> None:
+    """4.2 change 1: chain.jsonl is the SOLE authority for receipt values.
 
-    ``kind`` is ``"oracle"`` (Gate N oracle receipt) or ``"flake"`` (Gate N flake
-    receipt); the Gate M build-envelope branch was deleted in 1.1c — the disturbed-surface
-    set is host-derived inside decide_promotion from changed paths and the plan-declared
-    surface map, so no build envelope exists to ground. The flake producer writes
-    ``automatic_retry_count``; the core reads ``retry_count`` — the projection renames it so
-    the envelope and the chain entry speak the same field names.
+    The lane cites receipt IDS only; this seam resolves each cited id in the
+    VERIFIED chain (per-entry re-address + linkage + duplicate rejection all
+    happened in ``_load_chain``) and compares the chain-attested values to the
+    observation's self-reported ones. There is no envelope body left to forge —
+    a lane that still writes one is mechanically ignored by the input schema,
+    and a tampered chain entry already failed the load. The core keeps only
+    omission enforcement (a cited receipt must exist when the value is
+    load-bearing); value truth lives here, next to the chain.
     """
-    if kind == "oracle":
-        return {"receipt_id": entry.get("id"), "oracle_adequate": entry.get("oracle_adequate")}
-    if kind == "flake":
-        return {
-            "receipt_id": entry.get("id"),
-            "deterministic": entry.get("deterministic"),
-            "flake_count": entry.get("flake_count"),
-            "retry_count": entry.get("automatic_retry_count"),
-        }
-    raise PromotionGateError(f"chain-anchor: unknown receipt kind {kind!r}")
 
+    def _resolve(receipt_id: str, kind: str, surface_id: str) -> dict[str, Any]:
+        entry = chain.get(receipt_id)
+        if entry is None:
+            raise PromotionGateError(
+                f"chain-binding: receipt {receipt_id!r} cited on {surface_id!r} is "
+                f"not in the verified chain (forged or stale)"
+            )
+        if str(entry.get("kind", "")) != kind:
+            raise PromotionGateError(
+                f"chain-binding: receipt {receipt_id!r} is kind "
+                f"{entry.get('kind')!r}, not {kind!r}"
+            )
+        return entry
 
-def _verify_grounded(
-    env: Any, receipt_id: str, chain: dict[str, dict[str, Any]], kind: str
-) -> None:
-    """Fail-closed unless ``env`` is grounded in a real, hash-verified chain entry."""
-    entry = chain.get(receipt_id)
-    if entry is None:
-        raise PromotionGateError(
-            f"chain-anchor: receipt {receipt_id!r} not in the chain (forged or stale)"
-        )
-    if env is None or not env.present:
-        raise PromotionGateError(
-            f"chain-anchor: receipt {receipt_id!r} is cited but its envelope is absent"
-        )
-    expected = _envelope_projection(entry, kind)
-    if not all(env.body.get(k) == v for k, v in expected.items()):
-        raise PromotionGateError(
-            f"chain-anchor: envelope for {receipt_id!r} does not match the chain entry "
-            f"(forged — self-consistent but not grounded in the real receipt)"
-        )
-
-
-def verify_chain_anchor(request: PromotionRequest, chain: dict[str, dict[str, Any]]) -> None:
-    """Fail-closed unless every cited receipt envelope is grounded in the real chain.
-
-    A cited receipt whose id is not in the chain, whose chain entry is tampered (caught by
-    ``_load_chain``), or whose envelope body does not match the entry's projection, is a
-    fabrication (or a stale receipt) — the gate refuses to ground a decision on it. An absent
-    envelope (no receipt cited) is not verified here; the core's omission-enforcement
-    hard-blocks it on disturbed surfaces. A present envelope with an empty chain (no chain
-    file) cannot be grounded and fail-closes — the only safe answer when the seam cannot verify.
-    """
     for obs in request.observations:
         if obs.oracle_receipt:
-            _verify_grounded(obs.oracle_receipt_evidence, obs.oracle_receipt, chain, "oracle")
+            entry = _resolve(obs.oracle_receipt, "oracle", obs.surface_id)
+            attested = entry.get("oracle_adequate")
+            if not isinstance(attested, bool):
+                raise PromotionGateError(
+                    f"chain-binding: oracle receipt {obs.oracle_receipt!r} attests "
+                    f"no boolean oracle_adequate"
+                )
+            if bool(obs.oracle_adequate) != attested:
+                raise PromotionGateError(
+                    f"chain-binding: oracle_adequate self-report on {obs.surface_id!r} "
+                    f"contradicts the chain-attested value (forged self-report)"
+                )
         if obs.flake_receipt:
-            _verify_grounded(obs.flake_receipt_evidence, obs.flake_receipt, chain, "flake")
+            entry = _resolve(obs.flake_receipt, "flake", obs.surface_id)
+            checks = (
+                ("deterministic", bool(obs.deterministic), bool),
+                ("flake_count", obs.flake_count, int),
+                ("automatic_retry_count", obs.automatic_retry_count, int),
+            )
+            for field_name, reported, expected_type in checks:
+                attested_value = entry.get(field_name)
+                if not isinstance(attested_value, expected_type) or isinstance(
+                    attested_value, bool
+                ) is not (expected_type is bool):
+                    raise PromotionGateError(
+                        f"chain-binding: flake receipt {obs.flake_receipt!r} attests "
+                        f"no {field_name}"
+                    )
+                if reported != attested_value:
+                    raise PromotionGateError(
+                        f"chain-binding: {field_name} self-report on "
+                        f"{obs.surface_id!r} contradicts the chain-attested value"
+                    )
 
 
 def _policy_from_dict(raw: dict[str, Any]) -> SegregationPolicy:
@@ -372,7 +375,7 @@ def decide(run_root: Path) -> dict[str, Any]:
     # (pure, no disk) cannot catch. A present envelope with no chain file cannot be grounded and
     # fail-closes; an absent envelope (no receipt cited) is left to the core's omission-enforcement.
     chain = _load_chain(_chain_path(run_root))
-    verify_chain_anchor(request, chain)
+    _verify_chain_bindings(request, chain)
     decision = decide_promotion(request, policy, profile)
     return decision.to_dict()
 

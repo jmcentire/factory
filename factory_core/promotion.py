@@ -178,12 +178,7 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "evidence-id-missing",
     "evidence-missing",
     "evidence-subject-mismatch",
-    "flake-attested-value-missing",
-    "flake-binding-mismatch",
     "flake-count-invalid",
-    "flake-receipt-evidence-binding",
-    "flake-receipt-evidence-missing",
-    "flake-receipt-evidence-tampered",
     "flake-receipt-required",
     "live-evidence-digest-mismatch",
     "live-evidence-subject-mismatch",
@@ -194,11 +189,6 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "negative-evidence",
     "observation-outside-disturbance",
     "observation-surface-id-missing",
-    "oracle-attested-value-missing",
-    "oracle-binding-mismatch",
-    "oracle-receipt-evidence-binding",
-    "oracle-receipt-evidence-missing",
-    "oracle-receipt-evidence-tampered",
     "oracle-receipt-required",
     "oracle-silent",
     "risk-acceptance-authority-equals-implementer",
@@ -362,10 +352,14 @@ class SurfaceObservation:
     # agent cannot forge the envelope's chain anchor (the seam records it); a self-
     # consistent lie is closed by the seam's chain-anchor check, not the core. See
     # decide_promotion and docs/CONTROL-STRUCTURE-PLAN.md Part 7.
+    # 4.2 change 1: chain.jsonl is the SOLE authority for receipt values — the
+    # lane cites receipt IDS only; the envelope-body fields are deleted from the
+    # input schema, so a lane that still writes them is mechanically ignored.
+    # The seam (promotion_gate.verify_chain_bindings) resolves each cited id in
+    # the verified chain and compares the chain-attested values to the
+    # self-reported ones; the core keeps omission enforcement only.
     oracle_receipt: str = ""
-    oracle_receipt_evidence: EvidenceIntegrity | None = None
     flake_receipt: str = ""
-    flake_receipt_evidence: EvidenceIntegrity | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> SurfaceObservation:
@@ -392,17 +386,7 @@ class SurfaceObservation:
                 else None
             ),
             oracle_receipt=str(raw.get("oracle_receipt", "")),
-            oracle_receipt_evidence=EvidenceIntegrity.from_dict(
-                raw.get("oracle_receipt_evidence")
-                if isinstance(raw.get("oracle_receipt_evidence"), Mapping)
-                else None
-            ),
             flake_receipt=str(raw.get("flake_receipt", "")),
-            flake_receipt_evidence=EvidenceIntegrity.from_dict(
-                raw.get("flake_receipt_evidence")
-                if isinstance(raw.get("flake_receipt_evidence"), Mapping)
-                else None
-            ),
         )
 
 
@@ -690,12 +674,6 @@ def promotion_attestation_subject(
                 "automatic_retry_count": observation.automatic_retry_count,
                 "oracle_receipt": observation.oracle_receipt,
                 "flake_receipt": observation.flake_receipt,
-                "oracle_receipt_evidence_digest": _integrity_digest(
-                    observation.oracle_receipt_evidence
-                ),
-                "flake_receipt_evidence_digest": _integrity_digest(
-                    observation.flake_receipt_evidence
-                ),
                 "quarantine": (
                     {
                         **observation.quarantine.authority_body(observation.surface_id),
@@ -1120,64 +1098,13 @@ def decide_promotion(
         # false close, the signal vanishes rather than a false close). Critical is unaffected
         # (deterministic=False -> negative-evidence hard block, line ~1059). The false-close
         # vector is closed; re-verified by the independent Opus cross-family verifier.
-        if current_observation.oracle_receipt:
-            oev = current_observation.oracle_receipt_evidence
-            if oev is None or not oev.present:
-                hard_reasons.append(f"oracle-receipt-evidence-missing:{surface_id}")
-            elif not oev.verify():
-                hard_reasons.append(f"oracle-receipt-evidence-tampered:{surface_id}")
-            elif not oev.verifies_binding(
-                {"receipt_id": current_observation.oracle_receipt}
-            ):
-                hard_reasons.append(f"oracle-receipt-evidence-binding:{surface_id}")
-            else:
-                attested_adequate = oev.body.get("oracle_adequate") if oev.body else None
-                if not isinstance(attested_adequate, bool):
-                    hard_reasons.append(f"oracle-attested-value-missing:{surface_id}")
-                elif bool(current_observation.oracle_adequate) != bool(attested_adequate):
-                    hard_reasons.append(f"oracle-binding-mismatch:{surface_id}")
-        elif current_observation.oracle_adequate:
+        # 4.2 change 1: the core keeps OMISSION enforcement only — a load-bearing
+        # positive value with no cited receipt cannot advance. Value binding
+        # against the chain-attested receipt happens at the seam
+        # (verify_chain_bindings), where the verified chain actually lives.
+        if not current_observation.oracle_receipt and current_observation.oracle_adequate:
             hard_reasons.append(f"oracle-receipt-required:{surface_id}")
-        if current_observation.flake_receipt:
-            fev = current_observation.flake_receipt_evidence
-            if fev is None or not fev.present:
-                hard_reasons.append(f"flake-receipt-evidence-missing:{surface_id}")
-            elif not fev.verify():
-                hard_reasons.append(f"flake-receipt-evidence-tampered:{surface_id}")
-            elif not fev.verifies_binding(
-                {"receipt_id": current_observation.flake_receipt}
-            ):
-                hard_reasons.append(f"flake-receipt-evidence-binding:{surface_id}")
-            else:
-                fbody = fev.body or {}
-                det = fbody.get("deterministic")
-                fc = fbody.get("flake_count")
-                rc = fbody.get("retry_count")
-                if not isinstance(det, bool):
-                    hard_reasons.append(
-                        f"flake-attested-value-missing:{surface_id}:deterministic"
-                    )
-                elif bool(current_observation.deterministic) != bool(det):
-                    hard_reasons.append(
-                        f"flake-binding-mismatch:{surface_id}:deterministic"
-                    )
-                if not isinstance(fc, int) or isinstance(fc, bool):
-                    hard_reasons.append(
-                        f"flake-attested-value-missing:{surface_id}:flake_count"
-                    )
-                elif current_observation.flake_count != fc:
-                    hard_reasons.append(
-                        f"flake-binding-mismatch:{surface_id}:flake_count"
-                    )
-                if not isinstance(rc, int) or isinstance(rc, bool):
-                    hard_reasons.append(
-                        f"flake-attested-value-missing:{surface_id}:retry_count"
-                    )
-                elif current_observation.automatic_retry_count != rc:
-                    hard_reasons.append(
-                        f"flake-binding-mismatch:{surface_id}:retry_count"
-                    )
-        elif (
+        if not current_observation.flake_receipt and (
             current_observation.deterministic
             or surface.effective_criticality == CRITICALITY_STANDARD
         ):

@@ -194,24 +194,14 @@ def _observation(
     evidence: tuple[NamedEvidence, ...] = (),
     quarantine: Quarantine | None = None,
     oracle_receipt: str | None = None,
-    oracle_receipt_evidence: EvidenceIntegrity | None = None,
     flake_receipt: str | None = None,
-    flake_receipt_evidence: EvidenceIntegrity | None = None,
 ) -> SurfaceObservation:
-    # Synthesize self-consistent receipts by default (None) so the happy path binds cleanly
-    # under the enforcement cutover. Pass "" to force an explicitly absent receipt (testing the
-    # hard-block); pass a real id + evidence to test binding/mismatch.
+    # 4.2 change 1: observations cite receipt IDS only — the chain is the sole
+    # value authority, resolved at the seam. Pass "" to force an absent receipt.
     if oracle_receipt is None:
         oracle_receipt = "M-default"
-        oracle_receipt_evidence = _oracle_receipt_evidence("M-default", adequate=adequate)
     if flake_receipt is None:
         flake_receipt = "F-default"
-        flake_receipt_evidence = _flake_receipt_evidence(
-            "F-default",
-            deterministic=deterministic,
-            flake_count=flake_count,
-            retry_count=automatic_retry_count,
-        )
     return SurfaceObservation(
         surface_id=surface_id,
         oracle_adequate=adequate,
@@ -223,9 +213,7 @@ def _observation(
         automatic_retry_count=automatic_retry_count,
         quarantine=quarantine,
         oracle_receipt=oracle_receipt,
-        oracle_receipt_evidence=oracle_receipt_evidence,
         flake_receipt=flake_receipt,
-        flake_receipt_evidence=flake_receipt_evidence,
     )
 
 
@@ -785,81 +773,6 @@ def _flake_receipt_evidence(
     })
 
 
-def test_promotion_rejects_oracle_binding_mismatch() -> None:
-    """oracle_adequate is self-reported, but it binds to the mutation receipt: the agent
-    claims adequate while the receipt attests not (the named oracle survived). Hard block."""
-    obs = replace(
-        _observation("standard-surface"),
-        oracle_receipt="M-1",
-        oracle_receipt_evidence=_oracle_receipt_evidence(adequate=False),
-    )  # oracle_adequate defaults True -> contradicts the receipt
-    request = _request(observations=(obs,))
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "oracle-binding-mismatch:standard-surface" in decision.reasons
-
-
-def test_promotion_rejects_oracle_receipt_evidence_missing() -> None:
-    """Citing an oracle receipt but omitting its envelope is route-arounding — fail-closed."""
-    obs = replace(
-        _observation("standard-surface"), oracle_receipt="M-1", oracle_receipt_evidence=None
-    )  # cite a receipt but omit its envelope
-    request = _request(observations=(obs,))
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "oracle-receipt-evidence-missing:standard-surface" in decision.reasons
-
-
-def test_promotion_rejects_flake_binding_mismatch() -> None:
-    """deterministic/flake_count/retry_count bind to the flake-detection receipt. A
-    self-reported value that contradicts the attested receipt is a hard block, per field."""
-    obs = replace(
-        _observation("standard-surface"),
-        flake_receipt="F-1",
-        flake_receipt_evidence=_flake_receipt_evidence(
-            deterministic=False, flake_count=3, retry_count=1
-        ),
-    )  # defaults: deterministic=True, flake_count=0, retry=0 -> all contradict
-    request = _request(observations=(obs,))
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "flake-binding-mismatch:standard-surface:deterministic" in decision.reasons
-    assert "flake-binding-mismatch:standard-surface:flake_count" in decision.reasons
-    assert "flake-binding-mismatch:standard-surface:retry_count" in decision.reasons
-
-
-def test_promotion_rejects_flake_attested_value_missing() -> None:
-    """A cited flake receipt whose envelope omits an attested value is fail-closed, not
-    advisory: the agent cannot cite a receipt and skip the binding by omitting the value."""
-    ev = _evidence({"receipt_id": "F-1"})  # no deterministic/flake_count/retry_count
-    obs = replace(
-        _observation("standard-surface"), flake_receipt="F-1", flake_receipt_evidence=ev
-    )
-    request = _request(observations=(obs,))
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "flake-attested-value-missing:standard-surface:deterministic" in decision.reasons
-
-
-def test_promotion_accepts_when_observation_matches_receipts() -> None:
-    """When the self-reported values equal the attested receipt values the bindings hold
-    and the decision proceeds on its other evidence — no binding-mismatch hard reason."""
-    obs = replace(
-        _observation("standard-surface"),
-        oracle_receipt="M-1",
-        oracle_receipt_evidence=_oracle_receipt_evidence(adequate=True),
-        flake_receipt="F-1",
-        flake_receipt_evidence=_flake_receipt_evidence(
-            deterministic=True, flake_count=0, retry_count=0
-        ),
-    )
-    request = _request(observations=(obs,))
-    decision = decide_promotion(request, _roster(), _profile())
-    assert not any(r.startswith("oracle-binding-mismatch") for r in decision.reasons)
-    assert not any(r.startswith("flake-binding-mismatch") for r in decision.reasons)
-    assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
-
-
 def test_promotion_blocks_when_observation_receipts_absent() -> None:
     """Enforcement cutover: a positive adequacy/determinism claim with no seam-attested
     receipt is a hard block, not advisory — the self-report cannot stand without the
@@ -923,9 +836,7 @@ def test_standard_flake_admission_requires_receipt_closes_false_close() -> None:
             automatic_retry_count=0,
         ),
         oracle_receipt="M-1",
-        oracle_receipt_evidence=_oracle_receipt_evidence("M-1", adequate=True),
         flake_receipt="",
-        flake_receipt_evidence=None,
     )
     request = _request(observations=(obs,))
     decision = decide_promotion(request, _roster(), _profile())

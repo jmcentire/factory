@@ -208,10 +208,6 @@
   "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
  },
  {
-  "finding": "zero-caller-export:factory_runtime/promotion_gate.py:verify_chain_anchor",
-  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
- },
- {
   "finding": "zero-caller-export:factory_runtime/repair.py:AttemptRunner",
   "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
  },

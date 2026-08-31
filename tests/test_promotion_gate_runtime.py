@@ -323,7 +323,7 @@ def test_chain_anchor_fail_closed_when_chain_absent(tmp_path: Path) -> None:
     run_root = tmp_path / "runs" / "run"
     _write_inputs(run_root, _promoting_inputs(run_root))
     # no chain written -> _load_chain returns {}
-    with pytest.raises(PromotionGateError, match="chain-anchor"):
+    with pytest.raises(PromotionGateError, match="chain-binding|chain-anchor"):
         decide(run_root)
 
 
@@ -340,7 +340,7 @@ def test_chain_anchor_fail_closed_when_receipt_id_not_in_chain(tmp_path: Path) -
     # not in the chain" assertion, not a broken-link fail-close.
     entries = _rechained([e for e in promoting_chain_entries() if e["id"] != "M-default"])
     _write_chain(run_root, entries)
-    with pytest.raises(PromotionGateError, match="M-default.*not in the chain"):
+    with pytest.raises(PromotionGateError, match="M-default.*not in the (verified )?chain"):
         decide(run_root)
 
 
@@ -456,4 +456,26 @@ def test_chain_anchor_fail_closed_on_duplicate_id(tmp_path: Path) -> None:
     assert green_dup["flake_count"] != honest[2]["flake_count"]
     _write_chain(run_root, [*honest, green_dup])
     with pytest.raises(PromotionGateError, match="duplicate receipt id"):
+        decide(run_root)
+
+
+def test_seam_binding_mismatch_and_lane_envelope_ignored(tmp_path: Path) -> None:
+    """4.2 change 1's forcing pair, both ends: (a) a self-report contradicting the
+    chain-attested value refuses at the seam; (b) a lane-written envelope body in
+    the inputs is mechanically IGNORED — it cannot substitute for the chain."""
+
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    run_root = tmp_path / "runs" / "run"
+    inputs = promoting_promotion_inputs()
+    # (a) contradict the chain: the chain attests oracle_adequate=True; lie low.
+    inputs["request"]["observations"][0]["oracle_adequate"] = False
+    # (b) plant a forged envelope body claiming the lie is attested — ignored.
+    inputs["request"]["observations"][0]["oracle_receipt_evidence"] = {
+        "body": {"receipt_id": "M-default", "oracle_adequate": False},
+        "claimed_digest": "sha256:" + "0" * 64,
+    }
+    _write_inputs(run_root, inputs)
+    write_promoting_chain(run_root)
+    with pytest.raises(PromotionGateError, match="chain-binding.*contradicts"):
         decide(run_root)
