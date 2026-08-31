@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from factory_core.manifest import digest_obj
 from factory_core.provenance import IntentBackreference
+from factory_runtime.authority import human_public_keys
 from factory_runtime.orchestrator import BuildOutcome
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState
@@ -463,6 +464,8 @@ class RepairSupervisor:
                 kind="factory-repair-brief",
                 key_path=self.validator_key_path,
                 output_path=envelope_path,
+            
+                forbidden_signer_public_keys=human_public_keys(self.workflow.policy),
             )
         except TesseraVerificationError as signing_error:
             # Another identical supervisor may have won the no-replace publication race.

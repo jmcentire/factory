@@ -148,8 +148,15 @@ class TesseraCli:
         kind: str,
         key_path: str | Path,
         output_path: str | Path,
+        forbidden_signer_public_keys: frozenset[str] = frozenset(),
     ) -> VerifiedEnvelope:
-        """Create a new signed JSON envelope without exposing key material to Factory."""
+        """Create a new signed JSON envelope without exposing key material to Factory.
+
+        ``forbidden_signer_public_keys`` is the 4.1 trust-root rail: enrolled-human
+        keys are minted and used only OUTSIDE the host process, so a host signing
+        seam handed a human's key file must refuse rather than mint — the check runs
+        against the post-sign verified signer and removes the envelope on refusal.
+        """
 
         if not kind.strip():
             raise TesseraVerificationError("envelope kind is required")
@@ -230,7 +237,7 @@ class TesseraCli:
                 raise TesseraVerificationError(
                     f"could not inspect installed Tessera envelope: {exc}"
                 ) from exc
-            return VerifiedEnvelope(
+            wrapped = VerifiedEnvelope(
                 kind=verified.kind,
                 payload=verified.payload,
                 payload_digest=verified.payload_digest,
@@ -238,6 +245,18 @@ class TesseraCli:
                 envelope_digest=verified.envelope_digest,
                 path=output,
             )
+            if wrapped.public_key in forbidden_signer_public_keys:
+                if installed_identity is not None:
+                    _remove_installed_link(output, installed_identity)
+                try:
+                    output.unlink()
+                except OSError:
+                    pass
+                raise TesseraVerificationError(
+                    "refusing to mint with an enrolled-human key: human keys are "
+                    "used only outside the host process (4.1 trust root)"
+                )
+            return wrapped
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

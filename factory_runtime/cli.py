@@ -96,6 +96,9 @@ def _add_replay_verifier_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _load_workflow(arguments: argparse.Namespace) -> FactoryWorkflow:
+    from factory_runtime.authority import require_operator_owned_trust_root
+
+    require_operator_owned_trust_root(arguments.genesis, arguments.runs)
     tessera = _tessera(arguments.tessera_bin)
     policy = load_genesis(
         arguments.genesis,

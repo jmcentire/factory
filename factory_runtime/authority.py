@@ -96,6 +96,33 @@ class VerifiedReceipt:
     envelope: VerifiedEnvelope
 
 
+def require_operator_owned_trust_root(
+    genesis_path: str | Path, runs_root: str | Path
+) -> None:
+    """4.1 trust root: the enrollment roster must live OUTSIDE the runs root.
+
+    Anything under the runs root is an agent-adjacent surface (lanes write run
+    evidence there); a genesis loaded from inside it would let a lane stage the
+    roster that governs its own authority. Lexical containment, fail-closed.
+    """
+    genesis = Path(genesis_path).resolve()
+    runs = Path(runs_root).resolve()
+    if genesis == runs or runs in genesis.parents:
+        raise AuthorityVerificationError(
+            f"trust root {genesis} lives inside the runs root {runs} — the "
+            f"roster must be operator-owned, outside every agent-writable surface"
+        )
+
+
+def human_public_keys(policy: AuthorityPolicy) -> frozenset[str]:
+    """The enrolled-human signing keys the HOST may never mint with (4.1)."""
+    return frozenset(
+        principal.public_key
+        for principal in policy.principals.values()
+        if principal.kind == "human" and principal.public_key
+    )
+
+
 def load_genesis(
     envelope_path: str | Path,
     *,

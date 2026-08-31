@@ -98,7 +98,10 @@ def test_repair_supervisor_authenticates_and_reuses_a_preledger_envelope(
         wrap_calls = 0
         verify_calls = 0
 
-        def wrap_json(self, payload, *, kind, key_path, output_path):
+        def wrap_json(
+                self, payload, *, kind, key_path, output_path,
+                forbidden_signer_public_keys=frozenset(),
+            ):
             del key_path
             self.wrap_calls += 1
             path = Path(output_path)
@@ -139,6 +142,7 @@ def test_repair_supervisor_authenticates_and_reuses_a_preledger_envelope(
     class Workflow:
         root = tmp_path / "runs"
         policy = SimpleNamespace(
+            principals={},  # 4.1a: human_public_keys reads the roster for the forbidden-signer set
             principal=lambda _identity: SimpleNamespace(kind="agent", public_key=public_key)
         )
         store = SimpleNamespace()

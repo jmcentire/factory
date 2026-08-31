@@ -32,6 +32,7 @@ from factory_runtime.adversarial_review import (
     retain_validator_adversarial_review,
     verify_validator_adversarial_review,
 )
+from factory_runtime.authority import human_public_keys
 from factory_runtime.candidate_diff import CandidateDiffError, build_candidate_review_context
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import (
@@ -942,6 +943,8 @@ class FactoryOrchestrator:
                 kind="factory-evidence-bundle",
                 key_path=verifier_key_path,
                 output_path=bundle_path,
+            
+                forbidden_signer_public_keys=human_public_keys(self.workflow.policy),
             )
             try:
                 fsync_directory_chain(bundle_path.parent, through=self.workflow.root)
