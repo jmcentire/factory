@@ -49,7 +49,11 @@ from factory_runtime.lanes import (
     ValidationExecution,
 )
 from factory_runtime.preflight import run_preflight
-from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
+from factory_runtime.resume import (
+    ResumeReconciliationError,
+    ResumeVerification,
+    verify_resume_checkpoint,
+)
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
 from factory_runtime.state_admission import StateAdmissionError, read_stable_regular_bytes
@@ -286,17 +290,32 @@ class FactoryOrchestrator:
             )
         except AcceptanceObligationError as exc:
             raise OrchestrationError(str(exc)) from exc
-        resume = verify_resume_checkpoint(
-            resume_checkpoint_path,
-            expected_checkpoint_digest=expected_resume_checkpoint_digest,
-            runs_root=self.workflow.root,
-            run_id=run_id,
-            genesis_path=genesis_path,
-            trusted_root_public_key=self.workflow.policy.root_public_key,
-            tessera=self.workflow.tessera,
-            configuration_sources=resume_configuration_sources,
-            expected_acceptance_obligation_catalog_digest=(proposed_catalog.content_digest),
-        )
+        try:
+            resume = verify_resume_checkpoint(
+                resume_checkpoint_path,
+                expected_checkpoint_digest=expected_resume_checkpoint_digest,
+                runs_root=self.workflow.root,
+                run_id=run_id,
+                genesis_path=genesis_path,
+                trusted_root_public_key=self.workflow.policy.root_public_key,
+                tessera=self.workflow.tessera,
+                configuration_sources=resume_configuration_sources,
+                expected_acceptance_obligation_catalog_digest=(proposed_catalog.content_digest),
+            )
+        except ResumeReconciliationError as exc:
+            # 4.2 change 5: the typed refusal surfaces its per-field deltas and
+            # the one named repair instead of dying as an undifferentiated error.
+            raise OrchestrationError(
+                "resume reconciliation refused: "
+                + "; ".join(
+                    f"{name}: checkpoint {value['checkpoint'][:23]}... != "
+                    f"observed {value['observed'][:23]}..."
+                    for name, value in sorted(exc.deltas.items())
+                )
+                + f" — delta retained at {exc.retained_path}; repair: mint a "
+                "fresh checkpoint over the current configuration sources"
+            ) from exc
+
         current = self.workflow.store.load(run_id)
         if current.ledger_head != resume.current_run_ledger_head:
             raise OrchestrationError(

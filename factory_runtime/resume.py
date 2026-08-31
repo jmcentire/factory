@@ -38,6 +38,23 @@ class ResumeVerificationError(ValueError):
     """A resume checkpoint did not anchor the exact retained executable state."""
 
 
+class ResumeReconciliationError(ResumeVerificationError):
+    """External-INPUT digests drifted (4.2 change 5): a typed refusal, never an
+    undifferentiated one. Carries the per-field delta, points at the retained
+    delta record, and names the one repair — mint a fresh checkpoint. Identity
+    and security substitutions never come here; they refuse exact, above."""
+
+    def __init__(self, *, deltas: Mapping[str, Any], retained_path: Path) -> None:
+        self.deltas = dict(deltas)
+        self.retained_path = retained_path
+        names = ", ".join(sorted(self.deltas))
+        super().__init__(
+            f"resume configuration sources drifted ({names}): per-field delta "
+            f"retained at {retained_path}; repair: mint a fresh checkpoint over "
+            f"the current configuration sources"
+        )
+
+
 @dataclass(frozen=True)
 class ResumeVerification:
     """Fresh verification result bound to the current, race-checkable run head."""
@@ -466,6 +483,11 @@ def verify_resume_checkpoint(
             expected_acceptance_obligation_catalog_digest
         ),
     )
+    # 4.2 change 5 — the resume split. Identity/security fields stay EXACT (a
+    # substitution is an attack shape, refused undifferentiated); external-INPUT
+    # digests (the operator-supplied configuration sources, which legitimately
+    # evolve) get a TYPED reconciliation refusal that records the per-field
+    # delta as a retained fact and names the one repair: mint a fresh checkpoint.
     exact = {
         "repository_id": bound.policy.repository_id,
         "genesis_envelope_digest": bound.genesis_envelope_digest,
@@ -481,11 +503,39 @@ def verify_resume_checkpoint(
         "acceptance_obligation_catalog_digest": (
             bound.acceptance_obligation_catalog_digest
         ),
-        "configuration_digests": dict(bound.configuration_digests),
     }
     for field, expected in exact.items():
         if checkpoint[field] != expected:
             raise ResumeVerificationError(f"resume checkpoint has stale or substituted {field}")
+    checkpoint_configuration = dict(checkpoint["configuration_digests"])
+    bound_configuration = dict(bound.configuration_digests)
+    if checkpoint_configuration != bound_configuration:
+        deltas = {}
+        for name in sorted(set(checkpoint_configuration) | set(bound_configuration)):
+            expected_value = checkpoint_configuration.get(name, "")
+            observed_value = bound_configuration.get(name, "")
+            if expected_value != observed_value:
+                deltas[name] = {"checkpoint": expected_value, "observed": observed_value}
+        delta_document = {
+            "schema_version": "factory-resume-reconciliation/1",
+            "run_id": run_id,
+            "checkpoint_digest": checkpoint_digest,
+            "deltas": deltas,
+            "repair": "mint a fresh checkpoint over the current configuration sources",
+        }
+        delta_digest = digest_obj(delta_document)
+        retained_dir = Path(runs_root) / run_id / "evidence" / "resume-reconciliation"
+        retained_dir.mkdir(parents=True, exist_ok=True)
+        retained_path = retained_dir / (delta_digest.removeprefix("sha256:") + ".json")
+        if not retained_path.exists():
+            retained_path.write_text(
+                json.dumps(delta_document, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        raise ResumeReconciliationError(
+            deltas=deltas,
+            retained_path=retained_path,
+        )
 
     run_length = int(checkpoint["run_ledger_length"])
     resource_length = int(checkpoint["resource_ledger_length"])

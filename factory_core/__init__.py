@@ -192,6 +192,7 @@ from factory_core.invariant_kernel import (
     Violation,
     check_delta_fidelity,
     load_delta,
+    stale_declarations_block_ratification,
 )
 from factory_core.invariant_kernel import analyze as analyze_invariants
 from factory_core.manifest import (
@@ -556,6 +557,7 @@ __all__ = [
     "authorize_tool_invocation",
     "check_contract",
     "check_delta_fidelity",
+    "stale_declarations_block_ratification",
     "classify_control",
     "decide_notification",
     "decide_promotion",
