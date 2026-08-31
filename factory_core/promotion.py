@@ -90,6 +90,169 @@ DISPOSITION_RISK_ACCEPTED = "risk-accepted"
 DISPOSITION_GATE = "gate"
 DISPOSITION_BLOCK = "block"
 
+# --- Reason-code classification (remediation plan §1.1, preflight foundation) -------
+#
+# Every reason/gap/failure code decide_promotion can emit, classified by WHAT THE
+# CHECK READS (never by the code's name):
+#   configuration          decidable from ratification-time configuration alone
+#                          (profile, policy, roster, arrangement, plan facts) —
+#                          the intake preflight's hard-NO set
+#   surface-scoped         determined by disturbed-surface membership/class plus
+#                          configuration — the preflight's GO-WITH-DISCLOSURES set
+#   construction-evidence  requires the candidate, observations, receipts, or other
+#                          construction-time evidence — never preflight-decidable
+#
+# The reverse forcing test (tests/test_promotion_code_classes.py) source-scans this
+# module's emission sites: a new code fails closed until classified here. Foreign
+# codes passed through verbatim (checklist/criticality/independence/monitors) are
+# owned by their modules; the wrapped forms (checklist-integrity:, monitor-integrity:,
+# criticality-profile-invalid:, ...) are promotion-owned and classified below.
+
+CODE_CLASS_CONFIGURATION = "configuration"
+CODE_CLASS_SURFACE_SCOPED = "surface-scoped"
+CODE_CLASS_CONSTRUCTION = "construction-evidence"
+
+_CONFIGURATION_CODES = (
+    "approver-equals-implementer",
+    "approver-equals-verifier",
+    "approver-is-agent",
+    "approver-not-enrolled",
+    "approver-outside-delegate-roster",
+    "critical-delegate-not-enrolled-human",
+    "critical-ratification-delegates-undeclared",
+    "criticality-profile-invalid",
+    "implementer-missing",
+    "independence-failure",
+    "independence-integrity",
+    "independence-tier-derived",
+    "insufficient-approvers",
+    "lane-undeclared",
+    "lane-unknown",
+    "monitor-integrity",
+    "provenance-gap",
+    "provenance-integrity",
+    "provenance-missing",
+    "tool-policy-gap",
+    "tool-policy-invalid",
+    "tool-policy-missing",
+    "tool-policy-phase-artifacts-mismatch",
+    "verifier-equals-implementer",
+    "verifier-missing",
+)
+
+_SURFACE_SCOPED_CODES = (
+    "candidate-receipt-required",
+    "cosmetic-gap",
+    "critical-gap",
+    "specialist-review-missing",
+    "standard-gap-requires-risk-acceptance",
+    "surface-observation-missing",
+)
+
+_CONSTRUCTION_EVIDENCE_CODES = (
+    "attestation-digest-mismatch",
+    "attestation-missing",
+    "attestation-subject-mismatch",
+    "automatic-retry-count-invalid",
+    "candidate-digest-invalid",
+    "candidate-digest-missing",
+    "candidate-receipt-evidence-binding",
+    "candidate-receipt-evidence-missing",
+    "candidate-receipt-evidence-tampered",
+    "checklist-integrity",
+    "correction",
+    "correction-failure",
+    "correction-gap",
+    "correction-integrity",
+    "correction-record-outside-correction-lane",
+    "correction-review",
+    "cosmetic-automatic-retry",
+    "cosmetic-flake",
+    "critical-automatic-retry",
+    "critical-evidence-nondeterministic",
+    "critical-risk-acceptance-prohibited",
+    "critical-test-flaked",
+    "disturbed-surface-declared",
+    "disturbed-surface-mismatch",
+    "disturbed-surface-receipt",
+    "disturbed-surface-without-diff",
+    "evidence-digest-mismatch",
+    "evidence-duplicate",
+    "evidence-id-missing",
+    "evidence-missing",
+    "evidence-subject-mismatch",
+    "flake-attested-value-missing",
+    "flake-binding-mismatch",
+    "flake-count-invalid",
+    "flake-receipt-evidence-binding",
+    "flake-receipt-evidence-missing",
+    "flake-receipt-evidence-tampered",
+    "flake-receipt-required",
+    "live-evidence-digest-mismatch",
+    "live-evidence-subject-mismatch",
+    "live-result-invalid",
+    "live-verification-artifact-missing",
+    "live-verification-failed",
+    "live-verification-missing",
+    "negative-evidence",
+    "observation-outside-disturbance",
+    "observation-surface-id-missing",
+    "oracle-attested-value-missing",
+    "oracle-binding-mismatch",
+    "oracle-receipt-evidence-binding",
+    "oracle-receipt-evidence-missing",
+    "oracle-receipt-evidence-tampered",
+    "oracle-receipt-required",
+    "oracle-silent",
+    "risk-acceptance-authority-equals-implementer",
+    "risk-acceptance-authority-equals-verifier",
+    "risk-acceptance-authority-is-agent",
+    "risk-acceptance-authority-not-enrolled",
+    "risk-acceptance-candidate-mismatch",
+    "risk-acceptance-covers-surface-without-gap",
+    "risk-acceptance-evidence-invalid",
+    "risk-acceptance-evidence-missing",
+    "risk-acceptance-expired",
+    "risk-acceptance-profile-mismatch",
+    "risk-acceptance-rationale-missing",
+    "risk-acceptance-surface-missing",
+    "specialist-review-authority-equals-implementer",
+    "specialist-review-authority-equals-verifier",
+    "specialist-review-authority-is-agent",
+    "specialist-review-authority-not-enrolled",
+    "specialist-review-candidate-mismatch",
+    "specialist-review-duplicate",
+    "specialist-review-evidence-invalid",
+    "specialist-review-evidence-missing",
+    "specialist-review-failed",
+    "specialist-review-profile-mismatch",
+    "specialist-review-surface-id-missing",
+    "standard-automatic-retry",
+    "standard-flake-budget-exceeded",
+    "standard-flake-quarantine-authority-equals-implementer",
+    "standard-flake-quarantine-authority-equals-verifier",
+    "standard-flake-quarantine-authority-is-agent",
+    "standard-flake-quarantine-authority-not-enrolled",
+    "standard-flake-quarantine-evidence-invalid",
+    "standard-flake-quarantine-evidence-missing",
+    "standard-flake-quarantine-expired",
+    "standard-flake-quarantine-missing",
+    "standard-flake-quarantine-rationale-missing",
+    "standard-flake-quarantined",
+    "standard-gap-risk-accepted",
+    "surface-observation-duplicate",
+)
+
+PROMOTION_CODE_CLASSES: dict[str, str] = {
+    **{code: CODE_CLASS_CONFIGURATION for code in _CONFIGURATION_CODES},
+    **{code: CODE_CLASS_SURFACE_SCOPED for code in _SURFACE_SCOPED_CODES},
+    **{code: CODE_CLASS_CONSTRUCTION for code in _CONSTRUCTION_EVIDENCE_CODES},
+}
+
+CONFIGURATION_DETERMINED_CODES = frozenset(_CONFIGURATION_CODES)
+SURFACE_SCOPED_CODES = frozenset(_SURFACE_SCOPED_CODES)
+
+
 # Compatibility name: promotion gates are the generic evidence-backed checklist primitive.
 GateOutcome = ChecklistItemResult
 
