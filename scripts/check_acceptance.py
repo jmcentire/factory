@@ -48,7 +48,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AMBIENT_OVERRIDES = ("REMOVAL_LEDGER", "ACCEPTANCE_BASELINE", "ACCEPTANCE_PRE_TAG")
-LEDGER_KINDS = {"add", "delete", "de-rate", "demote", "gate-retire", "note"}
+LEDGER_KINDS = {"add", "delete", "de-rate", "demote", "gate-retire", "note", "partial delete"}
 LEDGER_STATUSES = {"planned", "landed"}
 FORBIDDEN_LEDGER_FIELDS = {"removed_loc", "loc", "lines"}
 
@@ -242,6 +242,17 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
             continue  # planned rows make no tree claim yet (scoped verification)
         if row["kind"] == "note":
             continue  # corrections/annotations: no tree claim, census owned by tests
+        if row["kind"] == "partial delete":
+            # The plan's own removal table uses this kind: behavior removed from a
+            # file that survives. Tree claim: the file must still exist.
+            partial_path = (row.get("subject") or {}).get("path")
+            if not partial_path:
+                failures.append(f"{label}: partial delete without a subject path")
+            elif not (repo / partial_path).exists():
+                failures.append(
+                    f"{label}: {partial_path} does not exist — partial delete of a ghost"
+                )
+            continue
         subject = row.get("subject") or {}
         if row["kind"] == "delete":
             path = subject.get("path")

@@ -458,9 +458,25 @@ class Ledger:
                 with os.fdopen(ledger_fd, "r+", encoding="utf-8") as fh:
                     ledger_fd = -1
                     records = self._parse_records(fh)
-                    intact, detail = self._verify_records(records)
-                    if not intact:
-                        raise LedgerIntegrityError(f"refusing to extend invalid ledger: {detail}")
+                    # Phase 3 change 1: append re-addresses only the TAIL record
+                    # (suffix continuity) with the caller-held expected_head as the
+                    # primary guarantee — the whole-history re-verify per write is
+                    # deleted as a collapse point, NOT demoted: full-chain
+                    # verification keeps its mandatory firing paths on every read
+                    # (verified_entries drives load/transition/rebuild), so a
+                    # mid-chain edit is still caught before any state is consumed.
+                    if records:
+                        tail = records[-1]
+                        tail_body = {
+                            key: value for key, value in tail.items() if key != "entry_hash"
+                        }
+                        if not _const_time_eq(
+                            self._address(tail_body), str(tail.get("entry_hash", ""))
+                        ):
+                            raise LedgerIntegrityError(
+                                "refusing to extend: tail record does not re-address "
+                                "(tampered or wrong-mode tail)"
+                            )
                     actual_head = records[-1]["entry_hash"] if records else ""
                     if expected_head is not None and not _const_time_eq(actual_head, expected_head):
                         raise LedgerIntegrityError(

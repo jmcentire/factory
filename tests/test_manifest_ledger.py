@@ -213,3 +213,46 @@ def test_bound_implementer_must_match_provenance_author() -> None:
     )
     violations = entry.validate_sod()
     assert any("does not match the bound author" in v for v in violations)
+
+
+def test_append_is_suffix_scoped_and_reads_catch_the_mid_chain_edit(tmp_path) -> None:
+    """Phase 3 change 1, both halves stated: append re-addresses only the tail
+    (the whole-history re-verify per write is deleted), and the MANDATORY read
+    path still refuses a mid-chain edit before any state is consumed — the
+    verification duty moved, it did not shrink."""
+    import json as _json
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(str(path))
+    ledger.append(_entry("impl@x", "ver@x", "appr@x"))
+    ledger.append(_entry("impl@x", "ver@x", "appr@x"))
+    head = ledger.append(_entry("impl@x", "ver@x", "appr@x"))
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    middle = _json.loads(lines[1])
+    middle["payload"] = {"note": "edited after the fact"}  # body changed, hash kept
+    lines[1] = _json.dumps(middle, sort_keys=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # Append extends past the edit (tail-scoped by design)...
+    ledger.append(_entry("impl@x", "ver@x", "appr@x"), expected_head=head)
+    # ...and the read path refuses the whole history, so nothing consumes it.
+    with pytest.raises(LedgerIntegrityError, match="content-address mismatch"):
+        ledger.verified_entries()
+
+
+def test_append_refuses_a_tampered_tail(tmp_path) -> None:
+    """The suffix check is not vacuous: a tail whose body was edited (hash kept)
+    refuses at append itself — the continuity anchor must re-address."""
+    import json as _json
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(str(path))
+    ledger.append(_entry("impl@x", "ver@x", "appr@x"))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    tail = _json.loads(lines[-1])
+    tail["payload"] = {"note": "edited"}
+    lines[-1] = _json.dumps(tail, sort_keys=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(LedgerIntegrityError, match="tail record does not re-address"):
+        ledger.append(_entry("impl@x", "ver@x", "appr@x"))
