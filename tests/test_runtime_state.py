@@ -1339,3 +1339,117 @@ def test_validating_pass_count_counts_admissions_not_lines(tmp_path: Path) -> No
         handle.write('{"to_state": "validating", "forged": true}\n')
     with pytest.raises(RunStateError):
         store.validating_pass_count("run-1")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 change 2 — head-pinned load
+# --------------------------------------------------------------------------- #
+
+def _pinned_store(tmp_path: Path):
+    from factory_core.manifest import digest_obj
+    from factory_runtime.state import RunStore
+    from tests.conftest import create_intake_run
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    create_intake_run(
+        store,
+        run_id="run-1",
+        target_digest="sha256:" + "a" * 64,
+        source_digest=digest_obj({"source": "run-1"}),
+    )
+    return store, runs / "run-1"
+
+
+def test_head_pinned_load_skips_the_derive_walk(tmp_path: Path) -> None:
+    """The fast path is real: with a pinned, head-matching projection, load never
+    enters _derive — proven by making _derive explode."""
+    store, run_dir = _pinned_store(tmp_path)
+    assert json.loads((run_dir / "run.json").read_text())["self_digest"].startswith("sha256:")
+
+    def explode(run_id):
+        raise AssertionError("derive walk entered on the fast path")
+
+    store._derive = explode  # type: ignore[method-assign]
+    projection = store.load("run-1")
+    assert projection.run_id == "run-1"
+
+
+def test_pinned_mismatch_repairs_and_emits_the_signal(tmp_path: Path) -> None:
+    """Plan change 2's one mismatch behavior, both halves asserted: the corrected
+    projection comes back AND the mismatch is a persisted, inspectable record —
+    recovery is never silence."""
+    store, run_dir = _pinned_store(tmp_path)
+    truth = store.load("run-1")
+    doc = json.loads((run_dir / "run.json").read_text())
+    doc["generation"] = 99  # tamper the body; self_digest goes stale
+    (run_dir / "run.json").write_text(json.dumps(doc, sort_keys=True))
+
+    projection = store.load("run-1")
+    assert projection.generation == truth.generation  # corrected, not the lie
+    repairs = [
+        json.loads(line)
+        for line in (run_dir / "projection-repairs.jsonl").read_text().splitlines()
+    ]
+    assert repairs and repairs[-1]["reason"] == "projection-self-digest-mismatch"
+    assert repairs[-1]["ledger_head"] == truth.ledger_head
+    # And the repair re-pinned the projection: the next load fast-paths again.
+    store._derive = lambda run_id: (_ for _ in ()).throw(AssertionError("derive"))  # type: ignore[method-assign]
+    assert store.load("run-1").generation == truth.generation
+
+
+def test_stale_head_pinned_projection_repairs_with_its_own_reason(tmp_path: Path) -> None:
+    """A projection whose self_digest verifies but whose head is not the ledger
+    tail (a stale snapshot re-pinned by an attacker or an interrupted write) is
+    repaired from the ledger with the head-stale reason."""
+    from factory_core.manifest import digest_obj
+
+    store, run_dir = _pinned_store(tmp_path)
+    doc = json.loads((run_dir / "run.json").read_text())
+    body = {k: v for k, v in doc.items() if k != "self_digest"}
+    body["ledger_head"] = "hmac-sha256:" + "e" * 64  # not the tail
+    body["self_digest"] = digest_obj(body)
+    (run_dir / "run.json").write_text(json.dumps(body, sort_keys=True))
+
+    projection = store.load("run-1")
+    assert projection.ledger_head != "hmac-sha256:" + "e" * 64
+    repairs = (run_dir / "projection-repairs.jsonl").read_text()
+    assert "projection-head-stale" in repairs
+
+
+def test_legacy_unpinned_projection_keeps_the_exact_prior_semantics(tmp_path: Path) -> None:
+    """A projection written before this change (no self_digest) gets the old
+    equality check — matching returns, mismatching raises, and NO repair record
+    is written, so retained released runs replay untouched."""
+    store, run_dir = _pinned_store(tmp_path)
+    doc = json.loads((run_dir / "run.json").read_text())
+    doc.pop("self_digest")
+    (run_dir / "run.json").write_text(json.dumps(doc, sort_keys=True))
+    assert store.load("run-1").run_id == "run-1"
+    assert not (run_dir / "projection-repairs.jsonl").exists()
+
+    doc["generation"] = 99
+    (run_dir / "run.json").write_text(json.dumps(doc, sort_keys=True))
+    with pytest.raises(RunStateError, match="does not match the authoritative ledger"):
+        store.load("run-1")
+    assert not (run_dir / "projection-repairs.jsonl").exists()
+
+
+def test_fast_path_never_covers_verification_bearing_states() -> None:
+    """The scope rule itself, pinned: every state at or past VALIDATING carries
+    replay-time cryptographic re-verification in its derive walk and must never
+    fast-path — a state added to the fast set without moving its verification
+    out of derive would silently skip it."""
+    from factory_runtime.state import _HEAD_PIN_FAST_PATH_STATES, RunState
+
+    verification_bearing = {
+        RunState.VALIDATING,
+        RunState.PREVIEW,
+        RunState.HUMAN_APPROVED,
+        RunState.CI,
+        RunState.PROMOTED,
+        RunState.SPECIFICATION_DEFECT,
+        RunState.BLOCKED,
+    }
+    assert not {state.value for state in verification_bearing} & _HEAD_PIN_FAST_PATH_STATES

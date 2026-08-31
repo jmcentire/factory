@@ -218,6 +218,20 @@ _ANCHOR_STATE_KEYS: Mapping[RunState, str] = {
 }
 
 
+_HEAD_PIN_FAST_PATH_STATES = frozenset(
+    state.value
+    for state in (
+        RunState.TARGET_RESOLUTION_AUTHORIZED,
+        RunState.TARGET_RESOLVED,
+        RunState.INTAKE,
+        RunState.PRODUCT_SPECIFICATION_RATIFIED,
+        RunState.ARCHITECTURE_RATIFIED,
+        RunState.OPERATIONAL_MATURITY_RATIFIED,
+        RunState.BUILDING,
+    )
+)
+
+
 class RunStateError(ValueError):
     """A run could not be created, loaded, or transitioned without guessing."""
 
@@ -876,9 +890,19 @@ class RunStore:
         )
 
     def load(self, run_id: str) -> RunProjection:
-        """Verify the ledger and require the convenience projection to match it exactly."""
+        """Head-pinned load (Phase 3 change 2).
 
-        derived = self._derive(run_id)
+        Fast path: the stored projection's ``self_digest`` verifies (its digested
+        body includes ``ledger_head``) AND the ledger tail re-addresses to that
+        exact head — the ~450-line derive walk is skipped. A PINNED projection
+        that mismatches gets ONE behavior, signal-emitting: full-chain
+        verification fires (the mandatory load-mismatch path), the projection is
+        re-derived and repaired, and the mismatch is recorded in the run's
+        projection-repairs record — recovery is never silence. A LEGACY
+        projection (no self_digest — written before this change) keeps the exact
+        prior equality semantics, so retained released runs replay untouched.
+        """
+
         path = self._projection_path(run_id)
         if not path.is_file():
             raise RunStateError(
@@ -890,12 +914,96 @@ class RunStore:
             raise RunStateError(f"run projection is unreadable: {exc}") from exc
         if not isinstance(raw, Mapping):
             raise RunStateError("run projection must be a JSON object")
-        stored = RunProjection.from_dict(raw)
-        if _canonical_json(stored.to_dict()) != _canonical_json(derived.to_dict()):
-            raise RunStateError(
-                "run projection does not match the authoritative ledger (stale or tampered)"
-            )
+        stored_self = str(raw.get("self_digest", ""))
+        # The derive walk is ALSO the carrier of replay-time cryptographic
+        # re-verification (preview evidence envelopes, retained adversarial
+        # review, dependency bytes) once a run reaches VALIDATING — the fast
+        # path must never skip a verification obligation, so it is scoped to
+        # states whose derive walk is pure recomputation. Everything at or past
+        # VALIDATING always takes the full walk.
+        fast_path_state = str(raw.get("state", ""))
+        if fast_path_state not in _HEAD_PIN_FAST_PATH_STATES:
+            stored_self = ""
+        if not stored_self:
+            derived = self._derive(run_id)
+            stored = RunProjection.from_dict(raw)
+            if _canonical_json(stored.to_dict()) != _canonical_json(derived.to_dict()):
+                raise RunStateError(
+                    "run projection does not match the authoritative ledger "
+                    "(stale or tampered)"
+                )
+            return derived
+        body = {key: value for key, value in raw.items() if key != "self_digest"}
+        repair_reason = ""
+        if digest_obj(body) != stored_self:
+            repair_reason = "projection-self-digest-mismatch"
+        else:
+            try:
+                tail = self._ledger(run_id).verified_tail()
+            except LedgerIntegrityError as exc:
+                raise RunStateError(f"run ledger verification failed: {exc}") from exc
+            if tail is None:
+                raise RunStateError(f"run does not exist or has no ledger entries: {run_id}")
+            if str(body.get("ledger_head", "")) != str(tail.get("entry_hash", "")):
+                repair_reason = "projection-head-stale"
+        if not repair_reason:
+            # The invariant "re-derives the retained set/report on every load"
+            # keeps a mechanical hold on the fast path: the TAIL transition's
+            # retained obligation bytes must re-derive the digests its ledger
+            # entry spent (deep history re-verifies on the full-walk paths, and
+            # the keyed chain owns the entries themselves).
+            tail_digests = tail.get("artifact_digests") if isinstance(tail, Mapping) else None
+            if isinstance(tail_digests, Mapping):
+                set_digest = str(tail_digests.get(TRANSITION_OBLIGATION_SET_KEY, ""))
+                report_digest = str(tail_digests.get(TRANSITION_OBLIGATION_REPORT_KEY, ""))
+                if set_digest and report_digest:
+                    obligation_root = (
+                        self._run_dir(run_id)
+                        / "evidence"
+                        / "transition-obligations"
+                        / set_digest.removeprefix("sha256:")
+                    )
+                    checks = (
+                        (obligation_root / "set.json", set_digest, "set"),
+                        (
+                            obligation_root
+                            / f"{report_digest.removeprefix('sha256:')}.report.json",
+                            report_digest,
+                            "report",
+                        ),
+                    )
+                    for retained_path, expected_digest, label in checks:
+                        try:
+                            retained_doc = json.loads(
+                                retained_path.read_text(encoding="utf-8")
+                            )
+                        except (OSError, json.JSONDecodeError) as exc:
+                            raise RunStateError(
+                                f"retained obligation {label} unreadable for the "
+                                f"current transition: {exc}"
+                            ) from exc
+                        if digest_obj(retained_doc) != expected_digest:
+                            raise RunStateError(
+                                f"retained obligation {label} differs from its "
+                                f"ledger digest"
+                            )
+            import dataclasses as _dataclasses
+
+            try:
+                fast_state = RunState(str(body.get("state", "")))
+            except ValueError as exc:
+                raise RunStateError(f"run projection carries an unknown state: {exc}") from exc
+            return _dataclasses.replace(RunProjection.from_dict(body), state=fast_state)
+        derived = self._derive(run_id)  # mandatory full-chain firing path
+        self._write_projection(derived)
+        self._record_projection_repair(run_id, repair_reason, derived.ledger_head)
         return derived
+
+    def _record_projection_repair(self, run_id: str, reason: str, head: str) -> None:
+        """Persist the repair as an inspectable record — recovery is not silence."""
+        path = self._run_dir(run_id) / "projection-repairs.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"reason": reason, "ledger_head": head}) + "\n")
 
     def rebuild_projection(self, run_id: str) -> RunProjection:
         """Re-derive and atomically replace a projection from an intact ledger."""
@@ -2721,8 +2829,13 @@ class RunStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".run-", suffix=".json", dir=path.parent)
         try:
+            document = projection.to_dict()
+            # Phase 3 change 2: the projection pins itself — self_digest covers the
+            # canonical body INCLUDING ledger_head, so the head-pinned load can
+            # trust a verified snapshot without the full derive walk.
+            document["self_digest"] = digest_obj(document)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(projection.to_dict(), handle, sort_keys=True, indent=2)
+                json.dump(document, handle, sort_keys=True, indent=2)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())

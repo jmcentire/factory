@@ -543,6 +543,23 @@ class Ledger:
             raise LedgerIntegrityError(f"ledger verification failed: {detail}")
         return records
 
+    def verified_tail(self) -> dict[str, Any] | None:
+        """Parse the ledger and verify ONLY the tail record's address (Phase 3
+        change 2's fast-path anchor). Returns the tail record, ``None`` for an
+        empty ledger, and raises when the tail does not re-address — the same
+        suffix-continuity check append uses. Full-chain verification stays on
+        ``verified_entries`` and its mandatory firing paths."""
+        records = self._records()
+        if not records:
+            return None
+        tail = records[-1]
+        body = {key: value for key, value in tail.items() if key != "entry_hash"}
+        if not _const_time_eq(self._address(body), str(tail.get("entry_hash", ""))):
+            raise LedgerIntegrityError(
+                "tail record does not re-address (tampered or wrong-mode tail)"
+            )
+        return tail
+
     def verify_chain(self) -> tuple[bool, str]:
         """Walk the whole chain and prove it is untampered. Checks, per entry: the stored
         address re-derives from the body (content-address integrity), the sequence increments
