@@ -7150,12 +7150,19 @@ def test_refusal_kind_registry_is_closed_over_harness_usage() -> None:
     )["kinds"]
     used: set[str] = set()
     for script in sorted(HARNESS.glob("*.sh")):
-        tokens = script.read_text(encoding="utf-8").split()
-        used.update(
-            tokens[i + 1]
-            for i, token in enumerate(tokens[:-1])
-            if token == "--kind"
-        )
+        # Join backslash continuations so an invocation split across lines scans
+        # as one; only refusal-event invocations feed this registry —
+        # record_no.sh's --kind flag has its own closed set (terminal_no_kinds.json).
+        text = script.read_text(encoding="utf-8").replace("\\\n", " ")
+        for line in text.splitlines():
+            if "refusal-event" not in line:
+                continue
+            tokens = line.split()
+            used.update(
+                tokens[i + 1]
+                for i, token in enumerate(tokens[:-1])
+                if token == "--kind"
+            )
     assert used, "no harness script passes --kind — instrumentation is unwired"
     assert used <= set(registry), f"unregistered kinds in harness scripts: {used - set(registry)}"
     assert "refusal-unregistered" in registry
@@ -7295,3 +7302,101 @@ def test_promote_close_write_failure_leaves_refusal_event(tmp_path: Path) -> Non
     rows = _refusal_events(root)
     assert [row["kind"] for row in rows] == ["refusal-promote"]
     assert rows[0]["exit_code"] == 70
+
+
+# --------------------------------------------------------------------------
+# Phase 0.2 (remediation plan) — host-written terminal-NO record.
+# The pass rule reads "harness terminal in {closed-green, closed-red,
+# host-recorded-NO}" — never "verdict.json present". record_no.sh is the sole
+# writer of the "no" disposition; kinds are committed closed data with a
+# signal/bound class so deadline expiry can never masquerade as an early NO.
+# --------------------------------------------------------------------------
+
+
+def _harness_doc(root: Path) -> dict[str, object]:
+    return json.loads((root / "harness.json").read_text(encoding="utf-8"))
+
+
+def test_record_no_writes_host_terminal_disposition(tmp_path: Path) -> None:
+    root = _make_run(tmp_path)
+    r = run(
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
+         "--reason", "spec unsatisfiable, human decision"],
+        tmp_path,
+        _factory_cli_env(),
+    )
+    assert r.returncode == 0, r.stderr
+    doc = _harness_doc(root)
+    assert doc["status"] == "no"
+    assert doc["no_kind"] == "operator"
+    assert doc["no_class"] == "signal"
+    assert doc["no_reason"] == "spec unsatisfiable, human decision"
+    assert str(doc["no_recorded_at"]).endswith("+00:00")
+
+
+def test_record_no_deadline_kind_is_a_bound_not_a_signal(tmp_path: Path) -> None:
+    """0.2 enforcement: deadline expiry is excluded from the rewarded NO-relevant
+    class — the deadline knob cannot manufacture the terminal the instrument pays."""
+    root = _make_run(tmp_path)
+    r = run(
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "watchdog-deadline",
+         "--reason", "signal deadline expired with residual blockers"],
+        tmp_path,
+        _factory_cli_env(),
+    )
+    assert r.returncode == 0, r.stderr
+    assert _harness_doc(root)["no_class"] == "bound"
+
+
+def test_record_no_refuses_unknown_kind(tmp_path: Path) -> None:
+    """A deliberate host action with an unknown kind is a caller bug, not a death
+    signal to preserve — refused, never minted mislabeled."""
+    root = _make_run(tmp_path)
+    r = run(
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "vibes",
+         "--reason", "x"],
+        tmp_path,
+        _factory_cli_env(),
+    )
+    assert r.returncode == 65
+    assert _harness_doc(root)["status"] == "open"
+
+
+def test_record_no_refuses_closed_run_and_conflicting_rewrite(tmp_path: Path) -> None:
+    root = _make_run(tmp_path)
+    args = ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
+            "--reason", "first"]
+    assert run(args, tmp_path, _factory_cli_env()).returncode == 0
+    # Identical retry is idempotent (crash-retry safety, promote.sh precedent).
+    assert run(args, tmp_path, _factory_cli_env()).returncode == 0
+    # A different NO must not overwrite the recorded one.
+    conflicting = run(
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
+         "--reason", "second"],
+        tmp_path,
+        _factory_cli_env(),
+    )
+    assert conflicting.returncode == 2
+    assert _harness_doc(root)["no_reason"] == "first"
+
+
+def test_promote_refuses_a_no_run_terminal_is_terminal(tmp_path: Path) -> None:
+    """A host-recorded NO is terminal: the close path fail-closes on it (and
+    leaves its own refusal event), never advancing a dead run to closed."""
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+    assert run(
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
+         "--reason", "dead end"],
+        tmp_path,
+        _factory_cli_env(),
+    ).returncode == 0
+    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
+    assert r.returncode != 0
+    assert _harness_doc(root)["status"] == "no"
+    assert [row["kind"] for row in _refusal_events(root)] == ["refusal-promote"]

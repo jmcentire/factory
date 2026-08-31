@@ -1,0 +1,18 @@
+{
+  "schema_version": "factory-terminal-no-kinds/1",
+  "comment": "Closed registry of host-recorded terminal-NO kinds (remediation plan Phase 0.2). Each kind carries its class: 'signal' is a NO-relevant terminal the acceptance instrument rewards as an early NO; 'bound' is excluded from the NO-relevant set so the deadline knob cannot manufacture the terminal event the instrument rewards. Additions are data-file diffs visible in git; record_no.sh refuses a kind absent from this file (a deliberate host action with an unknown kind is a caller bug, not a death signal to preserve).",
+  "kinds": {
+    "operator": {
+      "class": "signal",
+      "description": "an enrolled operator recorded the run as not-going-to-complete"
+    },
+    "preflight": {
+      "class": "signal",
+      "description": "the feasibility preflight proved the run unsatisfiable (Phase 1 wires this caller)"
+    },
+    "watchdog-deadline": {
+      "class": "bound",
+      "description": "the signal-deadline watchdog expired (Phase 0.4 wires this caller); a bound, never an instrument-rewarded signal"
+    }
+  }
+}
