@@ -6785,6 +6785,50 @@ def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     assert verdict["allowed"] is True
 
 
+def test_promote_never_erases_a_terminal_no_recorded_during_close(tmp_path: Path) -> None:
+    """Round-6 6-5: a terminal NO recorded BETWEEN the pre-check and the locked flip
+    survives — the flip mirrors the pre-check under the lock instead of trusting it,
+    exits 71 distinctly, and the NO fields stand untouched. The FACTORY_CLI wrapper
+    lands the NO right after the verdict renders, inside the exact race window."""
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+    env = _factory_cli_env()
+    wrapper = tmp_path / "cli_then_no.sh"
+    wrapper.write_text(
+        "#!/bin/bash\n"
+        f"{env['FACTORY_CLI']} \"$@\"\n"
+        "rc=$?\n"
+        "# inject the racing NO only after the verdict render, inside the exact window\n"
+        'if [ "$1" != "promote" ]; then exit $rc; fi\n'
+        f"python3 - {root}/harness.json <<'EOF'\n"
+        "import json, pathlib, sys\n"
+        "p = pathlib.Path(sys.argv[1])\n"
+        "doc = json.loads(p.read_text())\n"
+        "doc.update({'status': 'no', 'no_kind': 'watchdog-deadline',\n"
+        "            'no_class': 'terminal', 'no_reason': 'race-fixture',\n"
+        "            'no_recorded_at': '2026-08-31T00:00:00+00:00'})\n"
+        "p.write_text(json.dumps(doc))\n"
+        "EOF\n"
+        "exit $rc\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    env["FACTORY_CLI"] = str(wrapper)
+    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, env)
+    assert r.returncode == 71, (r.returncode, r.stdout, r.stderr)
+    doc = json.loads((root / "harness.json").read_text())
+    assert doc["status"] == "no"
+    assert doc["no_kind"] == "watchdog-deadline"
+    assert "closed_at" not in doc
+    events = (root / "events.jsonl").read_text().splitlines()
+    assert any("refused to erase" in line for line in events)
+
+
 def test_promote_fail_closes_when_decision_blocks(tmp_path: Path) -> None:
     """A blocked decision (allowed=False) is a finding, not a failure of promote.sh: the cage
     refused to advance a run the evidence does not support. run.json stays open."""
@@ -7321,7 +7365,7 @@ def _unattributed_refusal_exits(
     return unattributed
 
 
-_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70)(?!\d)|"\$rc")'
+_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70|71)(?!\d)|"\$rc")'
 _ENDGAME_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:70(?!\d)|"\$rc")'
 
 

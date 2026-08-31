@@ -184,7 +184,7 @@ fi
 #
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
 # half-written harness.json. Exit 70 on write-failure so it is distinct from BLOCKED (1).
-if ! python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" <<'PY' 2>>"$REJECTION"
+python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" <<'PY' 2>>"$REJECTION"
 import datetime, fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
 
 run_path = pathlib.Path(sys.argv[1])
@@ -221,6 +221,17 @@ doc = json.loads(read_regular(run_path))
 if doc.get("status") == "closed":
     print(f"promote: {run} already closed — nothing to do (idempotent)")
     sys.exit(0)
+if doc.get("status") != "open":
+    # Round-6 6-5: the locked flip mirrors the pre-check instead of trusting it —
+    # between verdict render and this lock, record_no may have written a terminal
+    # "no" (watchdog deadline, operator, preflight). A recorded NO is never erased
+    # by a later green verdict; distinct exit so the wrapper reports the refusal.
+    print(
+        f"promote: {run} carries terminal status "
+        f"{doc.get('status')!r} — close refused, the NO stands",
+        file=sys.stderr,
+    )
+    sys.exit(71)
 closed_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 verdict_bytes = read_regular(verdict_file)
 doc["status"] = "closed"
@@ -244,7 +255,14 @@ except OSError:
     raise  # surfaces as a non-zero exit; the `if !` below maps it to exit 70
 print(f"promote: {run} closed — sole-advancement via decide_promotion verdict")
 PY
-then
+flip_rc=$?
+if [ "$flip_rc" -ne 0 ]; then
+  if [ "$flip_rc" -eq 71 ]; then
+    refusal_event "terminal NO recorded during close: promote refused to erase it" 71
+    echo "promote: terminal NO recorded during close — the NO stands, run NOT closed" >&2
+    [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
+    exit 71
+  fi
   refusal_event "harness.json close write failed: run NOT closed" 70
   echo "promote: harness.json close write failed — run NOT closed" >&2
   [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2

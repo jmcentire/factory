@@ -256,3 +256,44 @@ def test_refused_prepare_retains_only_the_residual_blocker_snapshot(tmp_path: Pa
     document = json.loads((blobs[0] / "payload").read_text(encoding="utf-8"))
     assert document["refused"] is True
     assert "signal-knobs-undeclared" in document["report"]["issues"]
+
+
+def test_attempt_two_reprepare_of_unchanged_manifest_succeeds(tmp_path: Path) -> None:
+    """Round-6 6-1: the heart of the round-4 D3 fix, forced END-TO-END — a legal
+    attempt-2 re-prepare of the UNCHANGED manifest must succeed. Under the faithful
+    revert (truthiness guard + attempt-ceiling operand) this wedges with
+    deadline-knob-raised-after-start while every unit pin stays green; this test
+    reds that revert at the caller's wiring, not the callee's semantics."""
+    store, target_path, catalog_path, plan_path = _prepared_inputs(
+        tmp_path, with_signal=True
+    )
+    assert _prepare(tmp_path, target_path, catalog_path, plan_path).report.ready
+    second = _prepare(tmp_path, target_path, catalog_path, plan_path)
+    assert second.report.ready, second.report.issues
+
+
+def test_frozen_deadline_rederives_from_the_retained_blob(tmp_path: Path) -> None:
+    """Round-6 6-1 (companion): _frozen_signal_deadline must return the deadline the
+    first attempt actually froze — replacing it with `return None` disarms the
+    raised-after-start guard everywhere, and this test reds that mutation."""
+    from factory_runtime.generation import _frozen_signal_deadline
+
+    store, target_path, catalog_path, plan_path = _prepared_inputs(
+        tmp_path, with_signal=True
+    )
+    assert _prepare(tmp_path, target_path, catalog_path, plan_path).report.ready
+    projection = store.load("run-1")
+    # This fixture never records the BUILDING transition, so the projection carries
+    # no tuple yet (None is correct there — pre-first-recorded-attempt). Point a
+    # projection at the blob the prepare actually retained: the helper must
+    # re-derive the deadline from those exact bytes.
+    import dataclasses
+
+    blob_root = tmp_path / "run-1" / "evidence" / "generation" / "target-manifest"
+    digests = sorted(entry.name for entry in blob_root.iterdir())
+    assert len(digests) == 1
+    bound = dataclasses.replace(
+        projection,
+        generation_artifact_digests={"target-manifest-source": "sha256:" + digests[0]},
+    )
+    assert _frozen_signal_deadline(tmp_path, "run-1", bound) == 1

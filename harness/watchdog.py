@@ -166,16 +166,61 @@ class SignalWatchdog:
             knobs = self.knobs()
             passes = int(self._cli_json("pass-count")["passes"])
         except (WatchdogError, KeyError, ValueError, TypeError) as exc:
-            emit("watchdog_error", f"observation refused: {exc}", wake=False)
+            # Round-6 6-8: a persistent observation refusal must not silently disarm
+            # both firing modes — count consecutive errors across lives and escalate
+            # (wake=True, once) at the threshold; a later good observation re-arms.
+            state = _load_json(self.state_path)
+            errors = state.get("consecutive_errors")
+            errors = (errors if isinstance(errors, int) and errors >= 0 else 0) + 1
+            state["consecutive_errors"] = errors
+            escalate = errors >= 3 and not state.get("error_escalated")
+            if escalate:
+                state["error_escalated"] = True
+            self._write_state(state)
+            emit(
+                "watchdog_error",
+                f"observation refused ({errors} consecutive): {exc}"
+                + (" — monitoring degraded, operator attention required" if escalate else ""),
+                wake=escalate,
+            )
             return "error"
 
         state = _load_json(self.state_path)
-        observations = [o for o in state.get("observations", []) if isinstance(o, dict)]
+        state["consecutive_errors"] = 0
+        state["error_escalated"] = False
+        # Round-6 6-7: tampered-but-valid-JSON state (wrong-shape ts/passes) degrades
+        # to re-arm exactly like a deleted or invalid-JSON file — never a crash that
+        # kills the only monitor. Numeric coercion happens HERE, once, fail-safe.
+        observations = []
+        state_corrupt = False
+        for candidate in state.get("observations", []):
+            if not isinstance(candidate, dict):
+                state_corrupt = True
+                continue
+            try:
+                observations.append(
+                    {"ts": float(candidate["ts"]), "passes": int(candidate["passes"])}
+                )
+            except (KeyError, ValueError, TypeError):
+                state_corrupt = True
+        if state_corrupt:
+            observations = []
+            state["stall_seen_ts"] = None
+            state["backstop_fired"] = False
+            emit(
+                "watchdog_state_reset",
+                "persisted watchdog state was malformed: re-armed from empty "
+                "(tamper or corruption; a stall must now be seen twice again)",
+                wake=False,
+            )
         current = self.now()
-        if not observations or passes > int(observations[-1].get("passes", -1)):
+        if not observations or passes > observations[-1]["passes"]:
             observations.append({"ts": current, "passes": passes})
             observations = observations[-8:]
             state["stall_seen_ts"] = None
+            # Round-6 6-6: progress re-arms the backstop — fired-once is a latch
+            # against repeat pages for ONE stall, never permanent silence.
+            state["backstop_fired"] = False
         previous_check = state.get("last_check_ts")
         state["last_check_ts"] = current
         state["observations"] = observations
@@ -234,9 +279,11 @@ class SignalWatchdog:
                 verdict = "deadline-fired"
 
         if verdict in {"ok", "warned"} and observations:
-            gap = current - float(observations[-1]["ts"])
+            gap = current - observations[-1]["ts"]
             if gap > cap_seconds:
                 stall_seen = state.get("stall_seen_ts")
+                if not isinstance(stall_seen, (int, float)):
+                    stall_seen = None
                 if stall_seen is None:
                     # First live sighting of the stall: arm, never fire — a
                     # watchdog outage must not be misattributed as a run stall.
