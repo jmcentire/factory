@@ -352,10 +352,9 @@ class FactoryOrchestrator:
                 )
                 acceptance_catalog = stored_catalog.catalog
                 catalog_activation_artifacts = dict(stored_catalog.artifact_digests)
-                catalog_activation_nonces = [
-                    stored_catalog.human_receipt.nonce,
-                    stored_catalog.validator_receipt.nonce,
-                ]
+                # 4.1b: only the human AUTHORITY nonce is consumed; the Validator
+                # attribution carries no replay ceremony.
+                catalog_activation_nonces = [stored_catalog.human_receipt.nonce]
             else:
                 acceptance_catalog = load_retained_acceptance_catalog(
                     self.workflow.root,
@@ -950,10 +949,10 @@ class FactoryOrchestrator:
                 fsync_directory_chain(bundle_path.parent, through=self.workflow.root)
             except DurabilityError as exc:
                 raise OrchestrationError(str(exc)) from exc
-            if envelope.public_key != verifier.public_key:
-                raise OrchestrationError(
-                    "evidence bundle signer does not own the Validator verifier identity"
-                )
+            # 4.1b: the host-minted-then-host-verified bundle signer check is
+            # deleted — the host signed this envelope one call above, so verifying
+            # its own signature proved nothing; the signature is attribution and
+            # the enrolled-key threading above already refuses human keys.
             projection = self.workflow.store.transition(
                 run_id,
                 RunState.PREVIEW,

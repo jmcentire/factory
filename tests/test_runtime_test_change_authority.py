@@ -301,10 +301,9 @@ def test_exact_dual_authority_is_retained_and_addressed(tmp_path: Path) -> None:
     )
     reservation = json.loads((stored.directory / "nonce-reservations.json").read_text())
     assert reservation["authorization_digest"] == authorization.content_digest
-    assert reservation["nonces"] == [
-        "human-test-change-nonce",
-        "validator-test-change-nonce",
-    ]
+    # 4.1b: only the human AUTHORITY nonce is reserved — the Validator
+    # attribution carries no replay ceremony.
+    assert reservation["nonces"] == ["human-test-change-nonce"]
 
 
 def test_membership_or_signer_substitution_is_denied(tmp_path: Path) -> None:

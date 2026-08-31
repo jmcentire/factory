@@ -72,8 +72,10 @@ class StoredTestChangeAuthorization:
         }
 
     @property
-    def authority_nonces(self) -> tuple[str, str]:
-        return (self.human_receipt.nonce, self.validator_receipt.nonce)
+    def authority_nonces(self) -> tuple[str, ...]:
+        # 4.1b: the human receipt is the only authority; the Validator receipt is
+        # attribution and its nonce carries no replay ceremony.
+        return (self.human_receipt.nonce,)
 
 
 def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
@@ -380,10 +382,14 @@ def _reserved_nonces(parent: Path, *, exclude_address: str) -> frozenset[str]:
             or len({str(value) for value in raw_receipt_digests}) != 2
         ):
             raise TestChangeAuthorityError("retained test-change nonce reservation is malformed")
-        if not isinstance(raw_nonces, list) or len(raw_nonces) != 2:
+        # 4.1b: single-seat reservations hold one nonce (the human authority);
+        # dual-ratified history holds two — both shapes are real retained bundles.
+        if not isinstance(raw_nonces, list) or len(raw_nonces) not in (1, 2):
             raise TestChangeAuthorityError("retained test-change nonce reservation is malformed")
         normalized = [str(nonce) for nonce in raw_nonces]
-        if any(not nonce.strip() for nonce in normalized) or len(set(normalized)) != 2:
+        if any(not nonce.strip() for nonce in normalized) or len(set(normalized)) != len(
+            normalized
+        ):
             raise TestChangeAuthorityError("retained test-change nonce reservation is malformed")
         reservations.update(normalized)
     return frozenset(reservations)
@@ -619,10 +625,9 @@ def _verify_and_retain_test_change_authorization_locked(
             raise AuthorityVerificationError(
                 "test-change Validator ratifier is not an enrolled agent"
             )
-        if human.public_key == validator.public_key:
-            raise AuthorityVerificationError(
-                "test-change human and Validator ratifiers share a signing key"
-            )
+        # 4.1b orphaned-check sweep: the human/Validator key-distinctness check is
+        # deleted — distinctness between an authority seat and an attribution seat
+        # gates nothing once the Validator signature is provenance.
         if digest_bytes(human_bytes) != human_receipt.envelope.envelope_digest:
             raise AuthorityVerificationError(
                 "test-change human receipt changed while it was verified"
@@ -667,7 +672,7 @@ def _verify_and_retain_test_change_authorization_locked(
                 human_receipt.envelope.envelope_digest,
                 validator_receipt.envelope.envelope_digest,
             ],
-            "nonces": [human_receipt.nonce, validator_receipt.nonce],
+            "nonces": [human_receipt.nonce],
         }
     )
     _retain_bundle_atomically(

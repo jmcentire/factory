@@ -1433,14 +1433,19 @@ class RunStore:
 
         expected_authority_nonces = (
             (1 if destination is RunState.INTAKE else 0)
-            + (2 if catalog_activation else 0)
-            + (2 if test_change_activation else 0)
+            + (1 if catalog_activation else 0)
+            + (1 if test_change_activation else 0)
         )
         transition_nonces = transition_payload.get("authority_receipt_nonces", [])
         if not isinstance(transition_nonces, list):
             raise RunStateError("authority_receipt_nonces must be an array")
         normalized_nonces = [str(nonce) for nonce in transition_nonces]
         allowed_authority_nonce_counts = {expected_authority_nonces}
+        dual_history_extras = int(bool(catalog_activation)) + int(bool(test_change_activation))
+        if dual_history_extras:
+            # dual-ratified history recorded a validator nonce per activation
+            for extra in range(1, dual_history_extras + 1):
+                allowed_authority_nonce_counts.add(expected_authority_nonces + extra)
         if phase_key:
             # Three generations coexist on retained ledgers: legacy direct-store
             # entries recorded no phase nonces, dual-ratified history recorded two,
@@ -2344,10 +2349,16 @@ class RunStore:
                         }
                         else 0
                     )
-                    + (2 if derived_catalog_activation else 0)
-                    + (2 if derived_test_change_activation else 0)
+                    + (1 if derived_catalog_activation else 0)
+                    + (1 if derived_test_change_activation else 0)
                 )
                 allowed_entry_nonce_counts = {expected_entry_nonces}
+                derived_dual_extras = int(bool(derived_catalog_activation)) + int(
+                    bool(derived_test_change_activation)
+                )
+                if derived_dual_extras:
+                    for extra in range(1, derived_dual_extras + 1):
+                        allowed_entry_nonce_counts.add(expected_entry_nonces + extra)
                 if derived_phase_key:
                     # 4.1b: single-seat records one phase nonce; dual-ratified
                     # history recorded two; pre-nonce legacy recorded none.

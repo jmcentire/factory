@@ -914,10 +914,13 @@ def verify_and_retain_acceptance_catalog(
             clock=clock,
             consumed_nonces=tuple((*consumed, human_receipt.nonce)),
         )
+        # 4.1b: the Validator receipt is ATTRIBUTION — verified signature and
+        # enrolled principal so the provenance is meaningful; it authorizes nothing
+        # and its nonce is never consumed.
         validator = policy.principal(validator_identity)
         if validator is None or validator.kind != "agent":
             raise AuthorityVerificationError(
-                "acceptance-obligation Validator ratifier is not an enrolled agent"
+                "acceptance-obligation Validator attribution is not an enrolled agent"
             )
         if digest_bytes(human_envelope_bytes) != human_receipt.envelope.envelope_digest:
             raise AuthorityVerificationError(

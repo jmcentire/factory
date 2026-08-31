@@ -220,10 +220,14 @@ class TesseraEvidenceEnvelopeVerifier:
             raise EvidencePlaneError(
                 "evidence verifier authority policy differs from the run authority genesis"
             )
+        # 4.1b (fourth demotion site): the preview evidence envelope's Validator
+        # signature is ATTRIBUTION, not authority — the signature and enrolled
+        # principal are verified so provenance is meaningful, but promotion
+        # authority lives in the host-verified evidence and the human seats.
         principal = self._policy.principal(expected_signer_identity)
         if principal is None or principal.kind != "agent":
             raise EvidencePlaneError(
-                "evidence envelope signer is not an enrolled Validator agent"
+                "evidence envelope attribution is not an enrolled agent principal"
             )
         verification_copy = ""
         try:

@@ -65,10 +65,10 @@ construction — the purity guard will (and must) reject it.
 - `factory_runtime/isolation.py` / `lanes.py` — qualified platform isolation and asymmetric role
   projections (Tester never receives construction IR).
 - `factory_runtime/transition_obligations.py` / `acceptance_obligations.py` — code-selected,
-  versioned lifecycle obligations plus human+Validator-ratified acceptance catalogs and
+  versioned lifecycle obligations plus human-ratified acceptance catalogs (Validator receipt retained as attribution) and
   host-derived reports over exact immutable subjects.
 - `factory_runtime/test_change_authority.py` — retained exact test-expectation rulings bound to
-  current phase supersession and independently signed by an enrolled human and Validator.
+  current phase supersession, signed by an enrolled human (Validator receipt as attribution).
 - `factory_runtime/resume.py` — pre-mutable-state verification of externally supplied checkpoints
   over retained signed roots, lineage, resources, configuration, and retention policy.
 - `factory_runtime/runner.py` / `runner_isolation.py` / `projection_bundle.py` — closed-environment,
@@ -131,8 +131,9 @@ make test-tessera   # real signing + runtime-through-preview proof
   live in both target ABI and plan and cannot rise after authoring starts.
 - **Existing tests are immutable by default** — changing one requires a unique same-phase signed
   supersession plus one exact affirmative ruling over the run/generation/target, current phase
-  versions, assertion or frozen family, and expected replacement statement. An enrolled human and
-  a distinct enrolled Validator must sign that same ruling; it cannot invent or invert behavior.
+  versions, assertion or frozen family, and expected replacement statement. An enrolled human signs
+  that same ruling (sole authority, 4.1b); the Validator receipt is retained as verified
+  attribution; the ruling cannot invent or invert behavior.
 - **Tool capability boundary** — every declared tool has exactly one signed tier and a
   phase-2/3 backreference; unknown/Verboten denies, Sign-off grants are scoped and expiring,
   and denial probes demonstrate enforcement. Platform credential/network removal remains an
