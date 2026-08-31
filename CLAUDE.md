@@ -36,13 +36,6 @@ construction — the purity guard will (and must) reject it.
   reserved-token scan, and `compose_done` — the only path that mints `__DONE__`,
   reachable solely when the handover scope-union covers the ratified verb set over a
   PASS verdict.
-- `factory_core/qualification.py` — behavioral qualification for load-bearing role
-  instructions, layered above `instruction_control.py`'s byte-selection proof: a
-  role is qualified only when a passing probe and a passing adversarial
-  counter-probe exist, at the current exact configuration (model, runner,
-  role-contract digest, tool-schema digest, effective-directive-contract digest),
-  across all four required run classes (cold, exact-contract, same-session-resume,
-  compaction-boundary). Any configuration drift invalidates every prior result.
 - `factory_core/provenance.py` — canonical phase-artifact/backreference verifier and
   absence-vs-integrity issue classification, including whole-artifact version binding.
 - `factory_core/build_plan.py` — qualified recipe-pattern catalog and disposable per-run build
