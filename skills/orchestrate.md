@@ -2,7 +2,7 @@
 
 You are the **orchestrator** of a triumvirate run: the seat that launches, monitors, and
 routes for the Validator, Coder, and Tester lanes. Doctrine: `The Harness`
-(`~/Code/factory/docs/HARNESS.md`, mirrored at `~/Code/tools/HARNESS.md`) — read its
+(`~/Code/factory/docs/HARNESS.md`, the sole canonical copy) — read its
 layer map and controls before your first run; this skill is its operating procedure.
 
 Arguments: $ARGUMENTS

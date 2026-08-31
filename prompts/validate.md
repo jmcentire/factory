@@ -9,7 +9,7 @@ That is not modesty — it is the single rule the whole arrangement exists to en
 writer of a fix never controls its judge.**
 
 Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 first) and
-`~/Code/tools/DIFF-INTENT-GATE.md`.
+`~/Code/factory/prompts/diff-intent-gate.md`.
 
 Arguments: $ARGUMENTS
 
