@@ -168,6 +168,8 @@ def _parser() -> argparse.ArgumentParser:
     preflight.add_argument("--policy", help="segregation policy JSON")
     preflight.add_argument("--target-manifest", help="target manifest TOML (build/signal knobs)")
     preflight.add_argument("--build-plan", help="build plan JSON (max_build_attempts)")
+    preflight.add_argument("--runs", help="runs root for the dead-run liveness probe")
+    preflight.add_argument("--run-id", help="run id for the dead-run liveness probe")
 
     signal_knobs = commands.add_parser(
         "signal-knobs",
@@ -1076,12 +1078,20 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             if arguments.build_plan
             else None
         )
+        from factory_runtime.preflight import LivenessFacts, probe_liveness
+
+        preflight_liveness: LivenessFacts | None = (
+            probe_liveness(arguments.runs, arguments.run_id)
+            if arguments.runs and arguments.run_id
+            else None
+        )
         preflight_report = run_preflight(
             coverage=preflight_coverage,
             profile=preflight_profile,
             policy=preflight_policy,
             target_build=preflight_target_build,
             plan_max_build_attempts=preflight_plan_attempts,
+            liveness=preflight_liveness,
         )
         print(json.dumps(preflight_report.to_dict(), indent=2))
         if not preflight_report.go:

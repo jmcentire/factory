@@ -58,7 +58,7 @@ def test_satisfiable_frame_is_a_clean_go() -> None:
     )
     assert report.go and not report.hard_no
     assert report.ceiling == "pass"
-    assert report.not_applicable == ()
+    assert report.not_applicable == ("run-liveness",)  # liveness probed at the CLI door
 
 
 def test_uncovered_territory_without_criterion_is_pass_unreachable() -> None:
@@ -159,6 +159,7 @@ def test_could_not_check_is_loud_and_distinct_from_passed() -> None:
         "coverage-map",
         "attempt-ceilings",
         "critical-roster",
+        "run-liveness",
     }
     assert report.ceiling == "unknown"
     assert "preflight-reachability-unverified" in [
@@ -216,3 +217,70 @@ def test_cli_door_is_read_only_and_exits_2_on_hard_no(tmp_path) -> None:
         capture_output=True, text=True, cwd=repo,
     )
     assert ok.returncode == 0, ok.stderr
+
+
+def test_dead_run_liveness_hard_nos_and_their_go_sibling() -> None:
+    from factory_runtime.preflight import LivenessFacts
+
+    blocked = run_preflight(
+        liveness=LivenessFacts(state="blocked", build_attempt_count=2, build_attempt_limit=2)
+    )
+    assert "preflight-dead-run-blocked-at-ceiling" in [
+        finding.code for finding in blocked.hard_no
+    ]
+
+    wedged = run_preflight(
+        liveness=LivenessFacts(state="building", guard_residue=("/x/ledger.jsonl.lock",))
+    )
+    assert "preflight-dead-run-guard-residue" in [finding.code for finding in wedged.hard_no]
+
+    chained = run_preflight(
+        liveness=LivenessFacts(state="open", chain_error="duplicate receipt id 'R-1'")
+    )
+    assert "preflight-dead-run-chain-unloadable" in [
+        finding.code for finding in chained.hard_no
+    ]
+
+    corrupt = run_preflight(liveness=LivenessFacts(ledger_error="verification failed"))
+    assert "preflight-dead-run-ledger-unloadable" in [
+        finding.code for finding in corrupt.hard_no
+    ]
+
+    healthy = run_preflight(
+        liveness=LivenessFacts(state="building", build_attempt_count=1, build_attempt_limit=2)
+    )
+    assert healthy.go
+    assert "preflight-run-live" in [finding.code for finding in healthy.notes]
+
+
+def test_probe_liveness_reads_real_wedges(tmp_path) -> None:
+    """The impure prober: a missing run yields ledger_error; a stale exclusive
+    guard and an R5-wedged chain are both detected from the filesystem."""
+    import json as _json
+
+    from factory_runtime.preflight import probe_liveness
+
+    runs = tmp_path / "runs"
+    run_root = runs / "r1"
+    run_root.mkdir(parents=True)
+    (run_root / "ledger.jsonl.lock").write_text("", encoding="utf-8")
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    row = {"receipt_id": "R-1", "prev_hash": "0" * 64}
+    import hashlib
+
+    body = dict(row)
+    digest = hashlib.sha256(
+        _json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    entry = {**row, "entry_hash": digest}
+    (receipts / "chain.jsonl").write_text(
+        _json.dumps(entry) + "\n" + _json.dumps(entry) + "\n", encoding="utf-8"
+    )
+
+    facts = probe_liveness(runs, "r1")
+    assert facts.ledger_error  # no run.json/ledger: the run refuses to load
+    assert any(path.endswith("ledger.jsonl.lock") for path in facts.guard_residue)
+    # chain probing is best-effort here: the fixture chain may refuse for
+    # hash-shape reasons before the duplicate check; any refusal is a wedge.
+    assert facts.chain_error

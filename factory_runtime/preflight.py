@@ -44,6 +44,19 @@ from factory_runtime.generation import _signal_knob_issues
 
 
 @dataclass(frozen=True)
+class LivenessFacts:
+    """Dead-run facts probed from the filesystem (impure prober below);
+    the preflight core stays a pure function over these."""
+
+    state: str = ""
+    build_attempt_count: int = 0
+    build_attempt_limit: int = 0
+    guard_residue: tuple[str, ...] = ()
+    ledger_error: str = ""
+    chain_error: str = ""
+
+
+@dataclass(frozen=True)
 class PreflightFinding:
     code: str
     subject: str
@@ -81,6 +94,7 @@ def run_preflight(
     policy: SegregationPolicy | None = None,
     target_build: Mapping[str, Any] | None = None,
     plan_max_build_attempts: int | None = None,
+    liveness: LivenessFacts | None = None,
 ) -> PreflightReport:
     """Compute the intake verdict from ratification-time facts only."""
 
@@ -230,6 +244,70 @@ def run_preflight(
                 )
             )
 
+    # --- dead-run liveness (§1.1: detection only; time predictions are never
+    # residual blockers) ----------------------------------------------------------
+    if liveness is None:
+        not_applicable.append("run-liveness")
+    else:
+        if liveness.ledger_error:
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-dead-run-ledger-unloadable",
+                    "run-ledger",
+                    f"the run ledger refuses to load: {liveness.ledger_error}",
+                )
+            )
+        if (
+            liveness.state == "blocked"
+            and liveness.build_attempt_limit > 0
+            and liveness.build_attempt_count >= liveness.build_attempt_limit
+        ):
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-dead-run-blocked-at-ceiling",
+                    "attempts",
+                    f"BLOCKED with {liveness.build_attempt_count}/"
+                    f"{liveness.build_attempt_limit} attempts spent: no attempt "
+                    f"remains — repair authorization or terminal NO, never more "
+                    f"construction",
+                )
+            )
+        for guard in liveness.guard_residue:
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-dead-run-guard-residue",
+                    guard,
+                    "a stale exclusive guard blocks every transition (interrupted "
+                    "action evidence); release requires the receipted ceremony, "
+                    "not construction",
+                )
+            )
+        if liveness.chain_error:
+            hard_no.append(
+                PreflightFinding(
+                    "preflight-dead-run-chain-unloadable",
+                    "harness-receipt-chain",
+                    f"the harness receipt chain refuses to load — promotion is "
+                    f"permanently refused until the repair ceremony: "
+                    f"{liveness.chain_error}",
+                )
+            )
+        if not (
+            liveness.ledger_error
+            or liveness.chain_error
+            or liveness.guard_residue
+            or liveness.state == "blocked"
+        ):
+            notes.append(
+                PreflightFinding(
+                    "preflight-run-live",
+                    "run-liveness",
+                    f"state {liveness.state or '(new)'} with "
+                    f"{liveness.build_attempt_count}/"
+                    f"{liveness.build_attempt_limit or '-'} attempts spent",
+                )
+            )
+
     if hard_no:
         ceiling = VERDICT_BLOCK
     return PreflightReport(
@@ -239,4 +317,56 @@ def run_preflight(
         disclosures=tuple(disclosures),
         notes=tuple(notes),
         not_applicable=tuple(not_applicable),
+    )
+
+
+def probe_liveness(runs_root: str | Any, run_id: str) -> LivenessFacts:
+    """Filesystem prober for the liveness leg — the module's one impure seam.
+
+    Reads the verified projection (a refusing ledger IS the finding, never an
+    exception), the two exclusive-guard residues that wedge transitions, and
+    the harness receipt chain whose R5-class wedge refuses all promotion.
+    """
+
+    from pathlib import Path as _Path
+
+    from factory_runtime.promotion_gate import PromotionGateError, _chain_path, _load_chain
+    from factory_runtime.state import RunStateError, RunStore
+
+    root = _Path(str(runs_root))
+    run_root = root / run_id
+    state = ""
+    count = 0
+    limit = 0
+    ledger_error = ""
+    try:
+        projection = RunStore(root).load(run_id)
+        state = projection.state
+        count = projection.build_attempt_count
+        limit = projection.build_attempt_limit
+    except RunStateError as exc:
+        ledger_error = str(exc)[:300]
+    guards = tuple(
+        str(candidate)
+        for candidate in (
+            run_root / "ledger.jsonl.lock",
+            run_root / "resources.guard",
+            run_root / "run-transition.guard",
+        )
+        if candidate.exists()
+    )
+    chain_error = ""
+    chain = _chain_path(run_root)
+    if chain.exists():
+        try:
+            _load_chain(chain)
+        except PromotionGateError as exc:
+            chain_error = str(exc)[:300]
+    return LivenessFacts(
+        state=state,
+        build_attempt_count=count,
+        build_attempt_limit=limit,
+        guard_residue=guards,
+        ledger_error=ledger_error,
+        chain_error=chain_error,
     )
