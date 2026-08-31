@@ -317,7 +317,7 @@ def test_ship_chain_orphan_direction_fires_both_ways(tmp_path: Path) -> None:
     repo.mkdir()
     chain = ("ship: " + " ".join(sorted(module._SHIP_CHAIN_DISPOSITIONS)) + "\n")
     (repo / "Makefile").write_text(chain, encoding="utf-8")
-    gates = {"D", "I", "ACC"}
+    gates = {"D", "I", "ACC", "GLO"}
     assert module._ship_chain_problems(repo, gates) == []
 
     (repo / "Makefile").write_text(chain.rstrip("\n") + " check-novel\n", encoding="utf-8")

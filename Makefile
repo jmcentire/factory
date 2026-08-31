@@ -174,10 +174,13 @@ check-denial-probes: check-python ## every factory gate has a registered, collec
 check-acceptance: check-python ## removal-ledger tree claims, exhaustive kind classification, baseline citations
 	@$(PY) scripts/check_acceptance.py
 
+check-glossary: check-python ## glossary referent-integrity + single-definition-site (plan 5.2)
+	$(PY) scripts/check_glossary.py
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

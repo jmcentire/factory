@@ -238,6 +238,7 @@ _SHIP_CHAIN_DISPOSITIONS: dict[str, str] = {
     "check-harness": "meta",
     "check-denial-probes": "gate:I",
     "check-acceptance": "gate:ACC",
+    "check-glossary": "gate:GLO",
     "lint": "toolchain",
     "typecheck": "toolchain",
     "test": "toolchain",
