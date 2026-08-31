@@ -1,290 +1,298 @@
 [
-  {
-    "finding": "unreachable-module:factory_runtime/runner_failure.py:-",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "unreachable-module:factory_runtime/schemas/__init__.py:-",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "unresolved-reference:factory_runtime/broker.py:-",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "unresolved-reference:factory_runtime/cli.py:-",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/completeness.py:is_complete",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/completeness.py:meet",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/completeness.py:normalize_status",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/completeness.py:status_rank",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/contract.py:normalize_method",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/handover.py:HandoverError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/handover.py:HandoverScope",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/handover.py:reserved_token_violation",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/independence.py:normalize_independence_label",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/invariant_kernel.py:FidelityMismatch",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/invariant_kernel.py:LedgerFlow",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/invariant_kernel.py:TraceStep",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/invariant_kernel.py:validate_delta_dict",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/qualification.py:QualificationDecision",
-    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/qualification.py:QualificationError",
-    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/qualification.py:RunClassQualification",
-    "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/roles.py:build_grants",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/roles.py:build_roles",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:AdequacyCriterion",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:CoverageTerritory",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:FiredProbe",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:PromotionFloorLike",
-    "justification": "run-2 epistemic-core public API: consumed via same-module composition and tests; external callers arrive with orchestrator integration (2026-08-27)"
-  },
-  {
-    "finding": "zero-caller-export:factory_core/verdict.py:VerdictError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:StoredAcceptanceCatalog",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:ValidatorExecutionFile",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:verify_acceptance_obligation_report",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/authority.py:Principal",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:BrokerCapabilityHandle",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:BrokerEffect",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:BrokerError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:BrokerOperation",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:BrokerRegistry",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/broker.py:load_broker_capability",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/cli.py:main",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/evidence_plane.py:EvidenceVerificationReceipt",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/evidence_plane.py:VerifiedEvidenceEnvelope",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/generation.py:PreparedGeneration",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/generation.py:build_input_document",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/isolation.py:IsolationError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/lanes.py:FrozenValidatorExecution",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/lanes.py:LaneError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/lanes.py:LaneRole",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/lanes.py:freeze_validator_execution",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/lanes.py:temporary_build_loop_root",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/orchestrator.py:digest_artifact_tree",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/orchestrator_projection.py:OrchestratorProjectionError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/projection_bundle.py:ProjectionBundleError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/promotion_gate.py:decide",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/promotion_gate.py:verify_chain_anchor",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/repair.py:AttemptRunner",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/repair.py:RepairPlanner",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/repair.py:RepairSupervisorError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/repair.py:ValidatorLaunchRepairer",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/resume.py:ResumeVerificationError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner.py:CodexRunnerAdapter",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner.py:RunnerExecutableSnapshot",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner.py:RunnerReceipt",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner_failure.py:RunnerFailureEvidenceError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner_failure.py:main",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/runner_failure.py:verify_and_retain_runner_failure",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/state_admission.py:DependencyRule",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/state_qualification.py:StateQualificationError",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/state_qualification.py:qualification_executor_digest",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/state_qualification.py:scenario_set_digest",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/test_change_authority.py:StoredTestChangeAuthorization",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/transition_obligations.py:require_transition_inputs",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/workflow.py:StoredRatification",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  },
-  {
-    "finding": "zero-caller-export:factory_runtime/workflow.py:VerifiedRepairBrief",
-    "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
-  }
+ {
+  "finding": "unreachable-module:factory_runtime/runner_failure.py:-",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/schemas/__init__.py:-",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "unresolved-reference:factory_runtime/broker.py:-",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "unresolved-reference:factory_runtime/cli.py:-",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/completeness.py:is_complete",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/completeness.py:meet",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/completeness.py:normalize_status",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/completeness.py:status_rank",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/contract.py:normalize_method",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/handover.py:HandoverError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/handover.py:HandoverScope",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/handover.py:reserved_token_violation",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/independence.py:normalize_independence_label",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/invariant_kernel.py:FidelityMismatch",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/invariant_kernel.py:LedgerFlow",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/invariant_kernel.py:TraceStep",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/invariant_kernel.py:validate_delta_dict",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/qualification.py:QualificationDecision",
+  "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/qualification.py:QualificationError",
+  "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/qualification.py:RunClassQualification",
+  "justification": "run-2 qualification core: consumed via same-module composition and tests; external callers (Validator-lane wiring, CLI subcommand) arrive with the next integration step (2026-08-28)"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/roles.py:build_grants",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/roles.py:build_roles",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/verdict.py:AdequacyCriterion",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/verdict.py:CoverageTerritory",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/verdict.py:FiredProbe",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/verdict.py:PromotionFloorLike",
+  "justification": "run-2 epistemic-core public API: consumed via same-module composition and tests; external callers arrive with orchestrator integration (2026-08-27)"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/verdict.py:VerdictError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:StoredAcceptanceCatalog",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:ValidatorExecutionFile",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/acceptance_obligations.py:verify_acceptance_obligation_report",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/authority.py:Principal",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:BrokerCapabilityHandle",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:BrokerEffect",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:BrokerError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:BrokerOperation",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:BrokerRegistry",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:load_broker_capability",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/cli.py:main",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/evidence_plane.py:EvidenceVerificationReceipt",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/evidence_plane.py:VerifiedEvidenceEnvelope",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/generation.py:PreparedGeneration",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/generation.py:build_input_document",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/isolation.py:IsolationError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:FrozenValidatorExecution",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:LaneError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:LaneRole",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:freeze_validator_execution",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:temporary_build_loop_root",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/orchestrator.py:digest_artifact_tree",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/orchestrator_projection.py:OrchestratorProjectionError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/projection_bundle.py:ProjectionBundleError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/promotion_gate.py:decide",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/promotion_gate.py:verify_chain_anchor",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair.py:AttemptRunner",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair.py:RepairPlanner",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair.py:RepairSupervisorError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair.py:ValidatorLaunchRepairer",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/resume.py:ResumeVerificationError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:CodexRunnerAdapter",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerExecutableSnapshot",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerReceipt",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner_failure.py:RunnerFailureEvidenceError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner_failure.py:main",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner_failure.py:verify_and_retain_runner_failure",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:DependencyRule",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:StateQualificationError",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:qualification_executor_digest",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:scenario_set_digest",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/test_change_authority.py:StoredTestChangeAuthorization",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/transition_obligations.py:require_transition_inputs",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/workflow.py:StoredRatification",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/workflow.py:VerifiedRepairBrief",
+  "justification": "pre-existing at gate adoption (2026-08-27); grandfathered pending operator review"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/preflight.py:PreflightReport",
+  "justification": "public return/record types of run_preflight, consumed via instances (report.to_dict()) by the CLI door and via direct import by the forcing tests; a name-level external reference would be ceremony."
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/preflight.py:PreflightFinding",
+  "justification": "public return/record types of run_preflight, consumed via instances (report.to_dict()) by the CLI door and via direct import by the forcing tests; a name-level external reference would be ceremony."
+ }
 ]

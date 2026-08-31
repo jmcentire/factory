@@ -158,6 +158,17 @@ def _parser() -> argparse.ArgumentParser:
     pass_count.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(pass_count)
 
+    preflight = commands.add_parser(
+        "preflight",
+        help="feasibility preflight: the early NO from ratified facts (plan 1.1) — "
+        "read-only, writes nothing, exit 2 on a hard NO",
+    )
+    preflight.add_argument("--coverage", help="ratified coverage-map JSON")
+    preflight.add_argument("--profile", help="criticality profile JSON")
+    preflight.add_argument("--policy", help="segregation policy JSON")
+    preflight.add_argument("--target-manifest", help="target manifest TOML (build/signal knobs)")
+    preflight.add_argument("--build-plan", help="build plan JSON (max_build_attempts)")
+
     signal_knobs = commands.add_parser(
         "signal-knobs",
         help="signal-deadline knobs from the FROZEN generation target manifest (plan 0.4c) "
@@ -1031,6 +1042,50 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 }
             )
         )
+        return
+    if arguments.command == "preflight":
+        from factory_core.build_plan import BuildPlan
+        from factory_core.criticality import CriticalityProfile
+        from factory_core.target import load_target_manifest
+        from factory_core.verdict import CoverageMap
+        from factory_runtime.preflight import run_preflight
+        from factory_runtime.promotion_gate import _policy_from_dict
+
+        preflight_coverage = (
+            CoverageMap.from_dict(_read_object(arguments.coverage))
+            if arguments.coverage
+            else None
+        )
+        preflight_profile = (
+            CriticalityProfile.from_dict(_read_object(arguments.profile))
+            if arguments.profile
+            else None
+        )
+        preflight_policy = (
+            _policy_from_dict(_read_object(arguments.policy))
+            if arguments.policy
+            else None
+        )
+        preflight_target_build = (
+            dict(load_target_manifest(arguments.target_manifest).build)
+            if arguments.target_manifest
+            else None
+        )
+        preflight_plan_attempts = (
+            BuildPlan.from_dict(_read_object(arguments.build_plan)).max_build_attempts
+            if arguments.build_plan
+            else None
+        )
+        preflight_report = run_preflight(
+            coverage=preflight_coverage,
+            profile=preflight_profile,
+            policy=preflight_policy,
+            target_build=preflight_target_build,
+            plan_max_build_attempts=preflight_plan_attempts,
+        )
+        print(json.dumps(preflight_report.to_dict(), indent=2))
+        if not preflight_report.go:
+            raise SystemExit(2)
         return
     if arguments.command == "signal-knobs":
         from factory_runtime.generation import verify_prepared_generation
