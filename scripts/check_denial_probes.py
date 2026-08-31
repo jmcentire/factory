@@ -161,6 +161,125 @@ def _collect_nodeids(nodeids_file: Path | None) -> set[str]:
     return nodeids
 
 
+# ---------------------------------------------------------------------------
+# Recursion floor (plan 5.1): a row is gate-on-gate iff its registered probe
+# tests import or mutate ANOTHER row's registered impl. Gate subjects are
+# object-level artifacts, never another gate's output. The one meta-set below
+# (the purity/doctrine/wiring/acceptance/registry guards) is CLOSED BY
+# DECLARATION and grows only by human signature; Gate I — the registry gate,
+# the sole gate-over-gates — is the single exemption and is terminal.
+# ---------------------------------------------------------------------------
+
+_META_GATE_EXEMPTIONS = frozenset({"I"})
+_META_CONTROL_TOKENS: dict[str, frozenset[str]] = {
+    # token -> the gate ids that OWN it (self-reference is not recursion)
+    "check_core_purity": frozenset({"D"}),
+    "check_doctrine_sync": frozenset(),
+    "check_wiring": frozenset(),
+    "check_acceptance": frozenset({"ACC"}),
+    "check_denial_probes": frozenset({"I"}),
+    "gates.tsv": frozenset({"I"}),
+}
+
+
+def _probe_function_source(repo: Path, probe: str) -> str:
+    """The named probe FUNCTION's source only — file-level scanning would let one
+    shared test module poison every gate it hosts probes for."""
+    path_part, _, test_name = probe.partition("::")
+    test_path = repo / path_part
+    if not test_path.is_file() or not test_name:
+        return ""
+    text = test_path.read_text(encoding="utf-8")
+    marker = f"def {test_name}("
+    start = text.find(marker)
+    if start < 0:
+        return ""
+    end = text.find("\ndef ", start + len(marker))
+    return text[start : end if end > 0 else len(text)]
+
+
+def _recursion_floor_problems(repo: Path, rows: list[dict[str, str]]) -> list[str]:
+    problems: list[str] = []
+    for row in rows:
+        gate = row["gate"].strip()
+        if gate in _META_GATE_EXEMPTIONS:
+            continue
+        for probe in (p.strip() for p in row["probes"].split(";") if p.strip()):
+            body = _probe_function_source(repo, probe)
+            for token, owners in _META_CONTROL_TOKENS.items():
+                if gate in owners:
+                    continue
+                if token in body:
+                    problems.append(
+                        f"gate {gate!r} probe {probe!r} references meta control "
+                        f"{token!r} owned by another row — gate-on-gate is refused "
+                        f"(recursion floor, plan 5.1); Gate I is the sole "
+                        f"gate-over-gates"
+                    )
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Silent-neutering orphan direction, closed world (plan 5.1): every check
+# target in the Makefile ship chain is either a REGISTERED gate's impl or a
+# member of the one declared meta-set — a new ship-chain control cannot appear
+# unregistered, and a registered one cannot be quietly dropped from the chain.
+# The factory_core-symbol orphan direction is refused-as-unrealizable and
+# remains the named residual (two-commit neutering of a core-symbol gate).
+# ---------------------------------------------------------------------------
+
+_SHIP_CHAIN_DISPOSITIONS: dict[str, str] = {
+    # target -> "gate:<id>" (registered) | "meta" (declared meta-set) |
+    #           "toolchain" (language hygiene, not a factory gate)
+    "check-purity": "gate:D",
+    "check-doctrine": "meta",
+    "check-wiring": "meta",
+    "check-authority": "meta",
+    "check-harness": "meta",
+    "check-denial-probes": "gate:I",
+    "check-acceptance": "gate:ACC",
+    "lint": "toolchain",
+    "typecheck": "toolchain",
+    "test": "toolchain",
+}
+
+
+def _ship_chain_problems(repo: Path, registered_gates: set[str]) -> list[str]:
+    makefile = repo / "Makefile"
+    if not makefile.is_file():
+        return []
+    ship_line = ""
+    for line in makefile.read_text(encoding="utf-8").splitlines():
+        if line.startswith("ship:"):
+            ship_line = line
+            break
+    if not ship_line:
+        return ["Makefile has no ship target — the fail-closed chain is gone"]
+    targets = [t for t in ship_line.split("##")[0].removeprefix("ship:").split() if t]
+    problems: list[str] = []
+    for target in targets:
+        disposition = _SHIP_CHAIN_DISPOSITIONS.get(target)
+        if disposition is None:
+            problems.append(
+                f"ship-chain target {target!r} has no registered disposition — a new "
+                f"control cannot join the chain unregistered (orphan direction, plan 5.1)"
+            )
+        elif disposition.startswith("gate:"):
+            gate = disposition.removeprefix("gate:")
+            if gate not in registered_gates:
+                problems.append(
+                    f"ship-chain target {target!r} claims gate {gate!r} which is not "
+                    f"in the registry — silently neutered gate"
+                )
+    for target in _SHIP_CHAIN_DISPOSITIONS:
+        if target not in targets:
+            problems.append(
+                f"dispositioned target {target!r} is missing from the ship chain — "
+                f"a control was quietly dropped"
+            )
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="verify every factory gate has a registered, collecting denial probe"
@@ -216,6 +335,17 @@ def main() -> int:
                 f"gate {gate!r} has no red_now — an unfalsifiable probe is theater "
                 "(name the mutation that turns it red)"
             )
+
+    repo_root = (
+        args.registry.parent.parent
+        if args.registry is not None
+        else DEFAULT_REGISTRY.parent.parent
+    )
+    if args.registry is None:
+        # The closed-world scan runs only against the REAL repo — a fixture
+        # registry has no Makefile world to be closed over.
+        problems.extend(_ship_chain_problems(repo_root, seen_gates))
+    problems.extend(_recursion_floor_problems(repo_root, rows))
 
     # Report coverage (gate -> #probes), then problems.
     print(f"check-denial-probes: {len(rows)} gates registered, {len(nodeids)} node-ids collectable")

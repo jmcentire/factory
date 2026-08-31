@@ -273,3 +273,64 @@ def test_denial_probe_runner_rejects_unknown_gate() -> None:
     )
     assert proc.returncode == 64
     assert "unknown gate" in proc.stderr
+
+
+def test_gate_on_gate_probe_is_refused_by_the_recursion_floor(tmp_path: Path) -> None:
+    """Plan 5.1's recursion floor forcing test: a probe test whose FUNCTION body
+    references another row's meta control (here check_wiring, owned by no row)
+    is gate-on-gate and turns the check red; Gate I stays the sole exemption."""
+    fake_repo = tmp_path / "repo"
+    tests_dir = fake_repo / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_meta_probe.py").write_text(
+        "def test_probes_another_gate() -> None:\n"
+        "    import scripts.check_wiring  # gate-on-gate reference\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    registry_dir = fake_repo / "harness"
+    registry_dir.mkdir()
+    registry = registry_dir / "gates.tsv"
+    registry.write_text(
+        "gate\tname\tprohibits\tprobes\tred_now\n"
+        "Z\tmeta probe\tx\ttests/test_meta_probe.py::test_probes_another_gate\tdrop it\n",
+        encoding="utf-8",
+    )
+    nodeids = tmp_path / "nodeids.txt"
+    nodeids.write_text("tests/test_meta_probe.py::test_probes_another_gate\n", encoding="utf-8")
+    proc = _run_check(registry=registry, nodeids=nodeids)
+    assert proc.returncode == 1
+    assert "gate-on-gate is refused" in proc.stderr
+
+
+def test_ship_chain_orphan_direction_fires_both_ways(tmp_path: Path) -> None:
+    """Plan 5.1's silent-neutering closed world: an UNREGISTERED target joining
+    the ship chain is red, and a dispositioned control quietly dropped from the
+    chain is red — both directions, plus the neutered-gate case."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cdp", CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    chain = ("ship: " + " ".join(sorted(module._SHIP_CHAIN_DISPOSITIONS)) + "\n")
+    (repo / "Makefile").write_text(chain, encoding="utf-8")
+    gates = {"D", "I", "ACC"}
+    assert module._ship_chain_problems(repo, gates) == []
+
+    (repo / "Makefile").write_text(chain.rstrip("\n") + " check-novel\n", encoding="utf-8")
+    problems = module._ship_chain_problems(repo, gates)
+    assert any("no registered disposition" in item for item in problems)
+
+    (repo / "Makefile").write_text(
+        "ship: " + " ".join(sorted(set(module._SHIP_CHAIN_DISPOSITIONS) - {"check-purity"})) + "\n",
+        encoding="utf-8",
+    )
+    problems = module._ship_chain_problems(repo, gates)
+    assert any("quietly dropped" in item for item in problems)
+
+    (repo / "Makefile").write_text(chain, encoding="utf-8")
+    problems = module._ship_chain_problems(repo, gates - {"D"})
+    assert any("silently neutered gate" in item for item in problems)
