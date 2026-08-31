@@ -21,6 +21,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECK_WIRING = REPO_ROOT / "scripts" / "check_wiring.py"
 
+def _loan(finding: str, justification: str) -> dict:
+    """A baseline entry under the 4.2 change-6 loan discipline."""
+    import hashlib as _h
+
+    return {
+        "finding": finding,
+        "justification": justification,
+        "owner": "human:founder",
+        "expires": "2099-01-01",
+        "justification_digest": "sha256:"
+        + _h.sha256(justification.encode("utf-8")).hexdigest(),
+    }
+
+
 
 def _run(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -87,7 +101,7 @@ def test_baseline_pre_seeded_with_its_own_finding_is_caught(tmp_path) -> None:
     with (root / "factory_core" / "alpha.py").open("a", encoding="utf-8") as f:
         f.write('\n\ndef orphan_export():\n    return "nobody references me"\n')
     (root / "wiring_baseline.json").write_text(
-        json.dumps([{"finding": orphan_finding, "justification": "pre-seeded same-diff"}]),
+        json.dumps([_loan(orphan_finding, "pre-seeded same-diff")]),
         encoding="utf-8",
     )
 
@@ -109,7 +123,7 @@ def test_baseline_entry_for_a_file_unchanged_in_the_diff_is_not_flagged(tmp_path
     # baseline file itself changes) — this must not trigger the pre-seeding guard.
     (root / "wiring_baseline.json").write_text(
         json.dumps(
-            [{"finding": pre_existing_finding, "justification": "unrelated later baseline"}]
+            [_loan(pre_existing_finding, "unrelated later baseline")]
         ),
         encoding="utf-8",
     )
@@ -132,8 +146,8 @@ def test_baseline_pre_seeding_guard_is_itself_suppressible_with_justification(tm
     (root / "wiring_baseline.json").write_text(
         json.dumps(
             [
-                {"finding": orphan_finding, "justification": "pre-seeded same-diff"},
-                {"finding": guard_finding, "justification": "reviewed and accepted by operator"},
+                _loan(orphan_finding, "pre-seeded same-diff"),
+                _loan(guard_finding, "reviewed and accepted by operator"),
             ]
         ),
         encoding="utf-8",
@@ -169,7 +183,7 @@ def test_stale_baseline_entry_is_warned_not_silently_dropped(tmp_path) -> None:
     _init_clean_repo(root)
     stale_finding = "zero-caller-export:factory_core/alpha.py:a_function_that_no_longer_exists"
     (root / "wiring_baseline.json").write_text(
-        json.dumps([{"finding": stale_finding, "justification": "no longer applies"}]),
+        json.dumps([_loan(stale_finding, "no longer applies")]),
         encoding="utf-8",
     )
     _git(root, "add", "-A")
@@ -189,7 +203,7 @@ def test_no_stale_warning_when_every_baseline_entry_is_live(tmp_path) -> None:
         "import factory_core.alpha\n", encoding="utf-8"
     )
     (root / "wiring_baseline.json").write_text(
-        json.dumps([{"finding": live_finding, "justification": "still applies"}]),
+        json.dumps([_loan(live_finding, "still applies")]),
         encoding="utf-8",
     )
     _git(root, "add", "-A")
