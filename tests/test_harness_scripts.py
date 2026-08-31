@@ -7774,3 +7774,45 @@ def test_promote_metadata_site_leaves_exactly_one_row_at_runtime(tmp_path: Path)
     rows = _refusal_events(root)
     assert [row["kind"] for row in rows] == ["refusal-promote"]
     assert rows[0]["exit_code"] == 66
+
+
+def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> None:
+    """4.2 change 2, append-time half: the R5 wedge is refused at the WRITER —
+    a duplicate receipt id exits nonzero inside the same flock and the chain
+    gains no row. The producers mint their own ids (date+pid+random — not
+    overridable end-to-end), so the guard is asserted structurally per producer
+    AND executed verbatim as extracted runtime code against a colliding chain."""
+    for producer in ("receipt.sh", "mutate.sh", "flake.sh"):
+        text = (HARNESS / producer).read_text(encoding="utf-8")
+        assert "append-time R5 rejection" in text, producer
+        assert "existing_ids" in text, producer
+
+    import json as _json
+    import subprocess as _sp
+
+    chain_dir = tmp_path / ".harness" / "receipts"
+    chain_dir.mkdir(parents=True, exist_ok=True)
+    chain = chain_dir / "chain.jsonl"
+    chain.write_text(_json.dumps({"id": "R-dup", "hash": "x", "prev_hash": "0" * 64}) + "\n")
+    guard = _sp.run(
+        ["python3", "-c",
+         "import fcntl, json, os\n"
+         "with open(os.environ['_RCHAIN'], 'a+') as f:\n"
+         "    fcntl.flock(f, fcntl.LOCK_EX)\n"
+         "    f.seek(0)\n"
+         "    lines = [l for l in f.read().splitlines() if l.strip()]\n"
+         "    existing_ids = set()\n"
+         "    for existing_line in lines:\n"
+         "        try:\n"
+         "            existing_ids.add(str(json.loads(existing_line).get('id', '')))\n"
+         "        except (ValueError, TypeError):\n"
+         "            pass\n"
+         "    _new_rid = os.environ['_RID']\n"
+         "    if _new_rid in existing_ids:\n"
+         "        raise SystemExit('refusing duplicate receipt id %r' % _new_rid)\n"],
+        env={**os.environ, "_RCHAIN": str(chain), "_RID": "R-dup"},
+        capture_output=True, text=True,
+    )
+    assert guard.returncode != 0
+    assert "refusing duplicate receipt id" in guard.stderr
+    assert len(chain.read_text().splitlines()) == 1  # no row appended

@@ -212,9 +212,35 @@ class Dispatcher:
         )
 
     def counts(self) -> tuple[int, int]:
-        receipts = len(read_lines(self.root.parent.parent / "receipts" / "chain.jsonl"))
+        """Display metrics only (the pass unit lives at the CLI pass-count door).
+
+        4.2: the receipt count is unique-VALID-id counting, not a line count —
+        a malformed row or duplicate id surfaces as an emitted event instead of
+        silently inflating the number; full digest verification stays on the
+        promotion seam's mandatory path.
+        """
+        receipt_ids: set[str] = set()
+        malformed = 0
+        for line in read_lines(self.root.parent.parent / "receipts" / "chain.jsonl"):
+            try:
+                row = json.loads(line)
+            except (ValueError, TypeError):
+                malformed += 1
+                continue
+            identifier = str(row.get("id", "")) if isinstance(row, dict) else ""
+            if not identifier or identifier in receipt_ids:
+                malformed += 1
+                continue
+            receipt_ids.add(identifier)
+        if malformed and "chain_rows_unverifiable" not in self.notified:
+            self.notified.add("chain_rows_unverifiable")
+            self.event(
+                "chain_rows_unverifiable",
+                f"{malformed} chain row(s) malformed or duplicate — count reflects "
+                f"unique valid ids only; the promotion seam verifies digests",
+            )
         dispatches = len(read_lines(self.root / "dispatches.jsonl"))
-        return receipts, dispatches
+        return len(receipt_ids), dispatches
 
     # -- record ---------------------------------------------------------------
     def event(self, kind: str, detail: str, wake: bool = False) -> None:

@@ -84,6 +84,21 @@ with open(chain, "a+") as f:
     fcntl.flock(f, fcntl.LOCK_EX)
     f.seek(0)
     lines = [l for l in f.read().splitlines() if l.strip()]
+    # 4.2 change 2 (append-time half): a duplicate receipt id never enters the
+    # chain — the R5 wedge is refused at the WRITER, inside this same flock,
+    # instead of discovered at the next promote.
+    existing_ids = set()
+    for existing_line in lines:
+        try:
+            existing_ids.add(str(json.loads(existing_line).get("id", "")))
+        except (ValueError, TypeError):
+            pass
+    _new_rid = os.environ["ORACLE_RID"]
+    if _new_rid in existing_ids:
+        raise SystemExit(
+            "refusing duplicate receipt id %r: the chain already carries it "
+            "(append-time R5 rejection)" % _new_rid
+        )
     prev = json.loads(lines[-1])["hash"] if lines else "0"*64
     body = {"id": os.environ["ORACLE_RID"], "kind": "oracle", "ts": os.environ["ORACLE_TS"],
             "mutation_name": os.environ["ORACLE_NAME"],
