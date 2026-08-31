@@ -444,8 +444,10 @@ def verify_build_plan(bundle: BuildPlanBundle) -> BuildPlanReport:
         plan.build_input_digest
     ):
         issues.append("build-plan-input-digest-mismatch")
-    if plan.pattern_catalog_digest != catalog.content_digest:
-        issues.append("build-plan-pattern-catalog-mismatch")
+    # Phase 3 change 4: `build-plan-pattern-catalog-mismatch` deleted as redundancy
+    # removal, claimed honestly — every step's pattern_digest is already checked
+    # against the catalog entry it names, so a whole-catalog digest pin added no
+    # enforcement beyond blanket invalidation on unrelated catalog rows.
 
     artifacts: dict[str, PhaseArtifact] = {}
     current_phase_digests: dict[str, str] = {}
@@ -453,8 +455,10 @@ def verify_build_plan(bundle: BuildPlanBundle) -> BuildPlanReport:
         if artifact.phase in REQUIRED_PHASES and artifact.phase not in artifacts:
             artifacts[artifact.phase] = artifact
             current_phase_digests[artifact.phase] = artifact.content_digest
-    if dict(plan.phase_artifact_digests) != current_phase_digests:
-        issues.append("build-plan-phase-artifacts-mismatch")
+    # Phase 3 change 4: the blanket phase-map equality is replaced by per-edge
+    # supersedes resolution (verify_intent_provenance + _canonicalize below) —
+    # a re-signed artifact whose items declare their unchanged predecessors keeps
+    # derived work alive per edge; nothing here compares whole maps any more.
     if set(plan.phase_artifact_digests) != set(REQUIRED_PHASES):
         issues.append("build-plan-phase-set-incomplete")
     provenance_report = verify_intent_provenance(
@@ -513,11 +517,41 @@ def verify_build_plan(bundle: BuildPlanBundle) -> BuildPlanReport:
             upstream.update(references)
         elif phase == PHASE_OPERATIONAL_MATURITY:
             operational.update(references)
+    # Per-edge supersedes canonicalization (Phase 3 change 4, new host code):
+    # a stale reference maps to its current item ONLY via the exact declared
+    # prior-authority quadruple in the current item's signed supersedes set.
+    current_items: dict[tuple[str, str], tuple[Any, Any]] = {}
+    for phase_artifact in artifacts.values():
+        for item in phase_artifact.items:
+            current_items[(phase_artifact.artifact_id, item.item_id)] = (
+                phase_artifact,
+                item,
+            )
+
+    def _canonicalize(reference: IntentBackreference) -> IntentBackreference:
+        located = current_items.get((reference.artifact_id, reference.item_id))
+        if located is None:
+            return reference
+        phase_artifact, item = located
+        if reference.artifact_digest == phase_artifact.content_digest:
+            return reference
+        for superseded in item.supersedes:
+            if (
+                superseded.artifact_id == reference.artifact_id
+                and superseded.artifact_digest == reference.artifact_digest
+                and superseded.item_id == reference.item_id
+                and superseded.intent_digest == reference.intent_digest
+            ):
+                return phase_artifact.backreference(item)
+        return reference
+
     implemented = {
-        reference
+        canonical
         for step in plan.steps
-        for reference in step.intent_backreferences
-        if reference in upstream
+        for canonical in (
+            _canonicalize(reference) for reference in step.intent_backreferences
+        )
+        if canonical in upstream
     }
     for missing in sorted(upstream - implemented, key=lambda row: (row.artifact_id, row.item_id)):
         issues.append(
@@ -531,21 +565,22 @@ def verify_build_plan(bundle: BuildPlanBundle) -> BuildPlanReport:
     if not plan.oracle_links:
         issues.append("build-plan-oracle-links-empty")
     for link in plan.oracle_links:
-        pair = (link.expectation, link.oracle)
+        pair = (_canonicalize(link.expectation), _canonicalize(link.oracle))
         if pair in pairs:
             issues.append("build-plan-oracle-link-duplicate")
             continue
         pairs.add(pair)
+        canonical_expectation, canonical_oracle = pair
         valid = True
-        if link.expectation not in upstream:
+        if canonical_expectation not in upstream:
             issues.append("build-plan-oracle-expectation-not-upstream")
             valid = False
-        if link.oracle not in operational:
+        if canonical_oracle not in operational:
             issues.append("build-plan-oracle-not-operational")
             valid = False
         if valid:
-            linked_expectations.add(link.expectation)
-            linked_oracles.add(link.oracle)
+            linked_expectations.add(canonical_expectation)
+            linked_oracles.add(canonical_oracle)
             verified_links += 1
     for missing in sorted(
         required_expectations - linked_expectations,

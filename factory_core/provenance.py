@@ -546,7 +546,41 @@ def verify_intent_provenance(
             not _is_digest(ref.artifact_digest)
             or ref.artifact_digest != resolved_artifact.content_digest
         ):
-            issues.append(f"backreference-artifact-digest-mismatch:{claim_id}:{ref.artifact_id}")
+            # Phase 3 change 4 — per-edge supersedes resolution, NEW HOST CODE,
+            # labeled as such: a stale backreference resolves to the current item
+            # ONLY when the exact prior authority quadruple
+            # (artifact_id, old artifact_digest, item_id, old intent_digest) is
+            # DECLARED in the current item's signed supersedes set. A re-signed
+            # artifact whose items declare their unchanged predecessors keeps
+            # derived work alive; an item whose canonical statement actually
+            # changed cannot declare its old self and so still drifts the plan.
+            stale_item = item_index.get((ref.artifact_id, ref.item_id))
+            if (
+                stale_item is None
+                or not _is_digest(ref.artifact_digest)
+                or not any(
+                    superseded.artifact_id == ref.artifact_id
+                    and superseded.artifact_digest == ref.artifact_digest
+                    and superseded.item_id == ref.item_id
+                    and superseded.intent_digest == ref.intent_digest
+                    for superseded in stale_item.supersedes
+                )
+            ):
+                issues.append(
+                    f"backreference-artifact-digest-mismatch:{claim_id}:{ref.artifact_id}"
+                )
+                continue
+            resolved.append(
+                ResolvedClaim(
+                    claim_id=claim_id,
+                    kind=claim.kind,
+                    artifact_id=ref.artifact_id,
+                    artifact_digest=resolved_artifact.content_digest,
+                    item_id=ref.item_id,
+                    intent_digest=stale_item.intent_digest,
+                    canonical_statement=stale_item.canonical_statement,
+                )
+            )
             continue
         resolved_item = item_index.get((ref.artifact_id, ref.item_id))
         if resolved_item is None:

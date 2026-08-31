@@ -277,3 +277,72 @@ def test_catalog_trust_is_external_and_schema_refuses_unconfigured_steps() -> No
     del malformed["steps"][0]["configuration"]
     with pytest.raises(DocumentValidationError, match="configuration"):
         validate_document("build-plan", malformed)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 change 4 — per-edge supersedes resolution (the plan's three forcing
+# tests, verbatim intent: a re-sign with declared-unchanged items keeps the plan
+# ready end-to-end including oracle links; a changed canonical statement drifts
+# it; an oracle expectation change cannot be masked by a rebind).
+# --------------------------------------------------------------------------- #
+
+
+def _resigned(artifacts, *, change_statement: str | None = None):
+    """Re-sign every artifact at version 2. Each item declares its exact prior
+    authority in `supersedes` — except an item whose canonical statement changed,
+    which cannot truthfully declare its old self."""
+    resigned = []
+    for artifact in artifacts:
+        items = []
+        for item in artifact.items:
+            statement = item.canonical_statement
+            if change_statement and item.item_id == change_statement:
+                items.append(
+                    IntentItem(item_id=item.item_id, canonical_statement=statement + " CHANGED.")
+                )
+                continue
+            items.append(
+                IntentItem(
+                    item_id=item.item_id,
+                    canonical_statement=statement,
+                    supersedes=(artifact.backreference(item),),
+                )
+            )
+        resigned.append(replace(artifact, version="2", items=tuple(items)))
+    return tuple(resigned)
+
+
+def test_resign_with_declared_supersedes_keeps_the_plan_ready_end_to_end() -> None:
+    artifacts = _authority()
+    catalog = _catalog()
+    plan = _plan(artifacts, catalog)  # pinned to the v1 artifacts
+    resigned = _resigned(artifacts)
+    report = verify_build_plan(_bundle(resigned, catalog, plan))
+    assert report.ready, report.issues  # oracle links included — nothing drifted
+
+
+def test_changed_canonical_statement_drifts_the_plan() -> None:
+    artifacts = _authority()
+    catalog = _catalog()
+    plan = _plan(artifacts, catalog)
+    resigned = _resigned(artifacts, change_statement="product:add")
+    report = verify_build_plan(_bundle(resigned, catalog, plan))
+    assert not report.ready
+    assert any("product:add" in issue or "backreference" in issue for issue in report.issues), (
+        report.issues
+    )
+
+
+def test_oracle_expectation_change_cannot_be_masked_by_a_rebind() -> None:
+    """The changed item is the oracle-link's ORACLE (test:add): even though every
+    other item declares supersedes, the changed oracle's stale link must fail —
+    a rebind cannot manufacture continuity for changed intent."""
+    artifacts = _authority()
+    catalog = _catalog()
+    plan = _plan(artifacts, catalog)
+    resigned = _resigned(artifacts, change_statement="test:add")
+    report = verify_build_plan(_bundle(resigned, catalog, plan))
+    assert not report.ready
+    assert any("oracle" in issue or "backreference" in issue for issue in report.issues), (
+        report.issues
+    )

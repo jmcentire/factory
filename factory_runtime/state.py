@@ -2210,10 +2210,22 @@ class RunStore:
                 candidate_generation = {
                     str(key): str(value) for key, value in declared_generation.items()
                 }
-                if candidate_generation != generation_artifacts:
-                    raise RunStateError(
-                        f"ledger entry {index} changes or omits generation artifacts"
-                    )
+                # Phase 3 change 4: per-axis comparison of the NAMED config axes —
+                # never a whole-map equality. The target-manifest-source axis
+                # carries the three signal knobs by construction (they ride the
+                # frozen manifest bytes), so a mid-run re-signed ABI that only
+                # raises the deadline fails THIS named axis and disarms nothing.
+                for axis in sorted(set(candidate_generation) | set(generation_artifacts)):
+                    if candidate_generation.get(axis) != generation_artifacts.get(axis):
+                        raise RunStateError(
+                            f"ledger entry {index} changes or omits generation "
+                            f"axis {axis!r}"
+                            + (
+                                " (the signal knobs ride this axis)"
+                                if axis == "target-manifest-source"
+                                else ""
+                            )
+                        )
                 for key, value in candidate_generation.items():
                     _require_digest(value, f"generation_artifacts[{key!r}]")
 
