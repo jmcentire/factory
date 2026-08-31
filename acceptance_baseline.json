@@ -11,7 +11,8 @@
     "refusal-unregistered": true,
     "operator": true,
     "preflight": true,
-    "watchdog-deadline": false
+    "watchdog-deadline": false,
+    "construction-no-candidate": true
   },
   "excluded_event_kinds": [
     "blocking_written"

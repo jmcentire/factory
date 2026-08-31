@@ -1309,3 +1309,34 @@ def test_run_store_refuses_symlinked_run_or_ledger_paths(tmp_path: Path) -> None
     (run_dir / "ledger.jsonl").symlink_to(tmp_path / "missing-ledger")
     with pytest.raises(RunStateError, match="run ledger cannot be a symlink"):
         _create_resolution(store)
+
+
+def test_validating_pass_count_counts_admissions_not_lines(tmp_path: Path) -> None:
+    """Plan §0.4b: one pass = one VALIDATING admission in the VERIFIED ledger.
+    Never a line count — a tampered ledger refuses instead of counting, which
+    is the discriminator between this and the forbidden counts()/wc idiom."""
+    store = _store(tmp_path)
+    _create_intake(store)
+    _ratify_all(store)
+    _start_build(store)
+    assert store.validating_pass_count("run-1") == 0
+
+    validation = validation_artifacts(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1",
+        RunState.VALIDATING,
+        actor="validator",
+        artifact_digests=validation,
+        payload={"tester_identity": "tester"},
+        implementer_identity="coder",
+        verifier_identity="validator",
+    )
+    assert store.validating_pass_count("run-1") == 1
+
+    # A raw appended line is not a pass: the verified reader refuses the
+    # tampered chain outright rather than returning 2.
+    ledger_path = tmp_path / "run-1" / "ledger.jsonl"
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"to_state": "validating", "forged": true}\n')
+    with pytest.raises(RunStateError):
+        store.validating_pass_count("run-1")

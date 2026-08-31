@@ -150,6 +150,14 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(status)
 
+    pass_count = commands.add_parser(
+        "pass-count",
+        help="host pass count: VALIDATING admissions in the verified run ledger (plan 0.4b)",
+    )
+    pass_count.add_argument("--runs", required=True)
+    pass_count.add_argument("--run-id", required=True)
+    _add_replay_verifier_arguments(pass_count)
+
     rebuild = commands.add_parser(
         "rebuild-projection",
         help="rebuild run.json only from a verified ledger",
@@ -1003,6 +1011,17 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "status":
         _emit(_load_replay_store(arguments).load(arguments.run_id))
+        return
+    if arguments.command == "pass-count":
+        store = _load_replay_store(arguments)
+        print(
+            json.dumps(
+                {
+                    "run_id": arguments.run_id,
+                    "passes": store.validating_pass_count(arguments.run_id),
+                }
+            )
+        )
         return
     if arguments.command == "rebuild-projection":
         _emit(_load_replay_store(arguments).rebuild_projection(arguments.run_id))

@@ -947,6 +947,21 @@ class RunStore:
             raise RunStateError("run ledger changed while verified entries were being read")
         return tuple(dict(entry) for entry in entries)
 
+    def validating_pass_count(self, run_id: str) -> int:
+        """Host pass count (remediation plan §0.4b): one pass = one VALIDATING
+        admission entry in the VERIFIED run ledger — a candidate submitted to
+        review. Never a line count: a tampered ledger refuses instead of
+        counting. The ledger is clock-free by design; the signal-deadline
+        watchdog (§0.4c) derives elapsed-since-last-pass-advance from its own
+        host-timestamped observations of this count, so timestamps stay
+        host-owned and the chain stays free of clocks."""
+
+        return sum(
+            1
+            for entry in self.verified_ledger_entries(run_id)
+            if entry.get("to_state") == RunState.VALIDATING.value
+        )
+
     def execution_authority_digests(self, run_id: str) -> Mapping[str, str]:
         """Return the unique Stage-E artifact bindings from one verified run snapshot.
 
