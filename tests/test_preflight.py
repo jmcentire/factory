@@ -267,7 +267,9 @@ def test_probe_liveness_reads_real_wedges(tmp_path) -> None:
     runs = tmp_path / "runs"
     run_root = runs / "r1"
     run_root.mkdir(parents=True)
-    (run_root / "ledger.jsonl.lock").write_text("", encoding="utf-8")
+    # 4.2 change 7: ledger.jsonl.lock is a crash-released flock file now — its
+    # existence signals nothing; the sentinel-style guards remain wedge evidence.
+    (run_root / "resources.guard").write_text("", encoding="utf-8")
     receipts = tmp_path / "receipts"
     receipts.mkdir()
     row = {"receipt_id": "R-1", "prev_hash": "0" * 64}
@@ -284,7 +286,8 @@ def test_probe_liveness_reads_real_wedges(tmp_path) -> None:
 
     facts = probe_liveness(runs, "r1")
     assert facts.ledger_error  # no run.json/ledger: the run refuses to load
-    assert any(path.endswith("ledger.jsonl.lock") for path in facts.guard_residue)
+    assert any(path.endswith("resources.guard") for path in facts.guard_residue)
+    assert not any("ledger.jsonl.lock" in path for path in facts.guard_residue)
     # chain probing is best-effort here: the fixture chain may refuse for
     # hash-shape reasons before the duplicate check; any refusal is a wedge.
     assert facts.chain_error

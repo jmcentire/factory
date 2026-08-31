@@ -30,6 +30,7 @@ files) lives behind the adapter seams, never here.
 
 from __future__ import annotations
 
+import fcntl
 import fnmatch
 import hashlib
 import hmac
@@ -416,8 +417,14 @@ class Ledger:
         """Append a transition entry, chaining it to the current head. Returns the new entry's
         content address. The append is serialized by a fail-closed lock, verifies the existing
         chain before extending it, and fsyncs both the record and a newly-created parent entry
-        before returning. A stale lock is evidence of an interrupted append and therefore blocks
-        rather than being guessed away.
+        before returning.
+
+        4.2 change 7 ("degrade, never wedge"): the append mutex is a
+        CRASH-RELEASED fcntl flock, not an O_EXCL sentinel. A SIGKILLed appender
+        releases the lock with its process, so the crash case repairs itself —
+        the prior sentinel survived SIGKILL forever and its only repair was an
+        unreceipted bare removal (the named anti-pattern). A HELD lock still
+        refuses: a live concurrent append is real exclusion, not a wedge.
 
         Refuses (raises ``SegregationError``) if SoD is violated and
         ``LedgerIntegrityError`` if exclusive/intact prior state cannot be proven.
@@ -426,26 +433,25 @@ class Ledger:
         if parent:
             os.makedirs(parent, exist_ok=True)
         lock_path = f"{self.path}.lock"
-        lock_flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        lock_flags = os.O_CREAT | os.O_WRONLY
         lock_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         try:
             lock_fd = os.open(lock_path, lock_flags, 0o600)
-        except FileExistsError as exc:
-            raise LedgerIntegrityError(
-                f"ledger append lock already exists (concurrent or interrupted append): {lock_path}"
-            ) from exc
         except OSError as exc:
             raise LedgerIntegrityError(f"ledger append lock could not be created: {exc}") from exc
-        lock_ready = False
         try:
             self._require_regular(lock_fd, label="ledger append lock")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise LedgerIntegrityError(
+                    f"ledger append lock is held by a live appender: {lock_path}"
+                ) from exc
+            os.ftruncate(lock_fd, 0)
             os.write(lock_fd, f"pid={os.getpid()}\n".encode())
             os.fsync(lock_fd)
-            os.close(lock_fd)
-            lock_fd = -1
             if parent:
                 self._sync_directory(parent)
-            lock_ready = True
 
             ledger_flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
             ledger_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -514,15 +520,13 @@ class Ledger:
                 self._sync_directory(parent)
             return addr
         finally:
+            # Closing the descriptor releases the flock. The lock FILE is
+            # deliberately left in place: unlinking a flock file reintroduces
+            # the classic inode race (a waiter holding the old inode and a
+            # newcomer creating a fresh file can both "win"), and with
+            # crash-released semantics the file's existence signals nothing.
             if lock_fd >= 0:
                 os.close(lock_fd)
-            if lock_ready:
-                try:
-                    os.unlink(lock_path)
-                    if parent:
-                        self._sync_directory(parent)
-                except FileNotFoundError:
-                    pass
 
     def entries(self) -> list[dict[str, Any]]:
         """All intact persisted entries; invalid chains are never returned as data."""

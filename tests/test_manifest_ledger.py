@@ -256,3 +256,34 @@ def test_append_refuses_a_tampered_tail(tmp_path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.raises(LedgerIntegrityError, match="tail record does not re-address"):
         ledger.append(_entry("impl@x", "ver@x", "appr@x"))
+
+
+def test_crashed_append_lock_self_repairs(tmp_path) -> None:
+    """4.2 change 7 ("degrade, never wedge"): a lock FILE left by a SIGKILLed
+    appender — present but unflocked — no longer wedges the ledger; the flock
+    is crash-released, so the next append simply proceeds. The prior O_EXCL
+    sentinel survived the crash forever, and its only repair was the named
+    unreceipted-removal anti-pattern."""
+    path = tmp_path / "ledger.jsonl"
+    (tmp_path / "ledger.jsonl.lock").write_text("pid=99999\n", encoding="utf-8")
+    addr = Ledger(str(path)).append(_entry("impl@x", "ver@x", "appr@x"))
+    assert addr.startswith("sha256:")
+
+
+def test_held_append_lock_still_refuses(tmp_path) -> None:
+    """Real exclusion is not a wedge: a lock actively HELD by a live process
+    refuses the concurrent append."""
+    import fcntl as _fcntl
+    import os as _os
+
+    path = tmp_path / "ledger.jsonl"
+    lock_path = tmp_path / "ledger.jsonl.lock"
+    holder = _os.open(str(lock_path), _os.O_CREAT | _os.O_WRONLY, 0o600)
+    try:
+        _fcntl.flock(holder, _fcntl.LOCK_EX)
+        with pytest.raises(LedgerIntegrityError, match="held by a live appender"):
+            Ledger(str(path)).append(_entry("impl@x", "ver@x", "appr@x"))
+    finally:
+        _os.close(holder)
+    # released -> the next append proceeds
+    assert Ledger(str(path)).append(_entry("impl@x", "ver@x", "appr@x"))

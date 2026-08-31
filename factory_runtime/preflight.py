@@ -576,10 +576,14 @@ def probe_liveness(runs_root: str | Any, run_id: str) -> LivenessFacts:
         limit = projection.build_attempt_limit
     except RunStateError as exc:
         ledger_error = str(exc)[:300]
+    # 4.2 change 7: ledger.jsonl.lock left this set — the append mutex is now a
+    # crash-released flock whose FILE persists by design (unlinking a flock file
+    # reintroduces the inode race), so its existence signals nothing. The two
+    # remaining sentinel-style guards stay wedge evidence until their own
+    # conversions land.
     guards = tuple(
         str(candidate)
         for candidate in (
-            run_root / "ledger.jsonl.lock",
             run_root / "resources.guard",
             run_root / "run-transition.guard",
         )

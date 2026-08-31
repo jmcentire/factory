@@ -257,16 +257,17 @@ def test_long_resource_id_uses_a_schema_valid_content_addressed_event_id(
     assert len(str(record["record_id"])) <= 128
 
 
-def test_stale_lock_and_compare_and_swap_mismatch_refuse_append(tmp_path: Path) -> None:
+def test_crashed_lock_self_repairs_and_cas_mismatch_refuses_append(tmp_path: Path) -> None:
+    """4.2 change 7: a lock FILE left by a crashed appender no longer wedges the
+    resource ledger — the flock is crash-released, so the append proceeds. The
+    compare-and-swap expected-head binding remains the refusal that matters."""
     run_dir = tmp_path / "run-1"
     ledger = ResourceLedger(run_dir, "run-1", clock=lambda: 100)
     _append(ledger, "source", status="planned")
     lock = run_dir / "resources.jsonl.lock"
     lock.write_text("interrupted", encoding="utf-8")
-    with pytest.raises(LedgerIntegrityError, match="append lock"):
-        _append(ledger, "source", status="active")
+    _append(ledger, "source", status="active")  # crash residue: self-repairs
 
-    lock.unlink()
     generic = ledger._ledger()
     from factory_core.manifest import LedgerEntry
 
