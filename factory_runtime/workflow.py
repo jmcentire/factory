@@ -31,7 +31,11 @@ from factory_runtime.authority import (
     VerifiedReceipt,
     verify_receipt,
 )
-from factory_runtime.durability import DurabilityError, fsync_directory_chain
+from factory_runtime.durability import (
+    DurabilityError,
+    fsync_directory_chain,
+    load_chain_root_material,
+)
 from factory_runtime.evidence_plane import TesseraEvidenceEnvelopeVerifier
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.state import RunProjection, RunState, RunStore
@@ -457,6 +461,20 @@ class FactoryWorkflow:
             _verified_envelope_bytes(receipt),
             durable_root=self.root,
         )
+        # 2.2 keyed-genesis commitment: a founder-root-signed genesis that commits to
+        # chain-root material refuses run creation unless the LOCAL material re-derives
+        # that digest — binding every keyed ledger under this runs root to the founder
+        # root transitively (the resource seal inherits authenticity unchanged).
+        if self.policy.chain_root_commitment:
+            located = load_chain_root_material(self.store.root / run_id / "ledger.jsonl")
+            if located is None:
+                raise WorkflowError(
+                    "genesis commits to chain-root material but none governs the runs root"
+                )
+            if digest_bytes(located[0]) != self.policy.chain_root_commitment:
+                raise WorkflowError(
+                    "local chain-root material does not re-derive the genesis commitment"
+                )
         return self.store.create(
             run_id,
             target_digest=manifest.source_digest,

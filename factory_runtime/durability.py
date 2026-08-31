@@ -103,6 +103,22 @@ def load_chain_key(ledger_path: str | Path) -> bytes | None:
     import hashlib
     import hmac as _hmac
 
+    located = load_chain_root_material(ledger_path)
+    if located is None:
+        return None
+    material, ancestor = located
+    relative = _absolute_lexical(ledger_path).relative_to(ancestor).as_posix()
+    return _hmac.new(material, relative.encode("utf-8"), hashlib.sha256).digest()
+
+
+def load_chain_root_material(ledger_path: str | Path) -> tuple[bytes, Path] | None:
+    """Locate the chain root material governing ``ledger_path``.
+
+    Returns ``(material, ancestor_dir)`` from the nearest ``.chain-root.key`` ancestor,
+    or ``None`` when no root material governs the path (migration-only unkeyed mode).
+    Exposed separately so the genesis commitment check can bind the MATERIAL digest
+    without ever deriving (or holding) a per-ledger key it does not need.
+    """
     path = _absolute_lexical(ledger_path)
     ancestor = path.parent
     for _ in range(_CHAIN_KEY_WALK_CAP):
@@ -111,8 +127,7 @@ def load_chain_key(ledger_path: str | Path) -> bytes | None:
             material = root_file.read_bytes().strip()
             if not material:
                 raise DurabilityError(f"chain root key file is empty: {root_file}")
-            relative = path.relative_to(ancestor).as_posix()
-            return _hmac.new(material, relative.encode("utf-8"), hashlib.sha256).digest()
+            return material, ancestor
         if ancestor.parent == ancestor:
             break
         ancestor = ancestor.parent

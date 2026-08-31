@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.durability import CHAIN_ROOT_KEY_FILENAME
 from factory_runtime.schema import DocumentValidationError, validate_document
 
 _MAX_FILES = 4_096
@@ -71,6 +72,13 @@ def bundle_runner_projection(
         for name in sorted(names):
             path = Path(base) / name
             relative = _canonical_relative(path, source)
+            if name == CHAIN_ROOT_KEY_FILENAME:
+                # 2.2 negative space: a lane's closed environment never receives
+                # chain-key material — a projection root containing it is a staging
+                # error to surface, never to silently sanitize.
+                raise ProjectionBundleError(
+                    f"chain-key material may never enter a lane projection: {relative}"
+                )
             mode = path.lstat().st_mode
             if path.is_symlink() or not stat.S_ISREG(mode):
                 raise ProjectionBundleError(

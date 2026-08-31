@@ -96,6 +96,11 @@
     "issued_at": {
       "type": "integer",
       "minimum": 1
+    },
+    "chain_root_commitment": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Optional (plan 2.2): sha256 of the .chain-root.key material, binding the ledger chain-key root to the founder-root signature. When present, run creation refuses unless the local root material re-derives this digest."
     }
   },
   "$defs": {

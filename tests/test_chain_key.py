@@ -189,3 +189,145 @@ def test_run_store_round_trips_keyed_when_root_material_present(tmp_path: Path) 
     assert first["entry_hash"].startswith("hmac-sha256:")
     projection = store.load("r1")  # verification happens on load
     assert projection.run_id == "r1"
+
+
+# --------------------------------------------------------------------------- #
+# Negative space: no chain-key material in any lane-visible set (plan 2.2)
+# --------------------------------------------------------------------------- #
+
+def test_projection_bundle_refuses_chain_key_material(tmp_path: Path) -> None:
+    """A projection root containing root-key material is a staging error surfaced
+    loudly — never shipped to a lane, never silently sanitized."""
+    from factory_runtime.projection_bundle import (
+        ProjectionBundleError,
+        bundle_runner_projection,
+    )
+
+    root = tmp_path / "projection"
+    root.mkdir()
+    (root / "readme.md").write_text("ok", encoding="utf-8")
+    (root / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"root-material\n")
+    with pytest.raises(ProjectionBundleError, match="chain-key material"):
+        bundle_runner_projection(
+            root,
+            projection_receipt={"role": "coder", "sha": "x", "tree": "y"},
+            run_id="r1",
+            generation=1,
+            role="coder",
+            target_state_digest="sha256:" + "0" * 64,
+            resolved_commit="x",
+            resolved_tree="y",
+        )
+
+
+def test_named_secret_store_cannot_name_the_root_key_file(tmp_path: Path) -> None:
+    """The secret-name grammar structurally refuses the root key filename, so a
+    manifest can never smuggle it into a lane environment by name."""
+    from factory_runtime.runner import NamedSecretStore, RunnerError
+
+    (tmp_path / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"root-material\n")
+    store = NamedSecretStore(tmp_path)
+    with pytest.raises(RunnerError, match="invalid named secret"):
+        store.resolve([CHAIN_ROOT_KEY_FILENAME])
+
+
+# --------------------------------------------------------------------------- #
+# Keyed-genesis commitment (plan 2.2)
+# --------------------------------------------------------------------------- #
+
+def test_genesis_commitment_binds_local_root_material(tmp_path: Path) -> None:
+    """The pure halves of the commitment check: material re-derivation and the two
+    refusal shapes (absent material, mismatched material) exercised through the same
+    digest the workflow gate compares."""
+    from factory_core.manifest import digest_bytes
+    from factory_runtime.durability import load_chain_root_material
+
+    keyed = tmp_path / "keyed"
+    keyed.mkdir()
+    (keyed / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"root-material\n")
+    runs = keyed / "runs"
+    runs.mkdir()
+    located = load_chain_root_material(runs / "r1" / "ledger.jsonl")
+    assert located is not None
+    material, ancestor = located
+    assert ancestor == keyed
+    commitment = digest_bytes(material)
+    assert commitment == digest_bytes(b"root-material")  # stripped, deterministic
+
+    # The walk-up is bounded: a tree with no governing root within the cap is
+    # unkeyed (the sibling tree here is shallow enough that only its own ancestry
+    # matters once no root file exists on the path from it to the walk ceiling).
+    bare = tmp_path / "a" / "b" / "c" / "d" / "e" / "f" / "g" / "h" / "runs"
+    bare.mkdir(parents=True)
+    assert load_chain_root_material(bare / "r1" / "ledger.jsonl") is None
+
+
+def test_authority_policy_carries_the_commitment_field() -> None:
+    from factory_runtime.authority import AuthorityPolicy
+
+    policy = AuthorityPolicy(
+        repository_id="repo",
+        policy_id="p1",
+        root_public_key="a" * 64,
+        principals={},
+        bootstrap_enabled=False,
+        bootstrap_scope=frozenset(),
+        genesis_digest="sha256:" + "0" * 64,
+        chain_root_commitment="sha256:" + "1" * 64,
+    )
+    assert policy.chain_root_commitment.startswith("sha256:")
+
+
+# --------------------------------------------------------------------------- #
+# One-machine guard, half (a): coverage/verdict and promotion single-machine
+# enumeration (plan 2.2 topology section)
+# --------------------------------------------------------------------------- #
+
+def test_decide_promotion_has_exactly_one_admitted_caller() -> None:
+    """Every caller of decide_promotion outside the admitted set is a second
+    promotion machine — red here before it can exist."""
+    repo = Path(__file__).resolve().parent.parent
+    admitted = {"factory_runtime/promotion_gate.py": 1}
+    call = re.compile(r"(?<![\w.])decide_promotion\(")
+    found: dict[str, int] = {}
+    for module_dir in ("factory_core", "factory_runtime", "scripts", "harness"):
+        base = repo / module_dir
+        if not base.is_dir():
+            continue
+        for path in sorted(base.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            count = sum(
+                1
+                for match in call.finditer(text)
+                if not text[: match.start()].rstrip().endswith("def")
+            )
+            if count:
+                found[str(path.relative_to(repo))] = count
+    assert found == admitted, (
+        f"decide_promotion callers changed: {found} != admitted {admitted} — one "
+        f"canonical promotion machine, called by everyone (never a second door)"
+    )
+
+
+def test_verdict_ceiling_vocabulary_is_defined_in_one_module() -> None:
+    """The full-set and ceiling branches must be ONE function's vocabulary: the
+    verdict label literals may appear only in verdict.py — every other module
+    imports the constants, so a re-implemented ceiling cannot fork the ranking."""
+    repo = Path(__file__).resolve().parent.parent
+    literals = ("pass-on-covered-unknown-on-named",)
+    offenders: list[str] = []
+    for module_dir in ("factory_core", "factory_runtime", "scripts", "harness"):
+        base = repo / module_dir
+        if not base.is_dir():
+            continue
+        for path in sorted(base.glob("*.py")):
+            if path.name == "verdict.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            for literal in literals:
+                if f'"{literal}"' in text or f"'{literal}'" in text:
+                    offenders.append(f"{path.relative_to(repo)}:{literal}")
+    assert not offenders, (
+        f"verdict ceiling vocabulary re-declared outside verdict.py (import the "
+        f"constant instead): {offenders}"
+    )

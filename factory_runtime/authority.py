@@ -51,6 +51,9 @@ class AuthorityPolicy:
     bootstrap_enabled: bool
     bootstrap_scope: frozenset[str]
     genesis_digest: str
+    # 2.2: optional founder-root-signed commitment to the chain-key root material
+    # (sha256 of .chain-root.key bytes). Empty on pre-2.2 geneses.
+    chain_root_commitment: str = ""
 
     def principal(self, identity: str) -> Principal | None:
         return self.principals.get(identity)
@@ -161,6 +164,7 @@ def load_genesis(
         bootstrap_enabled=bool(bootstrap["enabled"]),
         bootstrap_scope=frozenset(str(value) for value in bootstrap["scope"]),
         genesis_digest=envelope.payload_digest,
+        chain_root_commitment=str(envelope.payload.get("chain_root_commitment", "")),
     )
 
 
