@@ -69,11 +69,35 @@ def test_warn_equal_to_deadline_is_allowed() -> None:
 
 
 def test_deadline_raised_after_start_refuses() -> None:
-    """A re-signed ABI that pushes the deadline beyond the attempt ceiling frozen
-    at the first attempt fires the named issue — the re-sign disarms nothing."""
-    issues = _signal_knob_issues(_build(_knobs(deadline=6), max_attempts=8), frozen_attempt_limit=4)
+    """Round-4 D3: the comparison operand is the DEADLINE frozen at attempt 1 —
+    a re-sign that raises 2 -> 3 fires even inside the attempt ceiling (the
+    old ceiling-based check under-fired here)."""
+    issues = _signal_knob_issues(
+        _build(_knobs(deadline=3), max_attempts=8), frozen_deadline=2
+    )
     assert "deadline-knob-raised-after-start" in issues
 
 
-def test_deadline_within_frozen_ceiling_is_clean() -> None:
-    assert _signal_knob_issues(_build(_knobs()), frozen_attempt_limit=4) == ()
+def test_unchanged_deadline_never_wedges_a_legal_manifest() -> None:
+    """Round-4 D3 over-fire regression: a manifest legal when frozen (deadline 4,
+    ceiling 8) must stay clean at every re-prepare — the old check compared
+    against the frozen ATTEMPT limit and permanently wedged this case."""
+    issues = _signal_knob_issues(
+        _build(_knobs(deadline=4), max_attempts=8), frozen_deadline=4
+    )
+    assert issues == ()
+
+
+def test_lowered_deadline_is_clean() -> None:
+    assert (
+        _signal_knob_issues(_build(_knobs(deadline=2, warn=1)), frozen_deadline=4) == ()
+    )
+
+
+def test_infinite_wall_clock_cap_refuses() -> None:
+    """Round-4 D4: TOML parses inf and it satisfied the bare positivity check —
+    the mandatory backstop was disable-able by declaration. Finite or refused."""
+    issues = _signal_knob_issues(
+        _build(_knobs(cap=float("inf"))), None
+    )
+    assert issues == ("signal-knobs-invalid",)

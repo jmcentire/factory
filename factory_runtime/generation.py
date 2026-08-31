@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -132,21 +133,23 @@ def _phase_artifacts(
 
 def _signal_knob_issues(
     build: Mapping[str, object],
-    frozen_attempt_limit: int | None,
+    frozen_deadline: int | None,
 ) -> tuple[str, ...]:
     """Validate the target ABI's signal-deadline knobs (remediation plan §0.4a).
 
     The three knobs live inside the target manifest, so they are frozen into the
     generation tuple transitively: any knob edit changes the manifest digest and
     fires target-manifest-run-digest-mismatch. The named raised-after-start issue
-    here additionally catches a re-signed ABI whose deadline exceeds the attempt
-    ceiling frozen at the first attempt — a mid-run re-sign that only raises the
-    deadline must fail the comparison and disarm nothing. The finer per-axis
-    comparison (each knob its own named axis) lands with Phase 3's replacement of
-    whole-tuple equality. Declaration is mandatory at readiness — configurable
-    never means disable-able — while schema-level requirement waits for the
-    factory-target-manifest/2 bump (refuse-at-parse is Phase 2.1's earliest
-    firing point).
+    compares the current deadline against the DEADLINE frozen at attempt 1
+    (round-4 D3: comparing against the frozen attempt ceiling both over-fired,
+    wedging a manifest that was legal when frozen, and under-fired on a raise
+    within the ceiling). A re-signed manifest that raises the deadline fires it;
+    everything else a re-sign changes is caught by the digest freeze. The finer
+    per-axis comparison lands with Phase 3. The wall-clock cap must be a FINITE
+    positive number (round-4 D4: TOML inf satisfied the bare positivity check;
+    the one knob with no upper anchor was disable-able by declaration).
+    Declaration stays mandatory at readiness; schema-level requirement waits for
+    the factory-target-manifest/2 bump.
     """
 
     signal = build.get("signal")
@@ -164,6 +167,7 @@ def _signal_knob_issues(
         and warn >= 1
         and isinstance(cap, (int, float))
         and not isinstance(cap, bool)
+        and math.isfinite(cap)
         and cap > 0
     ):
         return ("signal-knobs-invalid",)
@@ -177,7 +181,7 @@ def _signal_knob_issues(
         issues.append("signal-pass-deadline-exceeds-max-attempts")
     if warn > deadline:
         issues.append("signal-warn-exceeds-deadline")
-    if frozen_attempt_limit and deadline > frozen_attempt_limit:
+    if frozen_deadline is not None and deadline > frozen_deadline:
         issues.append("deadline-knob-raised-after-start")
     return tuple(issues)
 
@@ -264,7 +268,12 @@ class GenerationPreparer:
             and plan.max_build_attempts > projection.build_attempt_limit
         ):
             issues.append("build-plan-attempt-limit-raised-after-start")
-        issues.extend(_signal_knob_issues(target.build, projection.build_attempt_limit))
+        issues.extend(
+            _signal_knob_issues(
+                target.build,
+                _frozen_signal_deadline(self.runs_root, run_id, projection),
+            )
+        )
         unique_issues = tuple(dict.fromkeys(issues))
         report = replace(report, ready=not unique_issues, issues=unique_issues)
 
@@ -355,6 +364,34 @@ def _generation_blob(
     return verify_frozen_blob(directory, expected_digest=digest, label=label)
 
 
+def _frozen_signal_deadline(
+    runs_root: Path,
+    run_id: str,
+    projection: RunProjection,
+) -> int | None:
+    """The signal_pass_deadline frozen at the first attempt, if a generation
+    tuple exists. Pre-first-attempt and post-specification-defect there is no
+    frozen baseline (consistent with the attempt-limit shape); a pre-0.4a
+    frozen manifest without knobs yields None — such runs still refuse on the
+    CURRENT manifest's signal-knobs-undeclared, a declared retroactive
+    fail-closed."""
+
+    digest = dict(projection.generation_artifact_digests).get("target-manifest-source")
+    if not digest:
+        return None
+    blob = _generation_blob(runs_root, run_id, "target-manifest", digest)
+    frozen_target, _ = _load_target_exact(
+        blob.payload_path, expected_source_digest=blob.digest
+    )
+    signal = frozen_target.build.get("signal")
+    if not isinstance(signal, Mapping):
+        return None
+    deadline = signal.get("signal_pass_deadline")
+    if isinstance(deadline, int) and not isinstance(deadline, bool):
+        return deadline
+    return None
+
+
 def verify_prepared_generation(
     runs_root: str | Path,
     projection: RunProjection,
@@ -401,6 +438,12 @@ def verify_prepared_generation(
     )
     if target.content_digest != projection.target_digest:
         raise GenerationError("frozen target manifest does not match the run target")
+    frozen_knob_issues = _signal_knob_issues(target.build, None)
+    if frozen_knob_issues:
+        raise GenerationError(
+            "frozen target manifest signal knobs invalid: "
+            + ", ".join(frozen_knob_issues)
+        )
     catalog_raw, catalog_bytes = _read_object(
         catalog_blob.payload_path,
         label="frozen pattern catalog",
