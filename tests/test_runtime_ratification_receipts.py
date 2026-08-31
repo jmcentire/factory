@@ -104,17 +104,32 @@ def test_ratification_without_receipts_is_refused(tmp_path: Path) -> None:
         )
 
 
-def test_ratification_without_the_validator_receipt_is_refused(tmp_path: Path) -> None:
-    """A human approval on its own is not a ratification; the attestation is independent."""
+def test_single_seat_human_receipt_ratifies_and_missing_human_refuses(tmp_path: Path) -> None:
+    """4.1b single-seat authority: a human receipt ALONE is a valid ratification
+    (the Validator receipt is optional attribution), and a ratification without
+    the HUMAN receipt still refuses — the seat that carries authority is the one
+    that cannot be omitted."""
     store = _store(tmp_path)
-    with pytest.raises(RunStateError, match="validator-receipt"):
-        store.transition(
+    store.transition(
+        "run-1",
+        RunState.PRODUCT_SPECIFICATION_RATIFIED,
+        actor="validator",
+        artifact_digests={
+            "product-specification": PRODUCT,
+            "product-specification:human-receipt": HUMAN_RECEIPT,
+        },
+    )
+    assert store.load("run-1").state is RunState.PRODUCT_SPECIFICATION_RATIFIED
+
+    fresh = _store(tmp_path / "second")
+    with pytest.raises(RunStateError, match="human-receipt"):
+        fresh.transition(
             "run-1",
             RunState.PRODUCT_SPECIFICATION_RATIFIED,
             actor="validator",
             artifact_digests={
                 "product-specification": PRODUCT,
-                "product-specification:human-receipt": HUMAN_RECEIPT,
+                "product-specification:validator-receipt": VALIDATOR_RECEIPT,
             },
         )
 

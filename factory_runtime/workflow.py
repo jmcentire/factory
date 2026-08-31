@@ -705,14 +705,10 @@ class FactoryWorkflow:
         entries = self.store.verified_ledger_entries(run_id)
         if not entries or entries[-1].get("entry_hash") != expected_ledger_head:
             raise WorkflowError("repair brief predecessor ledger head is not current")
-        causal_validator = _causal_validator_identity(
-            entries[-1],
-            context="repair brief predecessor",
-        )
-        if validator_identity != causal_validator:
-            raise WorkflowError(
-                "repair brief signer must be the Validator of the causal failed attempt"
-            )
+        # 4.1b: the signer-is-causal-Validator AUTHORITY check is deleted — an agent
+        # signature is provenance, not authority, so which agent signed the brief
+        # cannot gate the repair; the identity is still verified as an enrolled
+        # agent below and recorded as attribution.
         principal = self.policy.principal(validator_identity)
         if principal is None or principal.kind != "agent":
             raise WorkflowError("repair brief signer must be an enrolled Validator agent")
@@ -864,14 +860,9 @@ class FactoryWorkflow:
             raise WorkflowError("recorded repair event is structurally incomplete")
         if not isinstance(predecessor_artifacts, Mapping):
             raise WorkflowError("recorded repair predecessor has no artifact bindings")
-        causal_validator = _causal_validator_identity(
-            predecessor,
-            context="recorded repair predecessor",
-        )
-        if validator_identity != causal_validator:
-            raise WorkflowError(
-                "repair brief verifier must be the Validator of the causal failed attempt"
-            )
+        # 4.1b: replay-side twin of the deleted signer-is-causal-Validator authority
+        # check — attribution, not authority; the enrolled-agent verification below
+        # is what remains.
         if (
             event.get("from_state") != RunState.BLOCKED
             or event.get("to_state") != RunState.BLOCKED
@@ -880,8 +871,6 @@ class FactoryWorkflow:
             raise WorkflowError("latest ledger event is not a repair-brief authorization")
         if event_payload.get("predecessor_ledger_head") != predecessor.get("entry_hash"):
             raise WorkflowError("recorded repair event does not bind its causal predecessor")
-        if event.get("verifier_identity") != causal_validator:
-            raise WorkflowError("recorded repair event names a different Validator")
         if event_artifacts.get("repair-brief") != envelope.payload_digest:
             raise WorkflowError("recorded repair event binds a different brief payload")
         if event_artifacts.get("repair-brief-envelope") != envelope.envelope_digest:
@@ -1069,6 +1058,10 @@ class FactoryWorkflow:
         human = self.policy.principal(human_receipt.signer_identity)
         if human is None or human.kind != "human":
             raise AuthorityVerificationError("phase human ratifier is not an enrolled human")
+        # 4.1b: the Validator receipt is ATTRIBUTION, not authority — verified for
+        # signature, principal, and exact subject so the provenance is meaningful,
+        # but its nonce is dropped (no replay ceremony for a non-authority) and no
+        # second disclosure mechanism exists on top of this provenance column.
         validator_receipt = verify_receipt(
             validator_receipt_path,
             policy=self.policy,
@@ -1083,7 +1076,7 @@ class FactoryWorkflow:
         validator = self.policy.principal(validator_receipt.signer_identity)
         if validator is None or validator.kind != "agent":
             raise AuthorityVerificationError(
-                "phase Validator ratifier must be an enrolled agent principal"
+                "phase Validator attribution is not an enrolled agent principal"
             )
 
         directory = (
@@ -1122,10 +1115,9 @@ class FactoryWorkflow:
                 "artifact_id": artifact.artifact_id,
                 "human_receipt_id": human_receipt.receipt_id,
                 "validator_receipt_id": validator_receipt.receipt_id,
-                "authority_receipt_nonces": [
-                    human_receipt.nonce,
-                    validator_receipt.nonce,
-                ],
+                # 4.1b: only the AUTHORITY receipt's nonce is consumed — the
+                # attribution receipt carries no replay ceremony.
+                "authority_receipt_nonces": [human_receipt.nonce],
             },
             verifier_identity=validator_receipt.signer_identity,
             approver_identity=human_receipt.signer_identity,

@@ -506,16 +506,21 @@ def _verify_obligation(
             and len(payload.get("authority_receipt_nonces", [])) == 1
         )
     elif verifier_id == "phase-receipt-membership-check":
+        # 4.1b single-seat: the artifact and the HUMAN receipt are required; the
+        # validator receipt is optional attribution — but when present it must be
+        # a distinct real digest (dual-ratified history keeps passing).
         phase = _PHASE_BY_DESTINATION.get(destination, "")
         values = [
             supplied.get(phase, ""),
             supplied.get(f"{phase}:human-receipt", ""),
-            supplied.get(f"{phase}:validator-receipt", ""),
         ]
+        attribution = supplied.get(f"{phase}:validator-receipt", "")
+        if attribution:
+            values.append(attribution)
         passed = (
             bool(phase)
             and all(_is_digest(value) for value in values)
-            and len(set(values)) == 3
+            and len(set(values)) == len(values)
             and phase_artifact_digests.get(phase) == supplied.get(phase)
         )
     elif verifier_id == "external-checkpoint-binding-check":

@@ -471,10 +471,19 @@ def _require_approval_identities(
 
 #: The two receipts a `*-ratified` entry must name, keyed `{phase}:{role}-receipt` — the keys
 #: `WorkflowEngine.ratify_phase` already records the verified envelope digests under.
-_RATIFICATION_RECEIPT_ROLES = ("human", "validator")
+# 4.1b: single-seat ratification authority — the HUMAN receipt is the only required
+# authority (founder-ratified demotion of LLM signatures to provenance). The validator
+# role stays in the SUFFIX vocabulary below so a recorded attribution receipt is
+# tolerated (and historical dual-ratified ledgers keep replaying green), but it is no
+# longer required and never authorizes.
+_RATIFICATION_RECEIPT_ROLES = ("human",)
+_RECEIPT_ATTRIBUTION_ROLES = ("validator",)
 
 #: The key suffixes that make a digest a ratification receipt, wherever it appears.
-_RECEIPT_KEY_SUFFIXES = tuple(f":{role}-receipt" for role in _RATIFICATION_RECEIPT_ROLES)
+_RECEIPT_KEY_SUFFIXES = tuple(
+    f":{role}-receipt"
+    for role in (*_RATIFICATION_RECEIPT_ROLES, *_RECEIPT_ATTRIBUTION_ROLES)
+)
 
 
 def _receipt_keys(digests: Mapping[str, Any]) -> set[str]:
@@ -555,7 +564,7 @@ def _require_receipts_belong_here(
     allowed = {
         f"{artifact_key}:{role}-receipt"
         for artifact_key in artifact_keys
-        for role in _RATIFICATION_RECEIPT_ROLES
+        for role in (*_RATIFICATION_RECEIPT_ROLES, *_RECEIPT_ATTRIBUTION_ROLES)
     }
     stray = sorted(_receipt_keys(digests) - allowed)
     if stray:
@@ -619,9 +628,25 @@ def _require_ratification_receipts(
             )
         values.append(value)
         receipts.add(value)
+    # 4.1b: attribution receipts (validator) are OPTIONAL — but when one is present
+    # it must still be a real, distinct, unreused envelope: two names for one
+    # envelope is one receipt whether or not the second name carries authority.
+    for role in _RECEIPT_ATTRIBUTION_ROLES:
+        key = f"{phase_key}:{role}-receipt"
+        value = str(digests.get(key, ""))
+        if not value:
+            continue
+        _require_digest(value, f"artifact_digests[{key!r}]")
+        if value in already_recorded:
+            raise RunStateError(
+                f"{context} reuses receipt digest {value} already recorded in this run: a receipt "
+                "binds to one subject digest and cannot ratify a second version of it"
+            )
+        values.append(value)
+        receipts.add(value)
     if len(set(values)) != len(values):
         raise RunStateError(
-            f"{context} requires the artifact digest and both receipt digests to be distinct: "
+            f"{context} requires the artifact digest and all receipt digests to be distinct: "
             "one envelope cited twice is one receipt, not two"
         )
     return receipts
@@ -1417,8 +1442,11 @@ class RunStore:
         normalized_nonces = [str(nonce) for nonce in transition_nonces]
         allowed_authority_nonce_counts = {expected_authority_nonces}
         if phase_key:
-            # Legacy direct-store tests and ledgers predate nonce recording for phase receipts;
-            # the workflow path records both. Receipt digests remain mandatory in either form.
+            # Three generations coexist on retained ledgers: legacy direct-store
+            # entries recorded no phase nonces, dual-ratified history recorded two,
+            # and 4.1b single-seat authority records exactly one (the human's —
+            # the Validator attribution carries no replay ceremony).
+            allowed_authority_nonce_counts.add(expected_authority_nonces + 1)
             allowed_authority_nonce_counts.add(expected_authority_nonces + 2)
         if len(normalized_nonces) not in allowed_authority_nonce_counts:
             raise RunStateError(
@@ -2321,6 +2349,9 @@ class RunStore:
                 )
                 allowed_entry_nonce_counts = {expected_entry_nonces}
                 if derived_phase_key:
+                    # 4.1b: single-seat records one phase nonce; dual-ratified
+                    # history recorded two; pre-nonce legacy recorded none.
+                    allowed_entry_nonce_counts.add(expected_entry_nonces + 1)
                     allowed_entry_nonce_counts.add(expected_entry_nonces + 2)
                 if len(entry_nonces) not in allowed_entry_nonce_counts:
                     raise RunStateError(

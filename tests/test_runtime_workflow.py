@@ -724,7 +724,10 @@ def test_three_phases_require_human_and_validator_receipts_and_reach_build_ready
         assert (result.directory / "artifact.json").is_file()
 
     assert workflow.store.load("run-1").state == RunState.OPERATIONAL_MATURITY_RATIFIED
-    assert len(workflow.store.consumed_authority_nonces("run-1")) == 8
+    # 4.1b single-seat authority: only HUMAN receipt nonces are consumed (three
+    # phases + intake + resolution); Validator attribution carries no replay
+    # ceremony, so its nonces never enter the consumed set.
+    assert len(workflow.store.consumed_authority_nonces("run-1")) == 5
 
 
 def test_phase_ratification_refuses_a_different_authority_genesis(
