@@ -806,3 +806,33 @@ def test_cli_build_and_validate_fails_closed_on_invalid_attempt_id(tmp_path: Pat
         fixture["workflow"].store.load("cli-synthetic-run").state.value
         == "operational-maturity-ratified"
     )
+
+
+def test_cli_preflight_no_leaves_zero_new_files(tmp_path: Path) -> None:
+    """Plan §1.1 forcing test: a preflight hard NO at dispatch fires before
+    catalog parse, resume verification, retention, and prepare — the refused
+    dispatch leaves ZERO new files under the run root (§1.1d's enabler)."""
+    binary = _binary()
+    fixture = _build_fixture(tmp_path, binary)
+
+    # Strip the signal knobs from the target manifest: the preflight's
+    # configuration-determined hard NO.
+    target_path = fixture["target_path"]
+    text = target_path.read_text(encoding="utf-8")
+    head, _, _ = text.partition("[build.signal]")
+    target_path.write_text(head.rstrip() + "\n", encoding="utf-8")
+
+    run_root = fixture["runs_root"] / "cli-synthetic-run"
+    before = sorted(str(p) for p in run_root.rglob("*"))
+
+    result = _run_cli(*_cli_args(fixture, attempt_id="attempt-1", broken=False))
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "preflight refused" in result.stderr
+    assert "signal-knobs-undeclared" in result.stderr
+    after = sorted(str(p) for p in run_root.rglob("*"))
+    assert after == before, "a preflight NO must leave zero new files"
+    assert (
+        fixture["workflow"].store.load("cli-synthetic-run").state.value
+        == "operational-maturity-ratified"
+    )

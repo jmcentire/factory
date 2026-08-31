@@ -47,6 +47,7 @@ from factory_runtime.lanes import (
     LaneExecution,
     ValidationExecution,
 )
+from factory_runtime.preflight import run_preflight
 from factory_runtime.resume import ResumeVerification, verify_resume_checkpoint
 from factory_runtime.snapshot import FrozenTree, SnapshotError, tree_digest
 from factory_runtime.state import RunProjection, RunState
@@ -231,6 +232,39 @@ class FactoryOrchestrator:
             raise OrchestrationError(
                 "attempt_id must start with an alphanumeric and contain only letters, "
                 "numbers, dot, underscore, or dash"
+            )
+        # Feasibility preflight (plan §1.1): the configuration-determined NO
+        # fires HERE — after the attempt-id regex, before catalog parse, resume
+        # verification, retention, and prepare — so a refused dispatch leaves
+        # zero new files under the run root (forcing-tested; §1.1d made the
+        # readiness path refusal-side-effect-free). Only the input groups
+        # available at dispatch run; the CLI door covers the rest, tri-state.
+        from factory_core.build_plan import BuildPlan
+        from factory_core.target import TargetManifestError, load_target_manifest
+
+        try:
+            preflight_target = load_target_manifest(target_manifest_path)
+        except (OSError, TargetManifestError) as exc:
+            raise OrchestrationError(f"preflight: target manifest unreadable: {exc}") from exc
+        try:
+            preflight_plan_attempts: int | None = BuildPlan.from_dict(
+                _object(Path(build_plan_path), label="build plan")
+            ).max_build_attempts
+        except (OrchestrationError, ValueError, KeyError, TypeError):
+            # A malformed plan dies with its exact shape error at prepare();
+            # the preflight only refuses on facts it could actually read.
+            preflight_plan_attempts = None
+        preflight_report = run_preflight(
+            target_build=dict(preflight_target.build),
+            plan_max_build_attempts=preflight_plan_attempts,
+        )
+        if not preflight_report.go:
+            raise OrchestrationError(
+                "preflight refused: "
+                + "; ".join(
+                    f"{finding.code}:{finding.subject}"
+                    for finding in preflight_report.hard_no
+                )
             )
         # Freeze the proposed catalog subject before opening the mutable run root.  The external
         # checkpoint must name this exact digest even on first activation; later authority and
