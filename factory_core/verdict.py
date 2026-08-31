@@ -239,15 +239,25 @@ class CoverageTerritory:
     status: str
     declared_by: str
     declaration_position: int
+    # Phase 1.5 additive join: "artifact_id:item_id" keys naming the oracle-link
+    # expectations that will clear this territory. Omitted from the declaration body
+    # when empty so every already-ratified declaration keeps its exact digest —
+    # additive means old bytes re-derive unchanged, never re-signed.
+    expectation_refs: tuple[str, ...] = ()
 
     def declaration_body(self) -> dict[str, Any]:
-        return {
+        body: dict[str, Any] = {
             "territory_id": normalize_label(self.territory_id),
             "kind": self.kind,
             "status": self.status,
             "declared_by": normalize_label(self.declared_by),
             "declaration_position": self.declaration_position,
         }
+        if self.expectation_refs:
+            body["expectation_refs"] = sorted(
+                ref.strip() for ref in self.expectation_refs if ref.strip()
+            )
+        return body
 
     @property
     def declaration_digest(self) -> str:
@@ -276,6 +286,7 @@ class CoverageTerritory:
             declaration_position=_require_int(
                 raw, "declaration_position", context="coverage territory"
             ),
+            expectation_refs=_str_tuple(raw.get("expectation_refs")),
         )
 
 

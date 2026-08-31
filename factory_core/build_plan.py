@@ -160,6 +160,11 @@ class BuildStep:
     configuration: Mapping[str, Any] = field(default_factory=dict)
     intent_backreferences: tuple[IntentBackreference, ...] = ()
     depends_on: tuple[str, ...] = ()
+    # Phase 1.5 additive joins, emitted only when declared so retained plan bytes
+    # re-derive unchanged: the ratified verbs this step delivers toward __DONE__, and
+    # the characterization probes this step promises toward adequacy criteria.
+    delivers_verbs: tuple[str, ...] = ()
+    promises_probes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "configuration", _freeze_json(self.configuration))
@@ -172,6 +177,12 @@ class BuildStep:
             "configuration": _thaw_json(self.configuration),
             "intent_backreferences": [item.to_dict() for item in self.intent_backreferences],
             "depends_on": list(self.depends_on),
+            **({"delivers_verbs": sorted(self.delivers_verbs)} if self.delivers_verbs else {}),
+            **(
+                {"promises_probes": sorted(self.promises_probes)}
+                if self.promises_probes
+                else {}
+            ),
         }
 
     @classmethod
@@ -188,6 +199,8 @@ class BuildStep:
                 for item in _mapping_items(raw.get("intent_backreferences"))
             ),
             depends_on=_strings(raw.get("depends_on")),
+            delivers_verbs=_strings(raw.get("delivers_verbs")),
+            promises_probes=_strings(raw.get("promises_probes")),
         )
 
 

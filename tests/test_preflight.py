@@ -7,6 +7,7 @@ against refusal bias — the class must discriminate, not merely fire), and
 
 from __future__ import annotations
 
+from factory_core.build_plan import BuildPlan
 from factory_core.criticality import CriticalityProfile
 from factory_core.manifest import SegregationPolicy
 from factory_core.verdict import (
@@ -58,7 +59,8 @@ def test_satisfiable_frame_is_a_clean_go() -> None:
     )
     assert report.go and not report.hard_no
     assert report.ceiling == "pass"
-    assert report.not_applicable == ("run-liveness",)  # liveness probed at the CLI door
+    # liveness is probed at the CLI door; no plan was supplied for the 1.5 joins
+    assert report.not_applicable == ("plan-joins", "run-liveness")
 
 
 def test_uncovered_territory_without_criterion_is_pass_unreachable() -> None:
@@ -159,6 +161,7 @@ def test_could_not_check_is_loud_and_distinct_from_passed() -> None:
         "coverage-map",
         "attempt-ceilings",
         "critical-roster",
+        "plan-joins",
         "run-liveness",
     }
     assert report.ceiling == "unknown"
@@ -284,3 +287,149 @@ def test_probe_liveness_reads_real_wedges(tmp_path) -> None:
     # chain probing is best-effort here: the fixture chain may refuse for
     # hash-shape reasons before the duplicate check; any refusal is a wedge.
     assert facts.chain_error
+
+
+def _plan(steps=(), oracle_links=()) -> BuildPlan:
+    return BuildPlan.from_dict({
+        "plan_id": "plan-1",
+        "max_build_attempts": 2,
+        "steps": list(steps),
+        "oracle_links": list(oracle_links),
+    })
+
+
+def _step(step_id="s1", **extra) -> dict:
+    return {
+        "step_id": step_id,
+        "pattern_id": "pat-1",
+        "pattern_digest": "d" * 64,
+        **extra,
+    }
+
+
+def test_undeclared_joins_are_loud_not_green() -> None:
+    """Phase 1.5 tri-state: a legacy plan (no additive fields) yields per-join
+    NA entries and disclosures — never a hard NO, never a silent pass."""
+    report = run_preflight(
+        coverage=_coverage(
+            [_territory("t1")],
+            adequacy=[AdequacyCriterion(territory_id="t1", required_probe_ids=("p1",))],
+        ),
+        plan=_plan(steps=[_step()]),
+    )
+    assert report.go
+    assert "verb-delivery" in report.not_applicable
+    assert "probe-promises" in report.not_applicable
+    assert "territory-oracles" in report.not_applicable
+    codes = [finding.code for finding in report.disclosures]
+    assert "preflight-verb-delivery-undeclared" in codes
+    assert "preflight-probe-promises-undeclared" in codes
+    assert "preflight-territory-oracles-undeclared" in codes
+
+
+def test_ratified_verb_no_step_delivers_is_done_unreachable() -> None:
+    report = run_preflight(
+        coverage=_coverage([_territory("t1")], verbs=("deliver", "migrate")),
+        plan=_plan(steps=[_step(delivers_verbs=["deliver"])]),
+    )
+    assert not report.go
+    undeliverable = [
+        finding for finding in report.hard_no
+        if finding.code == "preflight-verb-undeliverable"
+    ]
+    assert [finding.subject for finding in undeliverable] == ["migrate"]
+
+
+def test_all_verbs_delivered_is_the_go_sibling() -> None:
+    report = run_preflight(
+        coverage=_coverage([_territory("t1")], verbs=("deliver",)),
+        plan=_plan(steps=[_step(delivers_verbs=["deliver"])]),
+    )
+    assert report.go
+    assert "preflight-verb-delivery-ok" in [finding.code for finding in report.notes]
+
+
+def test_required_probe_nobody_promises_is_unsatisfiable() -> None:
+    report = run_preflight(
+        coverage=_coverage(
+            [_territory("t1")],
+            adequacy=[
+                AdequacyCriterion(territory_id="t1", required_probe_ids=("p1", "p2"))
+            ],
+        ),
+        plan=_plan(steps=[_step(promises_probes=["p1"])]),
+    )
+    assert not report.go
+    unpromised = [
+        finding for finding in report.hard_no if finding.code == "preflight-probe-unpromised"
+    ]
+    assert [finding.subject for finding in unpromised] == ["p2"]
+
+
+def test_all_probes_promised_is_the_go_sibling() -> None:
+    report = run_preflight(
+        coverage=_coverage(
+            [_territory("t1")],
+            adequacy=[AdequacyCriterion(territory_id="t1", required_probe_ids=("p1",))],
+        ),
+        plan=_plan(steps=[_step(promises_probes=["p1"])]),
+    )
+    assert report.go
+    assert "preflight-probe-promises-ok" in [finding.code for finding in report.notes]
+
+
+def test_territory_expectation_with_no_oracle_link_is_uncoverable() -> None:
+    from factory_core.verdict import CoverageMap, CoverageTerritory
+
+    coverage = CoverageMap(
+        territories=(
+            CoverageTerritory(
+                territory_id="t1", kind="scenario", status="covered",
+                declared_by="human:founder", declaration_position=1,
+                expectation_refs=("prod:req-1",),
+            ),
+        ),
+        adequacy=(),
+        verb_ids=("deliver",),
+    )
+    dead = run_preflight(coverage=coverage, plan=_plan(steps=[_step()]))
+    assert not dead.go
+    assert "preflight-territory-oracle-missing" in [
+        finding.code for finding in dead.hard_no
+    ]
+
+    linked = run_preflight(
+        coverage=coverage,
+        plan=_plan(
+            steps=[_step()],
+            oracle_links=[{
+                "expectation": {"artifact_id": "prod", "item_id": "req-1"},
+                "oracle": {"artifact_id": "ops", "item_id": "mon-1"},
+            }],
+        ),
+    )
+    assert "preflight-territory-oracle-missing" not in [
+        finding.code for finding in linked.hard_no
+    ]
+    assert "preflight-territory-oracles-ok" in [
+        finding.code for finding in linked.notes
+    ]
+
+
+def test_additive_fields_keep_ratified_digests_stable() -> None:
+    """The additive contract itself: a territory without expectation_refs and a step
+    without the new fields serialize byte-for-byte as before, so every already-signed
+    declaration and retained plan re-derives its exact digest."""
+    from factory_core.verdict import CoverageTerritory
+
+    bare = CoverageTerritory(
+        territory_id="t1", kind="scenario", status="covered",
+        declared_by="human:founder", declaration_position=1,
+    )
+    assert "expectation_refs" not in bare.declaration_body()
+
+    from factory_core.build_plan import BuildStep
+
+    step = BuildStep.from_dict(_step())
+    assert "delivers_verbs" not in step.to_dict()
+    assert "promises_probes" not in step.to_dict()

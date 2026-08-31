@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from factory_core.build_plan import BuildPlan
 from factory_core.criticality import CriticalityProfile
 from factory_core.manifest import SegregationPolicy
 from factory_core.verdict import (
@@ -94,6 +95,7 @@ def run_preflight(
     policy: SegregationPolicy | None = None,
     target_build: Mapping[str, Any] | None = None,
     plan_max_build_attempts: int | None = None,
+    plan: BuildPlan | None = None,
     liveness: LivenessFacts | None = None,
 ) -> PreflightReport:
     """Compute the intake verdict from ratification-time facts only."""
@@ -243,6 +245,138 @@ def run_preflight(
                     f"{capacity} enrolled human(s) >= floor {required}",
                 )
             )
+
+    # --- Phase 1.5 reachability schema joins (additive; undeclared is loud, not green) --
+    # Each join is checkable only when BOTH sides are ratified. A plan authored before
+    # the additive fields existed has not declared the join — that is "could not check",
+    # disclosed per join, never a hard NO against legacy plans and never a silent pass.
+    if plan is None or coverage is None:
+        not_applicable.append("plan-joins")
+    else:
+        ratified_verbs = {
+            normalize_label(verb) for verb in coverage.verb_ids if normalize_label(verb)
+        }
+        delivered = {
+            normalize_label(verb)
+            for step in plan.steps
+            for verb in step.delivers_verbs
+            if normalize_label(verb)
+        }
+        if not delivered:
+            not_applicable.append("verb-delivery")
+            disclosures.append(
+                PreflightFinding(
+                    "preflight-verb-delivery-undeclared",
+                    "verb-delivery",
+                    "no step declares delivers_verbs: the verb-to-step join was NOT "
+                    "verified — __DONE__ reachability through this plan is unchecked",
+                )
+            )
+        else:
+            for verb in sorted(ratified_verbs - delivered):
+                hard_no.append(
+                    PreflightFinding(
+                        "preflight-verb-undeliverable",
+                        verb,
+                        "ratified verb no step delivers: the handover scope-union can "
+                        "never cover it, so __DONE__ is provably unreachable through "
+                        "this plan",
+                    )
+                )
+            if ratified_verbs <= delivered:
+                notes.append(
+                    PreflightFinding(
+                        "preflight-verb-delivery-ok",
+                        "verb-delivery",
+                        f"{len(ratified_verbs)} ratified verb(s) all delivered",
+                    )
+                )
+        required_probes = {
+            probe
+            for criterion in coverage.adequacy
+            for probe in criterion.required_probe_ids
+            if str(probe).strip()
+        }
+        promised = {
+            probe
+            for step in plan.steps
+            for probe in step.promises_probes
+            if str(probe).strip()
+        }
+        if required_probes and not promised:
+            not_applicable.append("probe-promises")
+            disclosures.append(
+                PreflightFinding(
+                    "preflight-probe-promises-undeclared",
+                    "probe-promises",
+                    "adequacy criteria require probes but no step promises any: the "
+                    "probe join was NOT verified — receipt adequacy is unchecked",
+                )
+            )
+        elif required_probes:
+            for probe in sorted(required_probes - promised):
+                hard_no.append(
+                    PreflightFinding(
+                        "preflight-probe-unpromised",
+                        probe,
+                        "an adequacy criterion requires this probe but no step "
+                        "promises it: the territory can never be receipted, so its "
+                        "criterion is unsatisfiable by this plan",
+                    )
+                )
+            if required_probes <= promised:
+                notes.append(
+                    PreflightFinding(
+                        "preflight-probe-promises-ok",
+                        "probe-promises",
+                        f"{len(required_probes)} required probe(s) all promised",
+                    )
+                )
+        declared_refs = {
+            territory.territory_id: tuple(
+                ref.strip() for ref in territory.expectation_refs if ref.strip()
+            )
+            for territory in coverage.territories
+            if any(ref.strip() for ref in territory.expectation_refs)
+        }
+        if not declared_refs:
+            not_applicable.append("territory-oracles")
+            disclosures.append(
+                PreflightFinding(
+                    "preflight-territory-oracles-undeclared",
+                    "territory-oracles",
+                    "no territory declares expectation_refs: the territory-to-oracle "
+                    "join was NOT verified",
+                )
+            )
+        else:
+            link_keys = {
+                f"{link.expectation.artifact_id}:{link.expectation.item_id}"
+                for link in plan.oracle_links
+            }
+            unoracled = False
+            for territory_id, refs in sorted(declared_refs.items()):
+                for ref in refs:
+                    if ref not in link_keys:
+                        unoracled = True
+                        hard_no.append(
+                            PreflightFinding(
+                                "preflight-territory-oracle-missing",
+                                normalize_label(territory_id),
+                                f"declared expectation {ref!r} appears in no oracle "
+                                f"link: nothing in this plan can ever clear the "
+                                f"territory",
+                            )
+                        )
+            if not unoracled:
+                notes.append(
+                    PreflightFinding(
+                        "preflight-territory-oracles-ok",
+                        "territory-oracles",
+                        f"{len(declared_refs)} territory declaration(s) all resolve "
+                        f"to oracle links",
+                    )
+                )
 
     # --- dead-run liveness (§1.1: detection only; time predictions are never
     # residual blockers) ----------------------------------------------------------

@@ -1073,8 +1073,8 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             if arguments.target_manifest
             else None
         )
-        preflight_plan_attempts = (
-            BuildPlan.from_dict(_read_object(arguments.build_plan)).max_build_attempts
+        preflight_plan = (
+            BuildPlan.from_dict(_read_object(arguments.build_plan))
             if arguments.build_plan
             else None
         )
@@ -1090,7 +1090,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             profile=preflight_profile,
             policy=preflight_policy,
             target_build=preflight_target_build,
-            plan_max_build_attempts=preflight_plan_attempts,
+            plan_max_build_attempts=(
+                preflight_plan.max_build_attempts if preflight_plan else None
+            ),
+            plan=preflight_plan,
             liveness=preflight_liveness,
         )
         print(json.dumps(preflight_report.to_dict(), indent=2))
