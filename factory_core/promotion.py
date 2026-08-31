@@ -351,7 +351,7 @@ class SurfaceObservation:
     # subject binding, then compares the attested values to the self-reported ones. The
     # agent cannot forge the envelope's chain anchor (the seam records it); a self-
     # consistent lie is closed by the seam's chain-anchor check, not the core. See
-    # decide_promotion and docs/CONTROL-STRUCTURE-PLAN.md Part 7.
+    # decide_promotion (design history: docs/HISTORICAL_MARKDOWN/CONTROL-STRUCTURE-PLAN.md).
     # 4.2 change 1: chain.jsonl is the SOLE authority for receipt values — the
     # lane cites receipt IDS only; the envelope-body fields are deleted from the
     # input schema, so a lane that still writes them is mechanically ignored.

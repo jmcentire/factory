@@ -2,7 +2,7 @@
 
 **Under the doctrine.** The canonical foundation these syncs serve is the doctrine in
 [`SOFTWARE-FACTORY.md`](./SOFTWARE-FACTORY.md) and its executable companion
-[`AGENT-DIRECTIVES.md`](./AGENT-DIRECTIVES.md). This log records how generic advances are
+`SOFTWARE-FACTORY.md` Part II (the former AGENT-DIRECTIVES.md pointer). This log records how generic advances are
 extracted into `factory_core` so the code keeps implementing more of that doctrine without
 breaching the purity boundary; the doctrine is authoritative, the code implements pieces of it.
 
@@ -379,7 +379,7 @@ agent inference from the prior documents.
 | Deliverable | File | What changed |
 |---|---|---|
 | Canonical working specification | `docs/SOFTWARE-FACTORY.md` | Retains the complete supplied doctrine as the repository's working copy: Validator/Coder/Tester; product-specification/architecture/operational-maturity phases; shared spec/no Coder↔Tester channel; eight non-negotiables; integration tests during the loop; Validator-owned execution/mutation evidence; provenance; incomplete-enumeration/parity controls. The repository-local addition points status readers to `README.md`; encoding artifacts were normalized to their intended punctuation. |
-| Stable directive entry point | `docs/AGENT-DIRECTIVES.md` | Became a link-only compatibility surface into Part II of the canonical document. It intentionally carries no second copy of the directives that could drift. |
+| Stable directive entry point | `docs/AGENT-DIRECTIVES.md` (removed in remediation 5.2 — it was a link-only pointer) | Became a link-only compatibility surface into Part II of the canonical document. It intentionally carries no second copy of the directives that could drift. |
 | Active operational surfaces | `README.md`, `docs/VALIDATION-DIRECTIVE.md`, `docs/DOCTRINE-KERNEL.md`, `docs/practices/*.md`, `CLAUDE.md`, `AGENTS.md` | Reconciled role names, phase authority, Tester isolation, Validator mutation ownership, eight-rule inventory, and phase-3 test authorization while preserving the honest doctrine-vs-running boundary. Historical claims in this file remain historical rather than being silently rewritten. |
 | Canonical intent schema + verifier | `factory_core/provenance.py` | Adds canonical phase-artifact items, exact item digests, downstream backreferences for requirement/constraint/task/test-assertion metadata, external-authority artifact digests, full-bundle verification, and stable fail-closed issues. It explicitly refuses to treat digest equality as semantic equivalence: semantic canonicalization happens in the human/Validator phase loop. |
 | Promotion integration | `factory_core/promotion.py` | `decide_promotion` now re-derives the complete provenance bundle and denies missing/untrusted/unresolved/mismatched intent before allowing promotion. Provenance issues are retained in the decision evidence. |

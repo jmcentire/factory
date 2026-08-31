@@ -81,3 +81,13 @@ The 11 primary-artifact citations (paths + sha256 under ~/WanderRepos/repos, ver
 live before commit) with the pre-instrumentation honesty caveat on every row.
 
 - [ ] ratified as the acceptance baseline's reference corpus
+
+## 8. DOCTRINE-KERNEL deletion (plan 5.2 Step 1)
+
+The kernel-statement inventory is at
+`docs/proposals/doctrine-kernel-inventory-2026-08-31.md`: a mechanical first pass
+found 22 of 36 rows already duplicated in the canonical and 14 needing migration
+or named ratification. The kernel file stays alive until you sign; migration
+commits land the exact wording for whichever rows you route that way.
+
+- [ ] ratify per the inventory's checkboxes  [ ] veto: ______

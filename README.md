@@ -23,9 +23,9 @@ it. The doctrine is authoritative; this repository reports its running subset be
   tiers recorded per run, spec-derived monitors that a triage agent cannot silence, environment
   ladder, content-addressed evidence plane, and regulated control plane. Part II contains the
   authoritative self-contained role directives.
-- **[`docs/AGENT-DIRECTIVES.md`](docs/AGENT-DIRECTIVES.md)** — a stable compatibility entry
-  point into the role directives embedded in the canonical specification; it deliberately
-  does not duplicate them.
+- **[`docs/SOFTWARE-FACTORY.md`, Part II](docs/SOFTWARE-FACTORY.md)** — the role
+  directives live in the canonical working specification (the former
+  AGENT-DIRECTIVES.md pointer-to-pointer was removed in remediation 5.2).
 - **[`docs/VALIDATION-DIRECTIVE.md`](docs/VALIDATION-DIRECTIVE.md)** — the Validator's
   process-completeness operational supplement: phase-artifact provenance, no local-only work,
   durable `.kin`, current docs/contracts, migration atomicity, PR/commit/merge/deploy
