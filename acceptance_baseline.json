@@ -1,0 +1,53 @@
+{
+  "schema_version": "factory-acceptance-baseline/1",
+  "comment": "Remediation acceptance baseline (plan section 0.3). pre_tag is the tree before the first remediation commit; the checker derives LOC solely from git diff pre_tag..HEAD and verifies every removal-ledger tree claim against it. no_relevant_kinds is the committed, exhaustive NO-relevant classification over BOTH kind registries (refusal_event_kinds.json and terminal_no_kinds.json): every registered kind must appear here exactly once, so adding a kind without classifying it fails ship — additions are data-file diffs visible in git, never runtime-invented kinds. watchdog-deadline is pinned false (a bound, per section 0.2: the deadline knob cannot manufacture the terminal event the instrument rewards) and blocking_written is pinned excluded (a consumable coordination signal, per section 0.4).",
+  "pre_tag": "remediation-pre",
+  "no_relevant_kinds": {
+    "refusal-dispatch": true,
+    "refusal-phase1-gate": true,
+    "refusal-promote": true,
+    "refusal-endgame": true,
+    "refusal-unregistered": true,
+    "operator": true,
+    "preflight": true,
+    "watchdog-deadline": false
+  },
+  "excluded_event_kinds": ["blocking_written"],
+  "baseline_rows": [
+    {
+      "metric": "first_no_relevant_signal_hours",
+      "run": "PLAT-4025",
+      "value": 0.22,
+      "artifact": "UNDERIVED",
+      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+    },
+    {
+      "metric": "first_no_relevant_signal_hours",
+      "run": "booking-r1",
+      "value": 0.3,
+      "artifact": "UNDERIVED",
+      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+    },
+    {
+      "metric": "first_no_relevant_signal_hours",
+      "run": "ci-r1",
+      "value": 1.13,
+      "artifact": "UNDERIVED",
+      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+    },
+    {
+      "metric": "first_no_relevant_signal_hours",
+      "run": "ci-r2",
+      "value": 3.67,
+      "artifact": "UNDERIVED",
+      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+    },
+    {
+      "metric": "max_healthy_inter_pass_advance_gap_hours",
+      "run": "ci-r1",
+      "value": 6.98,
+      "artifact": "UNDERIVED",
+      "justification": "overnight operator wait, the reference the 12h wall-clock floor derives from (kindex a23ab68a8abd); primary artifact paths/digests requested on channel #21"
+    }
+  ]
+}

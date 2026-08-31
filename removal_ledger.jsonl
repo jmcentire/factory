@@ -1,0 +1,5 @@
+{"phase": "0.1", "axis": "2", "kind": "add", "subject": {"path": "harness/refusal_event_kinds.json"}, "note": "closed refusal-event kind registry (net addition, stated plainly)", "status": "landed"}
+{"phase": "0.1", "axis": "2", "kind": "add", "subject": {"path": "harness/attention_gate.py"}, "note": "append_refusal_event closed writer + refusal-event subcommand (net addition; path predates the addition — tree claim is presence-only)", "status": "landed"}
+{"phase": "0.2", "axis": "2", "kind": "add", "subject": {"path": "harness/record_no.sh"}, "note": "host-written terminal-NO record, sole writer of the no disposition (net addition, stated plainly)", "status": "landed"}
+{"phase": "0.2", "axis": "2", "kind": "add", "subject": {"path": "harness/terminal_no_kinds.json"}, "note": "closed terminal-NO kind registry with signal/bound class split (net addition)", "status": "landed"}
+{"phase": "0.3", "axis": "9", "kind": "add", "subject": {"path": "scripts/check_acceptance.py"}, "note": "acceptance instrument checker (net addition — the plan names it one of the two pure additions without which faster-and-earlier-NO is an assertion)", "status": "landed"}

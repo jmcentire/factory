@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
 
 .DEFAULT_GOAL := help
 
@@ -171,10 +171,13 @@ check-harness: check-python ## harness scripts parse/executable; local ledger ch
 check-denial-probes: check-python ## every factory gate has a registered, collecting denial probe
 	@$(PY) scripts/check_denial_probes.py
 
+check-acceptance: check-python ## removal-ledger tree claims, exhaustive kind classification, baseline citations
+	@$(PY) scripts/check_acceptance.py
+
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:
