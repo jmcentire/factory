@@ -765,7 +765,17 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "architecture",
         "operational-maturity",
     }
-    assert len(workflow.store.consumed_authority_nonces("synthetic-run")) == 8
+    # 4.1b single-seat authority consumes the human/founder receipts only;
+    # validator signatures are provenance, not replay authority.
+    assert workflow.store.consumed_authority_nonces("synthetic-run") == frozenset(
+        {
+            "synthetic-resolution-nonce",
+            "authorize-synthetic-nonce",
+            "product-specification-human-nonce-1",
+            "architecture-human-nonce-2",
+            "operational-maturity-human-nonce-3",
+        }
+    )
 
     product = phase_artifacts["product-specification"]
     architecture = phase_artifacts["architecture"]
@@ -1100,7 +1110,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
             key_path=coder_key,
             output_path=tmp_path / "coder-self-diagnosis.tessera.json",
         )
-        with pytest.raises(WorkflowError, match="Validator of the causal failed attempt"):
+        with pytest.raises(RunStateError, match="Validator of the causal failed attempt"):
             workflow.record_repair_brief(
                 "synthetic-run",
                 expected_ledger_head=predecessor_ledger_head,
@@ -1128,9 +1138,19 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         )
 
     orphaned_envelopes = tuple(
-        (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob("*.tessera.json")
+        sorted(
+            (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob(
+                "*.tessera.json"
+            )
+        )
     )
-    assert len(orphaned_envelopes) == 1
+    # The rejected Coder-signed brief remains unauthoritative evidence while the
+    # Validator-signed brief is the one publish-before-ledger orphan to recover.
+    orphaned_by_signer = {
+        cli.verify_json(path, expected_kind="factory-repair-brief").public_key: path
+        for path in orphaned_envelopes
+    }
+    assert set(orphaned_by_signer) == {coder_public_key, validator_public_key}
     assert workflow.store.load("synthetic-run").state == RunState.BLOCKED
 
     monkeypatch.setattr(workflow, "record_repair_brief", record_repair_brief)
@@ -1148,7 +1168,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         validator_diagnose=lambda *_args, **_kwargs: pytest.fail(
             "a recovered brief must make the retry pass without another diagnosis"
         ),
-        initial_repair_brief_path=orphaned_envelopes[0],
+        initial_repair_brief_path=orphaned_by_signer[validator_public_key],
     )
     assert attempted[0] == ("attempt-failed", None)
     assert attempted[1][0] == "attempt-1"

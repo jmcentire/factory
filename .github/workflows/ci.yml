@@ -20,6 +20,9 @@ jobs:
     steps:
       - name: Check out Factory
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # check-acceptance resolves the annotated remediation-pre baseline tag.
+          fetch-depth: 0
 
       - name: Check out pinned Tessera verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -82,6 +85,9 @@ jobs:
     steps:
       - name: Check out Factory
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The retained-tree and Tessera proofs must see the same baseline history.
+          fetch-depth: 0
 
       - name: Check out pinned Tessera verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
