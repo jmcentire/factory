@@ -16,7 +16,8 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "factory-target-manifest/1"
+      "const": "factory-target-manifest/2",
+      "description": "Schema/2 (plan 2.1): ONE digest over the raw bytes that were read; the in-file content_digest self-claim is gone (a file cannot vouch for itself). A /1 manifest refuses at parse \u2014 fail-closed re-declaration, no legacy-acceptance path."
     },
     "target_id": {
       "type": "string",
@@ -251,18 +252,14 @@
     "signature": {
       "type": "object",
       "additionalProperties": false,
+      "required": [
+        "key_id"
+      ],
       "properties": {
-        "content_digest": {
-          "type": "string"
-        },
-        "signer": {
-          "type": "string"
-        },
-        "algorithm": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The only in-file signature field: which detached trust-root key seals this manifest. The signature VALUE stays with the trust root, outside the file it signs; verification (dormant seam) runs over the raw bytes."
         }
       }
     }

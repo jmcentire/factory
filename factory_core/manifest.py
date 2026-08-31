@@ -66,8 +66,31 @@ def digest_obj(obj: Any) -> str:
     """Content address of a JSON-serializable object via a canonical (sorted, compact)
     encoding, so identical logical content always yields the same address regardless of
     key order or whitespace."""
-    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _refuse_unaddressable(obj)
+    canonical = json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
     return digest_bytes(canonical)
+
+
+def _refuse_unaddressable(obj: Any) -> None:
+    """Keep ``digest_obj`` injective over its actual input domain (plan 2.1).
+
+    ``json.dumps(sort_keys=True)`` silently coerces non-string dict keys (1 and "1"
+    collide) and, without ``allow_nan=False``, emits non-JSON tokens for NaN/Infinity —
+    both break the one-content-one-address property every ledger check rests on.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"digest_obj refuses non-string dict key {key!r}: key coercion "
+                    f"would let distinct objects share a content address"
+                )
+            _refuse_unaddressable(value)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            _refuse_unaddressable(item)
 
 
 def _const_time_eq(a: str, b: str) -> bool:

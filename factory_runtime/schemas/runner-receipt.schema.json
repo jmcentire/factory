@@ -11,7 +11,6 @@
     "generation",
     "role",
     "runner_manifest_digest",
-    "runner_manifest_source_digest",
     "runner_id",
     "adapter",
     "executable_digest",
@@ -51,27 +50,77 @@
     "finished_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-runner-receipt/3"},
-    "receipt_id": {"$ref": "#/$defs/id"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "role": {"enum": ["coder", "tester", "validator"]},
-    "runner_manifest_digest": {"$ref": "#/$defs/digest"},
-    "runner_manifest_source_digest": {"$ref": "#/$defs/digest"},
-    "runner_id": {"$ref": "#/$defs/id"},
-    "adapter": {"enum": ["codex", "ollama-codex"]},
-    "executable_digest": {"$ref": "#/$defs/digest"},
-    "runner_version": {"type": "string", "minLength": 1},
-    "model": {"type": "string", "minLength": 1},
-    "model_version": {"type": "string", "minLength": 1},
-    "configuration_digest": {"$ref": "#/$defs/digest"},
-    "state_profile_digest": {"$ref": "#/$defs/digest"},
-    "state_qualification_digest": {"$ref": "#/$defs/digest"},
-    "state_capsule_digest": {"$ref": "#/$defs/digest"},
-    "projection_digest": {"$ref": "#/$defs/digest"},
-    "task_digest": {"$ref": "#/$defs/digest"},
-    "prompt_schema_version": {"const": "factory-runner-prompt/3"},
-    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/2"},
+    "schema_version": {
+      "const": "factory-runner-receipt/3"
+    },
+    "receipt_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "role": {
+      "enum": [
+        "coder",
+        "tester",
+        "validator"
+      ]
+    },
+    "runner_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "runner_id": {
+      "$ref": "#/$defs/id"
+    },
+    "adapter": {
+      "enum": [
+        "codex",
+        "ollama-codex"
+      ]
+    },
+    "executable_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "runner_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "configuration_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_profile_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_qualification_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_capsule_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "projection_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "task_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "prompt_schema_version": {
+      "const": "factory-runner-prompt/3"
+    },
+    "prompt_assembler_version": {
+      "const": "factory-runner-prompt-assembler/2"
+    },
     "prompt_sequence": {
       "type": "array",
       "minItems": 3,
@@ -79,61 +128,190 @@
       "prefixItems": [
         {
           "allOf": [
-            {"$ref": "#/$defs/prompt"},
-            {"properties": {"attempt": {"const": 1}, "kind": {"const": "qualification"}}}
+            {
+              "$ref": "#/$defs/prompt"
+            },
+            {
+              "properties": {
+                "attempt": {
+                  "const": 1
+                },
+                "kind": {
+                  "const": "qualification"
+                }
+              }
+            }
           ]
         },
         {
           "allOf": [
-            {"$ref": "#/$defs/prompt"},
-            {"properties": {"attempt": {"const": 2}, "kind": {"const": "qualification"}}}
+            {
+              "$ref": "#/$defs/prompt"
+            },
+            {
+              "properties": {
+                "attempt": {
+                  "const": 2
+                },
+                "kind": {
+                  "const": "qualification"
+                }
+              }
+            }
           ]
         },
         {
           "allOf": [
-            {"$ref": "#/$defs/prompt"},
-            {"properties": {"attempt": {"const": 3}, "kind": {"const": "task"}}}
+            {
+              "$ref": "#/$defs/prompt"
+            },
+            {
+              "properties": {
+                "attempt": {
+                  "const": 3
+                },
+                "kind": {
+                  "const": "task"
+                }
+              }
+            }
           ]
         }
       ],
       "items": false
     },
-    "prompt_bytes_retained": {"const": true},
-    "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
-    "broker_registry_source_digest": {"$ref": "#/$defs/digest"},
-    "billing_key_name": {"$ref": "#/$defs/env_name"},
-    "secret_names": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/env_name"}},
-    "network_mode": {"const": "unrestricted-outbound"},
-    "qualification_digest": {"$ref": "#/$defs/digest"},
-    "canary_session_id": {"type": "string", "minLength": 1},
-    "resumed_session_id": {"type": "string", "minLength": 1},
-    "continuity_nonce_digest": {"$ref": "#/$defs/digest"},
-    "canary_attempts": {"const": 2},
-    "task_attempt": {"const": 3},
-    "input_tokens": {"type": "integer", "minimum": 0},
-    "output_tokens": {"type": "integer", "minimum": 0},
-    "cost_microusd": {"type": ["integer", "null"], "minimum": 0},
-    "cost_known": {"type": "boolean"},
-    "meter_semantics": {"enum": ["observed-post-call", "provider-hard-limit"]},
-    "process_peak": {"type": "integer", "minimum": 1},
-    "termination_reason": {"const": "completed"},
-    "handoff_digest": {"$ref": "#/$defs/digest"},
-    "started_at": {"type": "integer", "minimum": 1},
-    "finished_at": {"type": "integer", "minimum": 1}
+    "prompt_bytes_retained": {
+      "const": true
+    },
+    "resume_checkpoint_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "broker_registry_source_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "billing_key_name": {
+      "$ref": "#/$defs/env_name"
+    },
+    "secret_names": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/env_name"
+      }
+    },
+    "network_mode": {
+      "const": "unrestricted-outbound"
+    },
+    "qualification_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "canary_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resumed_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "continuity_nonce_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "canary_attempts": {
+      "const": 2
+    },
+    "task_attempt": {
+      "const": 3
+    },
+    "input_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "output_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cost_microusd": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "cost_known": {
+      "type": "boolean"
+    },
+    "meter_semantics": {
+      "enum": [
+        "observed-post-call",
+        "provider-hard-limit"
+      ]
+    },
+    "process_peak": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "termination_reason": {
+      "const": "completed"
+    },
+    "handoff_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "started_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "finished_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runner_manifest_source_digest": {
+      "$ref": "#/$defs/digest",
+      "description": "RETIRED (plan 2.1 dual-digest collapse): tolerated on retained historical documents only; writers no longer emit it and no check reads it."
+    }
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "env_name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$"},
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "env_name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+    },
     "prompt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attempt", "kind", "byte_count", "content_digest"],
+      "required": [
+        "attempt",
+        "kind",
+        "byte_count",
+        "content_digest"
+      ],
       "properties": {
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
-        "kind": {"enum": ["qualification", "task"]},
-        "byte_count": {"type": "integer", "minimum": 1, "maximum": 2097152},
-        "content_digest": {"$ref": "#/$defs/digest"}
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "kind": {
+          "enum": [
+            "qualification",
+            "task"
+          ]
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        }
       }
     }
   }

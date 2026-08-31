@@ -392,10 +392,11 @@ class FactoryWorkflow:
             raise WorkflowError("target-resolution request belongs to a different repository")
         if request["generation"] != 1:
             raise WorkflowError("new target-resolution requests must begin at generation 1")
-        if request["target_manifest_digest"] != manifest.content_digest:
-            raise WorkflowError("target-resolution request binds another target manifest")
-        if request["target_manifest_source_digest"] != manifest.source_digest:
-            raise WorkflowError("target-resolution request binds other manifest bytes")
+        # 2.1: the ONE manifest binding — the externally supplied request digest must
+        # equal the digest of the raw bytes that were read. This host-enforced equality
+        # is the live signature gate; the in-file self-claim it replaced is gone.
+        if request["target_manifest_digest"] != manifest.source_digest:
+            raise WorkflowError("target-resolution request binds other target-manifest bytes")
         if request["normalized_url"] != normalized_url:
             raise WorkflowError("target-resolution request binds another repository URL")
         if request["requested_ref"] != str(manifest.repo["ref"]):
@@ -458,10 +459,9 @@ class FactoryWorkflow:
         )
         return self.store.create(
             run_id,
-            target_digest=manifest.content_digest,
+            target_digest=manifest.source_digest,
             actor=actor,
             artifact_digests={
-                "target-manifest-source": manifest.source_digest,
                 "target-resolution-request": request_digest,
                 "target-resolution-receipt": receipt.envelope.envelope_digest,
                 "authority-genesis": self.policy.genesis_digest,
@@ -504,10 +504,8 @@ class FactoryWorkflow:
             expected_ledger_head=current.ledger_head,
         )
         artifacts = self.store.current_artifact_digests(run_id)
-        if manifest.content_digest != current.target_digest:
-            raise WorkflowError("retained target manifest differs from the run subject")
-        if manifest.source_digest != artifacts.get("target-manifest-source"):
-            raise WorkflowError("retained target manifest bytes differ from Stage R")
+        if manifest.source_digest != current.target_digest:
+            raise WorkflowError("retained target-manifest bytes differ from the run subject")
         if digest_obj(request) != artifacts.get("target-resolution-request"):
             raise WorkflowError("retained target-resolution request differs from Stage R")
         now = (self._clock or (lambda: int(time.time())))()

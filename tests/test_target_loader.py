@@ -9,7 +9,7 @@ from factory_core.target import TargetManifestError, load_target_manifest
 from tests.conftest import SYNTHETIC_TARGET
 
 VALID = """\
-schema_version = "factory-target-manifest/1"
+schema_version = "factory-target-manifest/2"
 target_id = "acme"
 
 [repo]
@@ -53,7 +53,6 @@ def test_accepts_the_synthetic_empty_target() -> None:
     tm = load_target_manifest(SYNTHETIC_TARGET)
     assert tm.target_id == "synthetic-empty"
     assert set(tm.adapters) == {"repo", "knowledge", "compliance", "idp", "artifact_sink"}
-    assert tm.content_digest.startswith("sha256:")
     assert tm.source_digest.startswith("sha256:")
     assert len(tm.roles) == 2
 
@@ -117,21 +116,61 @@ def test_refuses_python_file_reference(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_declared_content_digest_must_match(tmp_path) -> None:
+def test_schema_1_manifest_refuses_at_parse(tmp_path) -> None:
+    """The migration is fail-closed at the earliest firing point: a /1 manifest refuses
+    at schema validation — re-declaration under /2, never a legacy-acceptance path."""
+    legacy = VALID.replace("factory-target-manifest/2", "factory-target-manifest/1")
+    with pytest.raises(TargetManifestError, match="schema violation"):
+        load_target_manifest(_write(tmp_path, legacy))
+
+
+def test_in_file_content_digest_self_claim_is_refused_by_schema(tmp_path) -> None:
+    """2.1: a file cannot vouch for itself — the signature block carries only the key
+    id; any in-file digest/value field refuses at schema validation."""
     signed = VALID + '\n[signature]\ncontent_digest = "sha256:deadbeef"\n'
-    with pytest.raises(TargetManifestError, match="content-address mismatch"):
+    with pytest.raises(TargetManifestError, match="schema violation"):
         load_target_manifest(_write(tmp_path, signed))
 
 
-def test_content_address_round_trip(tmp_path) -> None:
-    unsigned = load_target_manifest(_write(tmp_path, VALID))
-    signed = VALID + f'\n[signature]\ncontent_digest = "{unsigned.content_digest}"\n'
-    p = tmp_path / "signed.toml"
-    p.write_text(signed)
-    tm = load_target_manifest(p)
-    assert tm.content_digest == unsigned.content_digest
+def test_the_single_digest_is_over_the_raw_bytes(tmp_path) -> None:
+    """Two manifests with identical logical content but different bytes (a comment)
+    address DIFFERENTLY: the digest binds what was read, not what the parser produced."""
+    from factory_core.manifest import digest_bytes
+
+    a = load_target_manifest(_write(tmp_path, VALID))
+    commented = VALID + "\n# a comment changes the bytes, not the parse\n"
+    q = tmp_path / "commented.toml"
+    q.write_text(commented)
+    b = load_target_manifest(q)
+    assert a.source_digest == digest_bytes(VALID.encode())
+    assert b.source_digest == digest_bytes(commented.encode())
+    assert a.source_digest != b.source_digest
 
 
-def test_require_signature_fails_closed_without_a_verifiable_signature(tmp_path) -> None:
-    with pytest.raises(TargetManifestError):
+def test_require_signature_fails_closed_without_a_key_id(tmp_path) -> None:
+    with pytest.raises(TargetManifestError, match="no signing key id"):
         load_target_manifest(_write(tmp_path, VALID), require_signature=True)
+
+
+def test_signature_seam_verifies_over_the_raw_bytes(tmp_path) -> None:
+    """The dormant trust-root seam receives the RAW bytes — never a canonical
+    re-encoding — and its refusal fail-closes the load."""
+    signed = VALID + '\n[signature]\nkey_id = "founder-2026"\n'
+    path = _write(tmp_path, signed)
+    seen: dict[str, object] = {}
+
+    def check(raw: bytes, block: dict) -> bool:
+        seen["raw"] = raw
+        seen["block"] = block
+        return True
+
+    tm = load_target_manifest(path, require_signature=True, verify_signature=check)
+    assert seen["raw"] == signed.encode()
+    assert seen["block"] == {"key_id": "founder-2026"}
+    assert tm.source_digest.startswith("sha256:")
+
+    def refuse(raw: bytes, block: dict) -> bool:
+        return False
+
+    with pytest.raises(TargetManifestError, match="signature verification failed"):
+        load_target_manifest(path, require_signature=True, verify_signature=refuse)

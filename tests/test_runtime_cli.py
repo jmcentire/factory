@@ -325,7 +325,7 @@ def test_cli_inspects_the_target_operational_abi(
     target = load_target_manifest(manifest_path)
 
     assert inspected["target_id"] == target.target_id
-    assert inspected["content_digest"] == target.content_digest
+    assert inspected["source_digest"] == target.source_digest
     assert inspected["source_digest"].startswith("sha256:")
     assert inspected["build"] == dict(target.build)
 

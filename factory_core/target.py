@@ -30,10 +30,10 @@ from typing import Any
 
 import jsonschema
 
-from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.manifest import digest_bytes
 
 SCHEMA_PATH = Path(__file__).parent / "schemas" / "target_manifest.schema.json"
-SCHEMA_VERSION = "factory-target-manifest/1"
+SCHEMA_VERSION = "factory-target-manifest/2"
 
 # The five adapter seams a manifest may select an implementation for (by name, never by code).
 ADAPTER_KINDS = ("repo", "knowledge", "compliance", "idp", "artifact_sink")
@@ -77,9 +77,10 @@ class TargetManifest:
     signature: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
-    # provenance stamped by the loader
+    # provenance stamped by the loader — 2.1: ONE digest, over the exact bytes that were
+    # read. The canonical re-derivation and its in-file declared content_digest are gone:
+    # signing a re-encoding of what the parser produced verified the parser, not the file.
     source_digest: str = ""  # content address of the raw TOML bytes
-    content_digest: str = ""  # canonical address of the manifest data (signature block excluded)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -157,20 +158,24 @@ def load_target_manifest_bytes(
     """Load, validate, and content-address a target manifest — fail-closed, before any adapter
     is resolved.
 
-    Steps, in order:
-      1. read raw bytes and compute the source content address;
+    Steps, in order (schema/2 — sign the bytes that were read, plan 2.1):
+      1. read raw bytes and compute THE content address (``digest_bytes(raw_bytes)``);
       2. parse TOML (malformed TOML -> refuse);
-      3. validate against the JSON Schema (missing/extra/mistyped fields -> refuse);
+      3. validate against the JSON Schema (missing/extra/mistyped fields -> refuse; a
+         schema/1 manifest refuses HERE, the earliest firing point — migration is
+         fail-closed re-declaration, never a legacy-acceptance path);
       4. refuse any code reference and validate adapter selections are registry names;
-      5. compute the canonical content address over the data (excluding the signature block);
-      6. verify the signature: if the manifest declares a ``content_digest`` it must equal the
-         computed address; if ``require_signature`` is set, a signature must be present and
-         (when ``verify_signature`` is supplied — the out-of-repo trust-root seam) must verify.
+      5. if ``require_signature`` is set, a ``[signature]`` block naming the key id must
+         be present and (when ``verify_signature`` is supplied) must verify over the RAW
+         BYTES — never over a canonical re-encoding, which would sign what the parser
+         produced instead of what was read.
 
-    ``verify_signature(canonical_bytes, signature_block) -> bool`` is the trust-root seam. When
-    absent and ``require_signature`` is True, only self-consistency of the declared digest is
-    enforced (a dev posture); anchoring the key out-of-repo with rotation/revocation is a
-    deferred founder decision, wired here but not bundled.
+    ``verify_signature(raw_bytes, signature_block) -> bool`` is the trust-root seam.
+    ENFORCEMENT, STATED HONESTLY: the live gate is the request-bound raw-byte digest
+    equality in host code (workflow.py's resolution check); this seam is DORMANT until an
+    out-of-repo trust root exists, and no doc may count it as active. The in-file
+    signature value as a self-verifiable claim is deleted — a file cannot vouch for
+    itself; the signature value lives detached, with the trust root.
     """
     source_digest = digest_bytes(raw_bytes)
 
@@ -194,32 +199,16 @@ def load_target_manifest_bytes(
     _refuse_code_references(body)
     _validate_adapter_names(data.get("adapters", {}))
 
-    canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    content_digest = digest_obj(body)
-
     signature = data.get("signature", {}) or {}
-    declared = signature.get("content_digest", "")
-    if declared and declared != content_digest:
-        raise TargetManifestError(
-            f"content-address mismatch: manifest declares {declared} but its canonical content "
-            f"addresses to {content_digest} (tampered or mis-signed)"
-        )
-
     if require_signature:
-        if not signature:
+        if not str(signature.get("key_id", "")).strip():
             raise TargetManifestError(
-                "signature required but the target manifest carries no [signature] block "
+                "signature required but the target manifest names no signing key id "
                 "(fail closed before adapter resolution)"
             )
-        if verify_signature is not None:
-            if not verify_signature(canonical, signature):
-                raise TargetManifestError(
-                    "signature verification failed against the supplied trust root (fail closed)"
-                )
-        elif not declared:
+        if verify_signature is not None and not verify_signature(raw_bytes, signature):
             raise TargetManifestError(
-                "signature required but no verifiable content_digest is present and no trust "
-                "root was supplied to verify against"
+                "signature verification failed against the supplied trust root (fail closed)"
             )
 
     return TargetManifest(
@@ -235,6 +224,5 @@ def load_target_manifest_bytes(
         signature=signature,
         schema_version=data.get("schema_version", SCHEMA_VERSION),
         source_digest=source_digest,
-        content_digest=content_digest,
         raw=data,
     )

@@ -1024,7 +1024,6 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         _emit(
             {
                 "target_id": manifest.target_id,
-                "content_digest": manifest.content_digest,
                 "source_digest": digest_bytes(manifest_bytes),
                 "repo": dict(manifest.repo),
                 "build": dict(manifest.build),
@@ -1472,7 +1471,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             runner_manifest_bytes
         ):
             raise ValueError("runner manifest is not bound by the external resume checkpoint")
-        if digest_obj(runner_manifest) != arguments.runner_manifest_digest:
+        if digest_bytes(runner_manifest_bytes) != arguments.runner_manifest_digest:
             raise ValueError("runner manifest differs from its externally expected digest")
         if runner_manifest.get("role") != arguments.role:
             raise ValueError("runner manifest belongs to another role")

@@ -316,8 +316,7 @@ if verb == "run-model":
             "role": role,
             "invocation": 1,
             "model_attempts": 1,
-            "runner_manifest_digest": manifest.content_digest,
-            "runner_manifest_source_digest": digest_bytes(manifest_raw),
+            "runner_manifest_digest": digest_bytes(manifest_raw),
             "runner_id": manifest_document["runner_id"],
             "adapter": manifest_document["adapter"],
             "executable_digest": digest_bytes(executable_raw),
@@ -1058,8 +1057,7 @@ def execution_truth_fixture(
         "run_id": run_id,
         "repository_id": "factory-test",
         "generation": 1,
-        "target_manifest_digest": manifest.content_digest,
-        "target_manifest_source_digest": manifest.source_digest,
+        "target_manifest_digest": manifest.source_digest,
         "normalized_url": normalize_repository_url(str(manifest.repo["url"])),
         "requested_ref": str(manifest.repo["ref"]),
         "subpath": normalize_subpath(str(manifest.repo.get("subpath", ""))),
@@ -1071,7 +1069,7 @@ def execution_truth_fixture(
     }
     store.create(
         run_id,
-        target_digest=manifest.content_digest,
+        target_digest=manifest.source_digest,
         actor="validator",
         artifact_digests={
             "target-manifest-source": manifest.source_digest,
@@ -1112,7 +1110,7 @@ def execution_truth_fixture(
         "run_id": run_id,
         "repository_id": "factory-test",
         "generation": 1,
-        "target_manifest_digest": manifest.content_digest,
+        "target_manifest_digest": manifest.source_digest,
         "target_state_digest": digest_obj(target_state),
         "resolved_commit": target_state["resolved_commit"],
         "proposed_by": "human:test",

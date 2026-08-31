@@ -1174,7 +1174,6 @@ def create_intake_run(
     run_id: str,
     target_digest: str,
     source_digest: str,
-    target_manifest_source_digest: str | None = None,
 ) -> Any:
     """Drive a RunStore through the v4 Stage-R/target-state/Stage-E intake boundary.
 
@@ -1186,7 +1185,6 @@ def create_intake_run(
     def address(label: str) -> str:
         return "sha256:" + hashlib.sha256(f"{run_id}:{label}".encode()).hexdigest()
 
-    manifest_source = target_manifest_source_digest or address("target-manifest-source")
     resource_head = address("resource-ledger")
     run_dir = (store.root / run_id).resolve()
     source_root = run_dir / "target" / "source"
@@ -1196,7 +1194,6 @@ def create_intake_run(
         target_digest=target_digest,
         actor="validator",
         artifact_digests={
-            "target-manifest-source": manifest_source,
             "target-resolution-request": address("target-resolution-request"),
             "target-resolution-receipt": address("target-resolution-receipt"),
             "authority-genesis": address("authority-genesis"),
@@ -1210,7 +1207,6 @@ def create_intake_run(
         "generation": 1,
         "target_id": "fixture",
         "target_manifest_digest": target_digest,
-        "target_manifest_source_digest": manifest_source,
         "requested_url": "https://example.test/repository.git",
         "canonical_url": "https://example.test/repository.git",
         "requested_ref": "refs/heads/main",

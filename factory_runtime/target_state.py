@@ -322,10 +322,8 @@ class TargetResolver:
             raise TargetResolutionError("request-ref-mismatch", requested_ref)
         if request.get("subpath") != subpath:
             raise TargetResolutionError("request-subpath-mismatch", subpath)
-        if request.get("target_manifest_digest") != manifest.content_digest:
-            raise TargetResolutionError("request-manifest-mismatch", manifest.content_digest)
-        if request.get("target_manifest_source_digest") != manifest.source_digest:
-            raise TargetResolutionError("request-manifest-source-mismatch", manifest.source_digest)
+        if request.get("target_manifest_digest") != manifest.source_digest:
+            raise TargetResolutionError("request-manifest-mismatch", manifest.source_digest)
 
         allowed = frozenset(str(value) for value in request["allowed_contact_operations"])
         mode = "local-object-source" if object_source is not None else "remote"
@@ -574,8 +572,7 @@ class TargetResolver:
                 "repository_id": self.repository_id,
                 "generation": self.generation,
                 "target_id": manifest.target_id,
-                "target_manifest_digest": manifest.content_digest,
-                "target_manifest_source_digest": manifest.source_digest,
+                "target_manifest_digest": manifest.source_digest,
                 "requested_url": expected_url,
                 "canonical_url": expected_url,
                 "requested_ref": requested_ref,

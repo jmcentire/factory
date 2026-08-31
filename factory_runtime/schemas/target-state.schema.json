@@ -11,7 +11,6 @@
     "generation",
     "target_id",
     "target_manifest_digest",
-    "target_manifest_source_digest",
     "requested_url",
     "canonical_url",
     "requested_ref",
@@ -32,31 +31,99 @@
     "created_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-target-state/1"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "repository_id": {"type": "string", "minLength": 1},
-    "generation": {"type": "integer", "minimum": 1},
-    "target_id": {"type": "string", "minLength": 1},
-    "target_manifest_digest": {"$ref": "#/$defs/digest"},
-    "target_manifest_source_digest": {"$ref": "#/$defs/digest"},
-    "requested_url": {"type": "string", "minLength": 1},
-    "canonical_url": {"type": "string", "minLength": 1},
-    "requested_ref": {"type": "string", "minLength": 1},
-    "observed_ref_object": {"$ref": "#/$defs/object_id"},
-    "peeled_object": {"$ref": "#/$defs/object_id"},
-    "resolved_commit": {"$ref": "#/$defs/object_id"},
-    "resolved_tree": {"$ref": "#/$defs/object_id"},
-    "control_root": {"type": "string", "minLength": 1},
-    "object_store": {"type": "string", "minLength": 1},
-    "source_root": {"type": "string", "minLength": 1},
-    "subpath": {"type": "string"},
-    "workdir": {"type": "string", "minLength": 1},
-    "checkout_id": {"$ref": "#/$defs/digest"},
-    "observation_method": {"enum": ["remote", "local-object-source"]},
-    "remote_freshness": {"enum": ["PROVED", "UNPROVED"]},
-    "contact_ledger_head": {"$ref": "#/$defs/digest"},
-    "resource_ledger_head": {"$ref": "#/$defs/digest"},
-    "created_at": {"type": "integer", "minimum": 1}
+    "schema_version": {
+      "const": "factory-target-state/1"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "repository_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "requested_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "canonical_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observed_ref_object": {
+      "$ref": "#/$defs/object_id"
+    },
+    "peeled_object": {
+      "$ref": "#/$defs/object_id"
+    },
+    "resolved_commit": {
+      "$ref": "#/$defs/object_id"
+    },
+    "resolved_tree": {
+      "$ref": "#/$defs/object_id"
+    },
+    "control_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "object_store": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subpath": {
+      "type": "string"
+    },
+    "workdir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "checkout_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "observation_method": {
+      "enum": [
+        "remote",
+        "local-object-source"
+      ]
+    },
+    "remote_freshness": {
+      "enum": [
+        "PROVED",
+        "UNPROVED"
+      ]
+    },
+    "contact_ledger_head": {
+      "$ref": "#/$defs/digest"
+    },
+    "resource_ledger_head": {
+      "$ref": "#/$defs/digest"
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_manifest_source_digest": {
+      "$ref": "#/$defs/digest",
+      "description": "RETIRED (plan 2.1 dual-digest collapse): tolerated on retained historical documents only; writers no longer emit it and no check reads it."
+    }
   },
   "$defs": {
     "id": {

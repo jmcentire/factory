@@ -13,7 +13,6 @@
     "invocation",
     "model_attempts",
     "runner_manifest_digest",
-    "runner_manifest_source_digest",
     "runner_id",
     "adapter",
     "executable_digest",
@@ -47,115 +46,333 @@
     "failed_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-runner-failure-receipt/2"},
-    "receipt_id": {"$ref": "#/$defs/id"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "generation": {"type": "integer", "minimum": 1},
-    "role": {"enum": ["coder", "tester", "validator"]},
-    "invocation": {"type": "integer", "minimum": 1, "maximum": 3},
-    "model_attempts": {"type": "integer", "minimum": 1, "maximum": 3},
-    "runner_manifest_digest": {"$ref": "#/$defs/digest"},
-    "runner_manifest_source_digest": {"$ref": "#/$defs/digest"},
-    "runner_id": {"$ref": "#/$defs/id"},
-    "adapter": {"enum": ["codex", "ollama-codex"]},
-    "executable_digest": {"$ref": "#/$defs/digest"},
-    "executable_snapshot": {"$ref": "#/$defs/primary_executable"},
+    "schema_version": {
+      "const": "factory-runner-failure-receipt/2"
+    },
+    "receipt_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "role": {
+      "enum": [
+        "coder",
+        "tester",
+        "validator"
+      ]
+    },
+    "invocation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "model_attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "runner_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "runner_id": {
+      "$ref": "#/$defs/id"
+    },
+    "adapter": {
+      "enum": [
+        "codex",
+        "ollama-codex"
+      ]
+    },
+    "executable_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "executable_snapshot": {
+      "$ref": "#/$defs/primary_executable"
+    },
     "child_executable_snapshots": {
       "type": "array",
       "maxItems": 1,
-      "items": {"$ref": "#/$defs/child_executable"}
+      "items": {
+        "$ref": "#/$defs/child_executable"
+      }
     },
-    "runner_version": {"type": "string", "minLength": 1, "maxLength": 256},
-    "model": {"type": "string", "minLength": 1, "maxLength": 256},
-    "model_version": {"type": "string", "minLength": 1, "maxLength": 256},
-    "configuration_digest": {"$ref": "#/$defs/digest"},
-    "state_profile_digest": {"$ref": "#/$defs/digest"},
-    "state_qualification_digest": {"$ref": "#/$defs/digest"},
-    "state_capsule_digest": {"$ref": "#/$defs/digest"},
-    "projection_digest": {"$ref": "#/$defs/digest"},
-    "task_digest": {"$ref": "#/$defs/digest"},
-    "target_state_digest": {"$ref": "#/$defs/digest"},
-    "run_ledger_head": {"$ref": "#/$defs/digest"},
-    "resume_checkpoint_digest": {"$ref": "#/$defs/digest"},
-    "broker_registry_source_digest": {"$ref": "#/$defs/digest"},
-    "qualification_digest": {"$ref": "#/$defs/digest"},
-    "qualification": {"$ref": "#/$defs/qualification"},
-    "continuity_nonce_digest": {"$ref": "#/$defs/digest"},
-    "prompt_schema_version": {"const": "factory-runner-prompt/3"},
-    "prompt_assembler_version": {"const": "factory-runner-prompt-assembler/2"},
+    "runner_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "model_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "configuration_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_profile_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_qualification_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "state_capsule_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "projection_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "task_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "target_state_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "run_ledger_head": {
+      "$ref": "#/$defs/digest"
+    },
+    "resume_checkpoint_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "broker_registry_source_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "qualification_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "qualification": {
+      "$ref": "#/$defs/qualification"
+    },
+    "continuity_nonce_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "prompt_schema_version": {
+      "const": "factory-runner-prompt/3"
+    },
+    "prompt_assembler_version": {
+      "const": "factory-runner-prompt-assembler/2"
+    },
     "prompt_sequence": {
       "type": "array",
       "minItems": 1,
       "maxItems": 3,
-      "items": {"$ref": "#/$defs/prompt"}
+      "items": {
+        "$ref": "#/$defs/prompt"
+      }
     },
-    "prompt_bytes_retained": {"const": true},
+    "prompt_bytes_retained": {
+      "const": true
+    },
     "diagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["content_digest", "byte_count", "visibility"],
+      "required": [
+        "content_digest",
+        "byte_count",
+        "visibility"
+      ],
       "properties": {
-        "content_digest": {"$ref": "#/$defs/digest"},
-        "byte_count": {"type": "integer", "minimum": 1, "maximum": 131072},
-        "visibility": {"const": "validator-private"}
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 131072
+        },
+        "visibility": {
+          "const": "validator-private"
+        }
       }
     },
-    "termination_reason": {"$ref": "#/$defs/termination_reason"},
-    "returncode": {"type": "integer"},
-    "process_peak": {"type": "integer", "minimum": 0},
+    "termination_reason": {
+      "$ref": "#/$defs/termination_reason"
+    },
+    "returncode": {
+      "type": "integer"
+    },
+    "process_peak": {
+      "type": "integer",
+      "minimum": 0
+    },
     "failure_capsule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "owner", "code", "summary"],
+      "required": [
+        "schema_version",
+        "owner",
+        "code",
+        "summary"
+      ],
       "properties": {
-        "schema_version": {"const": "factory-failure-capsule/1"},
-        "owner": {"enum": ["validator-harness", "host-prerequisite", "tester", "coder"]},
-        "code": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 1024}
+        "schema_version": {
+          "const": "factory-failure-capsule/1"
+        },
+        "owner": {
+          "enum": [
+            "validator-harness",
+            "host-prerequisite",
+            "tester",
+            "coder"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
       }
     },
-    "failed_at": {"type": "integer", "minimum": 1}
+    "failed_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runner_manifest_source_digest": {
+      "$ref": "#/$defs/digest",
+      "description": "RETIRED (plan 2.1 dual-digest collapse): tolerated on retained historical documents only; writers no longer emit it and no check reads it."
+    }
   },
   "allOf": [
     {
-      "if": {"properties": {"adapter": {"const": "codex"}}},
-      "then": {"properties": {"child_executable_snapshots": {"maxItems": 0}}},
-      "else": {"properties": {"child_executable_snapshots": {"minItems": 1, "maxItems": 1}}}
+      "if": {
+        "properties": {
+          "adapter": {
+            "const": "codex"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "child_executable_snapshots": {
+            "maxItems": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "child_executable_snapshots": {
+            "minItems": 1,
+            "maxItems": 1
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"invocation": {"const": 1}}},
-      "then": {"properties": {"prompt_sequence": {"minItems": 1, "maxItems": 1}}}
+      "if": {
+        "properties": {
+          "invocation": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "prompt_sequence": {
+            "minItems": 1,
+            "maxItems": 1
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"invocation": {"const": 2}}},
-      "then": {"properties": {"prompt_sequence": {"minItems": 2, "maxItems": 2}}}
+      "if": {
+        "properties": {
+          "invocation": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "prompt_sequence": {
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"invocation": {"const": 3}}},
-      "then": {"properties": {"prompt_sequence": {"minItems": 3, "maxItems": 3}}}
+      "if": {
+        "properties": {
+          "invocation": {
+            "const": 3
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "prompt_sequence": {
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
+      }
     }
   ],
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "primary_executable": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["relative_path", "byte_count", "content_digest"],
+      "required": [
+        "relative_path",
+        "byte_count",
+        "content_digest"
+      ],
       "properties": {
-        "relative_path": {"const": "executables/runner"},
-        "byte_count": {"type": "integer", "minimum": 1, "maximum": 1073741824},
-        "content_digest": {"$ref": "#/$defs/digest"}
+        "relative_path": {
+          "const": "executables/runner"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "child_executable": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["relative_path", "byte_count", "content_digest"],
+      "required": [
+        "relative_path",
+        "byte_count",
+        "content_digest"
+      ],
       "properties": {
-        "relative_path": {"const": "executables/codex"},
-        "byte_count": {"type": "integer", "minimum": 1, "maximum": 1073741824},
-        "content_digest": {"$ref": "#/$defs/digest"}
+        "relative_path": {
+          "const": "executables/codex"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "qualification": {
@@ -171,24 +388,60 @@
         "process_containment"
       ],
       "properties": {
-        "backend": {"type": "string", "minLength": 1, "maxLength": 256},
-        "scope_digest": {"$ref": "#/$defs/digest"},
-        "forbidden_read_denied": {"const": true},
-        "forbidden_write_denied": {"const": true},
-        "model_network_available": {"const": true},
-        "arbitrary_shell_denied": {"const": true},
-        "process_containment": {"const": true}
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "scope_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "forbidden_read_denied": {
+          "const": true
+        },
+        "forbidden_write_denied": {
+          "const": true
+        },
+        "model_network_available": {
+          "const": true
+        },
+        "arbitrary_shell_denied": {
+          "const": true
+        },
+        "process_containment": {
+          "const": true
+        }
       }
     },
     "prompt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attempt", "kind", "byte_count", "content_digest"],
+      "required": [
+        "attempt",
+        "kind",
+        "byte_count",
+        "content_digest"
+      ],
       "properties": {
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
-        "kind": {"enum": ["qualification", "task"]},
-        "byte_count": {"type": "integer", "minimum": 1, "maximum": 2097152},
-        "content_digest": {"$ref": "#/$defs/digest"}
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "kind": {
+          "enum": [
+            "qualification",
+            "task"
+          ]
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "content_digest": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "termination_reason": {

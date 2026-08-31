@@ -248,7 +248,7 @@ class GenerationPreparer:
         )
 
         issues = list(report.issues)
-        if target.content_digest != projection.target_digest:
+        if target.source_digest != projection.target_digest:
             issues.append("target-manifest-run-digest-mismatch")
         target_attempt_limit = target.build.get("max_attempts")
         if (
@@ -287,11 +287,11 @@ class GenerationPreparer:
             # otherwise side-effect-free, and the late-discovery freeze of
             # inputs that will never be consumed was removal-ledger work.
             refusal_document = {
-                "schema_version": "factory-generation-readiness/1",
+                "schema_version": "factory-generation-readiness/2",
                 "run_id": run_id,
                 "attempt_number": attempt_number,
                 "attempt_limit": plan.max_build_attempts,
-                "target_digest": target.content_digest,
+                "target_digest": target.source_digest,
                 "pattern_catalog_digest": catalog.content_digest,
                 "build_plan_digest": plan.content_digest,
                 "build_input_digest": build_input_digest,
@@ -332,12 +332,13 @@ class GenerationPreparer:
             data=build_input_bytes,
         )
         readiness_document = {
-            "schema_version": "factory-generation-readiness/1",
+            "schema_version": "factory-generation-readiness/2",
             "run_id": run_id,
             "attempt_number": attempt_number,
             "attempt_limit": plan.max_build_attempts,
-            "target_digest": target.content_digest,
-            "target_manifest_source_digest": target_snapshot.digest,
+            # 2.1 collapse: ONE target digest — the raw bytes that were read (and are
+            # retained in the target-manifest snapshot, so snapshot digest == this).
+            "target_digest": target.source_digest,
             "pattern_catalog_digest": catalog.content_digest,
             "pattern_catalog_source_digest": catalog_snapshot.digest,
             "build_plan_digest": plan.content_digest,
@@ -462,7 +463,7 @@ def verify_prepared_generation(
         target_blob.payload_path,
         expected_source_digest=target_blob.digest,
     )
-    if target.content_digest != projection.target_digest:
+    if target.source_digest != projection.target_digest:
         raise GenerationError("frozen target manifest does not match the run target")
     frozen_knob_issues = _signal_knob_issues(target.build, None)
     if frozen_knob_issues:
@@ -551,7 +552,7 @@ def verify_prepared_generation(
     ):
         raise GenerationError("frozen readiness attempt bound does not match the run ledger")
     cited = {
-        "target-manifest-source": readiness_raw.get("target_manifest_source_digest"),
+        "target-manifest-source": readiness_raw.get("target_digest"),
         "pattern-catalog": readiness_raw.get("pattern_catalog_digest"),
         "pattern-catalog-source": readiness_raw.get("pattern_catalog_source_digest"),
         "build-plan": readiness_raw.get("build_plan_digest"),

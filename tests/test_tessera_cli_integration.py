@@ -513,7 +513,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     target_path.write_text(
         "\n".join(
             (
-                'schema_version = "factory-target-manifest/1"',
+                'schema_version = "factory-target-manifest/2"',
                 'target_id = "synthetic-runtime"',
                 "[repo]",
                 'url = "https://example.invalid/synthetic.git"',
@@ -541,7 +541,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         encoding="utf-8",
     )
     manifest = load_target_manifest(target_path)
-    target_digest = manifest.content_digest
+    target_digest = manifest.source_digest
     verbatim = "Build the synthetic authorized Factory change."
     source_digest = digest_bytes(verbatim.encode())
 
@@ -586,7 +586,6 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "repository_id": "synthetic-factory-target",
         "generation": 1,
         "target_manifest_digest": target_digest,
-        "target_manifest_source_digest": manifest.source_digest,
         "normalized_url": normalize_repository_url(str(manifest.repo["url"])),
         "requested_ref": str(manifest.repo["ref"]),
         "subpath": "",

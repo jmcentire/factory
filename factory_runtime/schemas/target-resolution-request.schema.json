@@ -11,7 +11,6 @@
     "repository_id",
     "generation",
     "target_manifest_digest",
-    "target_manifest_source_digest",
     "normalized_url",
     "requested_ref",
     "subpath",
@@ -22,28 +21,71 @@
     "expires_at"
   ],
   "properties": {
-    "schema_version": {"const": "factory-target-resolution-request/1"},
-    "request_id": {"$ref": "#/$defs/id"},
-    "run_id": {"$ref": "#/$defs/id"},
-    "repository_id": {"type": "string", "minLength": 1},
-    "generation": {"type": "integer", "minimum": 1},
-    "target_manifest_digest": {"$ref": "#/$defs/digest"},
-    "target_manifest_source_digest": {"$ref": "#/$defs/digest"},
-    "normalized_url": {"type": "string", "minLength": 1},
-    "requested_ref": {"type": "string", "minLength": 1, "maxLength": 1024},
-    "subpath": {"type": "string", "maxLength": 4096},
+    "schema_version": {
+      "const": "factory-target-resolution-request/1"
+    },
+    "request_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "repository_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "normalized_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "subpath": {
+      "type": "string",
+      "maxLength": 4096
+    },
     "allowed_contact_operations": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
       "items": {
-        "enum": ["git-ls-remote", "git-fetch", "git-local-object-read"]
+        "enum": [
+          "git-ls-remote",
+          "git-fetch",
+          "git-local-object-read"
+        ]
       }
     },
-    "lane_execution": {"const": false},
-    "nonce": {"type": "string", "minLength": 16, "maxLength": 256},
-    "created_at": {"type": "integer", "minimum": 1},
-    "expires_at": {"type": "integer", "minimum": 1}
+    "lane_execution": {
+      "const": false
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 256
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_manifest_source_digest": {
+      "$ref": "#/$defs/digest",
+      "description": "RETIRED (plan 2.1 dual-digest collapse): tolerated on retained historical documents only; writers no longer emit it and no check reads it."
+    }
   },
   "$defs": {
     "id": {

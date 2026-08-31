@@ -61,7 +61,7 @@ def _phase(phase: str, artifact_id: str) -> PhaseArtifact:
 
 def _target_toml(catalog_digest: str, *, with_signal: bool) -> str:
     lines = [
-        'schema_version = "factory-target-manifest/1"',
+        'schema_version = "factory-target-manifest/2"',
         'target_id = "synthetic-prepare-forcing"',
         "[repo]",
         'url = "https://example.invalid/repo.git"',
@@ -124,9 +124,8 @@ def _prepared_inputs(root: Path, *, with_signal: bool) -> tuple[RunStore, Path, 
     create_intake_run(
         store,
         run_id="run-1",
-        target_digest=target.content_digest,
+        target_digest=target.source_digest,
         source_digest=SOURCE,
-        target_manifest_source_digest=target.source_digest,
     )
     states = (
         RunState.PRODUCT_SPECIFICATION_RATIFIED,
@@ -154,13 +153,13 @@ def _prepared_inputs(root: Path, *, with_signal: bool) -> tuple[RunStore, Path, 
                 **ratification_receipts(artifact.phase),
             },
         )
-    build_input = build_input_document("run-1", target.content_digest, artifacts)
+    build_input = build_input_document("run-1", target.source_digest, artifacts)
     product, architecture, operations = artifacts
     plan = BuildPlan(
         plan_id="plan-1",
         version="1",
         run_id="run-1",
-        target_digest=target.content_digest,
+        target_digest=target.source_digest,
         construction_mode="regenerate",
         max_build_attempts=1,
         build_input_digest=digest_obj(build_input),

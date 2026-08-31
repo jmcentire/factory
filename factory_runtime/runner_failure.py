@@ -496,12 +496,7 @@ def verify_and_retain_runner_failure(
             receipt["state_qualification_digest"],
             manifest.document["state_qualification_digest"],
         ),
-        ("runner manifest", receipt["runner_manifest_digest"], manifest.content_digest),
-        (
-            "runner manifest source",
-            receipt["runner_manifest_source_digest"],
-            digest_bytes(manifest_raw),
-        ),
+        ("runner manifest", receipt["runner_manifest_digest"], digest_bytes(manifest_raw)),
         (
             "runner manifest dependency",
             dependencies.get("runner-manifest"),

@@ -199,7 +199,7 @@ def _build_fixture(tmp_path: Path, binary: Path):
     target_path.write_text(
         "\n".join(
             (
-                'schema_version = "factory-target-manifest/1"',
+                'schema_version = "factory-target-manifest/2"',
                 'target_id = "cli-synthetic-runtime"',
                 "[repo]",
                 'url = "https://example.invalid/cli-synthetic.git"',
@@ -227,7 +227,7 @@ def _build_fixture(tmp_path: Path, binary: Path):
         encoding="utf-8",
     )
     manifest = load_target_manifest(target_path)
-    target_digest = manifest.content_digest
+    target_digest = manifest.source_digest
     verbatim = "Build the CLI-synthetic authorized Factory change."
     source_digest = digest_bytes(verbatim.encode())
 
@@ -261,7 +261,6 @@ def _build_fixture(tmp_path: Path, binary: Path):
         "repository_id": "cli-synthetic-factory-target",
         "generation": 1,
         "target_manifest_digest": target_digest,
-        "target_manifest_source_digest": manifest.source_digest,
         "normalized_url": normalize_repository_url(str(manifest.repo["url"])),
         "requested_ref": str(manifest.repo["ref"]),
         "subpath": "",

@@ -461,6 +461,9 @@ def test_runner_receipt_v2_keeps_its_historical_prompt_identity(tmp_path: Path) 
     historical["schema_version"] = "factory-runner-receipt/2"
     historical["prompt_schema_version"] = "factory-runner-prompt/2"
     historical["prompt_assembler_version"] = "factory-runner-prompt-assembler/1"
+    # A real retained v2 receipt carried the dual-digest twin retired in 2.1; current
+    # receipts no longer emit it, so the historical shape re-adds it explicitly.
+    historical["runner_manifest_source_digest"] = historical["runner_manifest_digest"]
 
     validate_document("runner-receipt", historical)
 

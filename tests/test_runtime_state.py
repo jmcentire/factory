@@ -72,7 +72,6 @@ def _target_state(store: RunStore) -> dict[str, object]:
         "generation": 1,
         "target_id": "fixture",
         "target_manifest_digest": TARGET,
-        "target_manifest_source_digest": TARGET_SOURCE,
         "requested_url": "https://example.test/repository.git",
         "canonical_url": "https://example.test/repository.git",
         "requested_ref": "refs/heads/main",

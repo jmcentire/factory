@@ -5,7 +5,7 @@
 # leaves this synthetic descriptor, and the core still loads, validates, and reasons over it.
 # Nothing here is target-specific; every value is a generic placeholder.
 
-schema_version = "factory-target-manifest/1"
+schema_version = "factory-target-manifest/2"
 target_id = "synthetic-empty"
 
 [repo]
@@ -64,5 +64,4 @@ launch = "noop"
 network = "offline"
 
 [signature]
-signer = "founder"
-algorithm = "none"
+key_id = "synthetic-dev"

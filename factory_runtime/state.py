@@ -775,7 +775,9 @@ class RunStore:
         _require_digest_keys(
             supplied,
             (
-                "target-manifest-source",
+                # 2.1: the manifest binding lives solely in target_digest (raw bytes);
+                # the "target-manifest-source" twin is gone from new geneses. Old
+                # ledgers that carry it as an extra key still load (presence-only check).
                 "target-resolution-request",
                 "target-resolution-receipt",
                 "authority-genesis",
@@ -1880,7 +1882,6 @@ class RunStore:
                     _require_digest_keys(
                         digests,
                         (
-                            "target-manifest-source",
                             "target-resolution-request",
                             "target-resolution-receipt",
                             "authority-genesis",

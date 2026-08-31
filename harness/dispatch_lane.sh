@@ -504,7 +504,8 @@ import hashlib, pathlib, sys
 print("sha256:" + hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 }
-RUNNER_MANIFEST_DIGEST="$(json_digest "$RUNNER_MANIFEST")" || fail "runner manifest digest failed"
+# 2.1: the digest binds the exact bytes the CLI will read, never a canonical re-encoding.
+RUNNER_MANIFEST_DIGEST="$(raw_digest "$RUNNER_MANIFEST")" || fail "runner manifest digest failed"
 RUNNER_OUTPUT_SCHEMA_DIGEST="$(raw_digest "$RUNNER_OUTPUT_SCHEMA")" || \
   fail "runner output schema digest failed"
 BROKER_REGISTRY_DIGEST="$(json_digest "$BROKER_REGISTRY")" || fail "broker registry digest failed"
