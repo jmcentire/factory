@@ -133,6 +133,7 @@ _CONFIGURATION_CODES = (
     "provenance-gap",
     "provenance-integrity",
     "provenance-missing",
+    "surface-id-reserved",
     "tool-policy-gap",
     "tool-policy-invalid",
     "tool-policy-missing",
@@ -902,6 +903,16 @@ def decide_promotion(
         f"path:{path}" for path in derivation.unmapped_paths
     )
     resolution = resolve_criticality(profile, derived_surface_ids, policy)
+    # The ``path:`` namespace is RESERVED for unmapped-path pseudo-surfaces. A profile
+    # that declares a surface id inside it could pre-classify an unmapped path (declare
+    # "path:migrations/drop.sql" Cosmetic, and the collision resolves to the declared
+    # class instead of implicit Critical) — so the declaration itself is invalid,
+    # unconditionally, not just when a collision happens to fire.
+    reserved = sorted(
+        normalize_label(control.surface_id)
+        for control in profile.surfaces
+        if normalize_label(control.surface_id).startswith("path:")
+    )
     surface_by_id = {surface.surface_id: surface for surface in resolution.surfaces}
     gaps: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
     negatives: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
@@ -909,6 +920,7 @@ def decide_promotion(
     hard_reasons: list[str] = [
         f"criticality-profile-invalid:{issue}" for issue in resolution.blocking_issues
     ]
+    hard_reasons.extend(f"surface-id-reserved:{surface_id}" for surface_id in reserved)
     reports: list[str] = list(resolution.reports)
     gate_reasons: list[str] = []
 

@@ -127,8 +127,9 @@ def test_class_partitions_are_disjoint_and_complete() -> None:
     assert CONFIGURATION_DETERMINED_CODES & SURFACE_SCOPED_CODES == frozenset()
     # 1.1c dropped the eight Gate M envelope labels (7 construction-evidence + the
     # surface-scoped candidate-receipt-required) and added the three derivation reports.
-    assert len(PROMOTION_CODE_CLASSES) == 117
-    assert len(CONFIGURATION_DETERMINED_CODES) == 25
+    # ...and the path:-namespace reservation added one configuration code.
+    assert len(PROMOTION_CODE_CLASSES) == 118
+    assert len(CONFIGURATION_DETERMINED_CODES) == 26
     assert len(SURFACE_SCOPED_CODES) == 5
 
 

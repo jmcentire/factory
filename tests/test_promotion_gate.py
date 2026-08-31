@@ -724,6 +724,33 @@ def test_retired_agent_declared_surface_field_is_inert() -> None:
     assert "disturbed-surface-unmapped-critical:core/danger.py" in decision.reports
 
 
+def test_profile_declaring_a_path_prefixed_surface_id_is_invalid() -> None:
+    """The ``path:`` namespace is reserved for unmapped-path pseudo-surfaces: a profile
+    that declares one could pre-classify an unmapped path below Critical (declare
+    "path:migrations/drop.sql" Cosmetic and the collision resolves to Cosmetic). The
+    declaration itself blocks, unconditionally — the GO sibling is every other test in
+    this file, whose profiles declare no reserved id."""
+    profile = CriticalityProfile.from_dict({
+        "surfaces": [
+            _profile().to_dict()["surfaces"][0],
+            {
+                "surface_id": "path:migrations/0042_drop.sql",
+                "criticality": "cosmetic",
+                "component_id": "db",
+                "decided_by": "alice",
+                "wrong_cost": "low",
+            },
+        ],
+        "side_effects": [],
+        "required_gate_ids": [],
+        "critical_ratification_delegates": ["alice", "bob"],
+    })
+    request = _request(profile=profile)
+    decision = decide_promotion(request, _roster(), profile)
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "surface-id-reserved:path:migrations/0042_drop.sql" in decision.reasons
+
+
 def _freeze_request_dict(request: PromotionRequest) -> dict[str, Any]:
     """Serialize a request the way conftest's ``_freeze`` does, for from_dict round-trips."""
     from tests.conftest import _freeze
