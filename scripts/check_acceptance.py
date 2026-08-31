@@ -67,15 +67,21 @@ def _exists_at_tag(repo: Path, tag: str, path: str) -> bool:
     return _git(repo, "cat-file", "-e", f"{tag}:{path}").returncode == 0
 
 
-def _load_registry_kinds(repo: Path) -> set[str]:
+def _load_registry_kinds(repo: Path) -> tuple[set[str], dict[str, str]]:
+    """Return (all registered kinds, terminal kind -> class)."""
     kinds: set[str] = set()
+    terminal_classes: dict[str, str] = {}
     for name in ("refusal_event_kinds.json", "terminal_no_kinds.json"):
         try:
             document = json.loads((repo / "harness" / name).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             _die(f"kind registry unreadable: harness/{name}: {exc}")
         kinds.update(document["kinds"])
-    return kinds
+        if name == "terminal_no_kinds.json":
+            for kind, spec in document["kinds"].items():
+                if isinstance(spec, dict):
+                    terminal_classes[str(kind)] = str(spec.get("class", ""))
+    return kinds, terminal_classes
 
 
 def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
@@ -88,11 +94,22 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
     pre_tag = baseline.get("pre_tag")
     if not isinstance(pre_tag, str) or not pre_tag:
         _die("baseline has no pre_tag")
-    if _git(repo, "rev-parse", "--verify", f"{pre_tag}^{{commit}}").returncode != 0:
+    resolved = _git(repo, "rev-parse", "--verify", f"{pre_tag}^{{commit}}")
+    if resolved.returncode != 0:
         _die(f"pre_tag does not resolve to a commit: {pre_tag}")
+    # Round-3 G2: the tag is pinned by COMMIT, not by name — `git tag -f` moving
+    # remediation-pre must show up as a committed-data diff, never silently.
+    pinned = baseline.get("pre_tag_commit")
+    if not isinstance(pinned, str) or not pinned:
+        failures.append("baseline has no pre_tag_commit — the boundary is movable by name")
+    elif resolved.stdout.strip() != pinned:
+        failures.append(
+            f"pre_tag {pre_tag} resolves to {resolved.stdout.strip()[:12]} but the baseline "
+            f"pins {pinned[:12]} — the boundary tag moved"
+        )
 
     # --- the exhaustive NO-relevant kind classification -----------------------------
-    registered = _load_registry_kinds(repo)
+    registered, terminal_classes = _load_registry_kinds(repo)
     classified = baseline.get("no_relevant_kinds")
     if not isinstance(classified, dict):
         _die("baseline has no no_relevant_kinds map")
@@ -105,7 +122,7 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
     for kind, value in classified.items():
         if not isinstance(value, bool):
             failures.append(f"no_relevant_kinds[{kind!r}] is not a boolean")
-    if classified.get("watchdog-deadline") is not False:
+    if "watchdog-deadline" in registered and classified.get("watchdog-deadline") is not False:
         failures.append(
             "watchdog-deadline must be classified false — a deadline expiry is a bound, "
             "never an instrument-rewarded signal (plan §0.2)"
@@ -114,6 +131,16 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
         failures.append(
             "blocking_written must be pinned in excluded_event_kinds (plan §0.4)"
         )
+    # Round-3 G4: one owner per fact — the terminal registry's signal/bound
+    # class OWNS a terminal kind's NO-relevance; the baseline cites it. A
+    # classification that disagrees with the registry is a fork of the fact.
+    for kind, clazz in terminal_classes.items():
+        cited = classified.get(kind)
+        if isinstance(cited, bool) and (clazz == "signal") != cited:
+            failures.append(
+                f"no_relevant_kinds[{kind!r}]={cited} contradicts the terminal registry "
+                f"class {clazz!r} — the registry owns this fact; the baseline must cite it"
+            )
 
     # --- baseline rows: cited or explicitly underived -------------------------------
     def _verify_citation(label: str, artifact: dict) -> None:
@@ -216,23 +243,35 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
             if gate in live_ids:
                 failures.append(f"{label}: gate {gate} still registered in gates.tsv")
                 continue
-            # Dead verification code dies with its gate: the retired gate's pre_tag
-            # probes must no longer collect anywhere in the suite.
+            # Round-3 D2: fail closed both directions — a retirement claim over a
+            # gate that never existed at pre_tag is a fabrication, not a removal
+            # (the delete branch already checks both directions; so must this).
             shown = _git(repo, "show", f"{pre_tag}:harness/gates.tsv")
             if shown.returncode != 0:
                 _die(f"gates.tsv unreadable at {pre_tag}")
-            for line in shown.stdout.splitlines():
-                if line.startswith(f"{gate}\t"):
-                    for node_id in line.split("\t")[3].split(";"):
-                        test_name = node_id.split("::")[-1].strip()
-                        if not test_name:
-                            continue
-                        hits = _git(repo, "grep", "-l", f"def {test_name}", "--", "tests/")
-                        if hits.returncode == 0 and hits.stdout.strip():
-                            failures.append(
-                                f"{label}: retired gate {gate}'s probe {test_name} survives "
-                                f"in {hits.stdout.strip().splitlines()[0]}"
-                            )
+            retired_rows = [
+                line for line in shown.stdout.splitlines() if line.startswith(f"{gate}\t")
+            ]
+            if not retired_rows:
+                failures.append(
+                    f"{label}: gate {gate} never existed at {pre_tag} — not a retirement"
+                )
+                continue
+            # Dead verification code dies with its gate: the retired gate's pre_tag
+            # probes must no longer collect anywhere in the suite.
+            for line in retired_rows:
+                for node_id in line.split("\t")[3].split(";"):
+                    # Strip any parametrization suffix — the test FUNCTION is the
+                    # survivable unit, not the node-id (round-3 D2).
+                    test_name = node_id.split("::")[-1].split("[")[0].strip()
+                    if not test_name:
+                        continue
+                    hits = _git(repo, "grep", "-l", f"def {test_name}", "--", "tests/")
+                    if hits.returncode == 0 and hits.stdout.strip():
+                        failures.append(
+                            f"{label}: retired gate {gate}'s probe {test_name} survives "
+                            f"in {hits.stdout.strip().splitlines()[0]}"
+                        )
     return failures
 
 

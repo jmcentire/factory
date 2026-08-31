@@ -2,6 +2,7 @@
   "schema_version": "factory-acceptance-baseline/1",
   "comment": "Remediation acceptance baseline (plan section 0.3). pre_tag is the tree before the first remediation commit; the checker derives LOC solely from git diff pre_tag..HEAD and verifies every removal-ledger tree claim against it. no_relevant_kinds is the committed, exhaustive NO-relevant classification over BOTH kind registries (refusal_event_kinds.json and terminal_no_kinds.json): every registered kind must appear here exactly once, so adding a kind without classifying it fails ship \u2014 additions are data-file diffs visible in git, never runtime-invented kinds. watchdog-deadline is pinned false (a bound, per section 0.2: the deadline knob cannot manufacture the terminal event the instrument rewards) and blocking_written is pinned excluded (a consumable coordination signal, per section 0.4). External (out-of-repo) artifact citations verify tri-state: digest checked when the path is readable on this machine, a loud NOTE when it is not \u2014 never silently green, never a ship failure on a machine without the retained runs; an in-repo citation always verifies strictly.",
   "pre_tag": "remediation-pre",
+  "pre_tag_commit": "4a9ac36cac9df91f2239530114e85684e91a9bfc",
   "no_relevant_kinds": {
     "refusal-dispatch": true,
     "refusal-phase1-gate": true,

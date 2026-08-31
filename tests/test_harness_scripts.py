@@ -7218,53 +7218,191 @@ def test_endgame_refusal_leaves_derivable_signal(tmp_path: Path) -> None:
     assert [row["kind"] for row in rows] == ["refusal-endgame"]
 
 
-def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
-    """Structural chokepoint (plan §0.1 per-path scope, verification round 2):
-    every fail-closed exit in promote.sh after the helper definition must have a
-    refusal_event call in its immediate block, so an uninstrumented refusal exit
-    cannot be added without turning this red. Exit 1 (BLOCKED) is exempt — it
-    renders a verdict file, which is already a recorded terminal signal. Exits
-    before the helper (usage, factory_load_context) are the stated pre-root
-    boundary."""
+def _unattributed_refusal_exits(
+    script_text: str,
+    exit_pattern: str,
+    call_names: tuple[str, ...] = ("refusal_event",),
+) -> list[str]:
+    """Block-structural exit attribution (verification round 3, D1).
+
+    A refusal exit is attributed only when a call appears in ITS OWN basic
+    block: on the same line before the exit, or on a preceding line with no
+    intervening exit statement, block boundary, heredoc body, or helper
+    DEFINITION text. The round-2 window-grep was proximity-textual and
+    empirically maskable at 7 of 16 sites; this scanner re-runs those masking
+    mutations red (see the mutation fixtures below).
+    """
     import re as _re
 
-    lines = (HARNESS / "promote.sh").read_text(encoding="utf-8").splitlines()
-    helper_at = next(i for i, line in enumerate(lines) if line.startswith("refusal_event()"))
-    exit_statement = _re.compile(r"(?:^|[;{|&]\s*)exit (?:2|64|66|70)\b")
-    missing = []
-    for i, line in enumerate(lines):
-        if i <= helper_at + 3:
-            continue
+    exit_re = _re.compile(exit_pattern)
+    call_re = _re.compile("|".join(_re.escape(name) for name in call_names))
+    boundary_re = _re.compile(r'^(\}|fi|done|else|esac)\b')
+
+    raw = script_text.replace("\\\n", " ")
+    lines = raw.splitlines()
+
+    # Mark heredoc bodies and helper-definition bodies as boundaries: their
+    # text must never satisfy an attribution (round 3: the endgame window was
+    # satisfied by the helper DEFINITION at :36-40).
+    marked: list[str] = []
+    heredoc_tag: str | None = None
+    in_helper = False
+    for line in lines:
         stripped = line.strip()
-        if stripped.startswith("#"):
+        if heredoc_tag is not None:
+            marked.append("###BOUNDARY###")
+            if stripped == heredoc_tag:
+                heredoc_tag = None
             continue
-        if exit_statement.search(stripped):
-            window = "\n".join(lines[max(0, i - 6) : i + 1])
-            if "refusal_event" not in window:
-                missing.append(f"{i + 1}: {stripped}")
-    assert not missing, "fail-closed exits without a refusal event:\n" + "\n".join(missing)
+        if in_helper:
+            marked.append("###BOUNDARY###")
+            if stripped == "}":
+                in_helper = False
+            continue
+        if any(stripped.startswith(f"{name}()") for name in call_names):
+            in_helper = True
+            marked.append("###BOUNDARY###")
+            continue
+        match = _re.search(r"<<-?'?([A-Z]+)'?", line)
+        if match:
+            heredoc_tag = match.group(1)
+            marked.append(line)  # the heredoc START line is real shell
+            continue
+        marked.append(line)
+
+    unattributed: list[str] = []
+    for i, line in enumerate(marked):
+        stripped = line.strip()
+        if stripped.startswith("#") or line == "###BOUNDARY###":
+            continue
+        exit_match = exit_re.search(stripped)
+        if not exit_match:
+            continue
+        call_match = call_re.search(stripped)
+        if call_match and call_match.start() < exit_match.start():
+            continue  # same-line attribution, call precedes the exit
+        attributed = False
+        for j in range(i - 1, max(-1, i - 11), -1):
+            back = marked[j].strip()
+            if back == "###BOUNDARY###" or marked[j] == "###BOUNDARY###":
+                break
+            if back.startswith("#") or not back:
+                continue
+            if exit_re.search(back) or boundary_re.match(back):
+                # A back line carrying its own exit is a complete prior block
+                # (one-liners included) — checked BEFORE the call so a
+                # neighbor's call never attributes this exit (round 3).
+                break
+            if call_re.search(back):
+                attributed = True
+                break
+            if back.endswith(("}", "then", "do", "{")):
+                # A closer ends the previous block; an opener starts OUR block —
+                # either way the scan has exhausted this exit's basic block
+                # (round 3: a preceding one-liner's call must never attribute
+                # a later block's exit).
+                break
+        if not attributed:
+            unattributed.append(f"{i + 1}: {stripped}")
+    return unattributed
+
+
+_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70)(?!\d)|"\$rc")'
+_ENDGAME_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:70(?!\d)|"\$rc")'
+
+
+def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
+    """Every fail-closed exit in promote.sh after the helper definition is
+    attributed to a refusal_event call in its own basic block (round-3 D1:
+    block-structural, exit "$rc" in scope). Exit 1 (BLOCKED) is exempt — it
+    renders a verdict; pre-helper exits are the stated pre-root boundary."""
+    text = (HARNESS / "promote.sh").read_text(encoding="utf-8")
+    body = text[text.index("refusal_event()") :]
+    missing = _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE)
+    assert not missing, "fail-closed exits without attribution:\n" + "\n".join(missing)
 
 
 def test_endgame_refusal_exits_all_route_through_refusal_event() -> None:
-    """Same structural chokepoint for endgame.sh. The RED/GREEN verdict exit
-    (`exit \"$FAILED\"`) is exempt — a rendered verdict is a recorded signal."""
+    """Same attribution for endgame.sh; the RED/GREEN verdict exit is exempt."""
+    text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
+    body = text[text.index("refusal_event()") :]
+    missing = _unattributed_refusal_exits(body, _ENDGAME_EXIT_RE)
+    assert not missing, "refusal exits without attribution:\n" + "\n".join(missing)
+
+
+def test_phase1_refusal_exit_is_attributed() -> None:
+    """Round-3 D3: phase1_gate.sh's gate-G exit 71 carries its attribution;
+    its pre-root exit-64 usage checks are the stated boundary."""
+    text = (HARNESS / "phase1_gate.sh").read_text(encoding="utf-8")
+    missing = _unattributed_refusal_exits(
+        text, r'(?:^|[;{|&]\s*)exit 71\b', ("refusal_event", "refusal-event")
+    )
+    assert not missing, "\n".join(missing)
+
+
+def test_dispatch_refusals_are_funneled_through_fail() -> None:
+    """Round-3 D3: dispatch_lane.sh's chokepoint is the fail() funnel — the
+    funnel must contain the refusal_event call, and no bare exit 70 may exist
+    outside it (a refusal that bypasses the funnel bypasses the event)."""
     import re as _re
 
-    lines = (HARNESS / "endgame.sh").read_text(encoding="utf-8").splitlines()
-    helper_at = next(i for i, line in enumerate(lines) if line.startswith("refusal_event()"))
-    exit_statement = _re.compile(r"(?:^|[;{|&]\s*)exit (?:70|\"\$rc\")")
-    missing = []
-    for i, line in enumerate(lines):
-        if i <= helper_at + 3:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        if exit_statement.search(stripped):
-            window = "\n".join(lines[max(0, i - 6) : i + 1])
-            if "refusal_event" not in window:
-                missing.append(f"{i + 1}: {stripped}")
-    assert not missing, "refusal exits without a refusal event:\n" + "\n".join(missing)
+    text = (HARNESS / "dispatch_lane.sh").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start_index = next(i for i, line in enumerate(lines) if line.startswith("fail() {"))
+    end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
+    fail_body = "\n".join(lines[start_index:end_index])
+    fail_end = text.index(lines[end_index + 1]) if end_index + 1 < len(lines) else len(text)
+    assert "refusal_event" in fail_body or "attention_gate.py" in fail_body
+    after_fail = text[fail_end:]
+    bare_exits = [
+        line.strip()
+        for line in after_fail.replace("\\\n", " ").splitlines()
+        if _re.search(r'(?:^|[;{|&]\s*)exit 70\b', line.strip())
+        and not line.strip().startswith("#")
+    ]
+    assert not bare_exits, f"exit 70 outside the fail() funnel: {bare_exits}"
+
+
+_MASKING_MUTATIONS = [
+    # Verification round 3 found these seven sites silently de-instrumentable
+    # under the window-grep. Each mutation removes one attribution; the
+    # scanner must go red on every one.
+    ("promote.sh", _PROMOTE_EXIT_RE, '  refusal_event "no checked harness.json" 64\n'),
+    (
+        "promote.sh", _PROMOTE_EXIT_RE,
+        'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
+    ),
+    (
+        "promote.sh", _PROMOTE_EXIT_RE,
+        '  refusal_event "run-owned resources lack a terminal disposition"\n',
+    ),
+    (
+        "endgame.sh", _ENDGAME_EXIT_RE,
+        'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
+    ),
+    (
+        "endgame.sh", _ENDGAME_EXIT_RE,
+        'rc=$?; refusal_event "resource verification refused" "$rc"; ',
+    ),
+    (
+        "endgame.sh", _ENDGAME_EXIT_RE,
+        '  refusal_event "final SHA is not a commit in the candidate resource"\n',
+    ),
+    ("endgame.sh", _ENDGAME_EXIT_RE, 'refusal_event "final SHA did not resolve exactly"; '),
+]
+
+
+@pytest.mark.parametrize("script,pattern,removal", _MASKING_MUTATIONS)
+def test_masking_mutations_turn_the_attribution_scanner_red(
+    script: str, pattern: str, removal: str
+) -> None:
+    text = (HARNESS / script).read_text(encoding="utf-8")
+    assert removal in text, f"mutation anchor drifted in {script}: {removal!r}"
+    mutated = text.replace(removal, "", 1)
+    body = mutated[mutated.index("refusal_event()") :]
+    assert _unattributed_refusal_exits(body, pattern), (
+        f"scanner failed to catch de-instrumentation of {removal!r} in {script}"
+    )
 
 
 def test_promote_blocked_decision_emits_no_refusal_event(tmp_path: Path) -> None:

@@ -192,3 +192,130 @@ def test_in_repo_citation_stays_strict(tmp_path: Path) -> None:
     r = _run(tmp_path, baseline=baseline)
     assert r.returncode == 1
     assert "unreadable" in r.stderr
+
+
+def test_moved_pre_tag_fails_against_the_pinned_commit(tmp_path: Path) -> None:
+    """Round-3 G2 (reproduced live by the verification seat): the boundary is
+    pinned by COMMIT in committed data — a re-pointed tag fails, by name alone
+    it would not."""
+    baseline = _good_baseline()
+    baseline["pre_tag_commit"] = "f" * 40
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "the boundary tag moved" in r.stderr
+
+
+def test_missing_pre_tag_commit_pin_fails(tmp_path: Path) -> None:
+    baseline = _good_baseline()
+    del baseline["pre_tag_commit"]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "movable by name" in r.stderr
+
+
+def test_terminal_kind_relevance_owned_by_registry(tmp_path: Path) -> None:
+    """Round-3 G4: one owner per fact — a baseline classification contradicting
+    the terminal registry's signal/bound class is a fork of the fact."""
+    baseline = _good_baseline()
+    baseline["no_relevant_kinds"]["preflight"] = False  # registry says signal
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "registry owns this fact" in r.stderr
+
+
+def test_fabricated_gate_retirement_fails_closed(tmp_path: Path) -> None:
+    """Round-3 D2: a retirement claim over a gate that never existed at pre_tag
+    is a fabrication, not a removal."""
+    r = _run(
+        tmp_path,
+        ledger_rows=[
+            {
+                "phase": "x",
+                "axis": "4",
+                "kind": "gate-retire",
+                "subject": {"gate": "Z9"},
+                "note": "fabricated",
+                "status": "landed",
+            }
+        ],
+    )
+    assert r.returncode == 1
+    assert "never existed at" in r.stderr
+
+
+def test_gate_retire_flow_with_parametrized_probe(tmp_path: Path) -> None:
+    """Round-3 D2 end-to-end in a scratch repo: a real retirement passes only
+    when the gate's pre_tag probes (parametrized node-ids included) are gone;
+    a surviving probe function fails."""
+    import subprocess as sp
+
+    repo = tmp_path / "repo"
+    (repo / "harness").mkdir(parents=True)
+    (repo / "tests").mkdir()
+
+    def git(*args: str) -> None:
+        sp.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (repo / "harness" / "gates.tsv").write_text(
+        "X\tname\tprohibits\ttests/x_test.py::test_x[param-1]\tred\n", encoding="utf-8"
+    )
+    (repo / "harness" / "refusal_event_kinds.json").write_text(
+        json.dumps({"kinds": {"refusal-x": "d"}}), encoding="utf-8"
+    )
+    (repo / "harness" / "terminal_no_kinds.json").write_text(
+        json.dumps({"kinds": {"operator": {"class": "signal", "description": "d"}}}),
+        encoding="utf-8",
+    )
+    (repo / "tests" / "x_test.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "pre")
+    git("tag", "-a", "pre", "-m", "boundary")
+    sha = sp.run(
+        ["git", "-C", str(repo), "rev-parse", "pre^{commit}"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    # Retire the gate at HEAD but leave the probe function alive.
+    (repo / "harness" / "gates.tsv").write_text("# empty\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "retire")
+
+    baseline = {
+        "pre_tag": "pre",
+        "pre_tag_commit": sha,
+        "no_relevant_kinds": {"refusal-x": True, "operator": True},
+        "excluded_event_kinds": ["blocking_written"],
+        "baseline_rows": [],
+    }
+    ledger = [
+        {
+            "phase": "x", "axis": "4", "kind": "gate-retire",
+            "subject": {"gate": "X"}, "note": "retired", "status": "landed",
+        }
+    ]
+    baseline_path = tmp_path / "b.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+    ledger_path = tmp_path / "l.jsonl"
+    ledger_path.write_text("".join(json.dumps(r) + "\n" for r in ledger), encoding="utf-8")
+
+    def run_checker() -> sp.CompletedProcess:
+        import os
+        env = dict(os.environ)
+        return sp.run(
+            [sys.executable, str(CHECKER), "--repo", str(repo),
+             "--ledger", str(ledger_path), "--baseline", str(baseline_path)],
+            capture_output=True, text=True, env=env,
+        )
+
+    surviving = run_checker()
+    assert surviving.returncode == 1
+    assert "probe test_x survives" in surviving.stderr
+
+    # Kill the probe function; the retirement now verifies.
+    (repo / "tests" / "x_test.py").write_text("def test_other():\n    pass\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "probe dies with its gate")
+    clean = run_checker()
+    assert clean.returncode == 0, clean.stderr
