@@ -161,6 +161,34 @@ def _parser() -> argparse.ArgumentParser:
     pass_count.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(pass_count)
 
+    chain_repair = commands.add_parser(
+        "chain-repair",
+        help="apply an operator-SIGNED chain-repair adjudication (4.2): quarantine "
+        "the named offending suffix under its installed signed license — the only "
+        "exit from the R5 wedge, one bounded operator action",
+    )
+    chain_repair.add_argument("--harness-root", required=True)
+    chain_repair.add_argument("--repair-record", required=True,
+                              help="pre-signed adjudication envelope (signed out-of-band; "
+                              "the host verifies, never mints)")
+    chain_repair.add_argument("--genesis", required=True)
+    chain_repair.add_argument("--root-public-key", required=True)
+    chain_repair.add_argument("--tessera-bin", default="tessera")
+
+    ledger_unlock = commands.add_parser(
+        "ledger-unlock",
+        help="apply an operator-SIGNED unlock adjudication for a sentinel guard "
+        "(4.2): liveness-checked, retained as a signed fact — never a bare removal",
+    )
+    ledger_unlock.add_argument("--runs", required=True)
+    ledger_unlock.add_argument("--run-id", required=True)
+    ledger_unlock.add_argument("--guard", required=True,
+                               choices=("resources.guard", "run-transition.guard"))
+    ledger_unlock.add_argument("--unlock-record", required=True)
+    ledger_unlock.add_argument("--genesis", required=True)
+    ledger_unlock.add_argument("--root-public-key", required=True)
+    ledger_unlock.add_argument("--tessera-bin", default="tessera")
+
     readiness_issues = commands.add_parser(
         "readiness-issues",
         help="read the retained generation-readiness snapshot's residual blockers "
@@ -1026,6 +1054,40 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 }
             )
         )
+        return
+    if arguments.command in ("chain-repair", "ledger-unlock"):
+        from factory_runtime.repair_ceremony import (
+            RepairCeremonyError,
+            apply_chain_repair,
+            apply_ledger_unlock,
+        )
+
+        ceremony_tessera = _tessera(arguments.tessera_bin)
+        ceremony_policy = load_genesis(
+            arguments.genesis,
+            trusted_root_public_key=arguments.root_public_key,
+            tessera=ceremony_tessera,
+        )
+        try:
+            if arguments.command == "chain-repair":
+                applied = apply_chain_repair(
+                    arguments.harness_root,
+                    record_path=arguments.repair_record,
+                    policy=ceremony_policy,
+                    tessera=ceremony_tessera,
+                )
+            else:
+                applied = apply_ledger_unlock(
+                    arguments.runs,
+                    arguments.run_id,
+                    guard_name=arguments.guard,
+                    record_path=arguments.unlock_record,
+                    policy=ceremony_policy,
+                    tessera=ceremony_tessera,
+                )
+        except RepairCeremonyError as exc:
+            raise SystemExit(f"{arguments.command}: {exc}") from exc
+        _emit({"applied": True, "record": str(applied.record_path), "detail": applied.detail})
         return
     if arguments.command == "readiness-issues":
         from factory_runtime.generation import GenerationError, _generation_blob

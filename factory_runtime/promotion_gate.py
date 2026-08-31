@@ -182,6 +182,14 @@ def _load_chain(chain_path: Path) -> dict[str, dict[str, Any]]:
     """
     if not chain_path.exists():
         return {}
+    # 4.2: a shortened chain grounds a decision ONLY under its installed signed
+    # repair license — unreceipted surgery is itself a wedge.
+    from factory_runtime.repair_ceremony import RepairCeremonyError, require_quarantine_license
+
+    try:
+        require_quarantine_license(chain_path.parent)
+    except RepairCeremonyError as exc:
+        raise PromotionGateError(str(exc)) from exc
     try:
         text = chain_path.read_text(encoding="utf-8")
     except OSError as exc:
