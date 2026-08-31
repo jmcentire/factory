@@ -7222,28 +7222,35 @@ def _unattributed_refusal_exits(
     script_text: str,
     exit_pattern: str,
     call_names: tuple[str, ...] = ("refusal_event",),
+    exempt_exits: tuple[str, ...] = (),
 ) -> list[str]:
-    """Block-structural exit attribution (verification round 3, D1).
+    """Advisory lexical layer of the refusal-exit guarantee (rounds 3-5).
 
-    A refusal exit is attributed only when a call appears in ITS OWN basic
-    block: on the same line before the exit, or on a preceding line with no
-    intervening exit statement, block boundary, heredoc body, or helper
-    DEFINITION text. The round-2 window-grep was proximity-textual and
-    empirically maskable at 7 of 16 sites; this scanner re-runs those masking
-    mutations red (see the mutation fixtures below).
+    Round 5 demoted this scanner: EXECUTION is the guarantee (the runtime
+    row-count tests drive every site); this layer stays as cheap early
+    feedback and now (a) FAILS TOWARD FLAGGING on exit forms it cannot
+    classify — any `exit` whose argument is not a registered literal code,
+    the exact quoted "$rc", or an explicitly exempt form is reported rather
+    than ignored (round-5 F-2: `exit $(( 66 ))` was invisible); (b) refuses
+    substitution look-alikes at the match site — `refusal_event_hushed=` and
+    trailing-comment mentions do not attribute (F-1); (c) recognizes quoted
+    and lowercase heredoc tags (F-3). `false && call` and other never-executing
+    placements remain beyond a lexical layer — by design, the runtime tests
+    own that class.
     """
     import re as _re
 
     exit_re = _re.compile(exit_pattern)
-    call_re = _re.compile("|".join(_re.escape(name) for name in call_names))
-    boundary_re = _re.compile(r'^(\}|fi|done|else|esac)\b')
+    any_exit_re = _re.compile(r"(?:^|[;{|&(]\s*)exit\b\s*([^;}&|)]*)")
+    call_re = _re.compile(
+        "|".join(_re.escape(name) + r"(?![\w=])" for name in call_names)
+    )
+    boundary_re = _re.compile(r"^(\}|fi|done|else|esac)\b")
+    exempt = set(exempt_exits)
 
     raw = script_text.replace("\\\n", " ")
     lines = raw.splitlines()
 
-    # Mark heredoc bodies and helper-definition bodies as boundaries: their
-    # text must never satisfy an attribution (round 3: the endgame window was
-    # satisfied by the helper DEFINITION at :36-40).
     marked: list[str] = []
     heredoc_tag: str | None = None
     in_helper = False
@@ -7263,44 +7270,53 @@ def _unattributed_refusal_exits(
             in_helper = True
             marked.append("###BOUNDARY###")
             continue
-        match = _re.search(r"<<-?'?([A-Z]+)'?", line)
+        match = _re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
         if match:
             heredoc_tag = match.group(1)
-            marked.append(line)  # the heredoc START line is real shell
+            marked.append(line)
             continue
         marked.append(line)
+
+    def _effective(line: str) -> str:
+        # Cut a trailing comment so '# refusal_event' cannot attribute; a '#'
+        # inside quotes is rare in these scripts and cutting early only makes
+        # the scanner MORE likely to flag — fail toward flagging.
+        position = line.find("#")
+        return line if position < 0 else line[:position]
 
     unattributed: list[str] = []
     for i, line in enumerate(marked):
         stripped = line.strip()
         if stripped.startswith("#") or line == "###BOUNDARY###":
             continue
-        exit_match = exit_re.search(stripped)
+        effective = _effective(stripped)
+        exit_match = exit_re.search(effective)
         if not exit_match:
+            for generic in any_exit_re.finditer(effective):
+                argument = generic.group(1).strip()
+                if argument in exempt:
+                    continue
+                unattributed.append(
+                    f"{i + 1}: UNCLASSIFIABLE exit form {argument!r}: {stripped}"
+                )
             continue
-        call_match = call_re.search(stripped)
+        call_match = call_re.search(effective)
         if call_match and call_match.start() < exit_match.start():
-            continue  # same-line attribution, call precedes the exit
+            continue
         attributed = False
         for j in range(i - 1, max(-1, i - 11), -1):
-            back = marked[j].strip()
-            if back == "###BOUNDARY###" or marked[j] == "###BOUNDARY###":
+            back_line = marked[j]
+            back = _effective(back_line.strip())
+            if back_line == "###BOUNDARY###":
                 break
-            if back.startswith("#") or not back:
+            if not back or back_line.strip().startswith("#"):
                 continue
-            if exit_re.search(back) or boundary_re.match(back):
-                # A back line carrying its own exit is a complete prior block
-                # (one-liners included) — checked BEFORE the call so a
-                # neighbor's call never attributes this exit (round 3).
+            if exit_re.search(back) or any_exit_re.search(back) or boundary_re.match(back):
                 break
             if call_re.search(back):
                 attributed = True
                 break
             if back.endswith(("}", "then", "do", "{")):
-                # A closer ends the previous block; an opener starts OUR block —
-                # either way the scan has exhausted this exit's basic block
-                # (round 3: a preceding one-liner's call must never attribute
-                # a later block's exit).
                 break
         if not attributed:
             unattributed.append(f"{i + 1}: {stripped}")
@@ -7318,7 +7334,9 @@ def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
     renders a verdict; pre-helper exits are the stated pre-root boundary."""
     text = (HARNESS / "promote.sh").read_text(encoding="utf-8")
     body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE)
+    missing = _unattributed_refusal_exits(
+        body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")
+    )
     assert not missing, "fail-closed exits without attribution:\n" + "\n".join(missing)
 
 
@@ -7326,7 +7344,9 @@ def test_endgame_refusal_exits_all_route_through_refusal_event() -> None:
     """Same attribution for endgame.sh; the RED/GREEN verdict exit is exempt."""
     text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
     body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(body, _ENDGAME_EXIT_RE)
+    missing = _unattributed_refusal_exits(
+        body, _ENDGAME_EXIT_RE, exempt_exits=('"$FAILED"', "64")
+    )
     assert not missing, "refusal exits without attribution:\n" + "\n".join(missing)
 
 
@@ -7335,32 +7355,52 @@ def test_phase1_refusal_exit_is_attributed() -> None:
     its pre-root exit-64 usage checks are the stated boundary."""
     text = (HARNESS / "phase1_gate.sh").read_text(encoding="utf-8")
     missing = _unattributed_refusal_exits(
-        text, r'(?:^|[;{|&]\s*)exit 71\b', ("refusal_event", "refusal-event")
+        text,
+        r'(?:^|[;{|&]\s*)exit 71\b',
+        ("refusal_event", "refusal-event"),
+        exempt_exits=("64",),
     )
     assert not missing, "\n".join(missing)
 
 
 def test_dispatch_refusals_are_funneled_through_fail() -> None:
-    """Round-3 D3: dispatch_lane.sh's chokepoint is the fail() funnel — the
-    funnel must contain the refusal_event call, and no bare exit 70 may exist
-    outside it (a refusal that bypasses the funnel bypasses the event)."""
-    import re as _re
+    """Round-5 F-4 rewrite: the funnel must contain an EXECUTING refusal-event
+    invocation (a python3 line calling the hyphenated subcommand dispatch
+    actually uses — the old refusal_event disjunct was dead text), and ANY exit
+    after the funnel that is not a registered non-refusal form is flagged, so
+    a refusal path replaced by echo+exit N turns this red."""
 
     text = (HARNESS / "dispatch_lane.sh").read_text(encoding="utf-8")
     lines = text.splitlines()
     start_index = next(i for i, line in enumerate(lines) if line.startswith("fail() {"))
     end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
-    fail_body = "\n".join(lines[start_index:end_index])
-    fail_end = text.index(lines[end_index + 1]) if end_index + 1 < len(lines) else len(text)
-    assert "refusal_event" in fail_body or "attention_gate.py" in fail_body
-    after_fail = text[fail_end:]
-    bare_exits = [
-        line.strip()
-        for line in after_fail.replace("\\\n", " ").splitlines()
-        if _re.search(r'(?:^|[;{|&]\s*)exit 70\b', line.strip())
-        and not line.strip().startswith("#")
-    ]
-    assert not bare_exits, f"exit 70 outside the fail() funnel: {bare_exits}"
+    fail_body_lines = [line.strip() for line in lines[start_index:end_index]]
+    assert any(
+        line.startswith("python3") and "refusal-event" in line
+        for line in fail_body_lines
+    ), "fail() carries no executing refusal-event invocation"
+
+    offenders = _dispatch_exits_outside_funnel(lines, end_index)
+    assert not offenders, f"exit outside the fail() funnel: {offenders}"
+
+
+def _dispatch_exits_outside_funnel(lines: list, end_index: int) -> list:
+    import re as _re
+
+    joined_tail = "\n".join(lines[end_index + 1 :]).replace("\\\n", " ")
+    any_exit_re = _re.compile(r"(?:^|[;{|&(]\s*)exit\b\s*([^;}&|)]*)")
+    offenders = []
+    for line in joined_tail.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        effective = stripped.split("#", 1)[0]
+        for match in any_exit_re.finditer(effective):
+            argument = match.group(1).strip()
+            if argument in {"64", "0", '"$rc"', "$?"}:
+                continue
+            offenders.append(stripped)
+    return offenders
 
 
 _MASKING_MUTATIONS = [
@@ -7390,6 +7430,53 @@ _MASKING_MUTATIONS = [
     ),
     ("endgame.sh", _ENDGAME_EXIT_RE, 'refusal_event "final SHA did not resolve exactly"; '),
 ]
+
+
+_SUBSTITUTION_MUTATIONS = [
+    # Round-5 F-1/F-2: token present but never executes — the pure-removal
+    # fixtures proved the scanner only against deletion; these prove it
+    # against substitution (the verifier's end-to-end reproductions).
+    (
+        "promote.sh",
+        "identifier-assignment",
+        'refusal_event "factory CLI exited 0 but wrote no verdict file"; ',
+        'refusal_event_hushed="factory CLI exited 0 but wrote no verdict file"; ',
+    ),
+    (
+        "promote.sh",
+        "arithmetic-exit",
+        'refusal_event "harness metadata check refused" 66; exit 66;',
+        'exit $(( 66 ));',
+    ),
+]
+
+
+@pytest.mark.parametrize("script,label,old,new", _SUBSTITUTION_MUTATIONS)
+def test_substitution_mutations_turn_the_scanner_red(
+    script: str, label: str, old: str, new: str
+) -> None:
+    text = (HARNESS / script).read_text(encoding="utf-8")
+    assert old in text, f"substitution anchor drifted in {script}: {label}"
+    mutated = text.replace(old, new, 1)
+    body = mutated[mutated.index("refusal_event()") :]
+    assert _unattributed_refusal_exits(
+        body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")
+    ), f"scanner failed to catch substitution {label} in {script}"
+
+
+def test_dispatch_echo_substitution_turns_the_funnel_scan_red() -> None:
+    """Round-5 F-4 end-to-end reproduction: a post-root fail() call replaced by
+    echo+exit must be flagged by the funnel scan."""
+    text = (HARNESS / "dispatch_lane.sh").read_text(encoding="utf-8")
+    anchor = 'fail "run has not been ignited through harness/factory.sh"'
+    assert anchor in text, "dispatch mutation anchor drifted"
+    mutated = text.replace(anchor, 'echo "run has no grounding marker" >&2; exit 65', 1)
+    lines = mutated.splitlines()
+    start_index = next(i for i, line in enumerate(lines) if line.startswith("fail() {"))
+    end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
+    assert _dispatch_exits_outside_funnel(lines, end_index), (
+        "the funnel scan must flag the substituted bare exit"
+    )
 
 
 @pytest.mark.parametrize("script,pattern,removal", _MASKING_MUTATIONS)
@@ -7556,3 +7643,92 @@ def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
     events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
     stops = [e for e in events if e.get("kind") == "dispatcher_stop"]
     assert stops and "run no" in stops[0]["detail"]
+
+
+# --------------------------------------------------------------------------
+# Round-5 F-1/F-2: runtime row-count coverage for every promote.sh refusal
+# site. The lexical scanner is advisory; EXECUTION is the guarantee — each
+# path is driven end-to-end and must leave exactly one registered refusal
+# row. A delegating stub CLI overrides one subcommand and hands everything
+# else to the real factory CLI, so run-context verification stays real.
+# --------------------------------------------------------------------------
+
+
+def _delegating_stub(tmp_path: Path, case: str) -> dict[str, str]:
+    env = _factory_cli_env()
+    real = env["FACTORY_CLI"]
+    stub = tmp_path / "stub-cli.sh"
+    body = {
+        "promote-refuses": 'if [ "$1" = "promote" ]; then echo "stub refusal" >&2; exit 2; fi',
+        "promote-silent-zero": 'if [ "$1" = "promote" ]; then exit 0; fi',
+        "promote-forked-output": (
+            'if [ "$1" = "promote" ]; then'
+            ' root="$(dirname "$0")/root-marker"; root="$(cat "$root")";'
+            ' printf \'{"allowed": true}\' > "$root/promotion_verdict.json";'
+            ' printf \'{"allowed": false}\'; exit 0; fi'
+        ),
+        "promote-unreadable-verdict": (
+            'if [ "$1" = "promote" ]; then'
+            ' root="$(dirname "$0")/root-marker"; root="$(cat "$root")";'
+            ' printf "not json" > "$root/promotion_verdict.json";'
+            ' printf "not json"; exit 0; fi'
+        ),
+        "seal-refused": (
+            'if [ "$1" = "verify-resources" ]; then'
+            '  for a in "$@"; do'
+            '    [ "$a" = "--seal" ] && { echo "stub seal refusal" >&2; exit 1; };'
+            '  done;'
+            'fi'
+        ),
+    }[case]
+    stub.write_text(
+        "#!/bin/bash\n" + body + f'\nexec {real} "$@"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env["FACTORY_CLI"] = str(stub)
+    return env
+
+
+_PROMOTE_RUNTIME_SITES = [
+    # (case, needs_promoting_inputs, expected_exit, detail_fragment)
+    ("promote-refuses", True, 2, "no verdict rendered"),
+    ("promote-silent-zero", True, 2, "wrote no verdict file"),
+    ("promote-forked-output", True, 2, "stale/forged verdict refused"),
+    ("promote-unreadable-verdict", True, 2, "verdict unreadable"),
+    ("seal-refused", True, 2, "terminal resource seal refused"),
+]
+
+
+@pytest.mark.parametrize("case,inputs,expected_exit,fragment", _PROMOTE_RUNTIME_SITES)
+def test_promote_refusal_sites_leave_exactly_one_row_at_runtime(
+    tmp_path: Path, case: str, inputs: bool, expected_exit: int, fragment: str
+) -> None:
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    if inputs:
+        (root / "promotion_inputs.json").write_text(
+            json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+        )
+        write_promoting_chain(root)
+    env = _delegating_stub(tmp_path, case)
+    (tmp_path / "root-marker").write_text(str(root), encoding="utf-8")
+    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, env)
+    assert r.returncode == expected_exit, (case, r.returncode, r.stderr)
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-promote"], (case, rows)
+    assert fragment in str(rows[0]["detail"]), (case, rows[0])
+
+
+def test_promote_metadata_site_leaves_exactly_one_row_at_runtime(tmp_path: Path) -> None:
+    """The :55 metadata-66 site (round-5 scanner-only list)."""
+    root = _make_run(tmp_path)
+    doc = json.loads((root / "harness.json").read_text(encoding="utf-8"))
+    doc["unexpected_field"] = True
+    (root / "harness.json").write_text(json.dumps(doc), encoding="utf-8")
+    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
+    assert r.returncode == 66
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-promote"]
+    assert rows[0]["exit_code"] == 66

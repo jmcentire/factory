@@ -242,3 +242,23 @@ def test_backstop_tampered_state_degrades_never_fires_falsely(tmp_path: Path) ->
     clock[0] += 60
     assert watchdog.check(recorder.emit, recorder.block) == "backstop-fired"
     assert len(recorder.blocks) == 1
+
+
+def test_cli_doors_are_pinned() -> None:
+    """Round-5 F-8.3: the pass-count and signal-knobs handlers were deletable
+    with the suite green. Pin their existence: the CLI must know both commands
+    (an unknown command is an argparse 'invalid choice', which must not appear)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    for command in ("pass-count", "signal-knobs"):
+        result = subprocess.run(
+            [sys.executable, "-m", "factory_runtime.cli", command,
+             "--runs", "/nonexistent", "--run-id", "rX",
+             "--genesis", "", "--root-public-key", "", "--tessera-bin", "tessera"],
+            capture_output=True, text=True, cwd=repo,
+        )
+        assert "invalid choice" not in result.stderr, f"{command} door missing"
+        assert result.returncode != 0  # nonexistent run refuses, door exists

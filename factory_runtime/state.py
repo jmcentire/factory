@@ -951,10 +951,13 @@ class RunStore:
         """Host pass count (remediation plan §0.4b): one pass = one VALIDATING
         admission entry in the VERIFIED run ledger — a candidate submitted to
         review. Never a line count: a tampered ledger refuses instead of
-        counting. The ledger is clock-free by design; the signal-deadline
-        watchdog (§0.4c) derives elapsed-since-last-pass-advance from its own
-        host-timestamped observations of this count, so timestamps stay
-        host-owned and the chain stays free of clocks."""
+        counting. Clock OWNERSHIP, not clock-free content (round-5 F-5): run
+        ledger entries do carry host-stamped created_at inside the hashed
+        body — what the design forbids is a nondeterministic clock in the
+        core (entries are caller-stamped). The 0.4c watchdog currently
+        derives elapsed-since-last-pass-advance from its own host-timestamped
+        observations of this count; deriving it from the verified created_at
+        instead remains a legitimate future option."""
 
         return sum(
             1

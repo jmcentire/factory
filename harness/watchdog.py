@@ -17,12 +17,18 @@ knobs, two firing modes:
   recorded (verification round-3 carryover).
 
 - **Wall-clock backstop** — the only control that catches the zero-pass
-  hung-lane class. The run ledger is clock-free by design, so the gap derives
-  from this watchdog's own host-timestamped observations of the pass count
-  (persisted in ``watchdog.json``). It fires only on a stall seen across TWO
+  hung-lane class. The gap derives from this watchdog's own host-timestamped
+  observations of the pass count (clock OWNERSHIP: ledger entries carry
+  caller-stamped created_at, and deriving the gap from those verified stamps
+  remains a legitimate future option — round-5 F-5), persisted in
+  ``watchdog.json``. It fires only on a stall seen across TWO
   live checks, so a dead watchdog can never misattribute its own absence as a
   run stall; firing writes a blocking operator event — never silence, and never
   an automatic terminal (a stall is an alarm; the deadline owns the NO).
+
+Tamper scope, stated plainly: until Phase 2.2 keys the run ledger, a
+whole-chain rewrite can mint pass counts — the deadline claims correct behavior
+over an INTACT ledger, not tamper-proofness (round-5 F-8.1).
 
 Knob values come ONLY from the frozen generation blob via the factory CLI
 ``signal-knobs`` door — this module reads no ambient environment for any knob

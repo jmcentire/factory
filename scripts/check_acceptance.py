@@ -68,20 +68,25 @@ def _exists_at_tag(repo: Path, tag: str, path: str) -> bool:
 
 
 def _load_registry_kinds(repo: Path) -> tuple[set[str], dict[str, str]]:
-    """Return (all registered kinds, terminal kind -> class)."""
+    """Return (all registered kinds, kind -> signal/bound class).
+
+    Round-5 F-6: BOTH registries carry the class; the registry owns each
+    kind's NO-relevance and the baseline only cites it. A registered kind
+    with no class is itself a failure surfaced by the caller's iff check
+    (an unclassed kind can never agree with any citation).
+    """
     kinds: set[str] = set()
-    terminal_classes: dict[str, str] = {}
+    classes: dict[str, str] = {}
     for name in ("refusal_event_kinds.json", "terminal_no_kinds.json"):
         try:
             document = json.loads((repo / "harness" / name).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             _die(f"kind registry unreadable: harness/{name}: {exc}")
         kinds.update(document["kinds"])
-        if name == "terminal_no_kinds.json":
-            for kind, spec in document["kinds"].items():
-                if isinstance(spec, dict):
-                    terminal_classes[str(kind)] = str(spec.get("class", ""))
-    return kinds, terminal_classes
+        for kind, spec in document["kinds"].items():
+            if isinstance(spec, dict):
+                classes[str(kind)] = str(spec.get("class", ""))
+    return kinds, classes
 
 
 def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
@@ -109,7 +114,7 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
         )
 
     # --- the exhaustive NO-relevant kind classification -----------------------------
-    registered, terminal_classes = _load_registry_kinds(repo)
+    registered, registry_classes = _load_registry_kinds(repo)
     classified = baseline.get("no_relevant_kinds")
     if not isinstance(classified, dict):
         _die("baseline has no no_relevant_kinds map")
@@ -131,16 +136,23 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
         failures.append(
             "blocking_written must be pinned in excluded_event_kinds (plan §0.4)"
         )
-    # Round-3 G4: one owner per fact — the terminal registry's signal/bound
-    # class OWNS a terminal kind's NO-relevance; the baseline cites it. A
-    # classification that disagrees with the registry is a fork of the fact.
-    for kind, clazz in terminal_classes.items():
+    # Round-3 G4 extended by round-5 F-6 to BOTH registries: one owner per
+    # fact — a registry's signal/bound class OWNS its kind's NO-relevance; the
+    # baseline cites it. A contradiction is a fork of the fact, and a
+    # registered kind with no class can never agree with any citation.
+    for kind, clazz in registry_classes.items():
         cited = classified.get(kind)
         if isinstance(cited, bool) and (clazz == "signal") != cited:
             failures.append(
-                f"no_relevant_kinds[{kind!r}]={cited} contradicts the terminal registry "
+                f"no_relevant_kinds[{kind!r}]={cited} contradicts the registry "
                 f"class {clazz!r} — the registry owns this fact; the baseline must cite it"
             )
+    unclassed = registered - set(registry_classes)
+    if unclassed:
+        failures.append(
+            f"kinds registered without a signal/bound class: {sorted(unclassed)} — "
+            f"the registry owns NO-relevance and must declare it"
+        )
 
     # --- baseline rows: cited or explicitly underived -------------------------------
     def _verify_citation(label: str, artifact: dict) -> None:

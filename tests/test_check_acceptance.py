@@ -263,7 +263,8 @@ def test_gate_retire_flow_with_parametrized_probe(tmp_path: Path) -> None:
         "X\tname\tprohibits\ttests/x_test.py::test_x[param-1]\tred\n", encoding="utf-8"
     )
     (repo / "harness" / "refusal_event_kinds.json").write_text(
-        json.dumps({"kinds": {"refusal-x": "d"}}), encoding="utf-8"
+        json.dumps({"kinds": {"refusal-x": {"class": "signal", "description": "d"}}}),
+        encoding="utf-8",
     )
     (repo / "harness" / "terminal_no_kinds.json").write_text(
         json.dumps({"kinds": {"operator": {"class": "signal", "description": "d"}}}),
