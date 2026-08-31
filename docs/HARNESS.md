@@ -21,8 +21,10 @@
 > produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
 > gaps remain. A green build is not a verified run; a verified run is the cage refusing on every
 > gap.
-> Canonical copy: `~/Code/factory/docs/HARNESS.md`. Mirror: `~/Code/tools/HARNESS.md`.
-> Skill form: `/orchestrate` (`skills/orchestrate.md` here and in `~/.claude/commands/`).
+> Canonical copy: `~/Code/factory/docs/HARNESS.md`; the former `~/Code/tools/HARNESS.md`
+> mirror is now a thin pointer here (reconciled 2026-08-30 — it had drifted).
+> Skill form: `/orchestrate` (`skills/orchestrate.md` here; `~/.claude/commands/` holds a
+> thin loader reading `prompts/orchestrate.md`).
 
 Two execution surfaces exist and must not be conflated. `factory_runtime` is the executable
 authority/isolation/evidence path: its signed ledger, target-bound generation tuple, macOS
