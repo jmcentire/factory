@@ -567,10 +567,17 @@ def _request(
         "provenance": _good_provenance(),
         "tool_policy": None,
         "independence": _independence(),
-        "candidate_receipt": None,
-        "candidate_receipt_evidence": None,
     }
     values.update(overrides)
+    # 1.1c: the core derives the disturbed set host-side from changed_paths + surface_map.
+    # The helper keeps ``disturbed_surface_ids`` as a TEST-INTENT alias and translates it
+    # into an exact path-per-surface binding, so the dozens of class-disposition tests read
+    # unchanged while the core field they used to set no longer exists. Tests that exercise
+    # derivation itself pass changed_paths/surface_map directly.
+    alias = tuple(values.pop("disturbed_surface_ids"))
+    if "changed_paths" not in values and "surface_map" not in values:
+        values["changed_paths"] = tuple(f"src/{s}.py" for s in alias)
+        values["surface_map"] = {f"src/{s}.py": s for s in alias}
     authority = values["provenance"]
     bundle = authority if isinstance(authority, ProvenanceBundle) else None
     if not tool_policy_overridden:
@@ -579,22 +586,8 @@ def _request(
         # The monitor set covers every surface the change disturbs; individual tests override it
         # to exercise a specific monitor defect.
         values["monitors"] = tuple(
-            _monitor(surface_id, provenance=bundle)
-            for surface_id in values["disturbed_surface_ids"]
+            _monitor(surface_id, provenance=bundle) for surface_id in alias
         )
-    # Synthesize a self-consistent candidate-build receipt by default (None) so the happy path
-    # binds cleanly under the enforcement cutover. Pass candidate_receipt="" to force an
-    # explicitly absent receipt (testing the hard-block); pass a real id + evidence to test
-    # binding/mismatch.
-    if values.get("candidate_receipt") is None:
-        dsids = tuple(values["disturbed_surface_ids"])
-        if dsids:
-            values["candidate_receipt"] = "R-default"
-            values["candidate_receipt_evidence"] = _candidate_receipt_evidence(
-                "R-default", disturbed_surface_ids=dsids,
-            )
-        else:
-            values["candidate_receipt"] = ""
     request = PromotionRequest(**values)
     if evidence_overridden:
         return request
@@ -657,143 +650,87 @@ def test_standard_and_cosmetic_adequate_oracles_auto_promote_without_clicks() ->
 
 
 # --------------------------------------------------------------------------
-# Gate M (slice 4) — disturbed-surface binding to the candidate-build receipt.
-# The attested surface set rides in a content-addressed EvidenceIntegrity envelope the
-# seam produces; the core verifies the envelope's content-address and receipt binding,
-# then compares the attested set to the agent's declared set. The agent cannot shrink the
-# set to dodge a Critical surface's evidence; a cited receipt with a missing, tampered,
-# or unbound envelope is a hard block (fail-closed).
+# Gate M (1.1c) — host-derived disturbed surfaces. No agent declaration exists to
+# verify: decide_promotion derives the set from the host's changed paths via the
+# plan-declared surface map. The forcing tests pin: derivation drives resolution,
+# an unmapped path and an absent map route to implicit Critical (never the lightest
+# tier), and a stale agent-declared field in the raw input is inert.
 # --------------------------------------------------------------------------
 
 
-def _candidate_receipt_evidence(
-    receipt_id: str = "R-1",
-    disturbed_surface_ids: tuple[str, ...] = ("standard-surface",),
-    changed_paths_digest: str = "sha256:abcd",
-) -> EvidenceIntegrity:
-    return _evidence({
-        "receipt_id": receipt_id,
-        "disturbed_surface_ids": list(disturbed_surface_ids),
-        "changed_paths_digest": changed_paths_digest,
-    })
-
-
-def test_promotion_rejects_disturbed_surface_mismatch() -> None:
-    """The agent cannot shrink the disturbed-surface set to dodge a surface's evidence:
-    the receipt attests {standard, extra} but the agent declares only {standard}. The
-    mismatch is a hard block — the prohibited action under test is that the run does not
-    advance."""
-    request = _request(
-        candidate_receipt="R-1",
-        candidate_receipt_evidence=_candidate_receipt_evidence(
-            disturbed_surface_ids=("standard-surface", "extra-surface"),
-        ),
-    )
+def test_promotion_derives_surfaces_host_side_and_reports_the_derivation() -> None:
+    """The GO sibling: mapped paths produce exactly the mapped surface set, the decision
+    reports what it derived, and the baseline adequate-oracle standard request still
+    auto-promotes with no receipt-envelope apparatus anywhere."""
+    request = _request()
     decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "disturbed-surface-mismatch" in decision.reasons
-    assert any(r.startswith("disturbed-surface-declared:") for r in decision.reports)
-    assert any(r.startswith("disturbed-surface-receipt:") for r in decision.reports)
-
-
-def test_promotion_rejects_tampered_candidate_receipt_evidence() -> None:
-    """A receipt envelope whose body does not re-derive to its claimed digest was altered
-    after the seam recorded it. The core's content-address check rejects it — fail-closed."""
-    ev = EvidenceIntegrity(
-        body=_candidate_receipt_evidence().body,
-        claimed_digest="sha256:" + "0" * 64,  # wrong digest -> tamper
-    )
-    request = _request(candidate_receipt="R-1", candidate_receipt_evidence=ev)
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "candidate-receipt-evidence-tampered" in decision.reasons
-
-
-def test_promotion_rejects_unbound_candidate_receipt_evidence() -> None:
-    """The envelope must bind the cited receipt: an envelope attesting receipt R-2 cannot
-    satisfy a request citing R-1 (replay of another run's receipt). Hard block."""
-    request = _request(
-        candidate_receipt="R-1",
-        candidate_receipt_evidence=_candidate_receipt_evidence(receipt_id="R-2"),
-    )
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "candidate-receipt-evidence-binding" in decision.reasons
-
-
-def test_promotion_rejects_missing_candidate_receipt_evidence() -> None:
-    """Citing a receipt but omitting its attested envelope is route-arounding, not
-    complying — fail-closed, not advisory."""
-    request = _request(candidate_receipt="R-1")  # no evidence
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "candidate-receipt-evidence-missing" in decision.reasons
-
-
-def test_promotion_rejects_disturbed_surface_without_diff() -> None:
-    """An attested surface set with no changed_paths_digest means the receipt recorded no
-    diff — surfaces claimed against an empty diff. Hard block (the spec's Gate M check)."""
-    request = _request(
-        candidate_receipt="R-1",
-        candidate_receipt_evidence=_candidate_receipt_evidence(changed_paths_digest=""),
-    )
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "disturbed-surface-without-diff" in decision.reasons
-
-
-def test_promotion_accepts_when_disturbed_surface_matches_receipt() -> None:
-    """When the declared set equals the receipt's attested set the binding holds and the
-    decision proceeds on its other evidence — no disturbed-surface hard reason, and the
-    baseline adequate-oracle standard request still auto-promotes."""
-    request = _request(
-        candidate_receipt="R-1",
-        candidate_receipt_evidence=_candidate_receipt_evidence(
-            disturbed_surface_ids=("standard-surface",),
-        ),
-    )
-    decision = decide_promotion(request, _roster(), _profile())
-    assert "disturbed-surface-mismatch" not in decision.reasons
     assert decision.allowed and decision.disposition == DISPOSITION_PROMOTE
+    assert "disturbed-surface-derived:standard-surface" in decision.reports
 
 
-def test_promotion_blocks_when_candidate_receipt_absent() -> None:
-    """Enforcement cutover (founder-ratified "full enforcement"): a promotion with disturbed
-    surfaces but no candidate-build receipt is a hard block, not advisory — the agent cannot
-    advance without the seam-attested diff-to-surface binding. The migration window is closed
-    by Gate L + this core gate (defense-in-depth: even a runtime bypass that reaches
-    decide_promotion receipt-less fails closed here). A run with no disturbed surfaces needs no
-    receipt and is unaffected (see test_empty_request_blocks_default_deny)."""
-    request = _request(candidate_receipt="")  # explicitly no receipt; disturbed surfaces present
-    decision = decide_promotion(request, _roster(), _profile())
-    assert decision.disposition == DISPOSITION_BLOCK
-    assert "candidate-receipt-required:disturbed-surface-binding" in decision.reasons
-
-
-def test_promotion_core_passes_self_consistent_lie_seam_closes_it() -> None:
-    """HONEST LIMITATION (not a core gap): the core is pure and cannot read the tamper-
-    evident chain, so it cannot distinguish a real seam-produced envelope from a self-
-    consistent one the agent forged (body + matching digest). Here the agent forges an
-    envelope attesting only {standard-surface} while the real receipt R-1 recorded
-    {standard, extra} — the core's content-address and binding checks PASS on the forgery.
-    This lie is closed by the SEAM's chain-anchor check (the forged digest is not in the
-    chain the seam records), audited by the postmortem — not by the core. This probe pins
-    the core's boundary: it enforces content-address + binding + set-equality, and defers
-    chain-authenticity to the seam (slice 4 seam-side producers, the activation)."""
-    forged = _evidence({  # self-consistent forgery: digest matches the body
-        "receipt_id": "R-1",
-        "disturbed_surface_ids": ["standard-surface"],  # shrunk vs the real receipt
-        "changed_paths_digest": "sha256:abcd",
-    })
+def test_promotion_routes_unmapped_paths_to_implicit_critical() -> None:
+    """A changed path with no plan-declared binding cannot pick its own tier: it becomes
+    an implicit-Critical pseudo-surface whose unmet Critical obligations block. Shrinking
+    the surface set is no longer a declaration an agent can make — the only way to shed
+    the path is to change the ratified map."""
     request = _request(
-        candidate_receipt="R-1",
-        candidate_receipt_evidence=forged,
+        changed_paths=("src/standard-surface.py", "migrations/0042_drop.sql"),
+        surface_map={"src/standard-surface.py": "standard-surface"},
+        observations=(_observation("standard-surface"),),
+        monitors=(_monitor("standard-surface", provenance=_good_provenance()),),
     )
     decision = decide_promotion(request, _roster(), _profile())
-    # The core does NOT block: the forgery is content-addressed and binds R-1. The seam
-    # is the catch. Asserting PROMOTE here documents that boundary, not a hole.
-    assert decision.disposition == DISPOSITION_PROMOTE
-    assert "disturbed-surface-mismatch" not in decision.reasons
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert (
+        "disturbed-surface-unmapped-critical:migrations/0042_drop.sql" in decision.reports
+    )
+    assert decision.highest_criticality == CRITICALITY_CRITICAL
+    assert "surface-unclassified:path:migrations/0042_drop.sql" in decision.reports
+
+
+def test_promotion_missing_surface_map_routes_every_path_to_critical() -> None:
+    """No map at all over a non-empty diff: every path is unmapped, the whole run pays
+    the full Critical tier, and the absence itself is reported — over-verifying is the
+    only safe default (plan 1.1c; matches criticality.py unknown-to-Critical)."""
+    request = _request(
+        changed_paths=("src/anything.py",),
+        surface_map=None,
+        observations=(_observation("standard-surface"),),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "surface-map-missing" in decision.reports
+    assert "disturbed-surface-unmapped-critical:src/anything.py" in decision.reports
+    assert decision.highest_criticality == CRITICALITY_CRITICAL
+
+
+def test_retired_agent_declared_surface_field_is_inert() -> None:
+    """The route-around this slice deletes: a raw input still carrying the retired
+    agent-declared ``disturbed_surface_ids`` (claiming only a cosmetic surface) cannot
+    steer resolution — the host derivation from the diff wins, and the unmapped path
+    still routes to Critical."""
+    raw = _freeze_request_dict(
+        _request(
+            changed_paths=("core/danger.py",),
+            surface_map=None,
+            observations=(_observation("standard-surface"),),
+        )
+    )
+    raw["disturbed_surface_ids"] = ["cosmetic-surface"]  # the retired declaration
+    request = PromotionRequest.from_dict(raw)
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert decision.highest_criticality == CRITICALITY_CRITICAL
+    assert "disturbed-surface-unmapped-critical:core/danger.py" in decision.reports
+
+
+def _freeze_request_dict(request: PromotionRequest) -> dict[str, Any]:
+    """Serialize a request the way conftest's ``_freeze`` does, for from_dict round-trips."""
+    from tests.conftest import _freeze
+
+    frozen = _freeze(request)
+    assert isinstance(frozen, dict)
+    return frozen
 
 
 # --------------------------------------------------------------------------
@@ -1282,7 +1219,8 @@ def test_attestation_binds_disturbance_determinism_and_approval_inputs() -> None
     )
     changed_disturbance = replace(
         cosmetic,
-        disturbed_surface_ids=("standard-surface",),
+        changed_paths=("src/standard-surface.py",),
+        surface_map={"src/standard-surface.py": "standard-surface"},
         observations=(_observation("standard-surface"),),
     )
     critical = _critical_request()
@@ -1547,14 +1485,14 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
     tool_policy = _good_tool_policy(provenance)
     oracle_ev = _oracle_receipt_evidence("M-1", adequate=True)
     flake_ev = _flake_receipt_evidence("F-1", deterministic=True, flake_count=0, retry_count=0)
-    candidate_ev = _candidate_receipt_evidence("R-1", disturbed_surface_ids=("critical-surface",))
     raw_request: dict[str, Any] = {
         "candidate_digest": CANDIDATE,
         "lane": LANE_CAPABILITY,
         "independence": _independence().to_dict(),
         "monitors": [_monitor("critical-surface", provenance=provenance).to_dict()],
         "monitor_declared_unit_count": 75,
-        "disturbed_surface_ids": ["critical-surface"],
+        "changed_paths": ["src/critical-surface.py"],
+        "surface_map": {"src/critical-surface.py": "critical-surface"},
         "observations": [
             {
                 "surface_id": "critical-surface",
@@ -1599,11 +1537,6 @@ def test_from_dict_and_decision_serialization_preserve_determinism_record() -> N
         "evaluated_at": 100,
         "provenance": provenance.to_dict(),
         "tool_policy": tool_policy.to_dict(),
-        "candidate_receipt": "R-1",
-        "candidate_receipt_evidence": {
-            "body": dict(candidate_ev.body or {}),
-            "claimed_digest": candidate_ev.claimed_digest,
-        },
     }
     unsigned = PromotionRequest.from_dict(raw_request)
     attestation = _attestation(unsigned, profile=profile)

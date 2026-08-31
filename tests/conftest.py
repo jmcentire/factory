@@ -1345,10 +1345,12 @@ def _chain_entry(**fields: Any) -> dict[str, Any]:
 def promoting_chain_entries() -> list[dict[str, Any]]:
     """Receipt chain entries that ground the cited envelopes in ``promoting_promotion_inputs``.
 
-    The fixture cites R-default (build), M-default (oracle), F-default (flake); the chain
-    entries carry the real producer fields the seam projection reads (build:
-    ``disturbed_surface_ids`` + ``changed_paths_digest``; oracle: ``oracle_adequate``; flake:
-    ``deterministic`` + ``flake_count`` + ``automatic_retry_count``). The flake producer writes
+    The fixture cites M-default (oracle) and F-default (flake); the chain entries carry
+    the real producer fields the seam projection reads (oracle: ``oracle_adequate``; flake:
+    ``deterministic`` + ``flake_count`` + ``automatic_retry_count``). The R-default build
+    entry stays because receipt.sh still writes build receipts to the chain — but since
+    1.1c nothing cites or projects it (the disturbed-surface set is host-derived inside
+    decide_promotion, not attested by envelope). The flake producer writes
     ``automatic_retry_count``; the envelope reads ``retry_count`` — the projection renames it, so
     the chain carries the producer name.
 

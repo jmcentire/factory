@@ -33,8 +33,9 @@ evaluation time and externally trusted identity roster.
 
 from __future__ import annotations
 
+import fnmatch
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -141,7 +142,6 @@ _CONFIGURATION_CODES = (
 )
 
 _SURFACE_SCOPED_CODES = (
-    "candidate-receipt-required",
     "cosmetic-gap",
     "critical-gap",
     "specialist-review-missing",
@@ -156,9 +156,6 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "automatic-retry-count-invalid",
     "candidate-digest-invalid",
     "candidate-digest-missing",
-    "candidate-receipt-evidence-binding",
-    "candidate-receipt-evidence-missing",
-    "candidate-receipt-evidence-tampered",
     "checklist-integrity",
     "correction",
     "correction-failure",
@@ -172,10 +169,9 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "critical-evidence-nondeterministic",
     "critical-risk-acceptance-prohibited",
     "critical-test-flaked",
-    "disturbed-surface-declared",
-    "disturbed-surface-mismatch",
-    "disturbed-surface-receipt",
-    "disturbed-surface-without-diff",
+    "disturbed-surface-derived",
+    "disturbed-surface-unmapped-critical",
+    "surface-map-missing",
     "evidence-digest-mismatch",
     "evidence-duplicate",
     "evidence-id-missing",
@@ -487,6 +483,56 @@ class RiskAcceptance:
 
 
 @dataclass(frozen=True)
+class _SurfaceDerivation:
+    """Host derivation of the disturbed-surface set (1.1c).
+
+    ``surface_ids`` are the mapped surfaces; ``unmapped_paths`` are changed paths with no
+    plan-declared binding — each becomes an implicit-Critical pseudo-surface downstream
+    (reported, never dropped: receipt.sh's precedent). ``map_missing`` marks an absent
+    surface map with a non-empty diff: every path is then unmapped and the run pays the
+    full Critical tier — over-verifying is the only safe default.
+    """
+
+    surface_ids: tuple[str, ...] = ()
+    unmapped_paths: tuple[str, ...] = ()
+    map_missing: bool = False
+
+
+def _derive_disturbed_surfaces(
+    changed_paths: Sequence[str],
+    surface_map: Mapping[str, str] | None,
+) -> _SurfaceDerivation:
+    """Derive the disturbed-surface set from the host's diff via plan-declared bindings.
+
+    Pure and deterministic: sorted globs, first ``fnmatch`` hit wins (byte-for-byte the
+    receipt.sh enumeration this replaces as authority). The agent holds no input here —
+    the paths come from the host's own diff and the map from the ratified plan.
+
+    Private until an external consumer exists (the wiring guard's rule: a symbol earns
+    its export by being called, not by intending to be).
+    """
+
+    paths = sorted({str(path).strip() for path in changed_paths if str(path).strip()})
+    if surface_map is None:
+        return _SurfaceDerivation(unmapped_paths=tuple(paths), map_missing=bool(paths))
+    globs = sorted(surface_map.keys())
+    mapped: set[str] = set()
+    unmapped: list[str] = []
+    for path in paths:
+        hit = next(
+            (str(surface_map[g]) for g in globs if fnmatch.fnmatchcase(path, g)), None
+        )
+        if hit is None:
+            unmapped.append(path)
+        else:
+            mapped.add(normalize_label(hit))
+    return _SurfaceDerivation(
+        surface_ids=tuple(sorted(s for s in mapped if s)),
+        unmapped_paths=tuple(unmapped),
+    )
+
+
+@dataclass(frozen=True)
 class PromotionRequest:
     """All evidence and authority records for one exact candidate.
 
@@ -497,7 +543,13 @@ class PromotionRequest:
 
     candidate_digest: str = ""
     lane: str = ""
-    disturbed_surface_ids: tuple[str, ...] = ()
+    # 1.1c: the disturbed-surface set is HOST-DERIVED inside decide_promotion from
+    # ``changed_paths`` (the host's own diff enumeration — receipt.sh's machinery) via
+    # ``surface_map`` (plan-declared glob-to-surface bindings). No agent declaration
+    # exists to verify, so the forgeable-attestation surface is gone by construction;
+    # an unmapped path or an absent map routes to implicit Critical, never the lightest.
+    changed_paths: tuple[str, ...] = ()
+    surface_map: Mapping[str, str] | None = None
     observations: tuple[SurfaceObservation, ...] = ()
     gates: tuple[GateOutcome, ...] = ()
     implementer: str = ""
@@ -513,15 +565,6 @@ class PromotionRequest:
     monitors: tuple[Monitor, ...] = ()
     monitor_declared_unit_count: int = 0
     correction: CorrectionRecord | None = None
-    # Gate M (slice 4): the candidate-build receipt this request binds to, and the
-    # content-addressed envelope the seam produces attesting the diff-derived surface set
-    # (body = {receipt_id, disturbed_surface_ids, changed_paths_digest}). The core verifies
-    # the envelope's content-address and subject binding, then compares the attested set to
-    # the agent's declared disturbed_surface_ids. The agent cannot forge the envelope's
-    # chain anchor; a self-consistent lie is closed by the seam's chain-anchor check (the
-    # postmortem audits it). See decide_promotion and docs/CONTROL-STRUCTURE-PLAN.md Part 7.
-    candidate_receipt: str = ""
-    candidate_receipt_evidence: EvidenceIntegrity | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> PromotionRequest:
@@ -533,7 +576,12 @@ class PromotionRequest:
         return cls(
             candidate_digest=str(raw.get("candidate_digest", "")),
             lane=normalize_label(str(raw.get("lane", ""))),
-            disturbed_surface_ids=_as_str_tuple(raw.get("disturbed_surface_ids")),
+            changed_paths=_as_str_tuple(raw.get("changed_paths")),
+            surface_map=(
+                {str(k): str(v) for k, v in raw["surface_map"].items()}
+                if isinstance(raw.get("surface_map"), Mapping)
+                else None
+            ),
             observations=tuple(
                 SurfaceObservation.from_dict(item)
                 for item in _mapping_sequence(raw.get("observations"))
@@ -580,12 +628,6 @@ class PromotionRequest:
             correction=(
                 CorrectionRecord.from_dict(correction_raw)
                 if isinstance(correction_raw, Mapping)
-                else None
-            ),
-            candidate_receipt=str(raw.get("candidate_receipt", "")),
-            candidate_receipt_evidence=EvidenceIntegrity.from_dict(
-                raw.get("candidate_receipt_evidence")
-                if isinstance(raw.get("candidate_receipt_evidence"), Mapping)
                 else None
             ),
         )
@@ -692,14 +734,13 @@ def promotion_attestation_subject(
         "candidate_digest": request.candidate_digest,
         "lane": normalize_label(request.lane),
         "criticality_profile_digest": profile.content_digest,
-        "disturbed_surface_ids": sorted(
-            normalize_label(surface_id)
-            for surface_id in request.disturbed_surface_ids
-            if normalize_label(surface_id)
+        "changed_paths": sorted(
+            str(path).strip() for path in request.changed_paths if str(path).strip()
         ),
-        "candidate_receipt": request.candidate_receipt,
-        "candidate_receipt_evidence_digest": _integrity_digest(
-            request.candidate_receipt_evidence
+        "surface_map": (
+            {str(k): str(v) for k, v in sorted(request.surface_map.items())}
+            if request.surface_map is not None
+            else None
         ),
         "gates": gates,
         "monitors": monitors,
@@ -850,7 +891,17 @@ def decide_promotion(
     into a risk acceptance.
     """
 
-    resolution = resolve_criticality(profile, request.disturbed_surface_ids, policy)
+    # 1.1c: the disturbed-surface set is derived HERE from the host's diff via the
+    # plan-declared bindings — the agent-declared set and its receipt-envelope
+    # verification apparatus are deleted, not because forging was tolerated but because
+    # nothing forgeable remains. An unmapped path (or an absent map over a non-empty
+    # diff) becomes an implicit-Critical pseudo-surface: criticality.py routes unknown
+    # ids to Critical, so the fail-closed tier default is inherited, never re-implemented.
+    derivation = _derive_disturbed_surfaces(request.changed_paths, request.surface_map)
+    derived_surface_ids = derivation.surface_ids + tuple(
+        f"path:{path}" for path in derivation.unmapped_paths
+    )
+    resolution = resolve_criticality(profile, derived_surface_ids, policy)
     surface_by_id = {surface.surface_id: surface for surface in resolution.surfaces}
     gaps: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
     negatives: dict[str, list[str]] = {surface_id: [] for surface_id in surface_by_id}
@@ -883,65 +934,16 @@ def decide_promotion(
     elif not request.evidence.verifies_binding(promotion_attestation_subject(request, profile)):
         hard_reasons.append("attestation-subject-mismatch")
 
-    # Gate M (slice 4): the disturbed-surface set must bind to the cited candidate-build
-    # receipt. The seam produces a content-addressed EvidenceIntegrity envelope attesting
-    # the diff-derived surface set (body = {receipt_id, disturbed_surface_ids,
-    # changed_paths_digest}); the core verifies the envelope's content-address and that it
-    # binds the cited receipt, then compares the attested set to the agent's declared
-    # disturbed_surface_ids. A mismatch blocks — the agent cannot shrink the set to dodge a
-    # Critical surface's evidence. A cited receipt whose envelope is missing, tampered, or
-    # unbound is a hard block (fail-closed): citing a receipt but omitting its attested
-    # envelope is route-arounding, not complying. An attested set with no changed_paths_digest
-    # is disturbed-surface-without-diff (the receipt recorded no diff). The core is pure (no
-    # disk), so it cannot read the chain; a self-consistent lie (a forged body+digest) is NOT
-    # closed by the core — it is closed by the SEAM's chain-anchor check (built 2026-08-14 in
-    # factory_runtime.promotion_gate): the seam finds the cited envelope's real chain entry by
-    # id and confirms the envelope body matches a deterministic PROJECTION of that entry, so a
-    # forged self-consistent envelope fail-closes on the projection mismatch. The prior Opus
-    # review's "OPEN GAP / requires a receipt-schema decision" was FALSIFIED — every field the
-    # envelope attests is already carried in the chain entry, so this is seam engineering, not a
-    # founder decision. The core keeps doing omission-enforcement (no receipt -> block); the
-    # seam adds fabrication-enforcement (forged receipt -> block) on top.
-    # Absent candidate_receipt with disturbed surfaces is a HARD BLOCK (the enforcement
-    # cutover, founder-ratified "full enforcement" of omission): the agent cannot advance a
-    # run without the seam-attested diff-to-surface binding. The migration window is closed —
-    # the seam always produces one build receipt covering every disturbed surface, so this is
-    # always satisfiable by a real run; an absent receipt here is a route-around, not a gap.
-    # A run with no disturbed surfaces needs no receipt and is unaffected.
-    if request.candidate_receipt:
-        ev = request.candidate_receipt_evidence
-        if ev is None or not ev.present:
-            hard_reasons.append("candidate-receipt-evidence-missing")
-        elif not ev.verify():
-            hard_reasons.append("candidate-receipt-evidence-tampered")
-        elif not ev.verifies_binding({"receipt_id": request.candidate_receipt}):
-            hard_reasons.append("candidate-receipt-evidence-binding")
-        else:
-            body = ev.body or {}
-            if not str(body.get("changed_paths_digest", "") or "").strip():
-                hard_reasons.append("disturbed-surface-without-diff")
-            attested = sorted(
-                {normalize_label(s) for s in _as_str_tuple(body.get("disturbed_surface_ids", ()))
-                 if normalize_label(s)}
-            )
-            declared = sorted(
-                {normalize_label(s) for s in request.disturbed_surface_ids
-                 if normalize_label(s)}
-            )
-            if declared != attested:
-                hard_reasons.append("disturbed-surface-mismatch")
-                reports.append(
-                    "disturbed-surface-declared:" + (",".join(declared) or "(empty)")
-                )
-                reports.append(
-                    "disturbed-surface-receipt:" + (",".join(attested) or "(empty)")
-                )
-    elif any(normalize_label(s) for s in request.disturbed_surface_ids):
-        # Enforcement cutover: disturbed surfaces without a candidate-build receipt cannot
-        # advance — the diff-to-surface binding is the load-bearing input, and an absent
-        # receipt is a route-around, not a gap. This is defense-in-depth beneath Gate L: even
-        # a runtime bypass that reaches decide_promotion receipt-less fails closed here.
-        hard_reasons.append("candidate-receipt-required:disturbed-surface-binding")
+    # 1.1c derivation record: the decision names what it derived and why — the report
+    # stream is where an operator sees an unmapped path routed to Critical instead of
+    # discovering it as a silent full-tier bill.
+    reports.append(
+        "disturbed-surface-derived:" + (",".join(derivation.surface_ids) or "(empty)")
+    )
+    for path in derivation.unmapped_paths:
+        reports.append(f"disturbed-surface-unmapped-critical:{path}")
+    if derivation.map_missing:
+        reports.append("surface-map-missing")
 
     tool_policy_issues: tuple[str, ...]
     tool_policy_digest = ""

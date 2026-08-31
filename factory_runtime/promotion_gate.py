@@ -53,10 +53,12 @@ do not close a full forward re-chain or a mint-by-append, which need an external
   ``flake.sh`` set ``prev_hash`` to the prior entry's hash); the seam verifies what they write
   (Opus cross-family review residuals R2 + R3, 2026-08-14).
 - ``verify_chain_anchor`` finds each cited envelope's real chain entry by id and confirms the
-  envelope body matches a deterministic PROJECTION of that entry (build:
-  disturbed_surface_ids + changed_paths_digest; oracle: oracle_adequate; flake: deterministic +
-  flake_count + retry_count<-automatic_retry_count). A forged envelope is self-consistent
-  (passes the core) but does not match the real entry's projection, so the seam fail-closes.
+  envelope body matches a deterministic PROJECTION of that entry (oracle: oracle_adequate;
+  flake: deterministic + flake_count + retry_count<-automatic_retry_count). A forged envelope
+  is self-consistent (passes the core) but does not match the real entry's projection, so the
+  seam fail-closes. The build projection was deleted in 1.1c: the disturbed-surface set is
+  host-derived inside ``decide_promotion`` from changed paths + the plan-declared surface map,
+  so there is no agent-attested build envelope left to ground (or to forge).
 
 The prior Opus review's F3 "cannot be built without a receipt-schema decision" was FALSIFIED:
 every field the envelope attests is already carried in the corresponding chain entry, and the
@@ -131,8 +133,8 @@ class PromotionGateError(Exception):
 # forged envelope is self-consistent (passes the core) but does not match the real entry's
 # projection, so the seam fail-closes. This is ordinary seam engineering — the prior Opus
 # cross-family review (2026-08-14) confirmed it is buildable today with no schema decision:
-# every field the three envelope bodies attest is already carried in the corresponding chain
-# entry (build: disturbed_surface_ids + changed_paths_digest; oracle: oracle_adequate; flake:
+# every field the envelope bodies attest is already carried in the corresponding chain
+# entry (oracle: oracle_adequate; flake:
 # deterministic + flake_count + automatic_retry_count; all carry id), and the chain's bare-hex
 # hash equals ``digest_obj(body).removeprefix("sha256:")`` (same canonical encoding, prefix
 # aside). The flake producer writes ``automatic_retry_count``; the core reads ``retry_count`` —
@@ -231,17 +233,13 @@ def _load_chain(chain_path: Path) -> dict[str, dict[str, Any]]:
 def _envelope_projection(entry: dict[str, Any], kind: str) -> dict[str, Any]:
     """Re-derive the envelope body the core expects, as a projection of the real chain entry.
 
-    ``kind`` is ``"build"`` (Gate M candidate-build receipt), ``"oracle"`` (Gate N oracle
-    receipt), or ``"flake"`` (Gate N flake receipt). The flake producer writes
+    ``kind`` is ``"oracle"`` (Gate N oracle receipt) or ``"flake"`` (Gate N flake
+    receipt); the Gate M build-envelope branch was deleted in 1.1c — the disturbed-surface
+    set is host-derived inside decide_promotion from changed paths and the plan-declared
+    surface map, so no build envelope exists to ground. The flake producer writes
     ``automatic_retry_count``; the core reads ``retry_count`` — the projection renames it so
     the envelope and the chain entry speak the same field names.
     """
-    if kind == "build":
-        return {
-            "receipt_id": entry.get("id"),
-            "disturbed_surface_ids": entry.get("disturbed_surface_ids"),
-            "changed_paths_digest": entry.get("changed_paths_digest"),
-        }
     if kind == "oracle":
         return {"receipt_id": entry.get("id"), "oracle_adequate": entry.get("oracle_adequate")}
     if kind == "flake":
@@ -285,10 +283,6 @@ def verify_chain_anchor(request: PromotionRequest, chain: dict[str, dict[str, An
     hard-blocks it on disturbed surfaces. A present envelope with an empty chain (no chain
     file) cannot be grounded and fail-closes — the only safe answer when the seam cannot verify.
     """
-    if request.candidate_receipt:
-        _verify_grounded(
-            request.candidate_receipt_evidence, request.candidate_receipt, chain, "build"
-        )
     for obs in request.observations:
         if obs.oracle_receipt:
             _verify_grounded(obs.oracle_receipt_evidence, obs.oracle_receipt, chain, "oracle")

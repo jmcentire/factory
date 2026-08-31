@@ -333,12 +333,14 @@ def test_chain_anchor_fail_closed_when_receipt_id_not_in_chain(tmp_path: Path) -
     the id is not grounded in this run's receipts. Fail-closed."""
     run_root = tmp_path / "runs" / "run"
     _write_inputs(run_root, _promoting_inputs(run_root))
-    # The chain carries M-default and F-default but NOT the candidate-build receipt R-default.
-    # Re-chain the subset from genesis so the seam's linkage check (Opus R2) passes and the
-    # test reaches the intended "id not in the chain" assertion, not a broken-link fail-close.
-    entries = _rechained([e for e in promoting_chain_entries() if e["id"] != "R-default"])
+    # The chain carries the build and flake entries but NOT the cited oracle receipt
+    # M-default (1.1c retargeted this probe from the retired build envelope to the
+    # surviving oracle projection — same F3 class). Re-chain the subset from genesis so
+    # the seam's linkage check (Opus R2) passes and the test reaches the intended "id
+    # not in the chain" assertion, not a broken-link fail-close.
+    entries = _rechained([e for e in promoting_chain_entries() if e["id"] != "M-default"])
     _write_chain(run_root, entries)
-    with pytest.raises(PromotionGateError, match="R-default.*not in the chain"):
+    with pytest.raises(PromotionGateError, match="M-default.*not in the chain"):
         decide(run_root)
 
 
@@ -350,14 +352,15 @@ def test_chain_anchor_fail_closed_when_envelope_does_not_match_chain(tmp_path: P
     mismatch against the real chain entry is what fail-closes."""
     run_root = tmp_path / "runs" / "run"
     _write_inputs(run_root, _promoting_inputs(run_root))
-    # The honest envelope attests changed_paths_digest="sha256:abcd"; forge the CHAIN entry to
-    # attest a different digest. The envelope is still self-consistent (passes the core), but
-    # its projection no longer matches the real chain entry. Re-chain from genesis so the forge
+    # The honest envelope attests oracle_adequate=True; forge the CHAIN entry to attest
+    # False (1.1c retargeted this probe from the retired build envelope to the surviving
+    # oracle projection). The envelope is still self-consistent (passes the core), but its
+    # projection no longer matches the real chain entry. Re-chain from genesis so the forge
     # is in the attested value, not in a broken link (Opus R2) that would fail-close earlier.
     honest = promoting_chain_entries()
-    forged_r_body = {k: v for k, v in honest[0].items() if k not in ("hash", "prev_hash")}
-    forged_r_body["changed_paths_digest"] = "sha256:DEAD"  # != envelope's sha256:abcd
-    forged = _rechained([forged_r_body, honest[1], honest[2]])
+    forged_m_body = {k: v for k, v in honest[1].items() if k not in ("hash", "prev_hash")}
+    forged_m_body["oracle_adequate"] = False  # != envelope's True
+    forged = _rechained([honest[0], forged_m_body, honest[2]])
     _write_chain(run_root, forged)
     with pytest.raises(PromotionGateError, match="forged"):
         decide(run_root)

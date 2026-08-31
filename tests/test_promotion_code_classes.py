@@ -51,7 +51,6 @@ _NON_CODES = {
     "report-and-promote",
     "risk-accepted",
     "negative-evidence",  # wrapper token, classified — listed to note it IS classified
-    "disturbed-surface-binding",  # suffix detail on candidate-receipt-required
     "flake-count",
     "retry-count",
 }
@@ -126,9 +125,11 @@ def test_every_classified_code_has_a_real_emission() -> None:
 
 def test_class_partitions_are_disjoint_and_complete() -> None:
     assert CONFIGURATION_DETERMINED_CODES & SURFACE_SCOPED_CODES == frozenset()
-    assert len(PROMOTION_CODE_CLASSES) == 122
+    # 1.1c dropped the eight Gate M envelope labels (7 construction-evidence + the
+    # surface-scoped candidate-receipt-required) and added the three derivation reports.
+    assert len(PROMOTION_CODE_CLASSES) == 117
     assert len(CONFIGURATION_DETERMINED_CODES) == 25
-    assert len(SURFACE_SCOPED_CODES) == 6
+    assert len(SURFACE_SCOPED_CODES) == 5
 
 
 def test_the_preflight_hard_no_exemplars_are_configuration() -> None:
