@@ -198,3 +198,47 @@ def test_watchdog_reads_no_ambient_environment_for_knobs() -> None:
     source = (HARNESS / "watchdog.py").read_text(encoding="utf-8")
     assert "os.environ" not in source
     assert "getenv" not in source
+
+
+def test_backstop_persists_across_watchdog_restarts(tmp_path: Path) -> None:
+    """#33 forcing test (a): kill/restart mid-gap — the arm state and the last
+    advance observation are durable in watchdog.json, so a flapping watchdog
+    cannot convert its own downtime into unbounded deadline extension. A
+    persisted wake WAS live when it wrote; the fresh instance fires from it."""
+    runner = FakeRunner(passes=1, cap_hours=1.0)
+    clock = [1000.0]
+    watchdog, _ = make_watchdog(tmp_path, runner, clock)
+    recorder = Recorder()
+    watchdog.check(recorder.emit, recorder.block)  # observes pass 1
+    clock[0] += 10 * 3600
+    watchdog.check(recorder.emit, recorder.block)  # arms (persisted)
+
+    # Simulated restart: a brand-new instance over the same root.
+    clock[0] += 60
+    restarted, _ = make_watchdog(tmp_path, runner, clock)
+    fresh = Recorder()
+    assert restarted.check(fresh.emit, fresh.block) == "backstop-fired"
+    assert fresh.blocks and fresh.blocks[0][1] == "wall_clock_backstop"
+
+
+def test_backstop_tampered_state_degrades_never_fires_falsely(tmp_path: Path) -> None:
+    """#33 forcing test (b): a deleted/corrupt watchdog.json degrades to
+    re-observe-and-re-arm — one-check delay, no false fire, no crash, and no
+    silent permanent disarm (the next two live checks fire again)."""
+    runner = FakeRunner(passes=1, cap_hours=1.0)
+    clock = [1000.0]
+    watchdog, root = make_watchdog(tmp_path, runner, clock)
+    recorder = Recorder()
+    watchdog.check(recorder.emit, recorder.block)
+    clock[0] += 10 * 3600
+    watchdog.check(recorder.emit, recorder.block)  # armed
+
+    (root / "watchdog.json").write_text("{corrupt", encoding="utf-8")
+    clock[0] += 60
+    assert watchdog.check(recorder.emit, recorder.block) == "ok"  # re-observes
+    assert not recorder.blocks
+    clock[0] += 2 * 3600
+    watchdog.check(recorder.emit, recorder.block)  # re-arms
+    clock[0] += 60
+    assert watchdog.check(recorder.emit, recorder.block) == "backstop-fired"
+    assert len(recorder.blocks) == 1
