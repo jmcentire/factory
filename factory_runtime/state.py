@@ -28,6 +28,9 @@ from factory_core.manifest import (
 from factory_runtime.durability import load_chain_key
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
+from factory_runtime.transition_admission import (
+    allowed_authority_nonce_counts as allowed_authority_nonce_counts_for,
+)
 from factory_runtime.transition_obligations import (
     REPORT_KEY as TRANSITION_OBLIGATION_REPORT_KEY,
 )
@@ -1431,28 +1434,20 @@ class RunStore:
                 "changed_existing_tests set"
             )
 
-        expected_authority_nonces = (
-            (1 if destination is RunState.INTAKE else 0)
-            + (1 if catalog_activation else 0)
-            + (1 if test_change_activation else 0)
-        )
         transition_nonces = transition_payload.get("authority_receipt_nonces", [])
         if not isinstance(transition_nonces, list):
             raise RunStateError("authority_receipt_nonces must be an array")
         normalized_nonces = [str(nonce) for nonce in transition_nonces]
-        allowed_authority_nonce_counts = {expected_authority_nonces}
-        dual_history_extras = int(bool(catalog_activation)) + int(bool(test_change_activation))
-        if dual_history_extras:
-            # dual-ratified history recorded a validator nonce per activation
-            for extra in range(1, dual_history_extras + 1):
-                allowed_authority_nonce_counts.add(expected_authority_nonces + extra)
-        if phase_key:
-            # Three generations coexist on retained ledgers: legacy direct-store
-            # entries recorded no phase nonces, dual-ratified history recorded two,
-            # and 4.1b single-seat authority records exactly one (the human's —
-            # the Validator attribution carries no replay ceremony).
-            allowed_authority_nonce_counts.add(expected_authority_nonces + 1)
-            allowed_authority_nonce_counts.add(expected_authority_nonces + 2)
+        # 4.1c: the write path consumes the SAME admission row the derive path
+        # consumes — the nonce-counting axis lives in TRANSITION_ADMISSION, and
+        # extracting it exposed a real write/derive drift on the base-state set.
+        allowed_authority_nonce_counts = allowed_authority_nonce_counts_for(
+            schema_version=RUN_SCHEMA_VERSION,
+            destination=str(destination),
+            phase_key=bool(phase_key),
+            catalog_activation=bool(catalog_activation),
+            test_change_activation=bool(test_change_activation),
+        )
         if len(normalized_nonces) not in allowed_authority_nonce_counts:
             raise RunStateError(
                 f"{destination} requires authority receipt nonce count in "
@@ -2339,31 +2334,14 @@ class RunStore:
             if len(entry_nonces) != len(set(entry_nonces)):
                 raise RunStateError(f"ledger entry {index} repeats an authority nonce")
             if schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS:
-                expected_entry_nonces = (
-                    (
-                        1
-                        if destination
-                        in {
-                            RunState.TARGET_RESOLUTION_AUTHORIZED,
-                            RunState.INTAKE,
-                        }
-                        else 0
-                    )
-                    + (1 if derived_catalog_activation else 0)
-                    + (1 if derived_test_change_activation else 0)
+                # 4.1c: same admission row as the write path — one axis, one answer.
+                allowed_entry_nonce_counts = allowed_authority_nonce_counts_for(
+                    schema_version=str(schema_version),
+                    destination=str(destination),
+                    phase_key=bool(derived_phase_key),
+                    catalog_activation=bool(derived_catalog_activation),
+                    test_change_activation=bool(derived_test_change_activation),
                 )
-                allowed_entry_nonce_counts = {expected_entry_nonces}
-                derived_dual_extras = int(bool(derived_catalog_activation)) + int(
-                    bool(derived_test_change_activation)
-                )
-                if derived_dual_extras:
-                    for extra in range(1, derived_dual_extras + 1):
-                        allowed_entry_nonce_counts.add(expected_entry_nonces + extra)
-                if derived_phase_key:
-                    # 4.1b: single-seat records one phase nonce; dual-ratified
-                    # history recorded two; pre-nonce legacy recorded none.
-                    allowed_entry_nonce_counts.add(expected_entry_nonces + 1)
-                    allowed_entry_nonce_counts.add(expected_entry_nonces + 2)
                 if len(entry_nonces) not in allowed_entry_nonce_counts:
                     raise RunStateError(
                         f"ledger entry {index} {destination} requires authority nonce count in "
