@@ -22,7 +22,7 @@ from factory_core.build_plan import (
     PatternCatalog,
     PatternDefinition,
 )
-from factory_core.manifest import digest_bytes, digest_obj
+from factory_core.manifest import digest_obj
 from factory_core.provenance import (
     PHASE_ARCHITECTURE,
     PHASE_OPERATIONAL_MATURITY,
