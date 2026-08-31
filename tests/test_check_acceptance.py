@@ -140,3 +140,55 @@ def test_ambient_override_is_refused_on_presence(tmp_path: Path) -> None:
     r = _run(tmp_path, env_extra={"REMOVAL_LEDGER": "/tmp/x"})
     assert r.returncode == 2
     assert "ambient override" in r.stderr
+
+
+def test_external_citation_mismatch_on_readable_artifact_fails(tmp_path: Path) -> None:
+    """A readable external artifact with a wrong digest is a lie, not a gap."""
+    external = tmp_path / "retained.log"
+    external.write_text("run artifact bytes", encoding="utf-8")
+    baseline = _good_baseline()
+    baseline["baseline_rows"] = [
+        {
+            "metric": "m",
+            "run": "r",
+            "value": 1,
+            "artifacts": [{"role": "t0", "path": str(external), "sha256": "0" * 64}],
+        }
+    ]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "digest mismatch" in r.stderr
+
+
+def test_external_citation_absent_is_a_loud_note_not_a_failure(tmp_path: Path) -> None:
+    """Tri-state: a retained-run artifact missing on this machine is 'could not
+    check' — loud on stdout, never silently green, never a ship failure."""
+    baseline = _good_baseline()
+    baseline["baseline_rows"] = [
+        {
+            "metric": "m",
+            "run": "r",
+            "value": 1,
+            "artifacts": [
+                {"role": "t0", "path": str(tmp_path / "gone.log"), "sha256": "0" * 64}
+            ],
+        }
+    ]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 0, r.stderr
+    assert "external citation not verifiable here" in r.stdout
+
+
+def test_in_repo_citation_stays_strict(tmp_path: Path) -> None:
+    baseline = _good_baseline()
+    baseline["baseline_rows"] = [
+        {
+            "metric": "m",
+            "run": "r",
+            "value": 1,
+            "artifacts": [{"role": "t0", "path": "no/such/file.json", "sha256": "0" * 64}],
+        }
+    ]
+    r = _run(tmp_path, baseline=baseline)
+    assert r.returncode == 1
+    assert "unreadable" in r.stderr

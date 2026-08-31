@@ -1,6 +1,6 @@
 {
   "schema_version": "factory-acceptance-baseline/1",
-  "comment": "Remediation acceptance baseline (plan section 0.3). pre_tag is the tree before the first remediation commit; the checker derives LOC solely from git diff pre_tag..HEAD and verifies every removal-ledger tree claim against it. no_relevant_kinds is the committed, exhaustive NO-relevant classification over BOTH kind registries (refusal_event_kinds.json and terminal_no_kinds.json): every registered kind must appear here exactly once, so adding a kind without classifying it fails ship — additions are data-file diffs visible in git, never runtime-invented kinds. watchdog-deadline is pinned false (a bound, per section 0.2: the deadline knob cannot manufacture the terminal event the instrument rewards) and blocking_written is pinned excluded (a consumable coordination signal, per section 0.4).",
+  "comment": "Remediation acceptance baseline (plan section 0.3). pre_tag is the tree before the first remediation commit; the checker derives LOC solely from git diff pre_tag..HEAD and verifies every removal-ledger tree claim against it. no_relevant_kinds is the committed, exhaustive NO-relevant classification over BOTH kind registries (refusal_event_kinds.json and terminal_no_kinds.json): every registered kind must appear here exactly once, so adding a kind without classifying it fails ship \u2014 additions are data-file diffs visible in git, never runtime-invented kinds. watchdog-deadline is pinned false (a bound, per section 0.2: the deadline knob cannot manufacture the terminal event the instrument rewards) and blocking_written is pinned excluded (a consumable coordination signal, per section 0.4). External (out-of-repo) artifact citations verify tri-state: digest checked when the path is readable on this machine, a loud NOTE when it is not \u2014 never silently green, never a ship failure on a machine without the retained runs; an in-repo citation always verifies strictly.",
   "pre_tag": "remediation-pre",
   "no_relevant_kinds": {
     "refusal-dispatch": true,
@@ -12,42 +12,104 @@
     "preflight": true,
     "watchdog-deadline": false
   },
-  "excluded_event_kinds": ["blocking_written"],
+  "excluded_event_kinds": [
+    "blocking_written"
+  ],
   "baseline_rows": [
     {
       "metric": "first_no_relevant_signal_hours",
       "run": "PLAT-4025",
       "value": 0.22,
-      "artifact": "UNDERIVED",
-      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+      "artifacts": [
+        {
+          "role": "t0",
+          "path": "/Users/jmcentire/WanderRepos/repos/repull/factory-import/workstream-0/runs/wander-r1-tmux-20260815-01/control/build_source_projection.py",
+          "sha256": "08e99de050ff7217ab13d1b151e65262492a65e5f20825bfd7d8ac1cbefd7953"
+        },
+        {
+          "role": "no-signal",
+          "path": "/Users/jmcentire/WanderRepos/repos/repull/factory-import/workstream-0/runs/wander-r1-tmux-20260815-01/admin/runtime/agy-preflight.log",
+          "sha256": "04a3fd7b53540108a5ddd980fe2cbad6d681c6fa15eeb5fb69a969fb581fe0c0"
+        },
+        {
+          "role": "no-timestamp",
+          "path": "/Users/jmcentire/WanderRepos/repos/repull/factory-import/workstream-0/runs/wander-r1-tmux-20260815-01/admin/runtime/agy-preflight.status.json",
+          "sha256": "75795ac34e2911c316d8ac627bf92c41158b3f815a4c81cd884a121a2f68c68c"
+        }
+      ],
+      "caveat": "pre-instrumentation run: timestamps are file mtimes plus embedded unix stamps, NOT signed host events \u2014 exactly the gap plan sections 0.1/0.2 close for future runs (extraction: channel #22, kindex a23ab68a8abd)"
     },
     {
       "metric": "first_no_relevant_signal_hours",
       "run": "booking-r1",
       "value": 0.3,
-      "artifact": "UNDERIVED",
-      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+      "artifacts": [
+        {
+          "role": "t0",
+          "path": "/Users/jmcentire/WanderRepos/repos/repull/factory-import/workstream-0/runs/booking-r1-tmux-20260815-02/control/RUN-CHARTER.md",
+          "sha256": "22e094aef5411abae954ad25b730c6de02e0bbac792ce4d965f42741b9b68a85"
+        },
+        {
+          "role": "no-signal",
+          "path": "/Users/jmcentire/WanderRepos/repos/repull/factory-import/workstream-0/runs/booking-r1-tmux-20260815-02/logs/coder-output.log",
+          "sha256": "ef60bb0fec286d010f1ba53608caecafb72a518a16f3d17c2f7dddaf229324b0"
+        }
+      ],
+      "caveat": "pre-instrumentation run: timestamps are file mtimes plus embedded unix stamps, NOT signed host events \u2014 exactly the gap plan sections 0.1/0.2 close for future runs (extraction: channel #22, kindex a23ab68a8abd)"
     },
     {
       "metric": "first_no_relevant_signal_hours",
       "run": "ci-r1",
       "value": 1.13,
-      "artifact": "UNDERIVED",
-      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+      "artifacts": [
+        {
+          "role": "t0",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r1/source/ask-verbatim.md",
+          "sha256": "09b42c63e38097969ce3b0e1260bac92441358c04fef355f9ca85b27b14f2c78"
+        },
+        {
+          "role": "no-signal",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r1/lanes/coder/inbox/002-workstream1-incomplete.md",
+          "sha256": "17151ec1b4e2472b555e737e8bbf9825926373e6d8f9087386107ce65c8b032d"
+        }
+      ],
+      "caveat": "pre-instrumentation run: timestamps are file mtimes plus embedded unix stamps, NOT signed host events \u2014 exactly the gap plan sections 0.1/0.2 close for future runs (extraction: channel #22, kindex a23ab68a8abd)"
     },
     {
       "metric": "first_no_relevant_signal_hours",
       "run": "ci-r2",
       "value": 3.67,
-      "artifact": "UNDERIVED",
-      "justification": "extracted by the verification seat from retained run artifacts (kindex a23ab68a8abd, channel #15); primary artifact paths/digests requested on channel #21 and re-cited before the Phase 0 sitting ratifies the wall-clock default"
+      "artifacts": [
+        {
+          "role": "t0",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r2/run-plan.md",
+          "sha256": "f7763cc530558f7ed0e83c2d42eef6f9a0f0ddc872f785850178b10a5dc14966"
+        },
+        {
+          "role": "no-signal",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r2/receipts/judge-20260828T053730Z.log",
+          "sha256": "b230040e89071d452dd134fe1bb35767020315524b5b3f7f7fec4e9df6dd6ff1"
+        }
+      ],
+      "caveat": "pre-instrumentation run: timestamps are file mtimes plus embedded unix stamps, NOT signed host events \u2014 exactly the gap plan sections 0.1/0.2 close for future runs (extraction: channel #22, kindex a23ab68a8abd)"
     },
     {
       "metric": "max_healthy_inter_pass_advance_gap_hours",
       "run": "ci-r1",
       "value": 6.98,
-      "artifact": "UNDERIVED",
-      "justification": "overnight operator wait, the reference the 12h wall-clock floor derives from (kindex a23ab68a8abd); primary artifact paths/digests requested on channel #21"
+      "artifacts": [
+        {
+          "role": "last-advance",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r1/lanes/coder/outbox/021-judge7-handover.md",
+          "sha256": "d6548d3f22ee48ebb1d80d9d1faf1d86cd5f664fc01866027553daedf3ec3230"
+        },
+        {
+          "role": "next-advance",
+          "path": "/Users/jmcentire/WanderRepos/repos/sync/.factory/runs/ci-r1/artifacts/signatures/eng-spec-addendum-6.sig.md",
+          "sha256": "1efc6068a744a68a67ac164ec526f215188e817b27ef11ff59b584f22385cda4"
+        }
+      ],
+      "caveat": "pre-instrumentation run: timestamps are file mtimes plus embedded unix stamps, NOT signed host events \u2014 exactly the gap plan sections 0.1/0.2 close for future runs (extraction: channel #22, kindex a23ab68a8abd)"
     }
   ]
 }

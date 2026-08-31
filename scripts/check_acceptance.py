@@ -116,24 +116,48 @@ def check(repo: Path, ledger_path: Path, baseline_path: Path) -> list[str]:
         )
 
     # --- baseline rows: cited or explicitly underived -------------------------------
+    def _verify_citation(label: str, artifact: dict) -> None:
+        raw_path = str(artifact.get("path", ""))
+        artifact_path = Path(raw_path) if Path(raw_path).is_absolute() else repo / raw_path
+        external = not str(artifact_path.resolve()).startswith(str(repo.resolve()) + os.sep)
+        try:
+            digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            if external:
+                # Tri-state: an out-of-repo retained-run artifact may not exist on
+                # this machine. "Could not check" is loud and distinct from
+                # "passed" — the recorded digest remains the citation's authority.
+                print(
+                    f"check-acceptance: NOTE — {label}: external citation not "
+                    f"verifiable here ({raw_path})"
+                )
+                return
+            failures.append(f"{label}: cited artifact unreadable: {exc}")
+            return
+        if digest != artifact.get("sha256"):
+            failures.append(f"{label}: cited artifact digest mismatch at {raw_path}")
+
     for index, row in enumerate(baseline.get("baseline_rows") or []):
         label = f"baseline_rows[{index}] ({row.get('metric')}/{row.get('run')})"
         artifact = row.get("artifact")
+        artifact_list = row.get("artifacts")
         if artifact == "UNDERIVED":
             if not str(row.get("justification") or "").strip():
                 failures.append(f"{label}: UNDERIVED without justification")
             continue
+        if isinstance(artifact_list, list) and artifact_list:
+            for item in artifact_list:
+                if not isinstance(item, dict):
+                    failures.append(f"{label}: artifacts entries must be path+sha256 objects")
+                    continue
+                _verify_citation(f"{label}/{item.get('role', '?')}", item)
+            continue
         if not isinstance(artifact, dict):
-            failures.append(f"{label}: artifact must be a path+sha256 object or UNDERIVED")
+            failures.append(
+                f"{label}: artifact must be a path+sha256 object, an artifacts list, or UNDERIVED"
+            )
             continue
-        artifact_path = repo / str(artifact.get("path", ""))
-        try:
-            digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-        except OSError as exc:
-            failures.append(f"{label}: cited artifact unreadable: {exc}")
-            continue
-        if digest != artifact.get("sha256"):
-            failures.append(f"{label}: cited artifact digest mismatch at {artifact.get('path')}")
+        _verify_citation(label, artifact)
 
     # --- removal-ledger rows --------------------------------------------------------
     try:
