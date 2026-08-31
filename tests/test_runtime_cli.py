@@ -704,3 +704,33 @@ def test_forbidden_runner_roots_derivation_covers_the_control_root(tmp_path) -> 
         _derive_forbidden_runner_roots(incomplete)
     with pytest.raises(ValueError, match="control_root"):
         _derive_forbidden_runner_roots({**roots, "control_root": ""})
+
+
+def test_retained_capsule_freshness_check_refuses_a_moved_projection(tmp_path) -> None:
+    """4.2 change 3's retained site: the lane-dispatch capsule pre-check stays
+    (no proven consumption-time arbiter for the capsule's frozen head) and must
+    refuse when the projection moved between assembly and capsule derivation.
+    The two deleted siblings' arbiters are already forcing-tested where they
+    live: the transition expected-head refusal (test_runtime_state) and the
+    resource ledger's in-lock CAS (test_runtime_resources)."""
+    import dataclasses
+
+    from factory_core.manifest import digest_obj
+    from factory_runtime.cli import _require_fresh_projection_before_capsule
+    from factory_runtime.state import RunStore
+    from tests.conftest import create_intake_run
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    create_intake_run(
+        store,
+        run_id="r1",
+        target_digest="sha256:" + "a" * 64,
+        source_digest=digest_obj({"source": "r1"}),
+    )
+    frozen = store.load("r1")
+    _require_fresh_projection_before_capsule(runs, "r1", frozen)  # unmoved: passes
+    stale = dataclasses.replace(frozen, generation=frozen.generation + 7)
+    with pytest.raises(ValueError, match="projection changed"):
+        _require_fresh_projection_before_capsule(runs, "r1", stale)

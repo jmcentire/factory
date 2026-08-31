@@ -752,11 +752,22 @@ def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _require_run_projection_unchanged(
+def _require_fresh_projection_before_capsule(
     runs: str | Path,
     run_id: str,
     expected: Any,
 ) -> None:
+    """RETAINED, renamed honestly (4.2 change 3): the lane-dispatch capsule's
+    ledger_head has no proven consumption-time arbiter yet — nothing downstream
+    re-verifies the head the capsule froze at its point of use — so this
+    pre-check stays until one is named and proven. Its two former siblings were
+    deleted WITH their named arbiters: the orchestrator-wake site (every
+    transition the woken orchestrator performs binds expected_head at the ledger
+    append — "ledger changed after the caller derived its transition" refuses a
+    raced head) and the broker-effects site (resource-ledger appends run under
+    the exclusive guard with an in-lock validated-snapshot expected_head —
+    attempt-and-arbitrate, no check-then-act).
+    """
     current = RunStore(runs).load(run_id)
     if current.to_dict() != expected.to_dict():
         raise ValueError("run projection changed while state dependencies were assembled")
@@ -1517,11 +1528,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             }
         )
         sections["run-projection"] = _canonical_bytes(projection_state.to_dict())
-        _require_run_projection_unchanged(
-            arguments.runs,
-            arguments.run_id,
-            projection_state,
-        )
+        # 4.2 change 3: the pre-flight projection re-load was DELETED here — every
+        # transition the woken orchestrator performs binds expected_head at the
+        # ledger append, which refuses a raced head at the point of consumption
+        # (attempt-and-arbitrate; the pre-check was a check-then-act duplicate).
         capsule = derive_state_capsule(
             purpose="orchestrator-wake",
             run_id=arguments.run_id,
@@ -1808,7 +1818,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             "state-qualification-observations": qualification_observations_bytes,
             "state-qualification-report": qualification_bytes,
         }
-        _require_run_projection_unchanged(
+        _require_fresh_projection_before_capsule(
             arguments.runs,
             arguments.run_id,
             projection_state,
@@ -2024,11 +2034,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             tessera=tessera,
             isolation=MacOSSandbox(),
         )
-        _require_run_projection_unchanged(
-            arguments.runs,
-            arguments.run_id,
-            projection_state,
-        )
+        # 4.2 change 3: deleted — every broker effect that records a resource does
+        # so through the resource ledger's exclusive guard with an IN-LOCK
+        # validated-snapshot expected_head (resources.py), so a raced head refuses
+        # at the append itself; the pre-check re-load added latency, not safety.
         effects = []
         for request in handoff["broker_requests"]:
             capability_digest = str(request["capability_digest"])
