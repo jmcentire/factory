@@ -163,7 +163,7 @@ make dev          # install the package + dev tooling (editable)
 make check-purity # prove the core imports nothing target-specific
 make check-doctrine # prove active doctrine surfaces retain the canonical structure
 make test         # run the pytest suite
-make ship         # every gate, fail-closed: purity -> doctrine -> lint -> typecheck -> test
+make ship         # every gate, fail-closed: purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test
 make test-isolation # macOS: prove kernel-enforced Coder/Tester separation
 make test-tessera # build ../tessera first; prove real signatures and the runtime to preview
 factory --help    # executable intake/ratification/status boundary
