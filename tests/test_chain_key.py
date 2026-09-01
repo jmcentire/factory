@@ -8,7 +8,7 @@ lane environment — so whole-history rewrite fails at ``_verify_records``.
 
 from __future__ import annotations
 
-import re
+import ast
 from pathlib import Path
 
 import pytest
@@ -116,35 +116,131 @@ _ADMITTED_SITES = {
     "factory_runtime/resume.py": 1,
 }
 
-_CONSTRUCTION = re.compile(r"(?<![\w.])Ledger\(")
+def _target_call_nodes(
+    source: str, *, symbol: str, module: str
+) -> list[ast.Call]:
+    """Every call to ``module.symbol`` in ``source``, in any binding form.
+
+    Catches the direct import, an aliased import (``import symbol as x``), the
+    defining module's own bare reference, and a module-qualified call
+    (``module.symbol(`` / ``leaf.symbol(``) — the forms a ``(?<![\\w.])``
+    regex missed (round-7 finding #4). Stated residual: a fully dynamic
+    ``getattr`` call is a reviewable event outside this static perimeter.
+    """
+
+    parent, _, leaf = module.rpartition(".")
+    tree = ast.parse(source)
+    local_names: set[str] = set()
+    module_handles: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name == symbol:
+            local_names.add(symbol)  # the defining module's bare reference
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == module:
+                for alias in node.names:
+                    if alias.name == symbol:
+                        local_names.add(alias.asname or symbol)
+            elif node.module == parent:
+                for alias in node.names:
+                    if alias.name == leaf:
+                        module_handles.add(alias.asname or leaf)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == module:
+                    module_handles.add(alias.asname or module)
+
+    def _is_module_ref(value: ast.expr) -> bool:
+        if isinstance(value, ast.Name):
+            return value.id in module_handles
+        return ast.unparse(value) in module_handles
+
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (isinstance(func, ast.Name) and func.id in local_names) or (
+            isinstance(func, ast.Attribute)
+            and func.attr == symbol
+            and _is_module_ref(func.value)
+        ):
+            calls.append(node)
+    return calls
+
+
+def _ledger_construction_sites(source: str) -> list[bool]:
+    """Every core-``Ledger`` construction in ``source``, each flagged threads-key.
+
+    AST-based, so the perimeter is airtight against the forms a regex missed
+    (round-7 finding #4): a module-qualified call (``manifest.Ledger(``, which
+    a ``(?<![\\w.])`` lookbehind excluded), an aliased import
+    (``import Ledger as L; L(...)``), and a ``from factory_core import manifest``
+    module handle are all caught, and the ``chain_key=`` check reads the actual
+    call keywords rather than a fragile character window. The one stated residual
+    is a deliberately dynamic construction (``getattr``) or a subclass of the
+    core Ledger — either is a reviewable event that would need its own admission.
+    """
+
+    return [
+        any(kw.arg == "chain_key" for kw in call.keywords)
+        for call in _target_call_nodes(
+            source, symbol="Ledger", module="factory_core.manifest"
+        )
+    ]
 
 
 def test_every_ledger_construction_site_threads_the_chain_key() -> None:
-    """A new ``Ledger(`` construction site cannot be added unkeyed without turning
+    """A new core-``Ledger`` construction cannot be added unkeyed without turning
     this red: every site in the admitted set must pass ``chain_key=`` explicitly,
-    and no site outside the set may construct a core Ledger at all."""
+    and no site outside the set may construct a core Ledger at all. The perimeter
+    is AST-based (round-7 #4: a regex missed qualified/aliased constructions)."""
     repo = Path(__file__).resolve().parent.parent
     found: dict[str, int] = {}
     for module_dir in ("factory_core", "factory_runtime"):
         for path in sorted((repo / module_dir).glob("*.py")):
-            text = path.read_text(encoding="utf-8")
-            count = 0
-            for match in _CONSTRUCTION.finditer(text):
-                window = text[match.start() : match.start() + 240]
-                if "class Ledger" in text[max(0, match.start() - 30) : match.start()]:
-                    continue
-                count += 1
-                assert "chain_key=" in window, (
+            sites = _ledger_construction_sites(path.read_text(encoding="utf-8"))
+            for threads_key in sites:
+                assert threads_key, (
                     f"{path.relative_to(repo)} constructs Ledger without an explicit "
                     f"chain_key= (plan 2.2: every site threads the key or names None "
-                    f"deliberately): ...{window[:120]!r}"
+                    f"deliberately)"
                 )
-            if count:
-                found[str(path.relative_to(repo))] = count
+            if sites:
+                found[str(path.relative_to(repo))] = len(sites)
     assert found == _ADMITTED_SITES, (
         f"Ledger construction sites changed: {found} != admitted {_ADMITTED_SITES}. "
         f"A new site must thread chain_key and be admitted here in the same change."
     )
+
+
+def test_the_enumeration_perimeter_catches_aliased_and_qualified_construction() -> None:
+    """Round-7 finding #4: the regex perimeter was permeable — a construction site
+    evading the ``(?<![\\w.])Ledger\\(`` pattern reddened nothing. These are the
+    exact evasions; the AST perimeter must SEE each one and report its key-threading
+    truthfully (an unkeyed one as False), not miss it."""
+    aliased = _ledger_construction_sites(
+        "from factory_core.manifest import Ledger as L\n"
+        "x = L('p')\n"  # aliased, unkeyed — the regex never saw 'Ledger('
+    )
+    assert aliased == [False], aliased
+
+    qualified = _ledger_construction_sites(
+        "import factory_core.manifest\n"
+        "x = factory_core.manifest.Ledger('p')\n"  # dotted — regex lookbehind excluded it
+    )
+    assert qualified == [False], qualified
+
+    from_module = _ledger_construction_sites(
+        "from factory_core import manifest\n"
+        "x = manifest.Ledger('p', chain_key=k)\n"  # module handle, keyed
+    )
+    assert from_module == [True], from_module
+
+    # and the true negative: a different class named ...Ledger is not the core one.
+    assert _ledger_construction_sites(
+        "from factory_runtime.resources import ResourceLedger\n"
+        "x = ResourceLedger('p')\n"
+    ) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -288,21 +384,21 @@ def test_decide_promotion_has_exactly_one_admitted_caller() -> None:
     promotion machine — red here before it can exist."""
     repo = Path(__file__).resolve().parent.parent
     admitted = {"factory_runtime/promotion_gate.py": 1}
-    call = re.compile(r"(?<![\w.])decide_promotion\(")
     found: dict[str, int] = {}
     for module_dir in ("factory_core", "factory_runtime", "scripts", "harness"):
         base = repo / module_dir
         if not base.is_dir():
             continue
         for path in sorted(base.glob("*.py")):
-            text = path.read_text(encoding="utf-8")
-            count = sum(
-                1
-                for match in call.finditer(text)
-                if not text[: match.start()].rstrip().endswith("def")
+            # AST perimeter (round-7 #4 class): a qualified/aliased call to the
+            # canonical machine cannot slip past a regex lookbehind.
+            calls = _target_call_nodes(
+                path.read_text(encoding="utf-8"),
+                symbol="decide_promotion",
+                module="factory_core.promotion",
             )
-            if count:
-                found[str(path.relative_to(repo))] = count
+            if calls:
+                found[str(path.relative_to(repo))] = len(calls)
     assert found == admitted, (
         f"decide_promotion callers changed: {found} != admitted {admitted} — one "
         f"canonical promotion machine, called by everyone (never a second door)"
