@@ -221,8 +221,6 @@ class _WalkedDestination:
     """One authority destination the run must traverse, derived from the row."""
 
     destination: str
-    consumes_authority_nonce: bool
-    requires_human_receipt: bool
     named_validator: str
 
 
@@ -231,43 +229,29 @@ def authority_destination_walk(
 ) -> tuple[_WalkedDestination, ...]:
     """Derive the run's authority destinations from the admission row.
 
-    Re-bases Phase 1's obligation walk (plan cross-axis resolution 4): which
-    destinations consume an authority nonce, which require a human receipt,
-    and which name a byte-admission validator is read off the SAME row both
-    state paths consume — the preflight consumes this walk instead of
-    re-asserting the facts inline. ``ratification_destinations`` is the
-    caller-supplied phase-state enumeration (single authority in ``state``);
-    activations land on the building destination.
+    Re-bases Phase 1's obligation walk (plan cross-axis resolution 4). The
+    walk's MEMBERSHIP is the fact it owns: every destination it returns needs
+    a resolvable human authority (base states off the row consume the signed
+    intake/resolution authority; ratifications and the building activations
+    require ratification receipts), so the preflight's zero-humans NO can
+    enumerate what is unreachable without re-asserting the list inline. The
+    per-destination receipt and nonce ENFORCEMENT stays where it always was —
+    the obligation layer and ``allowed_authority_nonce_counts`` — and is
+    deliberately not restated here as flags (round-8 8-3: restated flags were
+    asserted-but-unconsumed literals, a third authority for one fact).
+    ``named_validator`` is read off the row's byte-admission contract.
     """
 
     row = TRANSITION_ADMISSION.get(schema_version, TRANSITION_ADMISSION["factory-run/5"])
     validator = row.named_validator if row.admits_external_bytes else ""
-    walked = [
-        _WalkedDestination(
-            destination=destination,
-            consumes_authority_nonce=True,
-            requires_human_receipt=True,
-            named_validator=validator,
-        )
-        for destination in sorted(row.base_states)
-    ]
-    walked.extend(
-        _WalkedDestination(
-            destination=destination,
-            consumes_authority_nonce=False,
-            requires_human_receipt=True,
-            named_validator=validator,
-        )
-        for destination in ratification_destinations
+    destinations = (
+        *sorted(row.base_states),
+        *ratification_destinations,
+        # first-build catalog activation and test-change activation both
+        # ratify at the building destination.
+        "building",
     )
-    # First-build catalog activation and test-change activation both ratify at
-    # the building destination; either requires human+validator receipts.
-    walked.append(
-        _WalkedDestination(
-            destination="building",
-            consumes_authority_nonce=False,
-            requires_human_receipt=True,
-            named_validator=validator,
-        )
+    return tuple(
+        _WalkedDestination(destination=destination, named_validator=validator)
+        for destination in destinations
     )
-    return tuple(walked)

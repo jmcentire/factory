@@ -1453,3 +1453,32 @@ def test_fast_path_never_covers_verification_bearing_states() -> None:
         RunState.BLOCKED,
     }
     assert not {state.value for state in verification_bearing} & _HEAD_PIN_FAST_PATH_STATES
+
+
+def test_legacy_schema_under_a_keyed_root_is_a_downgrade_masquerade(
+    tmp_path: Path,
+) -> None:
+    """Round-8 finding 8-1: every v5-only admission row keys off the per-entry
+    schema_version. A keyless forger is stopped at the HMAC address layer, but a
+    KEY-HOLDER downgrade — a valid keyed ledger claiming a legacy schema to skip
+    the v5-only rows — must fail closed too: a keyed deployment has no
+    legitimate legacy ledger. Unkeyed replay is unaffected (test above)."""
+    from factory_runtime.durability import CHAIN_ROOT_KEY_FILENAME
+
+    (tmp_path / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"founder-root-material\n")
+    store = _store(tmp_path)
+    # a VALID keyed genesis (the key mints a real hmac-sha256 address) that
+    # nonetheless claims v4 — the downgrade a key-holder could attempt.
+    store._ledger("run-1").append(
+        LedgerEntry(
+            capability_id="run-1",
+            from_state="",
+            to_state=RunState.TARGET_RESOLUTION_AUTHORIZED,
+            artifact_digests={"target": TARGET, "phase_artifacts": {}},
+            payload={"run_schema_version": "factory-run/4"},
+            actor="validator",
+            created_at="100",
+        )
+    )
+    with pytest.raises(RunStateError, match="downgrade masquerade"):
+        store.rebuild_projection("run-1")

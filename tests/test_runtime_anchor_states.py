@@ -475,3 +475,30 @@ def test_derive_reverifies_ci_evidence_binding_on_replay(tmp_path: Path) -> None
     shutil.rmtree(ci_store)
     with pytest.raises(RunStateError, match="ci-evidence is invalid"):
         store.rebuild_projection("run-1")
+
+
+def test_keyed_run_seals_and_promotes_end_to_end(tmp_path: Path) -> None:
+    """Round-8 finding 8-2: under a founder-keyed deployment every NEW ledger
+    is keyed and its head is an hmac-sha256 address — the resource seal, the
+    promoted transition, its obligations, and replay must all speak the
+    ledger-head vocabulary or terminal accounting bricks fail-closed."""
+    from factory_runtime.durability import CHAIN_ROOT_KEY_FILENAME
+
+    (tmp_path / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"founder-root-material\n")
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store)
+    )
+    terminalize_run_resources(store, run_id="run-1")
+    projection = store.transition(
+        "run-1",
+        RunState.PROMOTED,
+        actor="validator",
+        artifact_digests={"promoted-artifact": CANDIDATE},
+    )
+    assert projection.state == RunState.PROMOTED
+    latest = store.current_artifact_digests("run-1")
+    # the head really is keyed — this test is vacuous if it silently ran unkeyed
+    assert latest["resource-ledger"].startswith("hmac-sha256:")
+    assert store.rebuild_projection("run-1").state == RunState.PROMOTED

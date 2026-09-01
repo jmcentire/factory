@@ -258,9 +258,7 @@ def run_preflight(
             ratification_destinations=RATIFICATION_DESTINATIONS,
         )
         if not policy.human_ids:
-            unreachable = ", ".join(
-                w.destination for w in walked if w.requires_human_receipt
-            )
+            unreachable = ", ".join(w.destination for w in walked)
             hard_no.append(
                 PreflightFinding(
                     "preflight-authority-unreachable",

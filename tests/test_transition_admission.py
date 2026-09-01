@@ -308,16 +308,14 @@ def test_authority_destination_walk_derives_from_the_row() -> None:
         schema_version="factory-run/5",
         ratification_destinations=("product-specification-ratified",),
     )
-    by_destination = {w.destination: w for w in walk}
-    assert set(by_destination) == {
+    assert {w.destination for w in walk} == {
         "intake",
         "target-resolution-authorized",
         "product-specification-ratified",
         "building",
     }
-    assert by_destination["intake"].consumes_authority_nonce
-    assert not by_destination["building"].consumes_authority_nonce
-    assert all(w.requires_human_receipt for w in walk)
+    # membership is the walk's one owned fact (8-3: receipt/nonce flags were
+    # deleted as asserted-but-unconsumed restatements of the obligation layer).
     # no current row admits external bytes, so no walked destination names a
     # validator — the day one does, the preflight check below starts firing.
     assert all(not w.named_validator for w in walk)

@@ -335,6 +335,17 @@ def _require_digest(value: str, field_name: str) -> None:
         raise RunStateError(f"{field_name} must be a canonical sha256 digest")
 
 
+#: Ledger HEADS speak two address vocabularies (plan 2.2: the prefix is the
+#: mode); content digests never do. Round-8 8-2: sha256-only head checks
+#: bricked keyed terminal accounting.
+_LEDGER_HEAD = re.compile(r"^(sha256|hmac-sha256):[0-9a-f]{64}$")
+
+
+def _require_ledger_head(value: str, field_name: str) -> None:
+    if not _LEDGER_HEAD.fullmatch(value):
+        raise RunStateError(f"{field_name} must be a canonical ledger-head address")
+
+
 def _require_generation_artifacts(
     digests: Mapping[str, Any],
     *,
@@ -2013,6 +2024,29 @@ class RunStore:
                     raise RunStateError(
                         f"run genesis has unsupported schema version {schema_version!r}"
                     )
+                # Round-8 finding 8-1 (version-downgrade masquerade): every
+                # v5-only admission row (CI evidence, causal verifier, evidence
+                # receipts, the immutable-review membership tuples) keys off this
+                # per-entry schema_version, which a direct-ledger forger controls.
+                # A KEYED deployment has no legitimate legacy ledger — keyed
+                # chains are v5-only and a real v1-v4 ledger carries unkeyed
+                # sha256 addresses that already fail a keyed verify at entry 0 —
+                # so a legacy schema under a chain-root-governed tree is an
+                # integrity signal, not a replay. Fail closed explicitly rather
+                # than relying on the incidental address mismatch. Unkeyed
+                # (migration-mode) trees keep legacy replay; their forgeability
+                # is the stated 2.2 residual and its true fix is the keyed
+                # migration path (founder-gated).
+                if (
+                    schema_version in LEGACY_RUN_SCHEMA_VERSIONS
+                    and load_chain_key(self._run_dir(run_id) / "ledger.jsonl")
+                    is not None
+                ):
+                    raise RunStateError(
+                        f"legacy schema {schema_version!r} under a chain-root-keyed "
+                        "deployment: keyed chains are v5-only, so a legacy ledger "
+                        "here is a downgrade masquerade, not a replay — refused"
+                    )
                 expected_genesis = (
                     RunState.TARGET_RESOLUTION_AUTHORIZED
                     if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS
@@ -2302,9 +2336,9 @@ class RunStore:
                         f"ledger entry {index} promotes a digest that was never approved"
                     )
                 if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
-                    _require_digest(
+                    _require_ledger_head(
                         str(digests.get("resource-ledger", "")),
-                        f"ledger entry {index} promotion resource-ledger digest",
+                        f"ledger entry {index} promotion resource-ledger head",
                     )
                     _require_digest(
                         str(digests.get("resource-ledger-seal", "")),

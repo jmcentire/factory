@@ -494,7 +494,7 @@ def _verify_obligation(
     elif verifier_id == "stage-r-subject-resource-check":
         passed = (
             supplied.get("target-state") == target_state_digest
-            and _is_digest(supplied.get("resource-ledger", ""))
+            and _is_ledger_head(supplied.get("resource-ledger", ""))
             and target_state.get("resource_ledger_head") == supplied.get("resource-ledger")
         )
     elif verifier_id == "stage-e-authority-binding-check":
@@ -608,7 +608,11 @@ def _verify_obligation(
             and supplied.get("promoted-artifact") == approved_candidate_digest
         )
     elif verifier_id == "resource-ledger-seal-binding-check":
-        passed = _require_digests(supplied, ("resource-ledger", "resource-ledger-seal"))
+        # The ledger HEAD speaks both address vocabularies (plan 2.2); the seal
+        # digest is digest_obj output and stays sha256-only (round-8 8-2).
+        passed = _is_ledger_head(supplied.get("resource-ledger", "")) and _is_digest(
+            supplied.get("resource-ledger-seal", "")
+        )
     elif verifier_id == "phase-invalidation-check":
         passed = str(payload.get("phase", "")) in set(_PHASE_BY_DESTINATION.values())
     elif verifier_id == "bounded-blocked-handoff-check":
