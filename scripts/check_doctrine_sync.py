@@ -196,21 +196,38 @@ def _normalized(text: str) -> str:
 
 def _active_markdown(root: Path) -> tuple[Path, ...]:
     """Enumerate every active Markdown surface so a new site cannot evade parity scanning."""
+    # Ruling 5c: root markdown enumerates by rglob (depth 1) and prompts/*.md
+    # joins the scanned surface set — a new file is scanned with no registration
+    # step. Generated ROLE-DOCTRINE.md and historical/proposal surfaces stay out.
     root_docs = tuple(
-        path
-        for path in (Path("README.md"), Path("CLAUDE.md"), Path("AGENTS.md"))
-        if (root / path).exists()
+        path.relative_to(root)
+        for path in sorted(root.glob("*.md"))
+        if path.is_file()
     )
     docs = tuple(
         path.relative_to(root)
         for path in sorted((root / "docs").rglob("*.md"))
-        if path.relative_to(root) not in HISTORICAL_MARKDOWN and path.relative_to(root) != CANONICAL
+        if path.relative_to(root) not in HISTORICAL_MARKDOWN
+        and path.relative_to(root) != CANONICAL
+        and "HISTORICAL_MARKDOWN" not in path.parts
+        and "proposals" not in path.parts
+        and path.name != "ROLE-DOCTRINE.md"
     )
-    return root_docs + docs
+    prompts = tuple(
+        path.relative_to(root) for path in sorted((root / "prompts").rglob("*.md"))
+    )
+    return root_docs + docs + prompts
 
 
 def _active_python(root: Path) -> tuple[Path, ...]:
-    return tuple(path.relative_to(root) for path in sorted((root / "factory_core").rglob("*.py")))
+    # Ruling 5c: factory_runtime, harness/*.py, and scripts/*.py join the parity
+    # scope — the same one-line rglob per tree.
+    trees = ("factory_core", "factory_runtime", "harness", "scripts")
+    return tuple(
+        path.relative_to(root)
+        for tree in trees
+        for path in sorted((root / tree).rglob("*.py"))
+    )
 
 
 def check_repository(root: Path = ROOT) -> tuple[str, ...]:
@@ -507,6 +524,11 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         errors.append("tester-construction-ir-isolation-missing")
 
     for path in _active_markdown(root) + _active_python(root):
+        if path.name == "check_doctrine_sync.py":
+            # The denylist's own definition site: the tokens appear here as the
+            # LIST, not as commitments — a denylist that flagged itself would
+            # make every entry unaddable.
+            continue
         text = _read(root, path).casefold()
         for stale in STALE_COMMITMENTS:
             if stale in text:
