@@ -208,6 +208,16 @@ def _parser() -> argparse.ArgumentParser:
     ledger_unlock.add_argument("--root-public-key", required=True)
     ledger_unlock.add_argument("--tessera-bin", default="tessera")
 
+    ci_retain = commands.add_parser(
+        "ci-retain",
+        help="retain a CI output document content-addressed under the run and print "
+        "its digest (the resolved CI row, plan 4.1): the ci transition admits only a "
+        "retained document whose body binds the exact approved candidate",
+    )
+    ci_retain.add_argument("--runs", required=True)
+    ci_retain.add_argument("--run-id", required=True)
+    ci_retain.add_argument("--document", required=True, help="CI output JSON file")
+
     readiness_issues = commands.add_parser(
         "readiness-issues",
         help="read the retained generation-readiness snapshot's residual blockers "
@@ -1119,6 +1129,22 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             raise SystemExit(f"{arguments.command}: {exc}") from exc
         _emit({"applied": True, "record": str(applied.record_path), "detail": applied.detail})
         return
+    if arguments.command == "ci-retain":
+        from factory_runtime.ci_evidence import CiOutputError, retain_ci_output
+
+        try:
+            document = json.loads(Path(arguments.document).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"ci-retain: unreadable CI output document: {exc}") from exc
+        try:
+            digest = retain_ci_output(
+                Path(arguments.runs) / arguments.run_id, document
+            )
+        except CiOutputError as exc:
+            raise SystemExit(f"ci-retain: {exc}") from exc
+        print(digest)
+        return
+
     if arguments.command == "readiness-issues":
         from factory_runtime.generation import GenerationError, _generation_blob
 

@@ -170,7 +170,7 @@ def test_promoting_a_different_digest_than_was_approved_is_refused(tmp_path: Pat
     """The byte-for-byte property: promote what the human approved, or refuse."""
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
 
     with pytest.raises(RunStateError, match="approved candidate"):
         store.transition(
@@ -184,7 +184,7 @@ def test_promoting_a_different_digest_than_was_approved_is_refused(tmp_path: Pat
 def test_promoting_without_naming_the_artifact_is_refused(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store)
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
 
     with pytest.raises(RunStateError, match="promoted-artifact"):
         store.transition("run-1", RunState.PROMOTED, actor="validator")
@@ -193,7 +193,7 @@ def test_promoting_without_naming_the_artifact_is_refused(tmp_path: Path) -> Non
 def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
     terminalize_run_resources(store, run_id="run-1")
     projection = store.transition(
         "run-1",
@@ -218,7 +218,7 @@ def test_promoting_the_approved_candidate_succeeds_and_is_resumable(tmp_path: Pa
 def test_direct_promoted_ledger_append_cannot_bypass_resource_close(tmp_path: Path) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
     ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
         generation=1,
         resource_id="unfinished-workspace",
@@ -261,7 +261,7 @@ def test_crash_after_resource_seal_is_a_promotion_only_resumable_state(
 ) -> None:
     store = _run_at_preview(tmp_path)
     _approve(store, candidate=CANDIDATE)
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
     terminalize_run_resources(store, run_id="run-1")
     ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).seal_for_close(actor="gate-l")
 
@@ -394,7 +394,9 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
     prior = RunState.PREVIEW
     if anchor_state is not RunState.HUMAN_APPROVED:
         _approve(store)
-        store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+        store.transition(
+            "run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store)
+        )
         prior = RunState.CI
     store._ledger("run-1").append(
         LedgerEntry(
@@ -420,4 +422,56 @@ def test_derive_requires_every_anchor_digest_the_write_path_requires(
     )
 
     with pytest.raises(RunStateError, match=f"{anchor_key} digest"):
+        store.rebuild_projection("run-1")
+
+
+def test_ci_refuses_a_fabricated_unretained_evidence_digest(tmp_path: Path) -> None:
+    """The resolved CI row (plan 4.1): a bare digest with no retained document
+    behind it is exactly what the old shape-only check admitted — the ci
+    admission now requires the retained bytes to exist and re-derive."""
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    with pytest.raises(RunStateError, match="ci-evidence is invalid"):
+        store.transition(
+            "run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts()
+        )
+
+
+def test_ci_refuses_evidence_bound_to_a_different_candidate(tmp_path: Path) -> None:
+    """The binding is exact: a retained CI document naming another candidate
+    proves nothing about the one being promoted."""
+    from factory_runtime.ci_evidence import retain_ci_output
+
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    forged = retain_ci_output(
+        store._run_dir("run-1"), {"candidate": OTHER_CANDIDATE, "seed": "forged"}
+    )
+    with pytest.raises(RunStateError, match="different candidate"):
+        store.transition(
+            "run-1",
+            RunState.CI,
+            actor="validator",
+            artifact_digests={"ci-evidence": forged},
+        )
+
+
+def test_derive_reverifies_ci_evidence_binding_on_replay(tmp_path: Path) -> None:
+    """The replay path calls the same verifier: destroying the retained CI
+    document after admission makes the ledger unloadable rather than silently
+    projecting a promotion whose integration proof no longer exists."""
+    import shutil
+
+    store = _run_at_preview(tmp_path)
+    _approve(store, candidate=CANDIDATE)
+    store.transition(
+        "run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store)
+    )
+    assert store.rebuild_projection("run-1").state == RunState.CI
+    ci_store = store._run_dir("run-1") / "evidence" / "ci"
+    for directory in ci_store.rglob("*"):
+        if directory.is_dir():
+            directory.chmod(0o755)
+    shutil.rmtree(ci_store)
+    with pytest.raises(RunStateError, match="ci-evidence is invalid"):
         store.rebuild_projection("run-1")

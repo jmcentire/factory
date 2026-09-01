@@ -25,6 +25,7 @@ from factory_core.manifest import (
     SegregationPolicy,
     digest_obj,
 )
+from factory_runtime.ci_evidence import CiOutputError, verify_retained_ci_output
 from factory_runtime.durability import load_chain_key
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
@@ -73,6 +74,9 @@ TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset(
 GENERATION_RUN_SCHEMA_VERSIONS = frozenset(
     {"factory-run/2", "factory-run/3", "factory-run/4", RUN_SCHEMA_VERSION}
 )
+# The resolved CI row (plan 4.1) is v5-only: released ledgers promoted without a
+# retained CI output under their frozen replay profiles and must keep doing so.
+CI_OUTPUT_RUN_SCHEMA_VERSIONS = frozenset({RUN_SCHEMA_VERSION})
 # v5 is the first schema that binds the immutable Validator execution/review tuple and a
 # replayable cryptographic evidence-verification receipt. Released v4 has a separate frozen,
 # read-only replay contract; it must not be interpreted with v5 semantics.
@@ -1739,6 +1743,25 @@ class RunStore:
                     "promoted artifact does not match the approved candidate digest "
                     "(the artifact promoted must be byte-for-byte what was approved)"
                 )
+        if destination is RunState.CI:
+            approved = current.approved_candidate_digest
+            if not approved:
+                raise RunStateError(
+                    f"{destination} requires a previously approved candidate digest"
+                )
+            # The resolved CI row (plan 4.1): the cited CI output must be a
+            # retained document whose body binds the EXACT approved candidate.
+            # The obligation layer's ci-evidence-binding-check verifies shape
+            # only (pre-existing); this is the real binding, and the replay
+            # path calls the same verifier.
+            try:
+                verify_retained_ci_output(
+                    self._run_dir(run_id),
+                    candidate_digest=approved,
+                    expected_digest=str(supplied.get("ci-evidence", "")),
+                )
+            except CiOutputError as exc:
+                raise RunStateError(f"{destination} ci-evidence is invalid: {exc}") from exc
 
         required_phase_keys = _required_phase_keys(destination, transition_payload)
         phases = {key: phases[key] for key in _PHASE_ORDER if key in required_phase_keys}
@@ -2303,6 +2326,21 @@ class RunStore:
                         raise RunStateError(
                             f"ledger entry {index} resource-ledger seal digest does not match"
                         )
+            elif destination is RunState.CI and (
+                schema_version in CI_OUTPUT_RUN_SCHEMA_VERSIONS
+            ):
+                # Same CI-row verifier as the write path — a directly appended
+                # ci entry citing no (or an unbound) CI output cannot project.
+                try:
+                    verify_retained_ci_output(
+                        self._run_dir(run_id),
+                        candidate_digest=approved_candidate,
+                        expected_digest=str(digests.get("ci-evidence", "")),
+                    )
+                except CiOutputError as exc:
+                    raise RunStateError(
+                        f"ledger entry {index} ci-evidence is invalid: {exc}"
+                    ) from exc
 
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):

@@ -734,3 +734,42 @@ def test_retained_capsule_freshness_check_refuses_a_moved_projection(tmp_path) -
     stale = dataclasses.replace(frozen, generation=frozen.generation + 7)
     with pytest.raises(ValueError, match="projection changed"):
         _require_fresh_projection_before_capsule(runs, "r1", stale)
+
+
+def test_ci_retain_retains_a_verifiable_candidate_bound_document(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The CI seam's entrypoint (the resolved CI row, plan 4.1): the printed
+    digest resolves through the same verifier the ci admission calls."""
+    from factory_runtime.ci_evidence import CiOutputError, verify_retained_ci_output
+
+    candidate = "sha256:" + "a" * 64
+    document = tmp_path / "ci.json"
+    document.write_text(
+        json.dumps({"candidate": candidate, "conclusion": "success"}),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    assert (
+        main(
+            [
+                "ci-retain",
+                "--runs",
+                str(tmp_path / "runs"),
+                "--run-id",
+                "r1",
+                "--document",
+                str(document),
+            ]
+        )
+        == 0
+    )
+    digest = capsys.readouterr().out.strip()
+    verify_retained_ci_output(
+        run_dir, candidate_digest=candidate, expected_digest=digest
+    )
+    with pytest.raises(CiOutputError, match="different candidate"):
+        verify_retained_ci_output(
+            run_dir, candidate_digest="sha256:" + "b" * 64, expected_digest=digest
+        )

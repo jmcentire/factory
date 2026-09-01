@@ -403,7 +403,7 @@ def test_full_happy_path_is_explicit_and_resumable(tmp_path: Path) -> None:
         implementer_identity="coder",
         approver_identity="human-approver",
     )
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
     terminalize_run_resources(store, run_id="run-1")
     store.transition(
         "run-1",
@@ -930,7 +930,7 @@ def test_promoting_with_an_unresolved_resource_is_refused(tmp_path: Path) -> Non
         implementer_identity="coder",
         approver_identity="human-approver",
     )
-    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts())
+    store.transition("run-1", RunState.CI, actor="validator", artifact_digests=ci_artifacts(store))
     ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100).append(
         generation=1,
         resource_id="unfinished-workspace",

@@ -1162,10 +1162,26 @@ def preview_artifacts(
     }
 
 
-def ci_artifacts(seed: str = "default") -> dict[str, str]:
-    """Content-addressed CI result required after human candidate approval."""
+def ci_artifacts(store: Any = None, run_id: str = "run-1", seed: str = "default") -> dict[str, str]:
+    """Retained, candidate-bound CI output citation (the resolved CI row, plan 4.1).
 
-    return {"ci-evidence": "sha256:" + hashlib.sha256(f"{seed}:ci-evidence".encode()).hexdigest()}
+    With a store, retains a real CI document bound to the run's approved
+    candidate and cites its address — what the v5 ci admission verifies.
+    Without one, fabricates a bare digest: the refusing-direction fixture.
+    """
+
+    if store is None:
+        return {
+            "ci-evidence": "sha256:"
+            + hashlib.sha256(f"{seed}:ci-evidence".encode()).hexdigest()
+        }
+    from factory_runtime.ci_evidence import retain_ci_output
+
+    approved = store.load(run_id).approved_candidate_digest
+    digest = retain_ci_output(
+        store._run_dir(run_id), {"candidate": approved, "seed": seed}
+    )
+    return {"ci-evidence": digest}
 
 
 def create_intake_run(
