@@ -29,7 +29,15 @@ from factory_runtime.durability import load_chain_key
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.transition_admission import (
+    ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+    TEST_CHANGE_AUTHORIZATION_KEY,
+    AdmissionRefusal,
+)
+from factory_runtime.transition_admission import (
     allowed_authority_nonce_counts as allowed_authority_nonce_counts_for,
+)
+from factory_runtime.transition_admission import (
+    transition_activations as transition_activations_for,
 )
 from factory_runtime.transition_obligations import (
     REPORT_KEY as TRANSITION_OBLIGATION_REPORT_KEY,
@@ -85,10 +93,11 @@ GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
     "generation-readiness",
 )
 
-ACCEPTANCE_OBLIGATION_CATALOG_KEY = "acceptance-obligation-catalog"
+# ACCEPTANCE_OBLIGATION_CATALOG_KEY / TEST_CHANGE_AUTHORIZATION_KEY are defined
+# in transition_admission (the shared axis assembles activation sets from them)
+# and re-exported above for this module's existing consumers.
 ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY = "acceptance_obligation_catalog"
 ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
-TEST_CHANGE_AUTHORIZATION_KEY = "test-change-authorization"
 VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
     "validator-execution-manifest",
     "validator-execution-configuration",
@@ -1361,25 +1370,25 @@ class RunStore:
                     + ", ".join(forbidden_subject_keys)
                 )
         phase_key = _PHASE_STATE_KEYS.get(destination)
-        catalog_activation = destination is RunState.BUILDING and not next_acceptance_catalog_digest
-        changed_tests_raw = transition_payload.get("changed_existing_tests", [])
-        if not isinstance(changed_tests_raw, list):
-            raise RunStateError("changed_existing_tests must be an exact array")
-        changed_tests = [str(test_id) for test_id in changed_tests_raw]
-        test_change_activation = bool(changed_tests)
-        if test_change_activation and destination is not RunState.BUILDING:
-            raise RunStateError(
-                "test expectation changes may be authorized only when entering building"
+        # 4.1c second axis: the write path consumes the SAME activation
+        # derivation the replay path consumes — catalog activation, test-change
+        # activation, and the ratified-key set are one answer, not twins.
+        try:
+            activations = transition_activations_for(
+                destination=str(destination),
+                phase_key=phase_key,
+                changed_existing_tests_raw=transition_payload.get(
+                    "changed_existing_tests", []
+                ),
+                catalog_digest_recorded=bool(next_acceptance_catalog_digest),
+                obligation_replay=RUN_SCHEMA_VERSION
+                in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS,
             )
-        ratified_artifact_keys = {
-            key
-            for key in (
-                phase_key,
-                ACCEPTANCE_OBLIGATION_CATALOG_KEY if catalog_activation else None,
-                TEST_CHANGE_AUTHORIZATION_KEY if test_change_activation else None,
-            )
-            if key is not None
-        }
+        except AdmissionRefusal as exc:
+            raise RunStateError(str(exc)) from exc
+        catalog_activation = activations.catalog_activation
+        test_change_activation = activations.test_change_activation
+        ratified_artifact_keys = activations.ratified_artifact_keys
         _require_receipts_belong_here(
             supplied,
             ratified_artifact_keys,
@@ -2110,31 +2119,24 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} changes the legacy run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
-            derived_catalog_activation = (
-                schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS
-                and destination is RunState.BUILDING
-                and not acceptance_obligation_catalog_digest
-            )
-            derived_changed_tests_raw = payload_raw.get("changed_existing_tests", [])
-            if not isinstance(derived_changed_tests_raw, list):
-                raise RunStateError(
-                    f"ledger entry {index} changed_existing_tests must be an exact array"
+            # 4.1c second axis: same activation derivation as the write path.
+            try:
+                derived_activations = transition_activations_for(
+                    destination=str(destination),
+                    phase_key=derived_phase_key,
+                    changed_existing_tests_raw=payload_raw.get(
+                        "changed_existing_tests", []
+                    ),
+                    catalog_digest_recorded=bool(acceptance_obligation_catalog_digest),
+                    obligation_replay=schema_version
+                    in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS,
+                    context=f"ledger entry {index} ",
                 )
-            derived_changed_tests = [str(test_id) for test_id in derived_changed_tests_raw]
-            derived_test_change_activation = bool(derived_changed_tests)
-            if derived_test_change_activation and destination is not RunState.BUILDING:
-                raise RunStateError(
-                    f"ledger entry {index} authorizes a test expectation change outside building"
-                )
-            derived_ratified_keys = {
-                key
-                for key in (
-                    derived_phase_key,
-                    (ACCEPTANCE_OBLIGATION_CATALOG_KEY if derived_catalog_activation else None),
-                    (TEST_CHANGE_AUTHORIZATION_KEY if derived_test_change_activation else None),
-                )
-                if key is not None
-            }
+            except AdmissionRefusal as exc:
+                raise RunStateError(str(exc)) from exc
+            derived_catalog_activation = derived_activations.catalog_activation
+            derived_test_change_activation = derived_activations.test_change_activation
+            derived_ratified_keys = derived_activations.ratified_artifact_keys
             _require_receipts_belong_here(
                 digests, derived_ratified_keys, context=f"ledger entry {index}"
             )

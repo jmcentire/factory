@@ -144,6 +144,114 @@ def test_both_state_paths_consume_the_same_row(tmp_path, monkeypatch) -> None:
         store.rebuild_projection("r1")  # derive path walks the same poisoned rule
 
 
+def test_activation_axis_unifies_the_twin_derivations() -> None:
+    """Second migrated axis: array-shape refusal, only-when-building refusal,
+    catalog predicate (gated on obligation replay), and ratified-key assembly
+    are one answer with the refusal context naming the ledger entry."""
+    from factory_runtime.transition_admission import (
+        ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+        TEST_CHANGE_AUTHORIZATION_KEY,
+        AdmissionRefusal,
+        transition_activations,
+    )
+
+    with pytest.raises(AdmissionRefusal, match="exact array"):
+        transition_activations(
+            destination="building",
+            phase_key=None,
+            changed_existing_tests_raw="not-a-list",
+            catalog_digest_recorded=False,
+            obligation_replay=True,
+        )
+    with pytest.raises(
+        AdmissionRefusal, match="ledger entry 3 test expectation changes"
+    ):
+        transition_activations(
+            destination="intake",
+            phase_key=None,
+            changed_existing_tests_raw=["t1"],
+            catalog_digest_recorded=False,
+            obligation_replay=True,
+            context="ledger entry 3 ",
+        )
+
+    first_build = transition_activations(
+        destination="building",
+        phase_key=None,
+        changed_existing_tests_raw=["t1"],
+        catalog_digest_recorded=False,
+        obligation_replay=True,
+    )
+    assert first_build.catalog_activation
+    assert first_build.test_change_activation
+    assert first_build.ratified_artifact_keys == frozenset(
+        {ACCEPTANCE_OBLIGATION_CATALOG_KEY, TEST_CHANGE_AUTHORIZATION_KEY}
+    )
+    # pre-obligation-replay versions never activate a catalog; a recorded
+    # catalog digest means no re-activation on later builds.
+    assert not transition_activations(
+        destination="building",
+        phase_key=None,
+        changed_existing_tests_raw=[],
+        catalog_digest_recorded=False,
+        obligation_replay=False,
+    ).catalog_activation
+    assert not transition_activations(
+        destination="building",
+        phase_key=None,
+        changed_existing_tests_raw=[],
+        catalog_digest_recorded=True,
+        obligation_replay=True,
+    ).catalog_activation
+    phase = transition_activations(
+        destination="product-specification-ratified",
+        phase_key="product-specification",
+        changed_existing_tests_raw=[],
+        catalog_digest_recorded=False,
+        obligation_replay=True,
+    )
+    assert phase.ratified_artifact_keys == frozenset({"product-specification"})
+
+
+def test_both_state_paths_consume_the_same_activation_axis(
+    tmp_path, monkeypatch
+) -> None:
+    """Poison the second axis' one answer and BOTH the write path and the
+    derive path refuse — neither carries a private twin of the derivation."""
+    import factory_runtime.state as state_module
+    from factory_core.manifest import digest_obj as _digest
+    from factory_runtime.state import RunState, RunStateError, RunStore
+    from factory_runtime.transition_admission import AdmissionRefusal
+    from tests.conftest import create_intake_run
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    create_intake_run(
+        store,
+        run_id="r1",
+        target_digest="sha256:" + "a" * 64,
+        source_digest=_digest({"source": "r1"}),
+    )
+
+    def poisoned(**_kwargs):
+        raise AdmissionRefusal("activation axis poisoned")
+
+    monkeypatch.setattr(state_module, "transition_activations_for", poisoned)
+    with pytest.raises(RunStateError, match="activation axis poisoned"):
+        store.transition(
+            "r1",
+            RunState.PRODUCT_SPECIFICATION_RATIFIED,
+            actor="validator",
+            artifact_digests={
+                "product-specification": "sha256:" + "b" * 64,
+                "product-specification:human-receipt": "sha256:" + "c" * 64,
+            },
+        )
+    with pytest.raises(RunStateError, match="activation axis poisoned"):
+        store.rebuild_projection("r1")
+
+
 def test_every_byte_admitting_row_names_a_callable_validator() -> None:
     """4.1's rule for LLM entry rows, as a contract rather than a count: a row
     that admits externally produced bytes must name its mechanical validator,
