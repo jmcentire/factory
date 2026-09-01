@@ -7816,3 +7816,49 @@ def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> No
     assert guard.returncode != 0
     assert "refusing duplicate receipt id" in guard.stderr
     assert len(chain.read_text().splitlines()) == 1  # no row appended
+
+
+def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
+    tmp_path: Path,
+) -> None:
+    """Round-8 (GLM #94 item 2): endgame.sh:100's ``candidate archive failed``
+    refusal was an UNDRIVEN guard — a control that looks live but no test made
+    its ``git archive | tar -x`` pipeline fail. It is a genuine environmental
+    degrade-never-wedge site (archive/extract I/O failure), so per the rule it
+    earns a DRIVING test rather than deletion. ``tar`` is used only at that line,
+    so a PATH-shadowed failing ``tar`` drives the guard true without disturbing
+    the real git steps before it, and the site must leave exactly one registered
+    refusal event and exit 70."""
+    operator, root, target_state = execution_truth_fixture(
+        tmp_path, terminal_resources=False
+    )
+    sha = str(target_state["resolved_commit"])
+
+    stub_dir = tmp_path / "failtar-bin"
+    stub_dir.mkdir()
+    tar_stub = stub_dir / "tar"
+    tar_stub.write_text(
+        "#!/usr/bin/env bash\necho 'stub tar: refusing to extract' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    tar_stub.chmod(0o755)
+
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+
+    r = run(
+        [
+            "bash",
+            str(HARNESS / "endgame.sh"),
+            "r1",
+            sha,
+            "--candidate-resource",
+            "target-source",
+        ],
+        tmp_path,
+        env,
+    )
+    assert r.returncode == 70, (r.returncode, r.stdout, r.stderr)
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
+    assert "candidate archive failed" in str(rows[0]["detail"])
