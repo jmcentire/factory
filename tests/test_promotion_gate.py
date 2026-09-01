@@ -692,6 +692,38 @@ def test_promotion_missing_surface_map_routes_every_path_to_critical() -> None:
     assert decision.highest_criticality == CRITICALITY_CRITICAL
 
 
+def test_empty_surface_map_value_routes_its_path_to_critical_not_the_void() -> None:
+    """Round-8 phase11c fail-open: a glob whose surface_map VALUE is empty matched
+    a changed path, normalized to "", and the old ``if s`` filter erased the path
+    from BOTH the mapped and unmapped sets — the change escaped criticality
+    entirely and could promote at the lightest tier. A malformed binding names no
+    surface, so its path is unmapped and inherits implicit Critical."""
+    request = _request(
+        changed_paths=("src/danger.py",),
+        surface_map={"src/danger.py": ""},  # matches, but names no surface
+        observations=(_observation("standard-surface"),),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-unmapped-critical:src/danger.py" in decision.reports
+    assert decision.highest_criticality == CRITICALITY_CRITICAL
+    # the path did NOT vanish — it is present as an unmapped pseudo-surface
+    assert "surface-unclassified:path:src/danger.py" in decision.reports
+
+
+def test_whitespace_only_surface_map_value_is_also_malformed() -> None:
+    """A whitespace-only value normalizes to empty just as a blank one does —
+    same malformed binding, same fail-closed route to Critical."""
+    request = _request(
+        changed_paths=("src/danger.py",),
+        surface_map={"src/danger.py": "   "},
+        observations=(_observation("standard-surface"),),
+    )
+    decision = decide_promotion(request, _roster(), _profile())
+    assert decision.disposition == DISPOSITION_BLOCK
+    assert "disturbed-surface-unmapped-critical:src/danger.py" in decision.reports
+
+
 def test_retired_agent_declared_surface_field_is_inert() -> None:
     """The route-around this slice deletes: a raw input still carrying the retired
     agent-declared ``disturbed_surface_ids`` (claiming only a cosmetic surface) cannot

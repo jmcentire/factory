@@ -505,14 +505,22 @@ def _derive_disturbed_surfaces(
     unmapped: list[str] = []
     for path in paths:
         hit = next(
-            (str(surface_map[g]) for g in globs if fnmatch.fnmatchcase(path, g)), None
+            (surface_map[g] for g in globs if fnmatch.fnmatchcase(path, g)), None
         )
-        if hit is None:
+        label = normalize_label(str(hit)) if hit is not None else ""
+        if not label:
+            # No matching glob OR a glob whose value is empty/blank — a malformed
+            # binding that names no surface. Either way the path is UNMAPPED and
+            # inherits the fail-closed Critical pseudo-surface; it is NEVER silently
+            # dropped. (Round-8 phase11c: an empty surface_map VALUE matched a glob,
+            # normalized to "", and the old ``if s`` filter erased the path from
+            # BOTH the mapped set and the unmapped set — the changed path escaped
+            # criticality entirely. Fail-open closed.)
             unmapped.append(path)
         else:
-            mapped.add(normalize_label(hit))
+            mapped.add(label)
     return _SurfaceDerivation(
-        surface_ids=tuple(sorted(s for s in mapped if s)),
+        surface_ids=tuple(sorted(mapped)),
         unmapped_paths=tuple(unmapped),
     )
 
