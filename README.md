@@ -12,25 +12,14 @@ The foundation of this repository is a written doctrine, and the code implements
 it. The doctrine is authoritative; this repository reports its running subset below.
 
 - **[`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)** — the unified specification:
-  exactly three roles (**Validator, Coder, Tester**), exactly three pre-build phases
-  (product specification, architecture, operational maturity), two flows (capability +
-  correction), the eight non-negotiables, shared-spec/no-shared-channel independence,
-  oracle-adequacy-not-blast-radius gating, human-decided surface criticality, class-scoped
-  determinism and evidence-gap disposition, the three signed/content-addressed invariant
-  documents, authorization-based existing-test disposition, evidence-backed checklist gates,
-  signed scoped tool tiers, the red-now/green-now correction controls and the suspected
-  over-constraint rule, reproduction as the correction's negative control, graded independence
-  tiers recorded per run, spec-derived monitors that a triage agent cannot silence, environment
-  ladder, content-addressed evidence plane, and regulated control plane. Part II contains the
-  authoritative self-contained role directives.
-- **[`docs/SOFTWARE-FACTORY.md`, Part II](docs/SOFTWARE-FACTORY.md)** — the role
-  directives live in the canonical working specification (the former
-  AGENT-DIRECTIVES.md pointer-to-pointer was removed in remediation 5.2).
+  exactly three roles (**Validator, Coder, Tester**), exactly three pre-build phases, the
+  eight non-negotiables, and every rule the factory enforces. Part II contains the
+  authoritative self-contained role directives. The former ~25-rule digest here was a
+  restatement that drifted; the specification is the authority (remediation 5.2).
+- **[`docs/GLOSSARY.md`](docs/GLOSSARY.md)** — the declared definition site: load-bearing
+  terms anchored to exact code referents at recorded digests.
 - **[`docs/VALIDATION-DIRECTIVE.md`](docs/VALIDATION-DIRECTIVE.md)** — the Validator's
-  process-completeness operational supplement: phase-artifact provenance, no local-only work,
-  durable `.kin`, current docs/contracts, migration atomicity, PR/commit/merge/deploy
-  evidence, live observability, class-scoped gap disposition and Standard risk acceptance,
-  rollback authority, and a reproducible evidence bundle for every pass.
+  process-completeness operational supplement.
 
 The practices under `docs/practices/` and the sync log in `docs/PROVENANCE-SYNC.md` are
 disciplines and records **under** this doctrine.
@@ -91,27 +80,9 @@ fences never substitute for runner isolation, typed capability checks, or signed
 
 ## Specs, recipes, and rebuilds
 
-The three ratified artifacts answer different human questions. The **Product Specification**
-states the outcome and user-visible behavior. The **Architecture Specification** settles the
-major interfaces, boundaries, data/authority ownership, and operational shape. The **Testing and
-Monitoring Strategy** states the user expectations and independent oracles that decide whether
-the result works. The human and Validator may negotiate these through as many chat turns as
-needed; generation begins only after all three are agreed, sufficiently deep, and independently
-ratified.
-
-A **recipe pattern** is narrower: a reusable, versioned construction mechanism with addresses for
-its implementation and qualification evidence. It is a standard way to build something, not a
-statement that the product should do it. A per-run **build plan (recipe book)** instantiates those
-patterns with configuration, orders their dependencies, links every Product/Architecture item to
-construction, and links each expectation to an Operational oracle. It is disposable derived IR:
-any phase amendment invalidates it, and it can never supersede a spec or alter a test expectation.
-
-Promotion cares whether the resulting product satisfies the agreed oracles, not whether generated
-code is aesthetically consistent. `regenerate` keeps a complete rewrite ordinary; `brownfield`
-exists for a deliberately scoped small correction. Existing tests are immutable by default: an
-agent may change one only when current signed authority uniquely supersedes the old behavior and a
-single exact ruling names the assertion (or frozen family) and expected change, then an enrolled
-human and a distinct enrolled Validator independently sign that ruling.
+The three ratified phase artifacts, recipe patterns, and the disposable per-run build plan are
+defined in [`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md) (the definitional prose that
+lived here was a restatement — remediation 5.2). What stays here is the honest boundary:
 
 The runtime currently binds the selected construction mode but does not yet derive and enforce a
 `brownfield` changed-path/surface ceiling against the produced candidate. The mandatory Validator
@@ -179,34 +150,11 @@ target pack and the core is still importable, testable, and green.
 
 ## What's here
 
-| Module | What it is |
-|---|---|
-| `factory_core/manifest.py` | The content-addressed (SHA-256), append-only, **hash-chained**, tamper-evident evidence ledger. Every append is **fail-closed on segregation of duties** (implementer, verifier, approver must be three distinct identities); `SegregationPolicy` resolves identities **DENY-wins** (an agent denylist beats the human allowlist); `verify_digest` is the constant-time leaf tamper check. Stdlib-only. |
-| `factory_core/evidence.py` + `factory_core/checklist.py` | Shared subject-bound evidence verification and the generic checklist item/report model. A checked item without its own valid citation is still a gap. |
-| `factory_core/criticality.py` | The fixed three-class (**Critical / Standard / Cosmetic**) surface-policy model. Components, surfaces, wrong-cost rationales, human deciders, side-effect edges, extra evidence ids, and Standard flake budgets are target **data**. Unknown/unclassified resolves Critical. |
-| `factory_core/promotion.py` | The pure promotion decision (`decide_promotion`) over criticality resolution, oracle/live/determinism observations, trusted invariant documents, signed tool policy, evidence-backed checklist, specialist review, risk acceptance, and SoD. Critical gaps block without waiver; Standard gaps gate; Cosmetic gaps report-and-promote. |
-| `factory_core/provenance.py` | The **provenance-of-intent** verifier (`verify_intent_provenance`): exactly one trusted Product Specification, Architecture Specification, and Testing and Monitoring Strategy; artifact-and-item digest binding for every downstream requirement, constraint, task, and test assertion; and explicit signed supersession metadata. Missing links are labeled for class disposition; unresolvable/mismatched links remain integrity failures. |
-| `factory_core/build_plan.py` | Qualified recipe-pattern catalog and per-run recipe book/build IR: immutable step configuration, dependency graph, complete implementation coverage, expectation→oracle matrix, and exact run/target/input/catalog/phase invalidation. |
-| `factory_core/test_disposition.py` | Pure authorization-based classification of formerly passing failures: update only on same-phase signed supersession plus one exact externally trusted human-authored, Validator-ratified impact ruling; otherwise fix the code when authority is unchanged or route silence/conflict to the human. |
-| `factory_core/independence.py` | The five-tier independence ladder (**weakest → strongest**), derived from the recorded arrangement and never asserted; the per-agent model family/version and directive version; and the structural-mode trade. Fail-closed: an unrecorded arrangement derives the weakest tier, and an overclaimed tier blocks. |
-| `factory_core/monitors.py` | Spec-derived monitors with resolvable authority, class-scoped authorship (**Critical ⇒ human-authored**), notification requiring an actionable conclusion, monitor-carried fix state, and density recorded without a threshold. |
-| `factory_core/triage.py` | The triage decision (`decide_triage`) that cannot silence its own alert's monitor without a human-ratified specification defect, plus the earned-notification decision (`decide_notification`). |
-| `factory_core/correction.py` | The red-now/green-now control classifier — a red guard is a **suspected over-constraint** raised, never repurposed — plus the recognition check, greenfield gating, and the reproduction-before-repair requirement. |
-| `factory_core/tool_policy.py` | Pure signed run-policy verifier and pre-execution invocation decision over opaque target-supplied tool/scope ids. Verboten and unknown deny, Sign-off authority expires, and denial probes prove configured refusal. |
-| `factory_core/comprehensiveness.py` | The **deterministic, injection-resistant** intake-completeness gate: an ordered, collision-guarded registry of **structural** field predicates (present-and-substantive by length + word-token count, never semantic, **never an LLM**) that decides comprehensive vs needs-info. The entrance analogue of `completeness.py`'s exit gate. Fields / thresholds / rules are per-target **data**. Stdlib-only. |
-| `factory_core/target.py` | The `TargetManifest` loader: parses a content-addressed TOML manifest (repo coords/ref, adapters, compliance, roles, operational build ABI, effort, demo environment), validates it against JSON Schema, and **refuses any code reference**—data in, never a code import. |
-| `factory_core/adapters.py` | The five `typing.Protocol` seams for all target contact: `RepoAdapter`, `KnowledgeAdapter`, `ComplianceAdapter`, `IdpAdapter`, `ArtifactSink`. Interfaces only. |
-| `factory_core/roles.py` | The target role/capability model **schema**: a capability is the atomic unit, an RBAC role is a named bundle, and grants are **per-target data**. It is distinct from the three factory workflow roles. |
-| `factory_core/schemas/capability_delta.schema.json` | The neutral, target-agnostic **capability-delta IR** a spec declares for a change (nodes with abstract roles, flows with an abstract data-class, invariants by opaque id + degree). The analyzer composes it against the signed kernel + composition ledger. Names no target; all concrete vocabulary is per-target kernel data. |
-| `factory_runtime/state.py` | Persisted lifecycle ledger and checked projection, including phase-amendment invalidation, receipt replay refusal, complete frozen generation tuples, and monotone bounded attempts. |
-| `factory_runtime/durability.py` + `tessera.py` + `authority.py` | Local-POSIX evidence durability, the real Tessera CLI boundary, externally pinned genesis, and subject-bound receipt verification. |
-| `factory_runtime/workflow.py` + `repair.py` + `failure_classification.py` | Authorized-change intake, dual-receipt invariant-document ratification, typed terminal-failure routing, and Validator-signed bounded repair over one immutable failed subject. |
-| `factory_runtime/generation.py` + `snapshot.py` | Target/phase/build-plan readiness plus content-addressed retention and re-verification of exact generation and review bytes. |
-| `factory_runtime/isolation.py` + `lanes.py` | Qualified macOS Seatbelt enforcement and asymmetric build-input/recipe projections for the separated Coder/Tester → Validator loop. |
-| `factory_runtime/adversarial_review.py` | Closed immutable review subjects and reports, exact cited-byte verification, code-owned dimension/completeness coverage, content-addressed finding identity, host-derived verdicts, and durable review evidence. |
-| `factory_runtime/evidence_plane.py` + `orchestrator.py` | Append-as-observed checklist journal, retained review snapshots, generation/attempt receipts, reproducible evidence bundle, and executable path through signed preview. |
-| `factory_runtime/cli.py` | `factory` commands for schema validation, canonical JSON addressing, target ABI inspection, genesis verification, intake, phase ratification, status, projection rebuild, Tessera wrapping, and Gate L rendering. |
-| `scripts/check_core_purity.py` | The executable, fail-closed **anti-coupling guard** (import scan + token denylist + reverse-dependency assert), baseline-backed by `core_purity_baseline.json`. The token set is **data**, read from `core_purity_denylist.json` (empty on the generic core — nothing target-specific to catch; a consuming target fills in its own tokens as private config). |
+The module inventory that lived here duplicated the doctrine-to-code table above
+row for row (its runtime rows duplicated the runtime-status table) and drifted on
+every refactor, so it was removed as a verified restatement (remediation 5.2).
+The tree plus each module's first-line invariant docstring is the inventory;
+[`docs/GLOSSARY.md`](docs/GLOSSARY.md) anchors the load-bearing terms.
 
 ## Quickstart
 
