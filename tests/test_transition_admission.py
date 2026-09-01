@@ -298,6 +298,71 @@ def test_membership_tuples_are_pinned_shared_data() -> None:
     assert set(IMMUTABLE_AFTER_VALIDATION_KEYS) <= set(VALIDATION_SUBJECT_KEYS)
 
 
+def test_authority_destination_walk_derives_from_the_row() -> None:
+    """The re-based obligation walk (cross-axis resolution 4): destinations
+    come off the row (base states nonce-consuming, ratifications and building
+    activations human-receipted), never re-asserted by a consumer."""
+    from factory_runtime.transition_admission import authority_destination_walk
+
+    walk = authority_destination_walk(
+        schema_version="factory-run/5",
+        ratification_destinations=("product-specification-ratified",),
+    )
+    by_destination = {w.destination: w for w in walk}
+    assert set(by_destination) == {
+        "intake",
+        "target-resolution-authorized",
+        "product-specification-ratified",
+        "building",
+    }
+    assert by_destination["intake"].consumes_authority_nonce
+    assert not by_destination["building"].consumes_authority_nonce
+    assert all(w.requires_human_receipt for w in walk)
+    # no current row admits external bytes, so no walked destination names a
+    # validator — the day one does, the preflight check below starts firing.
+    assert all(not w.named_validator for w in walk)
+
+
+def test_preflight_refuses_an_uncallable_admission_validator(monkeypatch) -> None:
+    """A byte-admitting row whose named validator is not registered callable is
+    a hard NO at hour zero — bytes at that destination could never be admitted.
+    GO sibling: the current row (no byte admission) emits no such finding."""
+    import factory_runtime.transition_admission as admission_module
+    from factory_core.criticality import CriticalityProfile
+    from factory_core.manifest import SegregationPolicy
+    from factory_runtime.preflight import run_preflight
+
+    policy = SegregationPolicy(human_ids=frozenset({"human:founder"}))
+    profile = CriticalityProfile.from_dict(
+        {
+            "profile_id": "p",
+            "decider": "human:founder",
+            "components": {},
+            "surfaces": {},
+        }
+    )
+    clean = run_preflight(profile=profile, policy=policy)
+    assert "preflight-admission-validator-uncallable" not in [
+        f.code for f in clean.hard_no
+    ]
+
+    poisoned_row = admission_module._NonceAdmissionRow(
+        base_states=frozenset({"intake"}),
+        phase_extras=(0,),
+        activation_dual_extra=False,
+        admits_external_bytes=True,
+        named_validator="registered-nowhere",
+    )
+    monkeypatch.setitem(
+        admission_module.TRANSITION_ADMISSION, "factory-run/5", poisoned_row
+    )
+    poisoned = run_preflight(profile=profile, policy=policy)
+    assert not poisoned.go
+    assert "preflight-admission-validator-uncallable" in [
+        f.code for f in poisoned.hard_no
+    ]
+
+
 def test_every_byte_admitting_row_names_a_callable_validator() -> None:
     """4.1's rule for LLM entry rows, as a contract rather than a count: a row
     that admits externally produced bytes must name its mechanical validator,

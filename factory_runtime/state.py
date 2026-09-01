@@ -212,6 +212,12 @@ _PHASE_STATE_KEYS: Mapping[RunState, str] = {
     RunState.ARCHITECTURE_RATIFIED: "architecture",
     RunState.OPERATIONAL_MATURITY_RATIFIED: "operational-maturity",
 }
+#: The ratification destinations, exported for the admission-table authority
+#: walk (preflight consumes it); the phase-state map above stays the single
+#: authority.
+RATIFICATION_DESTINATIONS: tuple[str, ...] = tuple(
+    str(state) for state in _PHASE_STATE_KEYS
+)
 _PHASE_ORDER = (
     "product-specification",
     "architecture",

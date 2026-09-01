@@ -42,6 +42,11 @@ from factory_core.verdict import (
     normalize_label,
 )
 from factory_runtime.generation import _signal_knob_issues
+from factory_runtime.state import RATIFICATION_DESTINATIONS, RUN_SCHEMA_VERSION
+from factory_runtime.transition_admission import (
+    ADMISSION_VALIDATORS,
+    authority_destination_walk,
+)
 
 
 @dataclass(frozen=True)
@@ -242,20 +247,42 @@ def run_preflight(
                     "any Critical surface is disturbed",
                 )
             )
-        # 4.1 intake authority-reachability: a roster with ZERO enrolled humans
-        # cannot ratify ANY phase, activate any catalog, or approve anything —
-        # every authority destination is structurally unreachable, so this is a
-        # hard NO at hour zero, not a Critical-scoped disclosure.
+        # 4.1 intake authority-reachability, re-based on the admission table
+        # (plan cross-axis resolution 4): the destinations that require a
+        # human receipt are WALKED off the same row both state paths consume,
+        # never re-asserted here. Zero enrolled humans makes every walked
+        # destination structurally unreachable — a hard NO at hour zero, not
+        # a Critical-scoped disclosure.
+        walked = authority_destination_walk(
+            schema_version=RUN_SCHEMA_VERSION,
+            ratification_destinations=RATIFICATION_DESTINATIONS,
+        )
         if not policy.human_ids:
+            unreachable = ", ".join(
+                w.destination for w in walked if w.requires_human_receipt
+            )
             hard_no.append(
                 PreflightFinding(
                     "preflight-authority-unreachable",
                     "enrolled-humans",
                     "no enrolled human exists: every required receipt signer is "
-                    "unresolvable, so no ratification, activation, or approval "
-                    "destination is reachable and __DONE__ is provably unreachable",
+                    f"unresolvable, so no authority destination is reachable "
+                    f"({unreachable} all require an enrolled human) and "
+                    f"__DONE__ is provably unreachable",
                 )
             )
+        for walked_destination in walked:
+            name = walked_destination.named_validator
+            if name and not callable(ADMISSION_VALIDATORS.get(name)):
+                hard_no.append(
+                    PreflightFinding(
+                        "preflight-admission-validator-uncallable",
+                        walked_destination.destination,
+                        f"admission row names byte-validator {name!r} but no "
+                        f"callable is registered: externally produced bytes at "
+                        f"this destination can never be admitted",
+                    )
+                )
         # Computed DIRECTLY from roster size — an emitted insufficient-approvers
         # from a late null probe cannot distinguish expected-empty from
         # impossible; this can (the n=1/I2 collision surfaced at T=0).
