@@ -252,6 +252,52 @@ def test_both_state_paths_consume_the_same_activation_axis(
         store.rebuild_projection("r1")
 
 
+def test_membership_tuples_are_pinned_shared_data() -> None:
+    """Third migrated axis: the artifact-key membership tuples both paths
+    enumerate are single shared constants. The pin makes any edit loud — a
+    membership change is a run-contract change, reviewed here, never a silent
+    drift between two inline twins."""
+    from factory_runtime.transition_admission import (
+        IMMUTABLE_AFTER_VALIDATION_KEYS,
+        PREVIEW_REQUIRED_ARTIFACT_KEYS,
+        VALIDATION_SUBJECT_KEYS,
+        VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+    )
+
+    exec_keys = (
+        "validator-execution-manifest",
+        "validator-execution-configuration",
+        "validator-execution-environment",
+        "validator-execution-snapshot",
+    )
+    assert VALIDATOR_EXECUTION_ARTIFACT_KEYS == exec_keys
+    assert VALIDATION_SUBJECT_KEYS == (
+        "candidate",
+        "acceptance-tests",
+        "coder-output-snapshot",
+        "tester-output-snapshot",
+        *exec_keys,
+    )
+    assert IMMUTABLE_AFTER_VALIDATION_KEYS == ("candidate", "acceptance-tests", *exec_keys)
+    assert PREVIEW_REQUIRED_ARTIFACT_KEYS == (
+        "candidate",
+        "acceptance-tests",
+        "acceptance-obligation-report",
+        "validator-review-subject",
+        "validator-adversarial-review",
+        "base-source-snapshot",
+        "candidate-change-set",
+        "validator-review-authority-context",
+        "validator-review-observations-source",
+        *exec_keys,
+        "evidence-bundle",
+        "evidence-envelope",
+    )
+    # the immutable set is a subset of the validation subject: nothing can be
+    # frozen at preview that was never part of the validation subject.
+    assert set(IMMUTABLE_AFTER_VALIDATION_KEYS) <= set(VALIDATION_SUBJECT_KEYS)
+
+
 def test_every_byte_admitting_row_names_a_callable_validator() -> None:
     """4.1's rule for LLM entry rows, as a contract rather than a count: a row
     that admits externally produced bytes must name its mechanical validator,

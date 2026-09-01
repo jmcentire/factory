@@ -30,7 +30,12 @@ from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.transition_admission import (
     ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+    ACCEPTANCE_OBLIGATION_REPORT_KEY,
+    IMMUTABLE_AFTER_VALIDATION_KEYS,
+    PREVIEW_REQUIRED_ARTIFACT_KEYS,
     TEST_CHANGE_AUTHORIZATION_KEY,
+    VALIDATION_SUBJECT_KEYS,
+    VALIDATOR_EXECUTION_ARTIFACT_KEYS,
     AdmissionRefusal,
 )
 from factory_runtime.transition_admission import (
@@ -93,17 +98,11 @@ GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
     "generation-readiness",
 )
 
-# ACCEPTANCE_OBLIGATION_CATALOG_KEY / TEST_CHANGE_AUTHORIZATION_KEY are defined
-# in transition_admission (the shared axis assembles activation sets from them)
-# and re-exported above for this module's existing consumers.
+# ACCEPTANCE_OBLIGATION_CATALOG_KEY / TEST_CHANGE_AUTHORIZATION_KEY /
+# ACCEPTANCE_OBLIGATION_REPORT_KEY / VALIDATOR_EXECUTION_ARTIFACT_KEYS are
+# defined in transition_admission (shared admission axes assemble membership
+# tuples from them) and re-exported above for this module's existing consumers.
 ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY = "acceptance_obligation_catalog"
-ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
-VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
-    "validator-execution-manifest",
-    "validator-execution-configuration",
-    "validator-execution-environment",
-    "validator-execution-snapshot",
-)
 PREVIEW_EVIDENCE_VERIFICATION_KEY = "evidence_verification_receipt"
 
 
@@ -1514,45 +1513,23 @@ class RunStore:
                 ),
                 context="preview admission",
             )
+            # 4.1c third axis: the membership tuples are shared admission data.
             _require_digest_keys(
                 supplied,
-                (
-                    "candidate",
-                    "acceptance-tests",
-                    ACCEPTANCE_OBLIGATION_REPORT_KEY,
-                    "validator-review-subject",
-                    "validator-adversarial-review",
-                    "base-source-snapshot",
-                    "candidate-change-set",
-                    "validator-review-authority-context",
-                    "validator-review-observations-source",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                    "evidence-bundle",
-                    "evidence-envelope",
-                ),
+                PREVIEW_REQUIRED_ARTIFACT_KEYS,
                 context=str(destination),
             )
             prior_artifacts = self.current_artifact_digests(run_id)
             trusted_evidence = {
                 key: str(prior_artifacts.get(key, ""))
-                for key in (
-                    "candidate",
-                    "acceptance-tests",
-                    "coder-output-snapshot",
-                    "tester-output-snapshot",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                )
+                for key in VALIDATION_SUBJECT_KEYS
             }
             _require_digest_keys(
                 trusted_evidence,
                 trusted_evidence,
                 context=f"{destination} prior validation",
             )
-            for key in (
-                "candidate",
-                "acceptance-tests",
-                *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-            ):
+            for key in IMMUTABLE_AFTER_VALIDATION_KEYS:
                 if supplied[key] != trusted_evidence[key]:
                     raise RunStateError(
                         f"{destination} changes {key} after immutable validation began"
@@ -2500,13 +2477,8 @@ class RunStore:
                 elif destination is RunState.SPECIFICATION_DEFECT:
                     validation_evidence = {}
             elif schema_version in IMMUTABLE_REVIEW_RUN_SCHEMA_VERSIONS:
-                validation_keys = (
-                    "candidate",
-                    "acceptance-tests",
-                    "coder-output-snapshot",
-                    "tester-output-snapshot",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                )
+                # 4.1c third axis: same membership tuples as the write path.
+                validation_keys = VALIDATION_SUBJECT_KEYS
                 if destination is RunState.BUILDING:
                     validation_evidence = {}
                 elif destination is RunState.VALIDATING:
@@ -2553,31 +2525,14 @@ class RunStore:
                     )
                     _require_digest_keys(
                         digests,
-                        (
-                            "candidate",
-                            "acceptance-tests",
-                            ACCEPTANCE_OBLIGATION_REPORT_KEY,
-                            "validator-review-subject",
-                            "validator-adversarial-review",
-                            "base-source-snapshot",
-                            "candidate-change-set",
-                            "validator-review-authority-context",
-                            "validator-review-observations-source",
-                            *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                            "evidence-bundle",
-                            "evidence-envelope",
-                        ),
+                        PREVIEW_REQUIRED_ARTIFACT_KEYS,
                         context=f"ledger entry {index} preview",
                     )
                     if not validation_evidence:
                         raise RunStateError(
                             f"ledger entry {index} preview has no immutable validation subject"
                         )
-                    for key in (
-                        "candidate",
-                        "acceptance-tests",
-                        *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                    ):
+                    for key in IMMUTABLE_AFTER_VALIDATION_KEYS:
                         if digests[key] != validation_evidence[key]:
                             raise RunStateError(
                                 f"ledger entry {index} preview changes {key} after validation"

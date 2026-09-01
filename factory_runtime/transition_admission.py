@@ -33,6 +33,49 @@ from dataclasses import dataclass
 ACCEPTANCE_OBLIGATION_CATALOG_KEY = "acceptance-obligation-catalog"
 TEST_CHANGE_AUTHORIZATION_KEY = "test-change-authorization"
 
+#: Third migrated axis: the artifact-key membership tuples both state paths
+#: previously enumerated as verbatim inline twins. The write-side VALIDATING
+#: supplied-set (the four execution keys alone) is NOT one of them — what must
+#: be newly supplied and what the entry must carry are different facts, and it
+#: stays in ``state``.
+ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
+VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
+    "validator-execution-manifest",
+    "validator-execution-configuration",
+    "validator-execution-environment",
+    "validator-execution-snapshot",
+)
+#: The immutable validation subject frozen at VALIDATING — the entry-carried
+#: membership the derive path requires and the write path trusts at PREVIEW.
+VALIDATION_SUBJECT_KEYS: tuple[str, ...] = (
+    "candidate",
+    "acceptance-tests",
+    "coder-output-snapshot",
+    "tester-output-snapshot",
+    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+)
+#: Every digest a PREVIEW transition must carry.
+PREVIEW_REQUIRED_ARTIFACT_KEYS: tuple[str, ...] = (
+    "candidate",
+    "acceptance-tests",
+    ACCEPTANCE_OBLIGATION_REPORT_KEY,
+    "validator-review-subject",
+    "validator-adversarial-review",
+    "base-source-snapshot",
+    "candidate-change-set",
+    "validator-review-authority-context",
+    "validator-review-observations-source",
+    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+    "evidence-bundle",
+    "evidence-envelope",
+)
+#: Keys that may not change between immutable validation and PREVIEW.
+IMMUTABLE_AFTER_VALIDATION_KEYS: tuple[str, ...] = (
+    "candidate",
+    "acceptance-tests",
+    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+)
+
 
 class AdmissionRefusal(ValueError):
     """An admission axis refused the transition; callers rewrap as their error."""
