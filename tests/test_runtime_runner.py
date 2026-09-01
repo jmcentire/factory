@@ -1483,7 +1483,19 @@ def test_lane_grant_containing_the_control_root_is_refused(tmp_path: Path) -> No
     """Plan §0.5: 'lanes have no write path to the control root' as its own
     registered probe — the claim was asserted, now it is enforced evidence.
     Both grant directions refuse: a writable grant overlapping the control
-    root, and a readable one (events.jsonl is not lane-readable either)."""
+    root, and a readable one (events.jsonl is not lane-readable either).
+
+    Portability residual, stated (round-8 note): this is the WPX gate's LIVE
+    KERNEL-ENFORCEMENT arm and is macOS-only — on a non-Darwin host it SKIPS
+    while ``make ship`` still reports the WPX gate green. The gate is not
+    undefended there: its other two forcing tests are platform-independent and
+    run everywhere — the CLI forbidden-roots derivation
+    (test_runtime_cli.py::test_forbidden_runner_roots_derivation_covers_the_control_root)
+    and the resume whole-control-root/rollback denial
+    (test_runtime_resume.py::test_whole_control_root_copy_and_ledger_rollback_are_denied).
+    What Linux loses is the live-Seatbelt proof, which is the same macOS-only
+    residual the README runtime-status isolation.py row already declares
+    ('Linux needs an independently qualified backend')."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     control_root = tmp_path / ".factory" / "runs" / "r1"
