@@ -527,7 +527,13 @@ def _verify_obligation(
         passed = (
             _is_digest(supplied.get("resume-checkpoint", ""))
             and bool(str(payload.get("resume_checkpoint_id", "")))
-            and _is_digest(payload.get("anchored_run_ledger_head", ""))
+            # The anchored RUN LEDGER HEAD speaks both address vocabularies
+            # (plan 2.2: hmac-sha256 when keyed); the resume-checkpoint above is
+            # a content digest and stays sha256-only. Round-8 8-2 completeness
+            # sweep: this head site was missed in the first pass and would have
+            # bricked the external-checkpoint binding obligation under a keyed
+            # deployment.
+            and _is_ledger_head(payload.get("anchored_run_ledger_head", ""))
             and isinstance(payload.get("anchored_run_ledger_length"), int)
             and int(payload["anchored_run_ledger_length"]) >= 1
             and _is_digest(acceptance_obligation_catalog_digest)

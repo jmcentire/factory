@@ -437,3 +437,41 @@ def test_authorized_test_change_ids_are_bound_into_report(tmp_path: Path) -> Non
         result["observations"]["artifact_digests"]["test-change-authorization"]
         == (standin_test_change_authorization_artifacts()["test-change-authorization"])
     )
+
+
+def test_external_checkpoint_binding_accepts_a_keyed_run_ledger_head() -> None:
+    """Round-8 8-2 completeness sweep (found on resume): the
+    external-checkpoint-binding-check validates anchored_run_ledger_head, a RUN
+    LEDGER HEAD — hmac-sha256 under a keyed deployment. It was still on the
+    sha256-only _is_digest check, so a keyed run's build obligation would have
+    bricked. It now speaks both address vocabularies; a malformed head still
+    refuses, and the sibling content digests stay sha256-only."""
+    sha = "sha256:" + "a" * 64
+    keyed_head = "hmac-sha256:" + "b" * 64
+
+    def _run(anchored_head: str) -> None:
+        obligations_module._verify_obligation(
+            "external-checkpoint-binding",
+            "external-checkpoint-binding-check",
+            destination="building",
+            prior_ledger_head=sha,
+            target_state_digest=sha,
+            target_state={},
+            phase_artifact_digests={},
+            acceptance_obligation_catalog_digest=sha,
+            supplied={"resume-checkpoint": sha},
+            payload={
+                "resume_checkpoint_id": "cp-1",
+                "anchored_run_ledger_head": anchored_head,
+                "anchored_run_ledger_length": 1,
+            },
+            approved_candidate_digest="",
+            implementer_identity="coder",
+            approver_identity="human",
+            snapshot_membership_keys=(),
+        )
+
+    _run(keyed_head)  # keyed head: must pass (this is the fix — previously raised)
+    _run(sha)  # unkeyed migration head: still valid
+    with pytest.raises(TransitionObligationError, match="external-checkpoint-binding"):
+        _run("not-a-head")  # a malformed head still refuses
