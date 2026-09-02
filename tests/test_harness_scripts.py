@@ -57,7 +57,8 @@ def run(
     # projection, resource, digest, and gate commands still reach the real CLI. Dedicated
     # runtime/integration tests exercise real checkpoint, runner, broker, and Seatbelt behavior.
     support = Path(os.environ.get("TMPDIR", "/tmp")) / (
-        f"factory-harness-test-{os.getpid()}-{hashlib.sha256(str(cwd).encode()).hexdigest()[:12]}"
+        f"factory-harness-test-{os.getpid()}-{threading.get_ident()}-"
+        f"{hashlib.sha256(str(cwd).encode()).hexdigest()[:12]}"
     )
     support.mkdir(exist_ok=True)
     checkpoint = support / "checkpoint.json"
@@ -5802,7 +5803,11 @@ def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(run_dispatch, ("coder", "tester")))
 
-    assert sorted(result.returncode for result in results) == [0, 70]
+    diagnostics = "\n".join(
+        f"{role}: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        for role, result in zip(("coder", "tester"), results, strict=True)
+    )
+    assert sorted(result.returncode for result in results) == [0, 70], diagnostics
     refused = next(result for result in results if result.returncode == 70)
     assert "objective budget reservation was refused" in refused.stderr
     reservations = read_chain(root / "budget-reservations.jsonl")
