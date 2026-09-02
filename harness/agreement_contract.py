@@ -275,7 +275,11 @@ def _requirement_blocks(
         seen.add(requirement_id)
         end = starts[number + 1][0] if number + 1 < len(starts) else len(lines)
         for index in range(start + 1, end):
-            if lines[index].startswith("## ") or _ANY_FACTORY_END.fullmatch(lines[index]):
+            if (
+                lines[index].startswith("## ")
+                or _ANY_FACTORY_BEGIN.fullmatch(lines[index])
+                or _ANY_FACTORY_END.fullmatch(lines[index])
+            ):
                 end = index
                 break
         body = "\n".join(lines[start:end]).rstrip()
@@ -309,7 +313,7 @@ def derive_regions(
             )
         else:  # guarded by required_configuration; keep this function safe in direct use.
             raise AgreementContractError(f"unsupported requirement-region family: {family}")
-        if not requirements:
+        if not requirements and family != "run-guidance":
             raise AgreementContractError(f"requirement-region family is empty: {family}")
         body = {
             "family": family,

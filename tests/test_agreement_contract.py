@@ -239,6 +239,28 @@ def test_absent_ignition_field_preserves_legacy_run_semantics(tmp_path: Path) ->
     assert verify_plan(root, artifacts) is None
 
 
+def test_authored_requirement_identity_excludes_following_generated_region(
+    tmp_path: Path,
+) -> None:
+    spec = tmp_path / "product-specification.md"
+    authored = "# Product Specification\n\n- **R1.1** The caller observes one decision.\n\n"
+    spec.write_text(
+        authored
+        + "<!-- FACTORY-SEMANTIC-UNION:BEGIN -->\n"
+        + "## Evidence-derived semantic decisions\n\nclosed\n"
+        + "<!-- FACTORY-SEMANTIC-UNION:END -->\n"
+    )
+    semantic_digest = derive_regions(spec, ["authored-product"])[0].region_digest
+    spec.write_text(
+        authored
+        + "<!-- FACTORY-RUN-GUIDANCE:BEGIN -->\n"
+        + "## Selected run guidance — behavior\n\nnone\n"
+        + "<!-- FACTORY-RUN-GUIDANCE:END -->\n"
+    )
+
+    assert derive_regions(spec, ["authored-product"])[0].region_digest == semantic_digest
+
+
 def create_probe_candidate(tmp_path: Path) -> tuple[Path, str]:
     candidate = tmp_path / "candidate"
     candidate.mkdir()
