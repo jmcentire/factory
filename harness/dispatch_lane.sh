@@ -63,6 +63,9 @@ PY
 # that ordering point refuses this invocation; one after it gates the next. SIGKILL closes the last
 # descriptor automatically, so exact retained inputs remain retryable without stale guard cleanup.
 if [ -z "${FACTORY_DISPATCH_LOCK_FD:-}" ]; then
+  "$D/orchestrator_checkpoint.sh" "$RUN" pre_dispatch \
+    "before dispatching the $ROLE lane" --runs "$FACTORY_RUNS_ROOT" || \
+    fail "resident Orchestrator did not assess the pre-dispatch checkpoint"
   exec python3 "$D/attention_gate.py" hold --root "$ROOT" --role "$ROLE" -- \
     bash "$0" "${ORIGINAL_ARGS[@]}"
 fi

@@ -40,6 +40,25 @@ refusal_event() {
 }
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
   { rc=$?; refusal_event "target-state verification refused" "$rc"; exit "$rc"; }
+if [ -e "$ROOT/dialogue/journal.jsonl" ] || [ -L "$ROOT/dialogue/journal.jsonl" ]; then
+  python3 "$D/lane_dialogue.py" require-clear --root "$ROOT" >/dev/null || {
+    rc=$?
+    refusal_event "unanswered lane question blocks endgame" "$rc"
+    exit "$rc"
+  }
+fi
+"$D/orchestrator_checkpoint.sh" "$RUN" pre_verdict \
+  "before rendering the endgame verdict for candidate resource $CANDIDATE_RESOURCE" \
+  --runs "$FACTORY_RUNS_ROOT" || {
+    rc=$?
+    refusal_event "resident Orchestrator did not assess the pre-verdict checkpoint" "$rc"
+    exit "$rc"
+  }
+python3 "$D/attention_gate.py" check --root "$ROOT" --lane validator || {
+  rc=$?
+  refusal_event "resident Orchestrator block is pending before verdict" "$rc"
+  exit "$rc"
+}
 
 RESOURCES=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN") || \
   { rc=$?; refusal_event "resource verification refused" "$rc"; exit "$rc"; }

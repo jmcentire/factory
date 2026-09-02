@@ -79,8 +79,19 @@ base_fields = {
     "launcher_qualification", "lane_isolation", "interactive_validator_boundary",
     "validator_agent", "orchestrator_agent", "validator_contract", "created_at",
 }
+resident_fields = {
+    "orchestrator_mode", "orchestrator_window", "orchestrator_visibility",
+    "orchestrator_effects", "orchestrator_boundary", "orchestrator_cli_version",
+    "orchestrator_cli_contract",
+}
 close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
-if set(doc) not in (base_fields, base_fields | close_fields):
+allowed_shapes = {
+    frozenset(base_fields),
+    frozenset(base_fields | resident_fields),
+    frozenset(base_fields | close_fields),
+    frozenset(base_fields | resident_fields | close_fields),
+}
+if frozenset(doc) not in allowed_shapes:
     raise SystemExit("promote: harness metadata has unknown or missing fields")
 if doc.get("status") not in {"open", "closed"}:
     raise SystemExit("promote: harness status is invalid")

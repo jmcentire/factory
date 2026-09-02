@@ -303,10 +303,47 @@ re-deriving it, and the next run starts where this one ended.
 4. **Link the nodes.** Research nodes link to the constraints, decisions, and questions
    they inform (`relates_to`, `implements`, `blocks`). An unlinked research node is
    invisible exactly when it matters — at the next surface that touches the same ground.
-5. **Cite research in every dispatch.** The Coder's and Tester's dispatches name the
-   run-tagged research nodes relevant to their lane, so neither lane re-fetches blind or
-   guesses at vendor behavior the run already established. Respect the projection
-   boundary: never route a research node carrying implementation detail to the Tester.
+5. **Challenge the apparent requirements before decomposing them.** Inventory explicit user and
+   ratified requirements separately from implicit assumptions and inherited code behavior. Mark
+   every intrinsic or interacting requirement that contributes disproportionate complexity,
+   state the simpler path that would exist without it, and name the counterfactual planning-mode,
+   model-tier, boundary, dependency, or necessary-chunk delta; diff size alone does not qualify.
+   Either cite why it is actually fixed or ask the human whether the expensive interpretation is intended. Do not turn an unexamined
+   premise into twenty tidy implementation chunks; that is how accidental complexity ossifies
+   into the next run's implicit requirements.
+6. **Derive, do not dump, each dispatch.** Use Kindex as normalized working state: one small
+   node/task per semantic, unknown, dependency, owner, model tier, and outcome. Give each lane the
+   smallest chunk-specific projection and its relevant node ids/digests; never paste the search
+   result or a long node dump into the prompt. Respect the projection boundary: never route a
+   research node carrying implementation detail to the Tester.
+7. **Pre-register diagnostic branches.** Before observing results, record competing causal
+   hypotheses and what each outcome would mean. res-r1 v2 separated two: “18 amended semantics
+   stay fixed while known omissions recur” meant incomplete enumeration; recurrence among the
+   amended 18 meant transmission/addendum blindness. The interim result selected the first branch:
+   both lanes repeatedly cited every addendum subsection and written semantics landed, while three
+   predicted omissions and a new live-UBR hold ambiguity surfaced. Therefore v3 is a mechanical
+   union of every lane-trace ambiguity and adversarial-review finding, with an explicit ruling and
+   per-item `open|closed` assertion. A grep/token mention is not a ruling. Do not collapse different
+   diseases into “more spec.”
+8. **Materialize the union before ratification.** Put each retained planning pass, lane trace, and
+   adversarial review under `artifacts/semantic-evidence/sources/<kind>/`. Require two separately
+   recorded extraction manifests per source, each binding the source digest, retaining claimed
+   extractor/configuration provenance, and naming every observation span. Record one typed ruling per derived
+   observation in `rulings.json`, then run:
+
+       python3 harness/semantic_union.py update-spec \
+         --artifacts <run>/artifacts \
+         --spec <run>/artifacts/product-specification.md
+
+   Do this before the Product Specification is signed. Phase A re-runs `semantic_union.py verify`
+   and blocks if the signed section is stale, hand-edited, incomplete, or open. Exact duplicates
+   may converge; differing spans/questions fork into separate observations rather than being
+   merged by an authored semantic id. This proves no extracted item was lost; it does not
+   authenticate the manifest's extractor claim. Extraction recall and ruling quality remain
+   judgment surfaces, so a downstream lane question is evidence to enroll and measure, not an
+   embarrassment to suppress. Until the producer inventory is mechanically joined, the generated
+   section reports producer-enrollment coverage as unknown; do not call the enrolled union
+   whole-run semantic completeness.
 
 **Kindex is context, never authority.** Nothing here weakens Phase A's rule: a research
 node cannot authorize a requirement — only the signed artifacts do. Research tells you
@@ -432,8 +469,13 @@ two separate claims about two separate parties — keep them apart.**
      handed to exactly the reader it was meant to exclude. Where a role needs no coordination
      at all, omit the channel capability from its grant entirely.
 
-3. **Keep the Coder's upward paths open, and only those.** A **question**, a **failure
-   report**, and a **specification defect** are open. Negotiating a verdict is not.
+3. **Keep each lane's upward paths open, and only those.** A **question**, a **failure report**,
+   and a **specification defect** are open. Negotiating a verdict is not. In a tmux Codex lane,
+   require `FACTORY_QUESTION: <one concrete question>` before the model guesses. The dispatcher
+   assigns an occurrence-specific ID. Obtain the human answer or cite the ratified artifact, then
+   deliver it with `tmux_lane_message.sh ... validator ... answer --question-id ...`; the channel
+   binds lane, question, authority basis, exact bytes, and the resumed Codex thread. You are the
+   only seat allowed to answer; the Orchestrator may issue only the generated status probe.
 
 4. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most
@@ -449,13 +491,17 @@ two separate claims about two separate parties — keep them apart.**
    was accepted as a deviation and shipped; the gate reintroduced the exact schedule-dependence the
    requirement existed to remove, and nothing had reviewed the ruling.
 
-5. **Monitor the lanes on a cursor, and watch the principal.** Two rules, both learned by going
+5. **Monitor the lanes on a cursor, and interrogate liveness rather than guessing it.** Two rules, both learned by going
    dark for twelve hours in batch0 while both lanes sat finished and idle. **Dedup by
    occurrence, never by content** — key on `(event, occurrence-index)` or a monotonic cursor,
    because an iterative process emits the *same* signal every round, and a content-keyed watcher
-   filtered round 2's `__DONE__` as already-seen: the exact awaited signal. **A liveness detector
-   watches the principal, not a surface** — a pane, a log, or a mailbox stays warm long after the
-   seat behind it is dead, and will report "alive" for it.
+   filtered round 2's `__DONE__` as already-seen: the exact awaited signal. A pane, a log, or a
+   mailbox stays warm long after the seat behind it is dead; elapsed silence also cannot
+   distinguish a reasoning loop from an I/O hang. Inspect tmux process/pane state and use
+   `tmux_lane_message.sh <run> validator <lane> status`. The exact-thread response classifies
+   `WORKING|BLOCKED|QUESTION|DONE`; silence alone stays `liveness_unknown` and never becomes a
+   confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
+   resolve or escalate it instead of treating its expected silence as a liveness alarm.
 
 6. **Return bare failure outcomes.** When you report a failure to the Coder: *what* failed —
    never the test name, the assertion text, the trace, or the fixture. A suite that talks back
@@ -471,7 +517,9 @@ intention — an intention dies at the first long tool call. At dispatch time, r
 durable wakeup through whatever mechanism the session offers (a harness lease, a kindex
 `remind_create`, the runner's wakeup scheduler), and on every firing run the same loop:
 
-1. Lane liveness on a cursor (dedup by occurrence, never by content — Phase B item 5).
+1. Lane state on a cursor (dedup by occurrence, never by content); inspect tmux and issue a typed
+   status probe when state is unknown. If the host offers `/loop`, point it at `status.sh` and this
+   inspection — not another raw model attempt.
 2. The receipt tail since the last wake: anything new, anything contradicting an earlier one.
 3. The outstanding-work ledger: what is open, what is blocked, what is waiting on you.
 4. Budget and lease state: anything near expiry routes to a decision now, not at expiry.
@@ -481,14 +529,35 @@ drift.
 
 **Share the plan with the orchestrator, then use it as your state-keeper.** You hold the
 frame, the artifacts, and the verdict; you should not also hold the run's entire working
-memory. At run start, hand the orchestrator the plan — objectives in sequence, the
-outstanding-work list, the decision points you expect — and explicitly ask it to keep you
+memory. At run start, have the orchestrator write the plan as bite-sized Kindex state — objectives
+in sequence, exact unknowns, dependencies, least-capable qualified model routing, outcome
+discriminators, outstanding work, and expected decision points — and explicitly ask it to keep you
 on task, check your actions against the rules and the plan, and remind you what is
 outstanding whenever you surface. When you are deep in one thread (a defect, an oracle
 read), the orchestrator holds everything else; ask it "what is outstanding, what is next
 per the plan" instead of reconstructing that from your own context. Distraction is a real,
 observed failure mode of this seat: runs with many live surfaces have lost threads because
 the Validator kept all the state itself.
+
+The Orchestrator is a **resident interactive agent**, not `agy -p`, another one-shot command,
+or a continuation that can speak only when you invoke it. A check the supervised party must opt
+into is not a check. The dispatcher independently delivers every bounded sampled activity
+snapshot it captured plus cadence to the Orchestrator's own pane under a monotonic cursor. You may
+query that seat, but its
+ability to observe and initiate never depends on you remembering to do so.
+
+Its review is also broader than rule compliance. It reconstructs the user's ultimate goal from
+the live conversation and Kindex; classifies recent input as override, aside, intensity change,
+or refinement; checks whether the current direction advances the goal; and projects consequences,
+implications, and side effects. A locally tidy action on a globally wrong trajectory is an
+Orchestrator block, not progress.
+
+The Orchestrator also classifies complexity and latent ambiguity before dispatch. It chooses
+`direct`, `clarify`, `decompose`, or `deep`; breaks complex work into concrete independently
+dispatchable chunks; and recommends the least expensive qualified model for each. Prefer
+Haiku-class/lower-tier models for qualified mechanical chunks, Sonnet-class/mid-tier models for
+ordinary bounded reasoning, and Opus/Fable-class/top-tier models only for genuinely hard or
+load-bearing work. Model changes still require qualification; this is routing advice, not a grant.
 
 **Defer to the orchestrator on rule adherence.** When the orchestrator calls a rule
 violation or a plan drift — you are picking up a pen, skipping a gate, negotiating with a
@@ -498,6 +567,9 @@ why the call is wrong on its face; an unresolved disagreement routes to the huma
 gets absorbed. The deference is scoped exactly: adherence calls are the orchestrator's to
 make with high deference owed, while **the verdict, the rulings, and the evidence reads
 remain yours** — the orchestrator keeps you honest about process; it never judges the work.
+Before dispatch and verdict, the retained Orchestrator assessment cursor must equal the activity
+high-water cursor. Its effect is monotone `{block, no-op}`: `no-op` never grants or substitutes for
+a gate, while `block` must be dispositioned through the evidence-bound attention channel.
 
 ---
 
@@ -623,6 +695,13 @@ process is not the writer, and `promote.sh` reaches the decision only through th
 function on the receipts — a blocking verdict, a missing input, or a stale/forged verdict all
 fail closed. This is why the local AI-rendered-verdict mode is safe to run: rendered in any
 mode, the verdict advances nothing on its own.
+
+Do not conflate “this judging pass is complete” with “the run is complete.” A BLOCK verdict —
+including failing tests or unresolved Critical findings — completes the pass and leaves the run
+open. Update Kindex with a new segment, preserve the outstanding work, repair/re-dispatch/re-judge,
+and continue. Do not end the run's Kindex tag. The run is terminal only when `harness.json` says
+`closed` after Gate L, or `no` after `record_no.sh`; neither your chat declaration nor the
+Orchestrator's has lifecycle authority.
 
 Hand the human a **decidable package**, led by the anomalies and the departures from the
 ordinary pattern — that is the review a human can actually do well:

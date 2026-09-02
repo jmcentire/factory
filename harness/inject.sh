@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # inject.sh — the ONLY sanctioned path for putting text into a lane's pane, and the
 # topology is enforced here, not remembered: Validator→{coder,tester,validator};
-# dispatcher/orchestrator/founder→validator only. Every injection is receipted
+# dispatcher/validator/founder→orchestrator; dispatcher/founder→validator.
+# The Orchestrator never sends raw terminal text into a pane it judges; its generated
+# status probe uses tmux_lane_message.sh and the Codex session API. Every injection is receipted
 # (sha256 of the message, from, to, ts) into .factory/runs/<run>/injections.jsonl.
 # Coder-bound *result* traffic passes a verdict filter: bare pass/fail only — never
 # a test name, assertion, or trace (validate.md:230-232).
 # usage: inject.sh <run> <to-window> [--results] "<message>"
-#        INJECT_FROM=orchestrator inject.sh <run> validator "<message>"
+#        INJECT_FROM=dispatcher inject.sh <run> orchestrator "<message>"
 set -euo pipefail
 RUN="${1:?usage: inject.sh <run> <to> [--results] <message>}"; TO="${2:?to}"; shift 2
 RESULTS=0
@@ -19,15 +21,20 @@ case "$TO" in
   coder|tester)
     if [ "$FROM" != "validator" ]; then
       echo "topology refusal: $FROM may not inject into $TO (Validator is the only hub" >&2
-      echo "into lanes; orchestrator/dispatcher speak to the Validator alone)" >&2
+      echo "into lanes; Orchestrator probes use the typed Codex-session channel)" >&2
       exit 77
     fi
     ;;
   validator)
-    case "$FROM" in validator|orchestrator|dispatcher|founder) ;; *)
+    case "$FROM" in validator|dispatcher|founder) ;; *)
       echo "topology refusal: unknown principal '$FROM'" >&2; exit 77 ;; esac
     ;;
-  *) echo "unknown lane window: $TO (coder|tester|validator)" >&2; exit 64 ;;
+  orchestrator)
+    case "$FROM" in dispatcher|validator|founder) ;; *)
+      echo "topology refusal: $FROM may not inject into the Orchestrator's own pane" >&2
+      exit 77 ;; esac
+    ;;
+  *) echo "unknown agent window: $TO (coder|tester|validator|orchestrator)" >&2; exit 64 ;;
 esac
 
 if [ "$TO" = "coder" ] && [ "$RESULTS" -eq 1 ]; then
@@ -60,6 +67,13 @@ if [ "$TO" = "coder" ]; then
   fi
 fi
 
+# Typed out-of-band transports reuse the topology and oracle-leak checks above,
+# then deliver through their own session API. Validation-only performs no receipt
+# write and no tmux input; it is deliberately placed after every content guard.
+if [ "${INJECT_VALIDATE_ONLY:-0}" = "1" ]; then
+  echo "validated: topology and content boundary"
+  exit 0
+fi
 
 mkdir -p "$ROOT"
 DIGEST=$(printf '%s' "$MSG" | shasum -a 256 | cut -d' ' -f1)

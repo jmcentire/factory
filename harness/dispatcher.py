@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""dispatcher.py — the resident seat that reasons about nothing.
+"""dispatcher.py — deterministic transport for one Factory run.
 
-Owns the event stream for one run: watches lane windows, detects the trigger
-conditions, records events, and wakes the orchestrator-agent on judgment-shaped
-exceptions. It is deterministic, spends no model tokens, and holds zero grant
-authority: manifests, registries, and the ledger are files it reads and cannot
-write. The stall metric is lane-tending, never repo diffs — answering a blocking
+The dispatcher observes panes, writes the durable event and activity streams,
+and delivers every bounded activity delta plus independent cadence records to a
+resident Orchestrator.  It does not decide which conversation bytes deserve
+strategic attention.  Pattern checks remain deterministic fail-safe controls;
+they are additional signals, not the Orchestrator's visibility boundary.
+
+The stall metric is lane-tending, never repo diffs — answering a blocking
 question counts as work; idle-awaiting-handoff is healthy and is never prodded
 (fucked_up.md §11.4; the 4-minute scoreboard cron is the named disease).
-
-Wake triggers (orchestrate.md: invoked, not resident): a lane's blocking
-question, a judgment-shaped failure class, a HALT, a lease expiry, a confirmed
-stall. Cadence is a config value in the run root, changed by humans, never by
-an agent mid-run.
 """
+
 import argparse
 import datetime
 import fcntl
@@ -34,9 +32,19 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
+from lane_dialogue import (  # noqa: E402 - adjacent harness module
+    LaneDialogueError,
+    pending_questions,
+    record_question,
+)
 from legacy_abandonment import (  # noqa: E402 - load the adjacent harness module
     LegacyAbandonmentError,
     verify_legacy_abandonment,
+)
+from orchestrator_channel import (  # noqa: E402 - adjacent harness module
+    OrchestratorChannelError,
+    activity_highwater,
+    append_activity,
 )
 from watchdog import SignalWatchdog  # noqa: E402 - adjacent harness module
 
@@ -50,12 +58,13 @@ TRIGGER_PATTERNS: dict[str, str] = {
     "contamination": r"contaminat",
 }
 HEALTHY_IDLE = "idle-awaiting-handoff"
+FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
 
 # Validator failure modes the Orchestrator audits (founder, 2026-08-09): announces
 # work and doesn't do it; forgets the triumvirate and codes itself; misattributes
 # authority; drifts from the ask. Detection here is DETERMINISTIC (pattern + timer +
-# receipt count); judgment stays with the woken orchestrator-agent, which flags to
-# the Validator or the human and never gates.
+# receipt count); judgment stays with the Orchestrator, whose closed report can
+# only block the Validator path or do nothing.
 PROMISE_RE = re.compile(
     r"\b(?:I(?:'|’)ll|I will|I am going to|going to|about to|let me(?: now)?)\s+"
     r"(\w+(?:\s+\S+){0,6})",
@@ -79,6 +88,32 @@ def detect_authority_claims(text: str) -> list[str]:
     required sentence is 'I cannot find where you said this; I may have invented
     it' — then stop (fucked_up §9.5-9.6)."""
     return [m.group(0).strip() for m in AUTHORITY_RE.finditer(text)]
+
+
+def capture_delta(previous: str, current: str) -> str:
+    """Return newly visible complete lines from successive bounded tmux captures.
+
+    tmux returns a sliding window rather than a cursor.  Prefer the unchanged
+    prefix (ordinary append/redraw), then the largest old-suffix/new-prefix
+    overlap (scroll).  Reprocessing the entire capture would recreate an already
+    answered ``FACTORY_QUESTION`` whenever any later output changed the pane.
+    """
+
+    if not previous:
+        return current
+    if previous == current:
+        return ""
+    old = previous.splitlines()
+    new = current.splitlines()
+    prefix = 0
+    while prefix < min(len(old), len(new)) and old[prefix] == new[prefix]:
+        prefix += 1
+    if prefix:
+        return "\n".join(new[prefix:])
+    for overlap in range(min(len(old), len(new)), 0, -1):
+        if old[-overlap:] == new[:overlap]:
+            return "\n".join(new[overlap:])
+    return current
 
 
 def now() -> str:
@@ -198,6 +233,8 @@ class Dispatcher:
         )
         self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
+        self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "headless-projection")
+        self.last_delivered_cursor = 0
         # Plan §0.4c: the signal-deadline watchdog rides this seam. Knobs come
         # only from the frozen generation blob via the CLI door; passes only
         # from the verified ledger via pass-count — never ambient environment,
@@ -251,7 +288,12 @@ class Dispatcher:
             self.wake_orchestrator(body)
 
     def wake_orchestrator(self, trigger: dict[str, object]) -> None:
-        """Invoked, not resident: hand the agent a projection, not the transcript.
+        """Route a deterministic signal without making it the attention boundary.
+
+        Resident mode appends the signal to the same complete activity journal
+        as ordinary pane changes; delivery happens once after the observation
+        pass.  The legacy qualified headless projection remains available for
+        non-tmux runs and retains its single-flight behavior.
 
         SINGLE-FLIGHT. Without this, one busy minute spawns a seat per event and
         they file contradictory records against each other — batch0 had three live
@@ -269,6 +311,19 @@ class Dispatcher:
         surface (the pane that stays warm). Past the deadline the seat is hung,
         not working: kill it, record the death, let a new wake spawn.
         """
+        if self.orchestrator_mode == "resident-monitoring":
+            try:
+                append_activity(
+                    self.root,
+                    kind="deterministic_signal",
+                    source="dispatcher",
+                    detail=f"deterministic signal: {trigger.get('kind', 'unknown')}",
+                    snapshot=json.dumps(trigger, sort_keys=True, separators=(",", ":")),
+                )
+            except OrchestratorChannelError as exc:
+                self._record_orchestrator_transport_failure(str(exc))
+            return
+
         wake = self.harness / "orchestrator_wake.sh"
         if not wake.exists():
             return
@@ -283,8 +338,10 @@ class Dispatcher:
             elapsed = (time.monotonic() - wake_start) if wake_start is not None else wake_timeout
             if elapsed < wake_timeout:
                 self.coalesced_wakes = getattr(self, "coalesced_wakes", 0) + 1
-                print(f"[wake coalesced] a seat is still working "
-                      f"({self.coalesced_wakes} since it started); not spawning a rival")
+                print(
+                    f"[wake coalesced] a seat is still working "
+                    f"({self.coalesced_wakes} since it started); not spawning a rival"
+                )
                 return
             # past the deadline — the seat is hung, not working. Kill it, record
             # the death, and fall through to spawn a fresh wake.
@@ -293,28 +350,30 @@ class Dispatcher:
                 f"orchestrator wake hung past {wake_timeout:.0f}s and was killed "
                 f"with scope={kill_scope}; no independent check is running"
             )
-            self.event("orchestrator_dead",
-                       kill_detail, wake=False)
+            self.event("orchestrator_dead", kill_detail, wake=False)
             # A dead orchestrator that is only silently recorded is the opposite of
             # the founder's "get the validator's attention" requirement. Banner it
             # (a non-executing display-message, like HALT/stall) and record the death
             # into wakes/receipts.jsonl — the wake script was killed before it could
             # write its own dead-wake record, so without this the labeled count in
             # status.sh misses the death the dispatcher itself caused.
-            self._banner(
-                f"INCIDENT — {kill_detail}"
-            )
+            self._banner(f"INCIDENT — {kill_detail}")
             wd = self.root / "wakes"
             wd.mkdir(parents=True, exist_ok=True)
             with open(wd / "receipts.jsonl", "a") as wf:
-                wf.write(json.dumps(
-                    {"ts": now(), "status": "ORCHESTRATOR_DID_NOT_RUN",
-                     "detail": kill_detail},
-                    sort_keys=True, separators=(",", ":")) + "\n")
+                wf.write(
+                    json.dumps(
+                        {"ts": now(), "status": "ORCHESTRATOR_DID_NOT_RUN", "detail": kill_detail},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
             self._wake_proc = None
         self._wake_proc = subprocess.Popen(
             [str(wake), self.run, json.dumps(trigger)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         self._wake_start = time.monotonic()
@@ -345,12 +404,34 @@ class Dispatcher:
         elif not halt.exists():
             self.halted = False
 
-    def check_window(self, window: str, tail: str) -> None:
-        prev = self.tails.get(window, "")
-        digest = hashlib.sha256(tail.encode()).hexdigest()
-        changed = digest != prev
-        self.tails[window] = digest
-        fresh = tail[len(prev):] if not changed else tail
+    def check_window(self, window: str, tail: str) -> bool:
+        previous = self.tails.get(window, "")
+        changed = tail != previous
+        fresh = capture_delta(previous, tail)
+        self.tails[window] = tail
+
+        if window in {"coder", "tester"}:
+            for line in fresh.splitlines()[-25:]:
+                matched = FACTORY_QUESTION_RE.search(line)
+                if matched is None:
+                    continue
+                try:
+                    question, created = record_question(
+                        self.root,
+                        window,
+                        matched.group("question").strip(),
+                    )
+                except (LaneDialogueError, OSError) as exc:
+                    self._record_orchestrator_transport_failure(str(exc))
+                    continue
+                notification = f"lane-question:{question['question_id']}"
+                if created or notification not in self.notified:
+                    self.notified.add(notification)
+                    self.event(
+                        "lane_question",
+                        f"{question['question_id']} from {window}: {question['text']}",
+                        wake=True,
+                    )
 
         for kind, pat in TRIGGER_PATTERNS.items():
             for line in fresh.splitlines()[-25:]:
@@ -361,15 +442,36 @@ class Dispatcher:
                         self.event(kind, f"{window}: {line.strip()}", wake=True)
 
         state = self.lane_state(window)
+        if window in {"coder", "tester"}:
+            try:
+                waiting_on_validator = bool(pending_questions(self.root, window))
+            except (LaneDialogueError, OSError) as exc:
+                self._record_orchestrator_transport_failure(str(exc))
+                waiting_on_validator = False
+            if waiting_on_validator:
+                # This is a known wait with a named resolver, not unknown liveness.
+                # The question gate already blocks transition until delivery.
+                self.quiet_since.pop(window, None)
+                return changed
         if changed or state == HEALTHY_IDLE:
             self.quiet_since.pop(window, None)
-            return
+            return changed
         first = self.quiet_since.setdefault(window, time.monotonic())
         quiet_min = (time.monotonic() - first) / 60
         threshold = 15 if window != "validator" else 30
         key = f"{window}:stall:{int(first)}"
         if quiet_min >= threshold and key not in self.notified:
             self.notified.add(key)
+            if self.orchestrator_mode == "resident-monitoring":
+                self.event(
+                    "liveness_unknown",
+                    f"{window} has produced no changed capture for {quiet_min:.0f}m; "
+                    "silence does not distinguish reasoning from an I/O wait. Validator or "
+                    "Orchestrator must inspect tmux and use tmux_lane_message.sh status for "
+                    "a typed Codex-session probe",
+                    wake=True,
+                )
+                return changed
             self.event(
                 "stall_confirmed",
                 f"{window} quiet {quiet_min:.0f}m with no state change and no "
@@ -392,6 +494,115 @@ class Dispatcher:
                 f"[dispatcher] {window} stalled {quiet_min:.0f}m — blocking event "
                 f"written; consume lanes/{window}.blocking before new work"
             )
+        return changed
+
+    def record_pane_delta(self, window: str, tail: str) -> None:
+        """Retain every changed pane snapshot; split only for transport ceilings.
+
+        The split is byte-preserving and carries no semantic selection.  tmux
+        remains an inferred coordination surface, so each row names the exact
+        captured bytes and their digest rather than pretending to be authority.
+        """
+
+        raw = tail.encode("utf-8")
+        chunks: list[str] = []
+        while raw:
+            end = min(len(raw), 48 * 1024)
+            while end and (raw[end : end + 1] and raw[end] & 0xC0 == 0x80):
+                end -= 1
+            if end == 0:
+                raise OrchestratorChannelError("pane capture cannot be split as UTF-8")
+            chunks.append(raw[:end].decode("utf-8"))
+            raw = raw[end:]
+        if not chunks:
+            chunks = [""]
+        total = len(chunks)
+        for index, chunk in enumerate(chunks, 1):
+            append_activity(
+                self.root,
+                kind="pane_delta",
+                source=window,
+                detail=f"complete bounded pane snapshot {index}/{total} for {window}",
+                snapshot=chunk,
+            )
+
+    def record_cadence(self) -> None:
+        append_activity(
+            self.root,
+            kind="cadence",
+            source="dispatcher",
+            detail=(
+                "independent strategic cadence: reconstruct the user's ultimate goal, "
+                "classify recent input, test direction and consequences, inspect side effects, "
+                "and audit rule adherence"
+            ),
+        )
+
+    def _record_orchestrator_transport_failure(self, detail: str) -> None:
+        key = f"orchestrator-transport:{hashlib.sha256(detail.encode()).hexdigest()}"
+        if key in self.notified:
+            return
+        self.notified.add(key)
+        self.event("orchestrator_transport_failed", detail[:300], wake=False)
+        self._block("validator", "orchestrator_transport_failed", detail[:200])
+        self._banner(f"INCIDENT — resident Orchestrator transport failed: {detail[:160]}")
+
+    def deliver_pending_activity(self) -> None:
+        """Notify the Orchestrator of the complete cursor range, without judging it."""
+
+        if self.orchestrator_mode != "resident-monitoring":
+            return
+        try:
+            cursor = activity_highwater(self.root)
+        except OrchestratorChannelError as exc:
+            self._record_orchestrator_transport_failure(str(exc))
+            return
+        if cursor <= self.last_delivered_cursor:
+            return
+        start = self.last_delivered_cursor + 1
+        journal = self.root / "orchestrator" / "activity.jsonl"
+        report = self.root / "orchestrator" / f"assessment-{cursor}.json"
+        channel = self.root / "orchestrator" / "bin" / "orchestrator_channel.py"
+        message = (
+            f"FACTORY_ACTIVITY cursors={start}..{cursor} journal={journal}. "
+            "Consume EVERY record in that range (no semantic filtering), inspect the full run "
+            "record, and use Kindex as normalized bite-sized work and experiment state rather "
+            "than a prompt dump. Challenge requirement provenance and disproportionate "
+            "complexity before decomposing; then reassess ambiguity, chunk/model routing, causal "
+            "discriminators, and exact harness lifecycle state; update OUTSTANDING-WORK.md, "
+            "then write the closed assessment/2 "
+            f"to {report} and run: python3 {channel} "
+            f"report --root {self.root} --input {report}. Decide only block or no-op; never grant."
+        )
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "INJECT_FROM": "dispatcher",
+                "HARNESS_RUN_ROOT": str(self.root),
+                "INJECT_SUBMIT_DELAY": "0.1",
+            }
+        )
+        try:
+            delivered = subprocess.run(
+                [str(self.harness / "inject.sh"), self.run, "orchestrator", message],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self._record_orchestrator_transport_failure(str(exc))
+            return
+        if delivered.returncode != 0:
+            detail = (delivered.stderr or delivered.stdout or "delivery failed").strip()
+            self._record_orchestrator_transport_failure(detail)
+            return
+        self.last_delivered_cursor = cursor
+        self.event(
+            "orchestrator_activity_delivered",
+            f"delivered every activity record through cursor {cursor}",
+            wake=False,
+        )
 
     def _banner(self, message: str) -> None:
         """Show a transient, non-executing tmux display-message banner. tmux is the
@@ -431,7 +642,8 @@ class Dispatcher:
             if key not in self.promises and f"promise:{key}" not in self.notified:
                 self.promises[key] = (time.monotonic(), rc, dc, line)
         expired = [
-            (k, v) for k, v in self.promises.items()
+            (k, v)
+            for k, v in self.promises.items()
             if (time.monotonic() - v[0]) / 60 >= self.promise_window_min
         ]
         for key, (_, rc0, dc0, line) in expired:
@@ -477,9 +689,7 @@ class Dispatcher:
             )
             return_code = verification.returncode
             detail = (
-                verification.stderr
-                or verification.stdout
-                or "target-state verification failed"
+                verification.stderr or verification.stdout or "target-state verification failed"
             ).strip()
         except (OSError, subprocess.TimeoutExpired) as exc:
             return_code = 1
@@ -496,20 +706,24 @@ class Dispatcher:
                 self._block("validator", failure_class, detail[:200])
 
     def check_alignment_audit(self) -> None:
-        """Periodic strategic audit — the Orchestrator reads the task, design docs,
-        and recent activity, and answers: is the run still pointed at what the
-        founder asked for? Cadence is harness.json data, bound at ignition."""
+        """Append an independent cadence record; the Orchestrator supplies judgment."""
         if self.audit_interval_min <= 0:
             return
         if (time.monotonic() - self.last_audit) / 60 >= self.audit_interval_min:
             self.last_audit = time.monotonic()
-            self.event(
-                "alignment_audit",
-                "scheduled strategic audit: check hyper-focus drift, promises vs "
-                "receipts, unnecessary waiting, doc currency, and run-owned "
-                "resource disposition",
-                wake=True,
-            )
+            if self.orchestrator_mode == "resident-monitoring":
+                try:
+                    self.record_cadence()
+                except OrchestratorChannelError as exc:
+                    self._record_orchestrator_transport_failure(str(exc))
+            else:
+                self.event(
+                    "alignment_audit",
+                    "scheduled strategic audit: check hyper-focus drift, promises vs "
+                    "receipts, unnecessary waiting, doc currency, and run-owned "
+                    "resource disposition",
+                    wake=True,
+                )
 
     def check_leases(self) -> None:
         for lease in sorted((self.root / "leases").glob("*.json")):
@@ -545,6 +759,11 @@ class Dispatcher:
 
     def run_loop(self) -> None:
         self.event("dispatcher_start", f"interval={self.interval}s run={self.run}")
+        if self.orchestrator_mode == "resident-monitoring":
+            try:
+                self.record_cadence()
+            except OrchestratorChannelError as exc:
+                self._record_orchestrator_transport_failure(str(exc))
         while True:
             cfg = self.root / "harness.json"
             try:
@@ -589,13 +808,19 @@ class Dispatcher:
             self.check_halt()
             for w in self.windows():
                 tail = self.capture(w)
-                self.check_window(w, tail)
+                changed = self.check_window(w, tail)
+                if self.orchestrator_mode == "resident-monitoring" and changed:
+                    try:
+                        self.record_pane_delta(w, tail)
+                    except OrchestratorChannelError as exc:
+                        self._record_orchestrator_transport_failure(str(exc))
                 if w == "validator":
                     self.check_validator_failure_modes(tail)
             self.check_alignment_audit()
             self.check_leases()
             self.signal_watchdog.check(self.event, self._block)
             self.snapshot_minutes()
+            self.deliver_pending_activity()
             time.sleep(self.interval)
 
 

@@ -31,6 +31,12 @@ from factory_runtime.resources import ResourceLedger
 from factory_runtime.state import RunState, RunStore
 from factory_runtime.state_admission import profile_digest
 from factory_runtime.target_state import TargetResolver, normalize_repository_url, normalize_subpath
+from harness.semantic_union import (
+    EXTRACTION_SCHEMA,
+    RULINGS_SCHEMA,
+    derive_observation_id,
+    update_spec,
+)
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
 
@@ -583,17 +589,11 @@ def test_directive_writers_reject_invalid_scope_without_mutating_either_chain(
     directives = tmp_path / "DIRECTIVES"
     ledger = directives / "ledger.jsonl"
     provisional = directives / "provisional.jsonl"
-    before = {
-        path: path.read_bytes() if path.exists() else None
-        for path in (ledger, provisional)
-    }
+    before = {path: path.read_bytes() if path.exists() else None for path in (ledger, provisional)}
 
     result = dl(tmp_path, *arguments)
 
-    after = {
-        path: path.read_bytes() if path.exists() else None
-        for path in (ledger, provisional)
-    }
+    after = {path: path.read_bytes() if path.exists() else None for path in (ledger, provisional)}
     assert result.returncode != 0
     assert "invalid directive scope" in result.stderr
     assert after == before
@@ -865,6 +865,13 @@ def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     assert r.returncode == 77 and "topology refusal" in r.stderr
 
 
+def test_dispatcher_can_address_only_the_orchestrators_own_pane(tmp_path: Path) -> None:
+    delivered = inject(tmp_path, "orchestrator", "assess cursor 9", frm="dispatcher")
+    assert delivered.returncode == 0, delivered.stderr
+    refused = inject(tmp_path, "validator", "I judged you", frm="orchestrator")
+    assert refused.returncode == 77 and "topology refusal" in refused.stderr
+
+
 def test_inject_validator_to_lane_is_receipted(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "spec question answered: see artifact digest")
     assert r.returncode == 0, r.stderr
@@ -951,7 +958,7 @@ def test_config_source_resolution_uses_verified_vector_not_reread_manifest(
         encoding="utf-8",
     )
     script = f"""
-source {HARNESS / 'run_context.sh'}
+source {HARNESS / "run_context.sh"}
 FACTORY_RESUME_CONFIG_MANIFEST={manifest}
 FACTORY_VERIFIED_RESUME_CONFIG_ARGS=(
   --config-source factory-directive-ledger={trusted.resolve()}
@@ -1344,11 +1351,36 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = has-session ]; then exit 1; fi\n'
+        'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
         encoding="utf-8",
     )
     tmux.chmod(0o755)
+    agy = stub / "agy"
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
+        '--disable-slash-commands --add-dir"; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
+    codex = stub / "codex"
+    codex.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "codex-cli 0.152.1-test"; exit 0; fi\n'
+        'if [[ "$*" == *"--help"* ]]; then '
+        'echo "--ignore-user-config --ignore-rules --strict-config --json '
+        '--thread --no-alt-screen --add-dir"; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
     timers = tmp_path / "timers.txt"
     timers.write_text("", encoding="utf-8")
     transcripts = tmp_path / "transcripts"
@@ -1399,12 +1431,278 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["resolved_commit"] == target["resolved_commit"]
     assert harness["validator_agent"] == "codex"
     assert harness["orchestrator_agent"] == "agy"
+    assert harness["orchestrator_mode"] == "resident-monitoring"
+    assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
+    assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
     assert (root / "TASK.md").read_text() == task
     assert "repo" not in harness and "base_sha" not in harness
-    assert str(target["workdir"]) in tmux_log.read_text()
-    assert str(operator) not in tmux_log.read_text()
+    tmux_calls = tmux_log.read_text()
+    assert str(target["workdir"]) in tmux_calls
+    assert str(operator) not in tmux_calls
+    assert "-n orchestrator" in tmux_calls
+    assert "agy --new-project --sandbox" in tmux_calls
+    assert "--new-project" in tmux_calls
+    assert "--prompt-interactive" in tmux_calls
+    assert "agy -p" not in tmux_calls and "agy --print" not in tmux_calls
+    assert "-n validator" in tmux_calls and "-n ctl" in tmux_calls
+    orchestrator_bin = root / "orchestrator" / "bin"
+    assert {path.name for path in orchestrator_bin.iterdir()} == {
+        "attention_gate.py",
+        "lane_dialogue.py",
+        "orchestrator_channel.py",
+    }
+    imported = subprocess.run(
+        [sys.executable, str(orchestrator_bin / "orchestrator_channel.py"), "--help"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert imported.returncode == 0, imported.stderr
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
+
+
+def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
+    tmp_path: Path,
+) -> None:
+    task = "Exercise a real Codex author lane."
+    operator, root, _ = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status=None,
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    ignited = run(
+        [
+            "bash",
+            str(HARNESS / "factory.sh"),
+            "r1",
+            task,
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    prompt = tmp_path / "coder-prompt.txt"
+    prompt.write_text("Implement the signed specification and checkpoint your work.\n")
+    launched = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane.sh"),
+            "r1",
+            "coder",
+            "launch",
+            "--repo",
+            str(lane),
+            "--prompt",
+            str(prompt),
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    assert "codex --ask-for-approval never exec" in coder_call
+    assert "env -i" in coder_call
+    assert "--ignore-user-config" in coder_call and "--ignore-rules" in coder_call
+    assert "default_permissions" in coder_call and "factory-lane" in coder_call
+    assert ".git" in coder_call and "write" in coder_call
+    assert "--sandbox" not in coder_call
+    rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
+    assert [row["status"] for row in rows] == ["planned", "active"]
+    assert rows[-1]["repository_preflight"]["ownership_after_launch"].startswith("agent-owned")
+    retained_prompt = (root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
+    assert "inspect your own status/diff" in retained_prompt
+    assert "commit only the work assigned to this lane" in retained_prompt
+
+    (lane / "answer.txt").write_text("agent-authored output\n", encoding="utf-8")
+    frozen = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane.sh"),
+            "r1",
+            "coder",
+            "freeze",
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+
+    assert frozen.returncode == 0, frozen.stdout + frozen.stderr
+    export = json.loads(frozen.stdout)
+    assert export["git_invoked_after_handoff"] is False
+    assert export["excluded_entries"] == [".git"]
+    assert export["source_file_count"] == 1
+    assert (Path(export["files_directory"]) / "answer.txt").read_text() == (
+        "agent-authored output\n"
+    )
+    rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
+    assert rows[-1]["schema_version"] == "factory-tmux-lane-freeze/1"
+    assert rows[-1]["boundary"] == "regular-files-only-no-git"
+
+
+def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread(
+    tmp_path: Path,
+) -> None:
+    from harness.lane_dialogue import record_question
+
+    task = "Resolve semantics through the typed lane question channel."
+    operator, root, _ = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status="open",
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    lane = tmp_path / "standalone-tester"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "tester-launch.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "factory-tmux-lane-launch/1",
+                "status": "active",
+                "run_id": "r1",
+                "role": "tester",
+                "agent": "codex",
+                "repository": str(lane),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    thread_id = "12345678-1234-4234-8234-123456789abc"
+    (launch_dir / "tester-thread-id").write_text(thread_id + "\n", encoding="utf-8")
+    question, _ = record_question(root, "tester", "Are unknown stay types rejected?")
+    answer = tmp_path / "answer.txt"
+    answer.write_text("Yes. Return the typed unknown-stay error.\n", encoding="utf-8")
+
+    blocked_freeze = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane.sh"),
+            "r1",
+            "tester",
+            "freeze",
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+    assert blocked_freeze.returncode == 70
+    assert "unanswered tester question" in blocked_freeze.stderr
+
+    delivered = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane_message.sh"),
+            "r1",
+            "validator",
+            "tester",
+            "answer",
+            "--runs",
+            str(root.parent),
+            "--question-id",
+            str(question["question_id"]),
+            "--answer-file",
+            str(answer),
+            "--basis",
+            "ratified requirement RES-4",
+            "--authority",
+            "ratified-spec",
+        ],
+        operator,
+        env,
+    )
+
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    assert "via Codex resume" in delivered.stdout
+    journal = read_chain(root / "dialogue" / "journal.jsonl")
+    assert [row["record_type"] for row in journal] == [
+        "question",
+        "message-planned",
+        "message-delivered",
+    ]
+    assert journal[-1]["thread_id"] == thread_id
+    assert journal[-1]["transport"] == "resume"
+    tmux_call = tmux_log.read_text()
+    assert "respawn-pane" in tmux_call
+    assert "exec --json resume" in tmux_call
+    assert ".git" in tmux_call and "write" in tmux_call
+
+
+def test_tmux_lane_message_refuses_orchestrator_specification_answer(
+    tmp_path: Path,
+) -> None:
+    from harness.lane_dialogue import record_question
+
+    operator, root, _ = execution_truth_fixture(
+        tmp_path,
+        task="Keep Orchestrator authority monotone.",
+        harness_status="open",
+    )
+    env, _ = factory_ignition_env(tmp_path, root)
+    lane = tmp_path / "standalone-coder"
+    lane.mkdir()
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "coder-launch.jsonl").write_text(
+        json.dumps(
+            {
+                "status": "active",
+                "run_id": "r1",
+                "role": "coder",
+                "agent": "codex",
+                "repository": str(lane),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (launch_dir / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n",
+        encoding="utf-8",
+    )
+    question, _ = record_question(root, "coder", "Who owns retry state?")
+    answer = tmp_path / "answer.txt"
+    answer.write_text("The client owns it.\n", encoding="utf-8")
+
+    refused = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane_message.sh"),
+            "r1",
+            "orchestrator",
+            "coder",
+            "answer",
+            "--runs",
+            str(root.parent),
+            "--question-id",
+            str(question["question_id"]),
+            "--answer-file",
+            str(answer),
+            "--basis",
+            "orchestrator inference",
+            "--authority",
+            "human-answer",
+        ],
+        operator,
+        env,
+    )
+
+    assert refused.returncode == 77
+    assert "may probe status but may not answer specifications" in refused.stderr
 
 
 def test_factory_task_mismatch_has_zero_tmux_or_harness_mutation(tmp_path: Path) -> None:
@@ -1527,6 +1825,207 @@ def test_promise_detection_catches_announced_intent() -> None:
     assert any("open the PR" in p for p in promises)
 
 
+def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filtering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps(
+            {
+                "orchestrator_mode": "resident-monitoring",
+                "audit_interval_min": 45,
+            }
+        ),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.record_pane_delta(  # type: ignore[attr-defined]
+        "validator",
+        "Ordinary design discussion with no dispatcher trigger vocabulary.",
+    )
+    dispatcher.record_cadence()  # type: ignore[attr-defined]
+
+    invocations: list[tuple[list[str], dict[str, object]]] = []
+
+    def delivered(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        invocations.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "delivered", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", delivered)
+    dispatcher.deliver_pending_activity()  # type: ignore[attr-defined]
+
+    activity = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert [row["kind"] for row in activity] == ["pane_delta", "cadence"]
+    assert activity[0]["snapshot"].startswith("Ordinary design discussion")
+    command, kwargs = invocations[0]
+    assert command[1:3] == ["r1", "orchestrator"]
+    assert "cursors=1..2" in command[3]
+    assert "Consume EVERY record" in command[3]
+    assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
+
+
+def test_resident_orchestrator_signal_joins_activity_stream_instead_of_spawning_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        mod.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("resident mode must not spawn a one-shot wake"),
+    )
+
+    dispatcher.wake_orchestrator(  # type: ignore[attr-defined]
+        {"ts": "2026-09-02T12:00:00+00:00", "kind": "spec_defect", "detail": "x"}
+    )
+
+    (row,) = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert row["kind"] == "deterministic_signal"
+    assert json.loads(row["snapshot"])["kind"] == "spec_defect"
+
+
+def test_dispatcher_registers_a_lane_question_without_guessing_its_answer(
+    tmp_path: Path,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+
+    changed = dispatcher.check_window(  # type: ignore[attr-defined]
+        "tester",
+        "Working through the contract.\n"
+        "FACTORY_QUESTION: Are unknown stay types rejected or preserved?",
+    )
+
+    assert changed is True
+    dialogue = read_chain(root / "dialogue" / "journal.jsonl")
+    assert len(dialogue) == 1
+    assert dialogue[0]["record_type"] == "question"
+    assert dialogue[0]["lane"] == "tester"
+    assert dialogue[0]["text"] == "Are unknown stay types rejected or preserved?"
+    (activity,) = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert activity["kind"] == "deterministic_signal"
+    trigger = json.loads(activity["snapshot"])
+    assert trigger["kind"] == "lane_question"
+    assert dialogue[0]["question_id"] in trigger["detail"]
+
+
+def test_dispatcher_does_not_reopen_answered_question_from_unchanged_scrollback(
+    tmp_path: Path,
+) -> None:
+    from harness.lane_dialogue import plan_message, record_delivery
+
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    question_line = "FACTORY_QUESTION: Are unknown stay types rejected or preserved?"
+    dispatcher.check_window("tester", question_line)  # type: ignore[attr-defined]
+    (question,) = read_chain(root / "dialogue" / "journal.jsonl")
+    answer = plan_message(
+        root,
+        sender="validator",
+        lane="tester",
+        message_kind="spec-answer",
+        text="Reject unknown stay types with the ratified typed error.",
+        basis="ratified requirement RES-4",
+        authority="ratified-spec",
+        question_id=str(question["question_id"]),
+    )
+    record_delivery(
+        root,
+        message_id=str(answer["message_id"]),
+        thread_id="12345678-1234-4234-8234-123456789abc",
+        transport="queue",
+    )
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "tester",
+        question_line + "\nContinuing with the bound answer.",
+    )
+
+    questions = [
+        row
+        for row in read_chain(root / "dialogue" / "journal.jsonl")
+        if row["record_type"] == "question"
+    ]
+    assert len(questions) == 1
+
+
+def test_resident_silence_is_unknown_until_a_typed_status_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.check_window("coder", "still reasoning")  # type: ignore[attr-defined]
+    dispatcher.quiet_since["coder"] = 0.0  # type: ignore[attr-defined]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: 16 * 60)
+
+    dispatcher.check_window("coder", "still reasoning")  # type: ignore[attr-defined]
+
+    events = read_chain(root / "events.jsonl")
+    assert events[-1]["kind"] == "liveness_unknown"
+    assert "does not distinguish reasoning from an I/O wait" in events[-1]["detail"]
+    assert not (root / "lanes" / "coder.blocking").exists()
+
+
+def test_lane_waiting_on_validator_question_is_not_a_liveness_alarm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from harness.lane_dialogue import record_question
+
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.check_window("coder", "waiting")  # type: ignore[attr-defined]
+    record_question(root, "coder", "Which ratified retry behavior applies here?")
+    dispatcher.quiet_since["coder"] = 0.0  # type: ignore[attr-defined]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: 16 * 60)
+
+    dispatcher.check_window("coder", "waiting")  # type: ignore[attr-defined]
+
+    assert "coder" not in dispatcher.quiet_since  # type: ignore[attr-defined]
+    assert not (root / "events.jsonl").exists()
+
+
 def test_promise_detection_ignores_plain_statements() -> None:
     mod = load_dispatcher()
     assert mod.detect_promises("The tests passed. Receipts are chained.") == []  # type: ignore[attr-defined]
@@ -1599,10 +2098,74 @@ demonstrated and the assertion is shown to discriminate met from unmet.
 """
 
 
+def _write_closed_semantic_union(artifacts: Path, spec: Path) -> None:
+    evidence = artifacts / "semantic-evidence"
+    for root in (evidence / "sources", evidence / "extractions"):
+        for kind in ("planning-pass", "lane-trace", "adversarial-review"):
+            (root / kind).mkdir(parents=True, exist_ok=True)
+    source = b"planning pass surfaced the explicit-root resolution behavior\n"
+    source_digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    source_id = "phase-a-planning"
+    (evidence / "sources" / "planning-pass" / f"{source_id}.source").write_bytes(source)
+    question = "Must callers be able to bind an explicit configuration root?"
+    scope = "R1.1 configuration resolution"
+    observation_id = derive_observation_id(
+        source_kind="planning-pass",
+        source_id=source_id,
+        source_digest=source_digest,
+        start=0,
+        end=len(source),
+        scope=scope,
+        question=question,
+    )
+    for suffix in ("a", "b"):
+        config = f"config-{suffix}".encode()
+        extraction = {
+            "schema_version": EXTRACTION_SCHEMA,
+            "source_kind": "planning-pass",
+            "source_id": source_id,
+            "source_sha256": source_digest,
+            "extractor": {
+                "id": f"planner-{suffix}",
+                "version": "fixture-v1",
+                "configuration_digest": "sha256:" + hashlib.sha256(config).hexdigest(),
+            },
+            "items": [
+                {
+                    "start": 0,
+                    "end": len(source),
+                    "scope": scope,
+                    "question": question,
+                }
+            ],
+        }
+        extraction_path = evidence / "extractions" / "planning-pass" / source_id / f"{suffix}.json"
+        extraction_path.parent.mkdir(parents=True, exist_ok=True)
+        extraction_path.write_text(json.dumps(extraction) + "\n", encoding="utf-8")
+    rulings = {
+        "schema_version": RULINGS_SCHEMA,
+        "items": [
+            {
+                "observation_id": observation_id,
+                "status": "closed",
+                "disposition": "resolved",
+                "ruling": "Yes; callers receive a documented explicit-root binding.",
+                "authority_basis": "Human-ratified Product Specification requirement R1.1.",
+                "owner": None,
+                "next_action": None,
+            }
+        ],
+    }
+    (evidence / "rulings.json").write_text(json.dumps(rulings) + "\n", encoding="utf-8")
+    update_spec(artifacts, spec)
+
+
 def mkrun(tmp: Path, spec: str, strat: str | None, contract: bool = True) -> Path:
     art = tmp / ".factory" / "runs" / "r1" / "artifacts"
     art.mkdir(parents=True)
-    (art / "product-specification.md").write_text(spec)
+    spec_path = art / "product-specification.md"
+    spec_path.write_text(spec)
+    _write_closed_semantic_union(art, spec_path)
     if strat is not None:
         (art / "testing-strategy.md").write_text(strat)
     if contract:
@@ -1683,6 +2246,48 @@ def test_phase1_gate_ignores_ambient_gap_override_and_still_refuses(tmp_path: Pa
     rows = _refusal_events(tmp / ".factory" / "runs" / "r1")
     assert [row["kind"] for row in rows] == ["refusal-phase1-gate"]
     assert "Fix and re-ratify" in r.stdout
+
+
+def test_phase1_gate_refuses_a_stale_token_matching_semantic_checklist(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    spec = tmp / ".factory" / "runs" / "r1" / "artifacts" / "product-specification.md"
+    spec.write_text(
+        spec.read_text(encoding="utf-8").replace(
+            "Yes; callers receive", "CLOSED token only; callers receive"
+        ),
+        encoding="utf-8",
+    )
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "semantic evidence union is absent, stale, incomplete, or open" in result.stdout
+    assert "differs from fresh evidence derivation" in result.stdout
+
+
+def test_phase1_gate_refuses_an_explicitly_open_semantic_item(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    artifacts = tmp / ".factory" / "runs" / "r1" / "artifacts"
+    rulings_path = artifacts / "semantic-evidence" / "rulings.json"
+    rulings = json.loads(rulings_path.read_text(encoding="utf-8"))
+    ruling = rulings["items"][0]
+    ruling.update(
+        {
+            "status": "open",
+            "disposition": "deferred",
+            "ruling": "The observable behavior still needs a human decision.",
+            "authority_basis": None,
+            "owner": "Validator",
+            "next_action": "Ask the human which behavior the caller observes.",
+        }
+    )
+    rulings_path.write_text(json.dumps(rulings) + "\n", encoding="utf-8")
+    update_spec(artifacts, artifacts / "product-specification.md")
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "semantic evidence union has open items" in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -1884,9 +2489,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task-" + ("t" * 60_000) + "\n")
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
     (root / "events.jsonl").write_text(
         json.dumps({"padding": "e" * 59_000}, separators=(",", ":")) + "\n"
     )
@@ -1920,8 +2523,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     directive_ledger = tmp_path / "DIRECTIVES" / "ledger.jsonl"
     (root / "minutes").mkdir()
     (root / "minutes" / "validator-2026-08-18.log").write_text(
-        "one\ntwo\n"
-        + "".join(f"minute-{index}-{'m' * 1_450}\n" for index in range(38)),
+        "one\ntwo\n" + "".join(f"minute-{index}-{'m' * 1_450}\n" for index in range(38)),
         encoding="utf-8",
     )
 
@@ -1956,36 +2558,26 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
     assert "/Users/" not in projections[0].read_text()
     projected = json.loads(projections[0].read_text())
     active_directives = next(
-        section for section in projected["sections"]
-        if section["section_id"] == "active-directives"
+        section for section in projected["sections"] if section["section_id"] == "active-directives"
     )
     assert "project this exact directive" in active_directives["content"]
     assert "ambient-forged" not in active_directives["content"]
     minutes = next(
-        section for section in projected["sections"]
-        if section["section_id"] == "minutes-tail"
+        section for section in projected["sections"] if section["section_id"] == "minutes-tail"
     )
     assert "[validator-2026-08-18.log] one" in minutes["content"]
-    wake_receipt = json.loads(
-        (root / "wakes" / "receipts.jsonl").read_text().splitlines()[0]
-    )
+    wake_receipt = json.loads((root / "wakes" / "receipts.jsonl").read_text().splitlines()[0])
     assert wake_receipt["agent"] == "agy"
     assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
     assert wake_receipt["status"] == "projection-prepared"
-    assert (
-        wake_receipt["sandbox_enforcement"]
-        == "cli-declared-not-independently-qualified"
-    )
-    completed_receipt = json.loads(
-        (root / "wakes" / "receipts.jsonl").read_text().splitlines()[1]
-    )
+    assert wake_receipt["sandbox_enforcement"] == "cli-declared-not-independently-qualified"
+    completed_receipt = json.loads((root / "wakes" / "receipts.jsonl").read_text().splitlines()[1])
     assert completed_receipt["status"] == "completed"
     assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
     assert completed_receipt["exit_code"] == 0
     assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
     assert (
-        completed_receipt["prompt_assembler_version"]
-        == "factory-orchestrator-prompt-assembler/2"
+        completed_receipt["prompt_assembler_version"] == "factory-orchestrator-prompt-assembler/2"
     )
     assert completed_receipt["prompt_id"] == prompts[0].name
     assert completed_receipt["prompt_byte_count"] == len(prompts[0].read_bytes())
@@ -2036,9 +2628,7 @@ def test_orchestrator_rejects_malformed_agy_terminal_stream(tmp_path: Path) -> N
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
@@ -2079,9 +2669,7 @@ def test_orchestrator_receipts_live_supervisor_output_truncation(tmp_path: Path)
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
@@ -2131,9 +2719,7 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
     (receipts / "chain.jsonl").write_text(
         "".join(f'{{"receipt":{index}}}\n' for index in range(12_000))
         + '{"receipt":"receipt-final"}\n'
@@ -2186,19 +2772,20 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
     assert "unterminated-fragment" not in sections["event-tail"]
     assert "omitted earlier, oversized, or invalid record" in sections["event-tail"]
     assert "minutes-final" in sections["minutes-tail"]
-    assert all(len(sections[name].encode()) <= 65_536 for name in (
-        "receipt-tail",
-        "event-tail",
-        "minutes-tail",
-    ))
+    assert all(
+        len(sections[name].encode()) <= 65_536
+        for name in (
+            "receipt-tail",
+            "event-tail",
+            "minutes-tail",
+        )
+    )
 
 
 def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Path) -> None:
     noisy = tmp_path / "noisy.py"
     noisy.write_text(
-        "import os, sys\n"
-        "while True:\n"
-        "    os.write(sys.stdout.fileno(), b'x' * 8192)\n"
+        "import os, sys\nwhile True:\n    os.write(sys.stdout.fileno(), b'x' * 8192)\n"
     )
     prompt = tmp_path / "prompt"
     prompt.write_text("audit\n")
@@ -2316,8 +2903,7 @@ def test_advisory_supervisor_kills_term_tolerant_child_after_parent_exits(
     )
     parent = tmp_path / "parent.py"
     parent.write_text(
-        "import subprocess, sys\n"
-        f"subprocess.Popen([sys.executable, {str(child)!r}])\n"
+        f"import subprocess, sys\nsubprocess.Popen([sys.executable, {str(child)!r}])\n"
     )
     prompt = tmp_path / "prompt"
     prompt.write_text("audit\n")
@@ -2604,9 +3190,7 @@ def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path)
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
     for index in range(65):
         (minutes / f"{index:02d}.log").write_text("minute\n")
 
@@ -2684,9 +3268,7 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
 def test_orchestrator_refuses_ambient_agent_substitution(tmp_path: Path) -> None:
     root = tmp_path / ".factory" / "runs" / "r1"
     (root / "wakes").mkdir(parents=True)
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "agy"})
-    )
+    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
 
     result = run(
         ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
@@ -3419,6 +4001,26 @@ def test_dispatcher_distinguishes_unavailable_verifier_from_target_divergence(
     assert blocking[0]["class"] == "target_state_verifier_unavailable"
 
 
+def test_resident_orchestrator_transport_failure_is_an_admitted_dispatcher_block(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+
+    blocking = append_blockers(
+        root,
+        "validator",
+        {
+            "ts": "2026-09-02T12:00:00+00:00",
+            "class": "orchestrator_transport_failed",
+            "evidence": "the resident Orchestrator notification could not be delivered",
+        },
+    )
+
+    (event,) = read_chain(blocking)
+    assert event["class"] == "orchestrator_transport_failed"
+
+
 def test_lane_env_refuses_past_blocking_event(tmp_path: Path) -> None:
     env = lane_env_setup(tmp_path)
     root = tmp_path / ".harness" / "runs" / "rA"
@@ -3553,9 +4155,7 @@ def test_consume_block_receipts_and_clears(tmp_path: Path) -> None:
     assert all(e["disposition_evidence_digest"] == evidence_digest for e in consumed)
     retained = root / consumed[0]["disposition_evidence_id"]
     assert retained.read_bytes() == evidence.read_bytes()
-    assert all(
-        e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in consumed
-    )
+    assert all(e["disposition_evidence_byte_count"] == len(evidence.read_bytes()) for e in consumed)
 
 
 def test_consume_block_durably_receipts_before_clearing_gate(tmp_path: Path) -> None:
@@ -4044,14 +4644,14 @@ def test_blocking_append_after_admission_marker_applies_to_next_dispatch(
     delegate.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "if [ \"${1:-}\" = prepare-lane-dispatch ] && "
-        "[ ! -e \"$HARNESS_RUN_ROOT/post-admission-block-injected\" ]; then\n"
-        "  mkdir -p \"$HARNESS_RUN_ROOT/lanes\"\n"
-        "  printf '%s\\n' '{\"class\":\"orchestrator_response\",\"response\":\"next\"}' "
-        ">> \"$HARNESS_RUN_ROOT/lanes/validator.blocking\"\n"
-        "  : > \"$HARNESS_RUN_ROOT/post-admission-block-injected\"\n"
+        'if [ "${1:-}" = prepare-lane-dispatch ] && '
+        '[ ! -e "$HARNESS_RUN_ROOT/post-admission-block-injected" ]; then\n'
+        '  mkdir -p "$HARNESS_RUN_ROOT/lanes"\n'
+        '  printf \'%s\\n\' \'{"class":"orchestrator_response","response":"next"}\' '
+        '>> "$HARNESS_RUN_ROOT/lanes/validator.blocking"\n'
+        '  : > "$HARNESS_RUN_ROOT/post-admission-block-injected"\n'
         "fi\n"
-        f"exec {sys.executable} -m factory_runtime.cli \"$@\"\n",
+        f'exec {sys.executable} -m factory_runtime.cli "$@"\n',
         encoding="utf-8",
     )
     delegate.chmod(0o755)
@@ -4190,13 +4790,16 @@ def test_blocking_event_partial_append_rolls_back_and_exact_retry_recovers(
     mod.append_blocking_event(root, "coder", event)
 
     assert read_chain(blocker) == [event]
-    assert len(
-        [
-            row
-            for row in read_chain(root / "events.jsonl")
-            if row.get("kind") == "blocking_written" and row.get("lane") == "coder"
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                row
+                for row in read_chain(root / "events.jsonl")
+                if row.get("kind") == "blocking_written" and row.get("lane") == "coder"
+            ]
+        )
+        == 1
+    )
 
 
 def test_attention_append_rollback_preserves_preexisting_durable_rows(
@@ -4253,9 +4856,7 @@ def test_blocking_event_exact_retry_repairs_killed_unterminated_tail(tmp_path: P
     mod.append_blocking_event(root, "coder", event)  # type: ignore[attr-defined]
 
     assert read_chain(blocker) == [event]
-    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == [
-        "blocking_written"
-    ]
+    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == ["blocking_written"]
 
 
 def test_blocking_event_exact_retry_fsyncs_complete_unreceipted_blocker(
@@ -4298,9 +4899,7 @@ def test_blocking_event_exact_retry_fsyncs_complete_unreceipted_blocker(
 
     assert blocker_identity in synced
     assert read_chain(blocker) == [event]
-    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == [
-        "blocking_written"
-    ]
+    assert [row["kind"] for row in read_chain(root / "events.jsonl")] == ["blocking_written"]
 
 
 def test_inherited_dispatch_descriptor_repeats_blocker_admission(tmp_path: Path) -> None:
@@ -4490,6 +5089,8 @@ def dispatch_success_fixture(
         ("testing-strategy.md", ADEQUATE_STRAT),
     ):
         (art / name).write_text(body)
+    _write_closed_semantic_union(art, art / "product-specification.md")
+    for name in ("product-specification.md", "architecture.md", "testing-strategy.md"):
         (art / f"{name}.digest").write_text("d\n")
     (art / "oracle-contract.md").write_text("signatures, shapes, marker locations\n")
     if primer:
@@ -4900,6 +5501,35 @@ def test_dispatch_delivers_path_free_fence_dispatch_specs_and_primer(tmp_path: P
     ]
 
 
+def test_dispatch_refuses_unassessed_resident_orchestrator_checkpoint(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["orchestrator_mode"] = "resident-monitoring"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    (stub / "tmux").write_text(
+        '#!/usr/bin/env bash\nif [ "$1" = display ]; then echo agy; fi\nexit 0\n',
+        encoding="utf-8",
+    )
+    (stub / "tmux").chmod(0o755)
+    environment = _dispatch_env(stub, root)
+    environment["FACTORY_ORCHESTRATOR_CHECKPOINT_TIMEOUT"] = "1"
+
+    result = run(
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
+        cwd,
+        environment,
+    )
+
+    assert result.returncode == 70
+    assert "did not assess the pre-dispatch checkpoint" in result.stderr
+    assert not (tmp_path / "boundary.log").exists()
+    (activity,) = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert activity["kind"] == "pre_dispatch"
+
+
 def test_dispatch_refuses_tampered_receipt_chain_before_window_plan(tmp_path: Path) -> None:
     cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
     forged = {
@@ -4979,15 +5609,11 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
     assert receipt["run_id"] == "r1"
     assert receipt["role"] == "coder"
     assert receipt["failure_capsule"]["owner"] == "validator-harness"
-    assert receipt["diagnostic"]["content_digest"] == digest_bytes(
-        diagnostic_path.read_bytes()
-    )
+    assert receipt["diagnostic"]["content_digest"] == digest_bytes(diagnostic_path.read_bytes())
     assert receipt["state_capsule_digest"] == digest_obj(
         json.loads(state_capsule_path.read_text(encoding="utf-8"))
     )
-    assert receipt["prompt_sequence"][0]["content_digest"] == digest_bytes(
-        prompt_path.read_bytes()
-    )
+    assert receipt["prompt_sequence"][0]["content_digest"] == digest_bytes(prompt_path.read_bytes())
     assert receipt["qualification_digest"] == digest_bytes(qualification_path.read_bytes())
     assert receipt["executable_digest"] == digest_bytes(executable_path.read_bytes())
     resources = ResourceLedger(root, "r1").latest()
@@ -4995,15 +5621,14 @@ def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -
     failure_event = next(
         record
         for record in ResourceLedger(root, "r1").records()
-        if record["resource_id"] == "runner-workspace-coder"
-        and record["status"] == "failed"
+        if record["resource_id"] == "runner-workspace-coder" and record["status"] == "failed"
     )
     assert failure_event["evidence_digests"]["runner-failure-receipt"] == digest_bytes(
         receipt_path.read_bytes()
     )
-    assert failure_event["evidence_digests"][
-        "validator-invocation-diagnostic"
-    ] == digest_bytes(diagnostic_path.read_bytes())
+    assert failure_event["evidence_digests"]["validator-invocation-diagnostic"] == digest_bytes(
+        diagnostic_path.read_bytes()
+    )
     assert failure_event["evidence_digests"]["failed-prompt-1"] == digest_bytes(
         prompt_path.read_bytes()
     )
@@ -6801,7 +7426,7 @@ def test_promote_never_erases_a_terminal_no_recorded_during_close(tmp_path: Path
     wrapper = tmp_path / "cli_then_no.sh"
     wrapper.write_text(
         "#!/bin/bash\n"
-        f"{env['FACTORY_CLI']} \"$@\"\n"
+        f'{env["FACTORY_CLI"]} "$@"\n'
         "rc=$?\n"
         "# inject the racing NO only after the verdict render, inside the exact window\n"
         'if [ "$1" != "promote" ]; then exit $rc; fi\n'
@@ -7187,9 +7812,9 @@ def _refusal_events(root: Path) -> list[dict[str, object]]:
 def test_refusal_kind_registry_is_closed_over_harness_usage() -> None:
     """Axis-2 additions are data-file diffs visible in git, never runtime-invented
     kinds: every --kind a harness script passes must be in the committed registry."""
-    registry = json.loads(
-        (HARNESS / "refusal_event_kinds.json").read_text(encoding="utf-8")
-    )["kinds"]
+    registry = json.loads((HARNESS / "refusal_event_kinds.json").read_text(encoding="utf-8"))[
+        "kinds"
+    ]
     used: set[str] = set()
     for script in sorted(HARNESS.glob("*.sh")):
         # Join backslash continuations so an invocation split across lines scans
@@ -7200,11 +7825,7 @@ def test_refusal_kind_registry_is_closed_over_harness_usage() -> None:
             if "refusal-event" not in line:
                 continue
             tokens = line.split()
-            used.update(
-                tokens[i + 1]
-                for i, token in enumerate(tokens[:-1])
-                if token == "--kind"
-            )
+            used.update(tokens[i + 1] for i, token in enumerate(tokens[:-1]) if token == "--kind")
     assert used, "no harness script passes --kind — instrumentation is unwired"
     assert used <= set(registry), f"unregistered kinds in harness scripts: {used - set(registry)}"
     assert "refusal-unregistered" in registry
@@ -7284,9 +7905,7 @@ def _unattributed_refusal_exits(
 
     exit_re = _re.compile(exit_pattern)
     any_exit_re = _re.compile(r"(?:^|[;{|&(]\s*)exit\b\s*([^;}&|)]*)")
-    call_re = _re.compile(
-        "|".join(_re.escape(name) + r"(?![\w=])" for name in call_names)
-    )
+    call_re = _re.compile("|".join(_re.escape(name) + r"(?![\w=])" for name in call_names))
     boundary_re = _re.compile(r"^(\}|fi|done|else|esac)\b")
     exempt = set(exempt_exits)
 
@@ -7338,9 +7957,7 @@ def _unattributed_refusal_exits(
                 argument = generic.group(1).strip()
                 if argument in exempt:
                     continue
-                unattributed.append(
-                    f"{i + 1}: UNCLASSIFIABLE exit form {argument!r}: {stripped}"
-                )
+                unattributed.append(f"{i + 1}: UNCLASSIFIABLE exit form {argument!r}: {stripped}")
             continue
         call_match = call_re.search(effective)
         if call_match and call_match.start() < exit_match.start():
@@ -7376,9 +7993,7 @@ def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
     renders a verdict; pre-helper exits are the stated pre-root boundary."""
     text = (HARNESS / "promote.sh").read_text(encoding="utf-8")
     body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(
-        body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")
-    )
+    missing = _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?"))
     assert not missing, "fail-closed exits without attribution:\n" + "\n".join(missing)
 
 
@@ -7386,9 +8001,7 @@ def test_endgame_refusal_exits_all_route_through_refusal_event() -> None:
     """Same attribution for endgame.sh; the RED/GREEN verdict exit is exempt."""
     text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
     body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(
-        body, _ENDGAME_EXIT_RE, exempt_exits=('"$FAILED"', "64")
-    )
+    missing = _unattributed_refusal_exits(body, _ENDGAME_EXIT_RE, exempt_exits=('"$FAILED"', "64"))
     assert not missing, "refusal exits without attribution:\n" + "\n".join(missing)
 
 
@@ -7398,7 +8011,7 @@ def test_phase1_refusal_exit_is_attributed() -> None:
     text = (HARNESS / "phase1_gate.sh").read_text(encoding="utf-8")
     missing = _unattributed_refusal_exits(
         text,
-        r'(?:^|[;{|&]\s*)exit 71\b',
+        r"(?:^|[;{|&]\s*)exit 71\b",
         ("refusal_event", "refusal-event"),
         exempt_exits=("64",),
     )
@@ -7418,8 +8031,7 @@ def test_dispatch_refusals_are_funneled_through_fail() -> None:
     end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
     fail_body_lines = [line.strip() for line in lines[start_index:end_index]]
     assert any(
-        line.startswith("python3") and "refusal-event" in line
-        for line in fail_body_lines
+        line.startswith("python3") and "refusal-event" in line for line in fail_body_lines
     ), "fail() carries no executing refusal-event invocation"
 
     offenders = _dispatch_exits_outside_funnel(lines, end_index)
@@ -7451,23 +8063,28 @@ _MASKING_MUTATIONS = [
     # scanner must go red on every one.
     ("promote.sh", _PROMOTE_EXIT_RE, '  refusal_event "no checked harness.json" 64\n'),
     (
-        "promote.sh", _PROMOTE_EXIT_RE,
+        "promote.sh",
+        _PROMOTE_EXIT_RE,
         'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
     ),
     (
-        "promote.sh", _PROMOTE_EXIT_RE,
+        "promote.sh",
+        _PROMOTE_EXIT_RE,
         '  refusal_event "run-owned resources lack a terminal disposition"\n',
     ),
     (
-        "endgame.sh", _ENDGAME_EXIT_RE,
+        "endgame.sh",
+        _ENDGAME_EXIT_RE,
         'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
     ),
     (
-        "endgame.sh", _ENDGAME_EXIT_RE,
+        "endgame.sh",
+        _ENDGAME_EXIT_RE,
         'rc=$?; refusal_event "resource verification refused" "$rc"; ',
     ),
     (
-        "endgame.sh", _ENDGAME_EXIT_RE,
+        "endgame.sh",
+        _ENDGAME_EXIT_RE,
         '  refusal_event "final SHA is not a commit in the candidate resource"\n',
     ),
     ("endgame.sh", _ENDGAME_EXIT_RE, 'refusal_event "final SHA did not resolve exactly"; '),
@@ -7488,7 +8105,7 @@ _SUBSTITUTION_MUTATIONS = [
         "promote.sh",
         "arithmetic-exit",
         'refusal_event "harness metadata check refused" 66; exit 66;',
-        'exit $(( 66 ));',
+        "exit $(( 66 ));",
     ),
 ]
 
@@ -7501,9 +8118,9 @@ def test_substitution_mutations_turn_the_scanner_red(
     assert old in text, f"substitution anchor drifted in {script}: {label}"
     mutated = text.replace(old, new, 1)
     body = mutated[mutated.index("refusal_event()") :]
-    assert _unattributed_refusal_exits(
-        body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")
-    ), f"scanner failed to catch substitution {label} in {script}"
+    assert _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")), (
+        f"scanner failed to catch substitution {label} in {script}"
+    )
 
 
 def test_dispatch_echo_substitution_turns_the_funnel_scan_red() -> None:
@@ -7587,8 +8204,15 @@ def _harness_doc(root: Path) -> dict[str, object]:
 def test_record_no_writes_host_terminal_disposition(tmp_path: Path) -> None:
     root = _make_run(tmp_path)
     r = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
-         "--reason", "spec unsatisfiable, human decision"],
+        [
+            "bash",
+            str(HARNESS / "record_no.sh"),
+            "r1",
+            "--kind",
+            "operator",
+            "--reason",
+            "spec unsatisfiable, human decision",
+        ],
         tmp_path,
         _factory_cli_env(),
     )
@@ -7606,8 +8230,15 @@ def test_record_no_deadline_kind_is_a_bound_not_a_signal(tmp_path: Path) -> None
     class — the deadline knob cannot manufacture the terminal the instrument pays."""
     root = _make_run(tmp_path)
     r = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "watchdog-deadline",
-         "--reason", "signal deadline expired with residual blockers"],
+        [
+            "bash",
+            str(HARNESS / "record_no.sh"),
+            "r1",
+            "--kind",
+            "watchdog-deadline",
+            "--reason",
+            "signal deadline expired with residual blockers",
+        ],
         tmp_path,
         _factory_cli_env(),
     )
@@ -7620,8 +8251,7 @@ def test_record_no_refuses_unknown_kind(tmp_path: Path) -> None:
     signal to preserve — refused, never minted mislabeled."""
     root = _make_run(tmp_path)
     r = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "vibes",
-         "--reason", "x"],
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "vibes", "--reason", "x"],
         tmp_path,
         _factory_cli_env(),
     )
@@ -7631,15 +8261,13 @@ def test_record_no_refuses_unknown_kind(tmp_path: Path) -> None:
 
 def test_record_no_refuses_closed_run_and_conflicting_rewrite(tmp_path: Path) -> None:
     root = _make_run(tmp_path)
-    args = ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
-            "--reason", "first"]
+    args = ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator", "--reason", "first"]
     assert run(args, tmp_path, _factory_cli_env()).returncode == 0
     # Identical retry is idempotent (crash-retry safety, promote.sh precedent).
     assert run(args, tmp_path, _factory_cli_env()).returncode == 0
     # A different NO must not overwrite the recorded one.
     conflicting = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
-         "--reason", "second"],
+        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator", "--reason", "second"],
         tmp_path,
         _factory_cli_env(),
     )
@@ -7657,12 +8285,22 @@ def test_promote_refuses_a_no_run_terminal_is_terminal(tmp_path: Path) -> None:
         json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
     )
     write_promoting_chain(root)
-    assert run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator",
-         "--reason", "dead end"],
-        tmp_path,
-        _factory_cli_env(),
-    ).returncode == 0
+    assert (
+        run(
+            [
+                "bash",
+                str(HARNESS / "record_no.sh"),
+                "r1",
+                "--kind",
+                "operator",
+                "--reason",
+                "dead end",
+            ],
+            tmp_path,
+            _factory_cli_env(),
+        ).returncode
+        == 0
+    )
     r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
     assert r.returncode != 0
     assert _harness_doc(root)["status"] == "no"
@@ -7707,7 +8345,7 @@ def _delegating_stub(tmp_path: Path, case: str) -> dict[str, str]:
             'if [ "$1" = "promote" ]; then'
             ' root="$(dirname "$0")/root-marker"; root="$(cat "$root")";'
             ' printf \'{"allowed": true}\' > "$root/promotion_verdict.json";'
-            ' printf \'{"allowed": false}\'; exit 0; fi'
+            " printf '{\"allowed\": false}'; exit 0; fi"
         ),
         "promote-unreadable-verdict": (
             'if [ "$1" = "promote" ]; then'
@@ -7719,8 +8357,8 @@ def _delegating_stub(tmp_path: Path, case: str) -> dict[str, str]:
             'if [ "$1" = "verify-resources" ]; then'
             '  for a in "$@"; do'
             '    [ "$a" = "--seal" ] && { echo "stub seal refusal" >&2; exit 1; };'
-            '  done;'
-            'fi'
+            "  done;"
+            "fi"
         ),
     }[case]
     stub.write_text(
@@ -7795,23 +8433,27 @@ def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> No
     chain = chain_dir / "chain.jsonl"
     chain.write_text(_json.dumps({"id": "R-dup", "hash": "x", "prev_hash": "0" * 64}) + "\n")
     guard = _sp.run(
-        ["python3", "-c",
-         "import fcntl, json, os\n"
-         "with open(os.environ['_RCHAIN'], 'a+') as f:\n"
-         "    fcntl.flock(f, fcntl.LOCK_EX)\n"
-         "    f.seek(0)\n"
-         "    lines = [l for l in f.read().splitlines() if l.strip()]\n"
-         "    existing_ids = set()\n"
-         "    for existing_line in lines:\n"
-         "        try:\n"
-         "            existing_ids.add(str(json.loads(existing_line).get('id', '')))\n"
-         "        except (ValueError, TypeError):\n"
-         "            pass\n"
-         "    _new_rid = os.environ['_RID']\n"
-         "    if _new_rid in existing_ids:\n"
-         "        raise SystemExit('refusing duplicate receipt id %r' % _new_rid)\n"],
+        [
+            "python3",
+            "-c",
+            "import fcntl, json, os\n"
+            "with open(os.environ['_RCHAIN'], 'a+') as f:\n"
+            "    fcntl.flock(f, fcntl.LOCK_EX)\n"
+            "    f.seek(0)\n"
+            "    lines = [l for l in f.read().splitlines() if l.strip()]\n"
+            "    existing_ids = set()\n"
+            "    for existing_line in lines:\n"
+            "        try:\n"
+            "            existing_ids.add(str(json.loads(existing_line).get('id', '')))\n"
+            "        except (ValueError, TypeError):\n"
+            "            pass\n"
+            "    _new_rid = os.environ['_RID']\n"
+            "    if _new_rid in existing_ids:\n"
+            "        raise SystemExit('refusing duplicate receipt id %r' % _new_rid)\n",
+        ],
         env={**os.environ, "_RCHAIN": str(chain), "_RID": "R-dup"},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert guard.returncode != 0
     assert "refusing duplicate receipt id" in guard.stderr
@@ -7829,9 +8471,7 @@ def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
     so a PATH-shadowed failing ``tar`` drives the guard true without disturbing
     the real git steps before it, and the site must leave exactly one registered
     refusal event and exit 70."""
-    operator, root, target_state = execution_truth_fixture(
-        tmp_path, terminal_resources=False
-    )
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
     sha = str(target_state["resolved_commit"])
 
     stub_dir = tmp_path / "failtar-bin"

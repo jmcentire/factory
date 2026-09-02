@@ -107,17 +107,74 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Verdict | Validator + human gates | Validator executes an oracle it did not author; the judge of the judge is the qualification suite plus the human gate — the gap the Validator postmortem named ("who judges the judge") closes structurally, not with a fourth agent. |
 
 One seat the map must name explicitly: the **orchestrator** — and it is two seats, not
-one. The **dispatcher** is a script. It owns the event stream, launches lanes through
-`lane_env`, relays, collects receipts, applies the failure-class routing table, and
-enforces budgets and leases. It reasons about nothing — most of what flows through a run
-is local commands and their output, and no model should be paying to watch that. The
-**orchestrator-agent** is invoked, not resident: the dispatcher wakes it on defined
-triggers — judgment-shaped failure classes, a lane's blocking question, a human message —
-under the lease discipline of control 6, and hands it a *projection*, not the transcript.
-Accordingly, “orchestrator enforcement” means the host dispatcher/runtime gates below, never
-the model orchestrator's judgment. The model may force an exact-subject human/Validator
-disposition by raising a blocker, but it cannot choose that disposition or satisfy any effect.
-The executable projection is a closed nine-section document (trigger, task, phase snapshot,
+one. The **dispatcher** is a script. It owns deterministic transport, launches lanes through
+`lane_env`, relays, collects receipts, and enforces budgets, leases, blocks, and sole
+advancement. It reasons about nothing.
+
+In an interactive tmux run the **orchestrator-agent is resident** from ignition to terminal
+disposition. The dispatcher samples a bounded last-60-line snapshot whenever a
+Validator/Coder/Tester capture changes and appends every sample it obtained plus every
+deterministic signal under a monotonic activity cursor and an independent cadence record. It
+addresses only the Orchestrator's own pane with the complete captured cursor range. It may
+coalesce notification timing; it may not decide which captured conversation bytes deserve
+strategic judgment. A check the supervised Validator must opt into is not a check. This
+coordination path journals pane text without redaction; do not place credentials or customer data
+in these panes, and do not describe this unqualified tmux mode as a confidentiality boundary.
+
+The resident Orchestrator reconstructs the user's ultimate goal from the bounded observed
+conversation, retained run record, and native Kindex context; classifies recent input as
+override/aside/intensity-change/refinement;
+checks whether the current direction advances that goal, projects the outcome, implications and
+side effects, and audits adherence. It keeps the outstanding-work ledger across turns. Its closed
+assessment also classifies complexity and latent ambiguity, selects
+`direct|clarify|decompose|deep`, first inventories apparent requirements and challenges
+disproportionate complexity caused by implicit assumptions, inherited behavior, or requirement
+interactions. The pressure point must name a counterfactual planning-mode, model-tier, boundary,
+dependency, or necessary-chunk delta; diff size alone does not qualify. It writes bite-sized work
+state to Kindex, pre-registers outcome
+discriminators for competing causal hypotheses, and recommends the least expensive qualified
+model for each concrete chunk. Kindex is normalized state from which a narrow dispatch projection
+is derived—not a long context dump. Its effect set is exactly `{block, no-op}`: a block forces an exact-subject
+human/Validator disposition; no-op grants nothing and can satisfy no gate. Pre-dispatch and
+pre-verdict checkpoints refuse until a retained assessment covers their activity cursor. The
+assessment's observed harness status must match `harness.json`; it cannot call an open run closed.
+The block effect becomes durable before the report can make its cursor current. It clears only
+through the existing exact-subject blocking-event disposition, followed by new activity and a new
+assessment; clearing the event does not erase outstanding work.
+
+The res-r1 v2 run demonstrates the required diagnostic discipline. It pre-registered incomplete
+enumeration versus addendum blindness as distinct causes. Both lanes repeatedly cited every added
+semantic subsection and those semantics landed, while known omissions and a new live-UBR hold
+ambiguity surfaced; that selects incomplete enumeration. The next semantic artifact therefore
+comes from the mechanical union of every lane-trace ambiguity and every adversarial-review finding,
+with an explicit ruling and per-item `open|closed` assertion. A grep hit, token mention, or section
+citation count cannot close an item. `semantic_union.py` implements the conservation boundary:
+every retained planning/lane/review source needs two separately recorded digest-bound extraction
+manifests; every extracted observation keeps a content-derived identity and exact ruling; and
+the compiler embeds its full input-closure digest plus canonical checklist into the signed Product
+Specification. Phase A freshly derives and byte-compares that section and refuses open items.
+This proves no retained, extracted observation disappeared. The manifests retain claimed
+extractor/configuration provenance but do not authenticate it. The mechanism deliberately does not
+claim that a model noticed every ambiguity in raw prose or that a ruling is correct; lane questions
+surface and measure those escapes. The generated section and CLI summary explicitly render
+producer-enrollment coverage as unknown until the producer inventory is mechanically joined, so a
+closed enrolled union cannot masquerade as whole-run semantic completeness.
+
+A tmux author that cannot proceed without guessing emits `FACTORY_QUESTION:`. The dispatcher
+retains an occurrence-specific question ID. Only the Validator can bind a human answer or already
+ratified specification to that ID; the Orchestrator can issue only a generated status probe. Both
+travel through `codex queue` or `codex exec resume` to the exact retained thread, never through raw
+terminal input. Planned and delivered records are separate, cross-lane answers and conflicting
+second answers refuse, and neither author's work is projected into the other lane.
+
+The **qualified non-interactive path remains one-shot**. There the dispatcher invokes the
+Orchestrator only on defined exception triggers and hands it a closed projection, not a
+transcript. That mode is reproducible and separately receipted; resident tmux coordination is
+explicitly `operator-owned-tmux-unqualified`. Neither mode gives the model grant authority.
+tmux pane capture is an inferred observation and never the retained response or an isolation
+boundary.
+
+For the qualified headless path, the executable projection is a closed nine-section document (trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata), built
 from one stable-open confirmed read of each bounded input and one stable bounded-suffix read of
 each append-only log, then bound by a state-dependency capsule. A mature log may grow without
@@ -168,8 +225,8 @@ does not yet claim a kernel-qualified projection-only confidentiality boundary o
 named-secret-only process environment for Agy/Codex. Until that launcher is routed through a
 qualified clean environment, ambient non-Factory credentials are outside this proof.
 An orchestrator that can edit a manifest is the meta-agent-with-authorization trap rebuilt
-with better vocabulary — and an agent seat that watches everything is the cost trap
-rebuilt with better intentions.
+with better vocabulary. A resident Orchestrator therefore writes only its outstanding-work and
+assessment artifacts; the deterministic consumer admits only block/no-op and refuses any grant.
 
 Mapping to the field, so nothing here is exotic: the directive ledger with taint-carrying
 downstream references is CaMeL's typed provenance; SPL-at-the-boundary is the
@@ -446,7 +503,10 @@ dependency-free (bash + python3 + git):
 - `harness/ground.sh` — verifies the runtime-selected target-state, authority ledger, cadence,
   tripwire, channel list, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
 - `harness/factory.sh` — ignition only after Stage E; verifies exact task bytes and target-state,
-  writes separate coordination metadata, records tmux intent, then opens the coordination surface.
+  writes separate coordination metadata, records tmux intent, then opens persistent
+  `orchestrator`, interactive `validator`, and deterministic `ctl` windows. The resident Agy
+  launch uses `--new-project --prompt-interactive`, never print mode; the explicit new-project
+  launch prevents an unattended project-trust prompt from swallowing the initial brief.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
@@ -459,6 +519,32 @@ dependency-free (bash + python3 + git):
   receipt and retained exact evidence: canonical qualification, every presented prompt, private
   primary/child executable snapshots, state capsule, and bounded diagnostic. No failed canary
   reaches the broker. Ambient gap flags cannot bypass either precondition.
+- `harness/orchestrator_channel.py` + `orchestrator_checkpoint.sh` — append every resident-mode
+  bounded observed activity snapshot under a monotonic cursor; validate the closed strategic
+  assessment (goal, input class, trajectory, side effects, adherence, requirement-pressure
+  analysis, planning mode, Kindex-backed chunks, causal discriminators, and exact harness
+  lifecycle state); and admit only
+  `block|no-op`. Dispatch and verdict wait for the checkpoint cursor.
+- `harness/semantic_union.py` + `phase1_gate.sh` — discover the closed retained source tree,
+  require two separately recorded source-digest-bound extraction manifests, preserve every
+  distinct observation, require an exact typed ruling, render the input closure into the Product
+  Specification, and refuse missing/open/stale/hand-edited unions before dispatch. The compiler
+  enforces post-extraction conservation, not semantic recall, authenticated provenance, or wisdom;
+  producer-enrollment coverage remains machine-visible as unknown until its inventory is joined.
+- `harness/tmux_lane.sh` + `codex_lane_session.py` + `lane_dialogue.py` +
+  `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
+  mode. Preflight requires a standalone repository whose Git/common directory is local and a
+  Codex CLI exposing the exact permission/session flags; the retained launch records its version.
+  Codex is launched as the agent harness with a custom permission profile that reopens only
+  `.git` inside that lane. Before each checkpoint the lane inspects its own status/diff, runs
+  relevant checks, and commits only its assigned work. The JSON event wrapper retains the real
+  thread ID, so typed status probes and exact-question answers can queue or resume that
+  conversation. From agent start onward
+  the whole repository—including Git hooks and config—is untrusted and host Git is forbidden.
+  After the pane is dead, a descriptor-relative bounded walk excludes root `.git`, rejects links,
+  special entries, nested Git metadata, portable-name collisions, privileged modes and ceiling
+  violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
+  checkpoints, never promotion evidence.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
   Append-only sources are read as stable bounded suffixes rather than rejected when their full
@@ -473,6 +559,12 @@ dependency-free (bash + python3 + git):
 - `harness/promote.sh` — Gate L harness close, driven only by the pure promotion verdict and its
   chain-anchor checks. After an allowing verdict it seals the exact terminal resource head. It
   does not create a RunStore `PROMOTED` transition.
+
+A completed judging pass is not a completed run. `VERDICT: BLOCK`, failing tests, unresolved
+review findings, missing inputs, or a refused Gate L all leave `harness.json` open and route to
+remediation. A run becomes terminal only through Gate L writing `closed` after an allowing
+promotion verdict, or `record_no.sh` writing `no`; ending a model turn, closing a Kindex session
+tag, or declaring completion in chat has no lifecycle effect.
 
 The active scripts live in `~/Code/factory/harness/`; tests and the denial-probe registry are the
 enforcement inventory, not this prose.
@@ -501,10 +593,15 @@ ratified policy change, not an environment variable.
 
 Named because each was proposed somewhere in the last month and each is a trap:
 
-- **Agent-to-agent heartbeats as the liveness primitive.** Liveness comes from the
-  substrate — leases, supervisor heartbeats, checkpoint ages — not from one stochastic
-  agent attesting another's existence. Read receipts between lanes are collaboration
-  telemetry at most.
+- **Elapsed silence called a stall.** An unchanged pane cannot distinguish a reasoning loop from
+  an I/O hang, and a warm pane cannot prove its principal is alive. In resident tmux mode the
+dispatcher therefore reports `liveness_unknown` rather than blocking on a timer. The Validator
+and Orchestrator inspect process/pane state and use the typed Codex-session status probe; the
+response classifies `WORKING|BLOCKED|QUESTION|DONE`. Where the host supports `/loop`, it repeats
+`status.sh` plus this inspection/probe—not raw model attempts. Leases, process identity,
+checkpoint ages, and explicit replies are separate observations; none is silently promoted into
+a semantic liveness verdict. A pending typed question is a known `waiting-on-validator` state and
+suppresses the quiet-time alarm; it is already blocked by the question gate.
 - **A meta-agent with authorization.** A planner may decompose, diagnose, and recommend. It
   may not grant capabilities, move gates, rewrite authority, or reinterpret a policy denial
   as an invitation to find another route. The supervisor that detects drift must not itself

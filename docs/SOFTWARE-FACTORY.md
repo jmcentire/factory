@@ -135,6 +135,36 @@ artifact, or a control — not a role.
 | **Coder** | Implements against the spec. |
 | **Tester** | Writes tests against the spec. |
 
+### The resident Orchestrator is a supervisory control, not a fourth role
+
+Interactive tmux operation may run a resident Orchestrator agent from ignition until terminal
+disposition. It owns no implementation, test, verdict, grant, or close authority, so the three
+role separation above does not change. Its job is to observe every bounded sampled pane snapshot
+the dispatcher captures, without semantic filtering, plus independent cadence; recover the
+user's continuing goal from the retained run and Kindex; question whether the current direction
+and side effects advance that goal; audit the rules; and preserve normalized outstanding work
+across turns.
+
+Before it decomposes a task, it inventories the apparent requirements. It distinguishes explicit
+user intent and ratified artifacts from implicit assumptions and inherited code behavior, then
+identifies whether one requirement contributes disproportionate complexity intrinsically or by
+interacting with another. Each pressure point names its assumptions and the simpler path that
+would exist if it changed. It qualifies as a pressure point only when relaxing it changes the
+planning mode or model tier, or removes a named boundary, dependency, or necessary work chunk—not
+merely because the resulting diff is large. It either cites why the requirement is fixed or raises
+a concrete simplification question and blocks further decomposition. Existing complexity is
+evidence to investigate, never proof that the complexity exists for a current reason.
+
+Only after that pass does it choose `direct`, `clarify`, `decompose`, or `deep`, write small
+dependency-linked chunks to Kindex, and recommend the least expensive qualified model for each.
+Its closed machine effect remains only `block|no-op`; `no-op` grants nothing. The deterministic
+dispatcher transports every captured cursor range and cadence row but selects no conversation for
+strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
+Orchestrator inspects tmux and sends a typed status probe to the exact retained author session.
+A block becomes durable before its assessment is current, names its reason, and clears only through
+an exact-subject Validator/human disposition plus a new assessment; clearing it closes neither the
+outstanding work nor the run.
+
 ### The two rules that make this work
 
 **There is no communication between Coder and Tester.** Every question goes to the Validator,
@@ -246,6 +276,25 @@ than asking the human to proofread dense text.
 
 The loop continues until the specification is **specific enough to be implemented** and both
 parties agree it is.
+
+Before calling it specific enough, pressure-test the requirement set itself. A single explicit,
+implicit, or inherited requirement can dominate the solution cost or interact with another to do
+so. State that contribution and the simpler observable goal that might satisfy the user without
+it; ask rather than silently preserve accidental complexity. Decomposition begins only after
+those questions close.
+
+Semantic closure is derived from evidence, not recall. Retain each planning pass, prior lane
+trace, and adversarial review as a source; bind two separately recorded, source-digest-bound
+extraction manifests to every source; preserve every extracted observation under a
+content-derived identity; and give
+each an explicit typed ruling plus `open|closed` state. A generated section in the signed Product
+Specification binds the complete input closure. Phase A re-derives and byte-compares it, and any
+missing extraction/ruling, source drift, hand edit, or open item blocks. This mechanically proves
+that no **retained and extracted** observation disappeared. Claimed extractor/configuration
+provenance is retained but not authenticated. The mechanism does not prove extraction recall or
+ruling wisdom; questions discovered downstream are escape evidence to enroll in the next pass.
+Until every producer is mechanically joined to source enrollment, the generated section must render
+producer-enrollment coverage as unknown; a closed enrolled union is not whole-run completeness.
 
 **Specific enough to be implemented is not detailed enough to be built one way.** The Product
 Specification asserts *what ought to be true* — a capability, a guarantee, an outcome the system
@@ -930,10 +979,12 @@ Once the three phases are agreed, the loop runs.
    pattern catalog; the Tester is mechanically denied both.
 2. **Coder** implements. The plan supplies qualified mechanisms and configuration, but every
    consequential choice still resolves to the ratified phase artifacts. Questions go to the
-   Validator, which answers by quoting the authorizing language or escalates to the human.
+   Validator over an occurrence-bound typed channel, which blocks the lane until the Validator
+   delivers an answer from quoted ratified language or a retained human ruling to that exact
+   session. The Orchestrator may inspect status but may not answer.
 3. **Tester** writes integration-level acceptance and feature tests, deriving every expectation
    from the ratified build input and never from the construction IR or implementation. Questions
-   go to the Validator on the same terms.
+   go to the Validator on the same terms. No answer may cross from one author lane to the other.
 4. The runtime freezes the exact Coder and Tester outputs independently before review. A hash
    without recoverable subject bytes is not an immutable review artifact. **Validator** runs the
    tests only from those frozen subjects when both are complete.
@@ -1640,6 +1691,22 @@ surface every gap as a blocking question, generate the edge cases and contradict
 does not resolve, and present concrete derived behaviors for acceptance or refutation rather
 than asking the human to proofread. Preserve the original ask verbatim. Continue until it is
 specific enough to be implemented and the human agrees it is.
+
+Before decomposition, inventory explicit/ratified requirements separately from implicit
+assumptions and inherited behavior. Identify any one requirement or interaction with
+disproportionate solution cost, expose the assumptions that keep it in scope, and present the
+simpler path that would follow if it changed. Record the counterfactual planning-mode, model-tier,
+boundary, dependency, or necessary-chunk delta that makes the cost high; diff size alone does not.
+Either cite a binding basis or ask the human; do not turn an avoidably complex premise into an
+elaborate plan that future agents will mistake for an implicit requirement.
+
+Build the Product Specification's semantic checklist from the deterministic union of all
+retained planning, lane-trace, and adversarial-review extractions. Every source requires two
+separately recorded, source-digest-bound extraction manifests. Every distinct observation gets an
+explicit typed ruling and `open|closed` state; differing questions fork rather than collapse under
+an authored merge key.
+Materialize the canonical checklist and input-closure digest before ratification, then require the
+Phase A byte-exact verifier to pass. A grep hit or a mention of the right token is not closure.
 
 **Phase 2 — propose the architecture.** Draft an architecture that satisfies the signed product
 spec and state its consequences plainly: component boundaries, state ownership, dependency

@@ -14,15 +14,21 @@
   goals. Holds the human↔AI context because induced understanding of the task
   lives there. The only hub into the lanes.
 - **Orchestrator — strategic.** Process and goal enforcement over the whole
-  project and its design docs. Audits the *Validator's* failure modes: announced
+  project, its live conversation, Kindex context, and its design docs. It is a
+  resident interactive agent, launched at ignition rather than a one-shot `agy -p`.
+  The dispatcher supplies every bounded sampled pane snapshot it captures plus independent
+  cadence under a monotonic cursor; it does not decide which events deserve judgment. The
+  Orchestrator reconstructs the user's ultimate goal, classifies recent input, tests whether the current direction
+  advances that goal, and projects implications and side effects. It also audits the
+  *Validator's* failure modes: announced
   work with no receipt; forgetting the triumvirate and doing lane work itself;
   misattributing authority (claims that resolve to no ledger entry); doing the
   opposite of the recorded ask; hyper-focus on what the founder doesn't care
   about; waiting on input it doesn't need; and cleanup debt accruing (the
-  100-items-of-lingering-work state is almost never wanted). Detection is the
-  dispatcher's (deterministic patterns, timers, receipt counts); judgment is the
-  woken agent's; the verdict FLAGS to the Validator or escalates to the human —
-  it never touches a lane or acquires verdict authority. Its structured event does gate the next
+  100-items-of-lingering-work state is almost never wanted). Judgment is the
+  resident agent's; deterministic checks remain independent fail-safes. It never sends free-form
+  prose into a pane it judges; its only lane message is a generated typed status probe. It never
+  acquires verdict authority. Its closed effect is `block|no-op`, and a block gates the next
   dispatch until the Validator records an evidence-bound `stop`, `narrow`, `escalate`, `refute`,
   or `resolve` disposition.
 
@@ -31,16 +37,53 @@
 | Founder workflow step | Mechanism |
 |---|---|
 | 0. Authorize exact execution | Runtime Stage R authorizes bounded target resolution; `resolve-target` creates the exact run-owned target-state; distinct Stage E authorizes the verbatim request against that state. No tmux or lane exists yet. |
-| 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens `ctl` and `validator` in the exact target workdir. |
-| 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Artifacts are settled one behavior-ledger row at a time and land content-addressed in `.factory/runs/<run>/artifacts/` with `.digest` files. |
+| 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens persistent `orchestrator`, `validator`, and deterministic `ctl` windows. |
+| 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Before decomposition it challenges explicit, implicit, and inherited requirements that disproportionately drive complexity. Retained planning/lane/review sources get two separately recorded, source-bound extraction passes; `semantic_union.py update-spec` materializes every observation and ruling into the Product Specification before artifacts are settled and content-addressed. Phase A refuses an open or stale union. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
-| 7. Fire up orchestrator, engineer, tester | `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` accepts only `factory-lane-dispatch/1` JSON: exact run/generation/role, bounded task interpretation, ambiguity state, and one exact readback for every effective checkpoint-bound directive. It also requires the full authority tuple, externally pinned resume checkpoint, compiled role contract, role manifest, output schema, named-secret root, and broker registry. It bundles an asymmetric path-free projection, qualifies two canaries plus same-session resume, runs the task under hard resource ceilings, and executes only signed typed broker requests. No lane tmux process exists. The strategic orchestrator remains `dispatcher.py` plus trigger-only `/orchestrate`. |
-| 8. Orchestrator tracks tasks, takes minutes | `dispatcher.py` snapshots the human↔Validator window into `minutes/` — labeled `[INFERRED]`, non-authoritative, an index into the directive ledger, never the record. |
-| 9. Validator dispatches immutable objectives; active poll | Validator dispatches only through `dispatch_lane.sh`. Model output is a closed handoff, not a live conversational lane; questions and blocked status return as retained data. The *dispatcher* owns coordination cadence for the interactive Validator surface. |
-| Stalls / lulls | Dispatcher stall FSM: lane-tending metric, confirm-before-prod, `idle-awaiting-handoff` never prodded, repo-diff metrics forbidden. Prods go to the Validator, not past it. |
-| Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then routes to Gate L. It never sweeps ambient branches, stashes, worktrees, PRs, or dirt. |
+| 7. Fire up orchestrator, engineer, tester | The strategic Orchestrator is already resident. `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` remains the qualified path: closed dispatch, asymmetric projection, structural qualification, hard ceilings, and signed typed broker operations. `harness/tmux_lane.sh` is the explicitly unqualified dogfood/coordination alternate: it launches a real Codex agent in a standalone repository with agent-owned `.git`, then crosses only a no-Git content-addressed regular-file export. |
+| 8. Orchestrator tracks goal and tasks | `dispatcher.py` appends every bounded sampled pane snapshot and cadence record to `orchestrator/activity.jsonl`; notifications go only to the Orchestrator's own pane. The agent uses Kindex as normalized bite-sized work/experiment state, derives chunk-specific dispatch context, identifies disproportionate requirement/assumption pressure before decomposing, classifies complexity/ambiguity, recommends the least expensive qualified model per chunk, and emits a closed goal/direction/consequence/adherence/lifecycle assessment. `minutes/` remains `[INFERRED]` and non-authoritative. |
+| 9. Validator dispatches immutable objectives; active poll | Validator dispatches through `dispatch_lane.sh`; unqualified tmux author lanes use `tmux_lane.sh`. A lane emits `FACTORY_QUESTION` instead of guessing. `lane_dialogue.py` binds a Validator answer to that exact lane/question, while either supervisor can issue the generated status probe through `tmux_lane_message.sh`; Codex queue/resume preserves the thread. |
+| Stalls / lulls | In resident tmux mode quiet time emits `liveness_unknown`, never a guessed stall. A lane with a pending typed question is already `waiting-on-validator` and does not raise a liveness alarm. Otherwise Validator and Orchestrator inspect tmux and use the typed status probe; `/loop`, when available, repeats `status.sh`/inspection rather than model attempts. `idle-awaiting-handoff` is healthy and repo-diff metrics remain forbidden. |
+| Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then routes to Gate L. A BLOCK completes only the judging pass; the run stays open. Only Gate L can write `closed`, while `record_no.sh` alone writes terminal `no`. |
 | Click-and-test proof | `proof.sh <run>` reads `.factory/target.conf` (see `target.conf.example`): a declared provision script, real entry-point probes (HTTP hits, CLI runs, out-of-band DB checks, screenshot/video captures — each receipted, outputs kept as evidence), access instructions for the human, teardown always. No target.conf = a **declared gap**, never a quiet pass. |
 | Postmortem | `postmortem.py --root .factory/runs/<run>` — derives every number from recorded artifacts or prints UNDERIVED; per-agent feedback collected by the Validator, coordination-vs-build split for the next iteration. |
+
+## Semantic evidence union
+
+The evidence set is a closed directory, not a prose appendix:
+
+```text
+artifacts/semantic-evidence/
+├── sources/{planning-pass,lane-trace,adversarial-review}/<source-id>.source
+├── extractions/{planning-pass,lane-trace,adversarial-review}/<source-id>/<pass>.json
+└── rulings.json
+```
+
+Each retained source needs at least two separately recorded extraction manifests. Every extraction
+binds the source SHA-256, records its claimed extractor/version/configuration provenance, and names
+the exact spans/questions it found. Observation IDs are derived from those bytes and questions;
+there is no authored merge key that can silently make two findings one.
+`rulings.json` has exactly one `resolved`, `not-an-ambiguity`, or `deferred` row per derived
+observation. A deferred row is `open` and blocks.
+
+Before ratification, render the exact checklist into the Product Specification:
+
+```bash
+python3 harness/semantic_union.py update-spec \
+  --artifacts .factory/runs/<run>/artifacts \
+  --spec .factory/runs/<run>/artifacts/product-specification.md
+```
+
+After the Product Specification has a `.digest`, `update-spec` refuses; evidence changes require
+an explicit superseding/re-ratification cycle. `phase1_gate.sh` invokes `semantic_union.py verify`,
+which re-reads every source and extraction, recomputes the complete input closure, byte-compares
+the generated signed section, and rejects any open item. The guarantee is conservation after
+extraction. The manifests do not authenticate extractor identity or prove recall; extraction recall
+and the quality of the human ruling remain semantic judgments. Downstream `FACTORY_QUESTION`
+records are the escape evidence used to measure and improve them. Until producer-driven enrollment
+lands, the generated section and CLI summary render
+`producer_enrollment_coverage=unknown-until-producer-inventory-is-joined`; an enrolled union must
+not be presented as whole-run semantic coverage.
 
 ## Genericity: the target is data
 
@@ -86,7 +129,14 @@ names a consuming project:
 - `sched_audit.sh` — control 6: unregistered OS timer = hostile. (`SCHED_AUDIT_INPUT`
   is a test seam for the forced-negative drill.)
 - `ground.sh` — control 7 + 9: resume from disk; reconcilers under `.factory/reconcile.d/`.
-- `factory.sh` opens only the operator-owned coordination surface. `dispatch_lane.sh` and
+- `factory.sh` opens a persistent Orchestrator plus the operator-owned Validator/dispatcher
+  coordination surface. `orchestrator_channel.py` carries the complete activity cursor and
+  monotone assessments; `orchestrator_checkpoint.sh` requires them before dispatch/verdict.
+  `tmux_lane.sh` gives unqualified Codex author lanes local Git checkpoints and requires a
+  status/diff plus relevant-check audit before each commit;
+  `codex_lane_session.py` retains the real thread; and `lane_dialogue.py` plus
+  `tmux_lane_message.sh` provide typed questions, answers, and status probes. Freeze crosses only
+  plain regular-file output without invoking lane Git after handoff. `dispatch_lane.sh` and
   `projection.sh` form the qualified model boundary; `inject.sh`, `dispatcher.py`, and
   `orchestrator_wake.sh` serve coordination; `endgame.sh` and `postmortem.py` close and report.
 
@@ -109,10 +159,10 @@ Forced-negative drills for all of it: `tests/test_harness_scripts.py`, wired int
    not symmetry. Ratify or overrule.
 2. **Hub ownership**: `validate.md` and `orchestrate.md` both claim the identical
    hub-and-spoke seat. This build gives lanes to the Validator and makes the
-   orchestrator out-of-band (dispatcher = transport/process control;
-   orchestrator-agent → Validator only). `/orchestrate`'s relay-to-lanes and
-   receipt-bounce behaviors as written are NOT implemented; the skill text needs a
-   founder edit to match, or this build needs reversing.
+   Orchestrator an independent resident monitor (dispatcher → Orchestrator pane;
+   Orchestrator report → monotone blocking channel). It cannot inject into the
+   Validator or an author lane. `/orchestrate`'s direct relay-to-lanes behavior is
+   intentionally not implemented.
 3. **Tester falsifiability under interface-only projection**: `test.md:102-104`
    (name the production-code mutation that turns each test red) is unsatisfiable
    without seeing production code. Options: accept contract-level mutation naming,
