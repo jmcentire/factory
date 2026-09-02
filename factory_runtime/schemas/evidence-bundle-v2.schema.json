@@ -58,65 +58,35 @@
         "generation-readiness"
       ],
       "properties": {
-        "target-manifest-source": {
-          "$ref": "#/$defs/digest"
-        },
-        "pattern-catalog": {
-          "$ref": "#/$defs/digest"
-        },
-        "pattern-catalog-source": {
-          "$ref": "#/$defs/digest"
-        },
-        "build-plan": {
-          "$ref": "#/$defs/digest"
-        },
-        "build-plan-source": {
-          "$ref": "#/$defs/digest"
-        },
-        "build-input": {
-          "$ref": "#/$defs/digest"
-        },
-        "generation-readiness": {
-          "$ref": "#/$defs/digest"
-        }
+        "target-manifest-source": {"$ref": "#/$defs/digest"},
+        "pattern-catalog": {"$ref": "#/$defs/digest"},
+        "pattern-catalog-source": {"$ref": "#/$defs/digest"},
+        "build-plan": {"$ref": "#/$defs/digest"},
+        "build-plan-source": {"$ref": "#/$defs/digest"},
+        "build-input": {"$ref": "#/$defs/digest"},
+        "generation-readiness": {"$ref": "#/$defs/digest"}
       }
     },
     "review_snapshots": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "coder-output",
-        "tester-output"
-      ],
+      "required": ["coder-output", "tester-output"],
       "properties": {
-        "coder-output": {
-          "$ref": "#/$defs/digest"
-        },
-        "tester-output": {
-          "$ref": "#/$defs/digest"
-        }
+        "coder-output": {"$ref": "#/$defs/digest"},
+        "tester-output": {"$ref": "#/$defs/digest"}
       }
     },
     "build_attempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "number",
-        "limit"
-      ],
+      "required": ["number", "limit"],
       "properties": {
-        "number": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1
-        }
+        "number": {"type": "integer", "minimum": 1},
+        "limit": {"type": "integer", "minimum": 1}
       }
     },
     "ledger_head": {
-      "$ref": "#/$defs/ledger_head"
+      "$ref": "#/$defs/digest"
     },
     "phase_artifacts": {
       "type": "array",
@@ -647,11 +617,6 @@
           ]
         }
       }
-    },
-    "ledger_head": {
-      "type": "string",
-      "pattern": "^(sha256|hmac-sha256):[0-9a-f]{64}$",
-      "description": "A ledger-head address: sha256 (unkeyed, migration-only) or hmac-sha256 (keyed, plan 2.2)."
     }
   }
 }
