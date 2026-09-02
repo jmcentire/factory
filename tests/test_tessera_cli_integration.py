@@ -765,7 +765,15 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "architecture",
         "operational-maturity",
     }
-    assert len(workflow.store.consumed_authority_nonces("synthetic-run")) == 8
+    assert workflow.store.consumed_authority_nonces("synthetic-run") == frozenset(
+        {
+            "synthetic-resolution-nonce",
+            "authorize-synthetic-nonce",
+            "product-specification-human-nonce-1",
+            "architecture-human-nonce-2",
+            "operational-maturity-human-nonce-3",
+        }
+    )
 
     product = phase_artifacts["product-specification"]
     architecture = phase_artifacts["architecture"]
@@ -1054,6 +1062,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     attempted: list[tuple[str, Path | None]] = []
     attempt_outcomes: list[BuildOutcome] = []
+    rejected_repair_envelopes: set[Path] = set()
 
     def run_attempt(attempt_id: str, repair_brief_path: Path | None) -> BuildOutcome:
         attempted.append((attempt_id, repair_brief_path))
@@ -1100,7 +1109,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
             key_path=coder_key,
             output_path=tmp_path / "coder-self-diagnosis.tessera.json",
         )
-        with pytest.raises(WorkflowError, match="Validator of the causal failed attempt"):
+        with pytest.raises(RunStateError, match="Validator of the causal failed attempt"):
             workflow.record_repair_brief(
                 "synthetic-run",
                 expected_ledger_head=predecessor_ledger_head,
@@ -1108,6 +1117,15 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                 envelope=malicious_envelope,
                 validator_identity="agent:coder",
             )
+        rejected_path = (
+            workflow.root
+            / "synthetic-run"
+            / "evidence"
+            / "repair-briefs"
+            / f"{malicious_envelope.payload_digest.removeprefix('sha256:')}.tessera.json"
+        )
+        assert rejected_path.is_file()
+        rejected_repair_envelopes.add(rejected_path)
         return plan
 
     record_repair_brief = workflow.record_repair_brief
@@ -1128,7 +1146,11 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         )
 
     orphaned_envelopes = tuple(
-        (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob("*.tessera.json")
+        path
+        for path in (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob(
+            "*.tessera.json"
+        )
+        if path not in rejected_repair_envelopes
     )
     assert len(orphaned_envelopes) == 1
     assert workflow.store.load("synthetic-run").state == RunState.BLOCKED
