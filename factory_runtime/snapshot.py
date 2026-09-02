@@ -28,6 +28,7 @@ from factory_runtime.durability import (
     fsync_directory,
     fsync_directory_chain,
 )
+from factory_runtime.retained_tree import RetainedTreeError, retained_regular_files
 
 _LABEL = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -542,16 +543,15 @@ def _capture_tree(
     *,
     allow_empty: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-    if root.is_symlink() or not root.is_dir():
-        raise SnapshotError(f"snapshot source is not a regular directory: {root}")
+    try:
+        files = retained_regular_files(root)
+    except RetainedTreeError as exc:
+        raise SnapshotError(str(exc)) from exc
     rows: list[dict[str, Any]] = []
     content: dict[str, bytes] = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root).as_posix()
-        if path.is_symlink():
-            raise SnapshotError(f"snapshot source contains a forbidden symlink: {relative}")
-        if path.is_dir():
-            continue
+    source = Path(root).absolute()
+    for path in files:
+        relative = path.relative_to(source).as_posix()
         data, mode = _read_regular(path)
         rows.append(
             {
