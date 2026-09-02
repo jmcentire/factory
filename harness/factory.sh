@@ -175,6 +175,8 @@ metadata = {
     "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
     "orchestrator_effects": "monotone-block-or-no-op",
     "orchestrator_boundary": "operator-owned-tmux-unqualified",
+    "agreement_contract_version": "factory-agreement-contract/1",
+    "agreement_requirement_region_families": ["authored-product"],
     "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }

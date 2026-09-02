@@ -96,6 +96,12 @@ falsifying mutation (`scripts/check_denial_probes.py` fails the build on a gate 
   the reason the requirement names. You still run the Q1/Q2/Q3 read and the red-now/green-now
   guards; the gate makes a vacuous oracle *unpromotable*, so a clean gate is not a clean bill of
   health — it is the floor, and the adversaries above it still find the defects.
+- **"End to end" means agreement, not merely two complete paths → Gate AGR.** Phase A derives
+  an exact participant inventory for every configured Product-requirement region. Two or more
+  participants mechanically force a cross-path contract in the signed Testing Strategy. Phase C
+  requires distinct producer- and consumer-side mutations that leave the selected local suite
+  green and turn the shared-boundary oracle red, bound to the exact candidate, suite, and oracle
+  digests. A collection of independently green end-to-end paths cannot satisfy this gate.
 - **The verdict is a flag, not a negotiation → Gate E** (factual/subjective objection
   classification). `inject.sh` refuses to pass test detail or subjective verdict content into a
   lane's context, so a verdict cannot be negotiated into the lane that owns the pen. You render
@@ -283,7 +289,22 @@ restatement.**
    Cosmetic**, what being wrong costs, and the declared side-effect edges. **An unclassified
    surface is Critical. Cosmetic is an explicit decision, never an omission.** A small diff
    never lowers the class.
-8. **Sign, digest, record.** Then the next artifact.
+8. **Compile the cross-path agreement register before signing the Testing Strategy.** For every
+   configured Product-requirement region, retain a participant inventory derived from a route
+   table, call graph, schema registry, generated binding, or an explicitly weaker bounded-manual
+   enumeration. One participant requires the mechanical inventory digest in its single-path
+   basis; two or more participants force cross-path. A bounded-manual inventory cannot clear a
+   Critical requirement. Every cross-path entry names the shared authority, semantic residue,
+   agreement oracle, distinct producer/consumer mismatch plans, and dispositions version skew,
+   data at rest, retry, duplication, ordering, and error taxonomy. Then run:
+
+       python3 harness/agreement_contract.py update-strategy \
+         --root <run> --artifacts <run>/artifacts
+
+   `phase1_gate.sh` re-derives exact region, inventory, contract, and rendered-section membership.
+   Do not hand-edit the generated register. Any phase amendment makes it stale and requires fresh
+   derivation before re-ratification.
+9. **Sign, digest, record.** Then the next artifact.
 
 **Know what the panels cannot do.** They reliably catch interface and contract errors. They
 catch **zero** framing errors, because reviewers drawn from one model reading one target
@@ -495,17 +516,28 @@ defects*). Run every gate; never read a clean gate as a clean bill of health.
    disabled**, a rerun is a separate recorded run that never overwrites the earlier
    observation. A flaky Critical test rerun to green is retry-as-search — afterward you cannot
    distinguish correctness from luck.
-6. **Drive it live.** A hermetic green suite is necessary and not sufficient. Exercise the
+6. **Prove every declared cross-path agreement at the shared boundary.** “End to end” does not
+   mean quote was tested and hold was tested independently; it means the one availability decision
+   they share cannot be interpreted differently. For each cross-path entry, exercise the real
+   composition and produce two existential non-redundancy witnesses: at least one producer-side
+   mismatch and one different consumer-side mismatch which the unchanged selected local suite
+   misses and the unchanged agreement oracle catches. Use `agreement_probe.py`; its receipt binds
+   the exact candidate commit, selected local-suite bytes, agreement-oracle bytes, commands, and
+   mutation. Never weaken a local test to manufacture the witness. If the relationship has no
+   semantic residue because one generated/structural authority carries all of it, retain an
+   independent adversarial review of that exact candidate and authority digest; your own assertion
+   is not the escape. `endgame.sh` refuses stale, missing, one-direction, or downgraded evidence.
+7. **Drive it live.** A hermetic green suite is necessary and not sufficient. Exercise the
    running system across real boundaries with real (disposable) externals: the happy path per
    Critical surface, an isolation assertion, a rejection assertion, an audit row, a fail-closed
    refusal. **BLOCKED is not PASS.**
-7. **Review adversarially, and filter.** Fan out perspective-diverse finders; for **each**
+8. **Review adversarially, and filter.** Fan out perspective-diverse finders; for **each**
    finding spawn an independent refuter whose job is to **kill** it; record both verdicts;
    dedup; synthesize; run a completeness critic ("what class of problem did nobody look
    for?"); loop until dry. **Detection is cheap and should be exhaustive — escalation must be
    earned.** An unrefuted finding is a hypothesis, and a gate flooded with hypotheses gets
    bypassed as routine, which rebuilds the alert wall inside the thing meant to replace it.
-8. **Gate on the doneness skeptic — it runs *last among the gates* and *before the promotion
+9. **Gate on the doneness skeptic — it runs *last among the gates* and *before the promotion
    decision*.** Both halves are load-bearing and neither survives alone: it only pays after
    everything else is green, **and** nothing is promoted, merged, or released until it clears. Last
    in sequence is not last in weight; read as a closing formality it is worthless. Run Sim against

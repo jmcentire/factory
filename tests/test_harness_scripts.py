@@ -1435,6 +1435,8 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["orchestrator_mode"] == "resident-monitoring"
     assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
     assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
+    assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
+    assert harness["agreement_requirement_region_families"] == ["authored-product"]
     assert (root / "TASK.md").read_text() == task
     assert "repo" not in harness and "base_sha" not in harness
     tmux_calls = tmux_log.read_text()
@@ -2289,6 +2291,27 @@ def test_phase1_gate_refuses_an_explicitly_open_semantic_item(tmp_path: Path) ->
 
     assert result.returncode == 71
     assert "semantic evidence union has open items" in result.stdout
+
+
+def test_phase1_gate_refuses_missing_agreement_contract_for_new_run(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    root = tmp / ".factory" / "runs" / "r1"
+    (root / "harness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "factory-harness/2",
+                "run_id": "r1",
+                "agreement_contract_version": "factory-agreement-contract/1",
+                "agreement_requirement_region_families": ["authored-product"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "agreement plan is absent, stale, incomplete, or downgraded" in result.stdout
 
 
 # --------------------------------------------------------------------------

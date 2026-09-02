@@ -158,6 +158,22 @@ else
   note "  $semantic_result"
 fi
 
+# --- F. Cross-path agreement closure -----------------------------------------
+# A collection of locally adequate path tests is not an oracle for the agreement
+# between those paths. New runs close an exact participant inventory over every
+# configured Product-requirement region and render the resulting single/cross-path
+# classification into the signed Testing Strategy. Runs that predate the ignition
+# metadata remain legacy rather than being silently reinterpreted.
+agreement_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/agreement_contract.py" \
+  verify-plan --root "$ROOT" --artifacts "$ART" 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "F: agreement plan exactly covers every configured requirement region"
+  note "  $agreement_result"
+else
+  fail "F: agreement plan is absent, stale, incomplete, or downgraded"
+  note "  $agreement_result"
+fi
+
 # --- report: post-ratification amendments are the adequacy measurement --------
 AMEND=$(grep -h '^## AMENDMENT' "$ART"/*.md 2>/dev/null | wc -l | tr -d ' ')
 echo

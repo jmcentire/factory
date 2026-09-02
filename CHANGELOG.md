@@ -3,6 +3,46 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.5.0] - 2026-09-02
+
+### Added
+
+- Real resident tmux sessions for the Validator, Orchestrator, Coder, and Tester. Codex author
+  lanes use standalone repositories with lane-local Git metadata, receive the narrow `.git` write
+  profile needed to inspect and checkpoint their own work, audit their delta before committing,
+  retain the actual resumable thread identity, and export only a bounded plain-file candidate for
+  host review. Agent commits are useful checkpoints; the host still judges frozen bytes.
+- A typed, bidirectional lane-question protocol. A Coder or Tester can block on an occurrence-bound
+  specification question; only the Validator can bind and deliver the answer back into the same
+  conversation, while the Orchestrator may issue status probes but cannot invent semantics.
+- Typed liveness observations for resident sessions. Silence is `unknown`, a pending question is
+  `waiting-on-validator`, and the supervisors use tmux plus the resumable status channel instead
+  of pretending elapsed-output heuristics distinguish reasoning from I/O hangs.
+- A resident strategic Orchestrator contract over the complete activity cursor. It continuously
+  evaluates the user's goal, direction, implications, side effects, adherence, hidden ambiguity,
+  disproportionate requirements, simpler counterfactuals, task decomposition, Kindex-backed work
+  state, causal discriminators, model-tier routing, and exact harness lifecycle. Its only effects
+  remain monotone `block | no-op`; it can neither grant nor close.
+- Evidence-conserving semantic compilation from every retained planning pass, lane trace, and
+  adversarial review into an exact ruled Product Specification section, so a token mention cannot
+  stand in for an enumerated and closed decision.
+- `factory-agreement-contract/1`, which derives single-path versus cross-path requirements from an
+  exact participant inventory and writes the complete register into the signed Testing Strategy.
+  Gate AGR refuses missing membership, multi-participant downgrades, and endgame without distinct
+  producer/consumer mismatch witnesses bound to the exact candidate, local suite, and relational
+  oracle. This closes the failure where quote and hold were each tested but their shared decision
+  was never tested for agreement.
+
+### Changed
+
+- The default resident Orchestrator launch uses an actual interactive Agy project rather than
+  one-shot print mode. Dispatcher cursor wakes and independent cadence now let it monitor ordinary
+  activity continuously, while typed tmux pokes keep coordination separate from evidence or
+  isolation claims.
+- Gate L remains the only close authority. A finished judging pass with failed tests, a blocking
+  verdict, unanswered questions, stale agreement evidence, or unresolved findings leaves the run
+  open for remediation.
+
 ## [0.4.1] - 2026-08-24
 
 ### Changed

@@ -296,6 +296,15 @@ ruling wisdom; questions discovered downstream are escape evidence to enroll in 
 Until every producer is mechanically joined to source enrollment, the generated section must render
 producer-enrollment coverage as unknown; a closed enrolled union is not whole-run completeness.
 
+Agreement closure is relational, not a count of complete paths. Before Phase 3 is ratified, derive
+an exact participant inventory for each Product requirement from the strongest available
+structural evidence. One participant is single-path; two or more force a cross-path agreement
+entry in the generated Testing Strategy. That entry names the shared authority, the semantic
+residue, a shared-boundary oracle, two asymmetric mismatch directions, and rollout/data/error
+axes. Phase C must show that producer-side and consumer-side drift can each evade their unchanged
+local suite while the agreement oracle catches it, on the exact candidate. Thus “quote was tested”
+plus “hold was tested” is not evidence that quote and hold make the same availability decision.
+
 **Specific enough to be implemented is not detailed enough to be built one way.** The Product
 Specification asserts *what ought to be true* — a capability, a guarantee, an outcome the system
 must exhibit — and never *how*. This is stronger than *no implementation details*; it is **no

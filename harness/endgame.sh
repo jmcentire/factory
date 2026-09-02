@@ -91,6 +91,16 @@ git -C "$CANDIDATE" cat-file -e "$SHA^{commit}" 2>/dev/null || {
 RESOLVED=$(git -C "$CANDIDATE" rev-parse --verify "$SHA^{commit}")
 [ "$RESOLVED" = "$SHA" ] || { refusal_event "final SHA did not resolve exactly"; echo "endgame: final SHA did not resolve exactly" >&2; exit 70; }
 
+# A green local suite is not evidence that producer/consumer paths agree. The
+# Phase-A agreement register names every cross-path obligation; Phase C must now
+# carry exact-candidate, exact-suite, exact-oracle two-direction witnesses (or the
+# explicitly weaker independently reviewed structural-authority route).
+AGREEMENT_EVIDENCE_GREEN=1
+if ! python3 "$D/agreement_contract.py" verify-evidence --root "$ROOT" \
+  --artifacts "$ROOT/artifacts" --candidate-sha "$SHA"; then
+  AGREEMENT_EVIDENCE_GREEN=0
+fi
+
 RESOURCE_ID="endgame-checkout-${SHA:0:12}-$$"
 FRESH="$ROOT/endgame/$RESOURCE_ID"
 EVIDENCE=$(python3 - "$FACTORY_TARGET_STATE_DIGEST" "$CANDIDATE_RESOURCE" "$SHA" <<'PY'
@@ -126,6 +136,14 @@ resource_event '{}' active
 
 FAILED=0
 say() { printf '%s\n' "$*"; }
+if [ "$AGREEMENT_EVIDENCE_GREEN" -eq 1 ]; then
+  say "== cross-path agreement evidence =="
+  say "   exact-subject agreement evidence: GREEN"
+else
+  say "== cross-path agreement evidence =="
+  say "   exact-subject agreement evidence: RED"
+  FAILED=1
+fi
 gate() {
   local name="$1"; shift
   say "== $name =="

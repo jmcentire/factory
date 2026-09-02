@@ -531,6 +531,14 @@ dependency-free (bash + python3 + git):
   Specification, and refuse missing/open/stale/hand-edited unions before dispatch. The compiler
   enforces post-extraction conservation, not semantic recall, authenticated provenance, or wisdom;
   producer-enrollment coverage remains machine-visible as unknown until its inventory is joined.
+- `harness/agreement_contract.py` + `agreement_probe.py` — for runs whose ignition metadata names
+  `factory-agreement-contract/1`, close an exact participant inventory over the configured Product
+  requirement-region families, derive single-path versus cross-path from participant cardinality,
+  and byte-compare the generated Testing Strategy register before dispatch. At endgame, each
+  cross-path requirement needs distinct producer/consumer mismatch receipts that bind the exact
+  candidate, unchanged selected local suite, and unchanged agreement oracle; the only alternate
+  route is an exact-candidate independent review showing one structural authority carries all
+  semantic residue. Older runs without the ignition field keep their released semantics.
 - `harness/tmux_lane.sh` + `codex_lane_session.py` + `lane_dialogue.py` +
   `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
   mode. Preflight requires a standalone repository whose Git/common directory is local and a
@@ -554,8 +562,9 @@ dependency-free (bash + python3 + git):
   does not declare a filesystem sandbox. Agy/Codex CLI sandboxing remains explicitly unqualified
   as a kernel-enforced read boundary.
 - `harness/endgame.sh` — accepts only an exact candidate SHA in a named run-owned resource,
-  archives it into a recorded endgame worktree, runs ship/isolation/live proof, verifies exact
-  target and terminal resource dispositions, and never inspects or cleans ambient user state.
+  verifies cross-path agreement evidence when the run declared that contract, archives the exact
+  object into a recorded endgame worktree, runs ship/isolation/live proof, verifies exact target
+  and terminal resource dispositions, and never inspects or cleans ambient user state.
 - `harness/promote.sh` — Gate L harness close, driven only by the pure promotion verdict and its
   chain-anchor checks. After an allowing verdict it seals the exact terminal resource head. It
   does not create a RunStore `PROMOTED` transition.
