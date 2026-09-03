@@ -5893,8 +5893,19 @@ def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
         for role, result in zip(("coder", "tester"), results, strict=True)
     )
     assert sorted(result.returncode for result in results) == [0, 70], diagnostics
-    refused = next(result for result in results if result.returncode == 70)
+    refused_index = next(
+        index for index, result in enumerate(results) if result.returncode == 70
+    )
+    refused = results[refused_index]
+    refused_role = ("coder", "tester")[refused_index]
     assert "objective budget reservation was refused" in refused.stderr
+    assert not (root / "workspaces" / refused_role).exists()
+    resources = ResourceLedger(root, "r1").records()
+    assert not any(
+        record["resource_id"]
+        in {f"lane-workspace-{refused_role}", f"runner-workspace-{refused_role}"}
+        for record in resources
+    )
     reservations = read_chain(root / "budget-reservations.jsonl")
     assert len(reservations) == 1
     assert reservations[0]["reserved_max_cost_microusd"] == 1000

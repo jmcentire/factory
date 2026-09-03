@@ -291,16 +291,10 @@ PRIMER_SRC="$ART/primer.$ROLE.md"
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || \
   fail "target-state changed before projection"
 
-resource_event() {
-  local resource_id="$1" resource_type="$2" identifier="$3" status="$4"
-  local disposition="$5" evidence="$6"
-  factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
-    --resource-id "$resource_id" --resource-type "$resource_type" --identifier "$identifier" \
-    --creator-action lane-dispatch --ownership run-owned \
-    --baseline-json '{"absent_at_plan":true}' --disposition-json "$disposition" \
-    --evidence-json "$evidence" --status "$status" --actor lane-dispatch >/dev/null
-}
-
+# Budget admission must precede lane-workspace creation and resource-lifecycle mutation. Without
+# this ordering, two otherwise valid lane starts can race on the lifecycle sentinel before the
+# atomic budget ledger has selected the admitted lane. That turns a live peer into a false
+# interrupted-transition refusal and lets a budget-denied attempt leave workspace/resource residue.
 WS="$ROOT/workspaces/$ROLE"
 WORKSPACE_ID="lane-workspace-$ROLE"
 EVIDENCE="{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\",\"checkout\":\"$FACTORY_CHECKOUT_ID\"}"
@@ -309,24 +303,6 @@ if [ -e "$WS" ] || [ -L "$WS" ]; then
   [ -d "$WS" ] && [ ! -L "$WS" ] || \
     fail "existing lane workspace is not a real directory"
   RECOVER_EXISTING_FAILURE=1
-else
-  resource_event "$WORKSPACE_ID" lane-workspace "$WS" planned '{}' "$EVIDENCE"
-  set +e
-  PROJ=$(HARNESS_PROJECTION_CONF="$PROJECTION_CONF" \
-    "$D/projection.sh" "$ROLE" "$FACTORY_SOURCE_ROOT" "$FACTORY_BASE_COMMIT" "$WS")
-  PROJ_RC=$?
-  set -e
-  if [ "$PROJ_RC" -ne 0 ]; then
-    if [ -e "$WS" ] || [ -L "$WS" ]; then
-      resource_event "$WORKSPACE_ID" lane-workspace "$WS" failed \
-        '{"reason":"projection failed","residue":true}' "$EVIDENCE" || true
-    else
-      resource_event "$WORKSPACE_ID" lane-workspace "$WS" abandoned \
-        '{"reason":"projection failed before creation","residue":false}' "$EVIDENCE" || true
-    fi
-    fail "lane projection failed"
-  fi
-  resource_event "$WORKSPACE_ID" lane-workspace "$WS" active '{}' "$EVIDENCE"
 fi
 
 RUNNER_MANIFEST_DIR="${FACTORY_RUNNER_MANIFEST_DIR:-}"
@@ -363,6 +339,160 @@ expected = "ollama-codex" if agent == "ollama" else "codex"
 if doc.get("role") != role or doc.get("adapter") != expected:
     raise SystemExit(1)
 PY
+RUNNER_MAX_COST_MICROUSD="$(python3 - "$RUNNER_MANIFEST" <<'PY'
+import json, pathlib, sys
+doc = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = doc.get("limits", {}).get("max_cost_microusd")
+if not isinstance(value, int) or value < 0:
+    raise SystemExit(1)
+print(value)
+PY
+)" || fail "runner manifest has no enforceable monetary ceiling"
+RECEIPT_ID="lane-$ROLE-g$FACTORY_GENERATION"
+RUNNER_WS="$RUNNER_WORKSPACE_ROOT/$RUN/$RECEIPT_ID"
+RUNNER_RESOURCE_ID="runner-workspace-$ROLE"
+FAILURE_RECEIPT="$RUNNER_WS/runner-failure-receipt.json"
+FAILURE_DIAGNOSTIC="$RUNNER_WS/validator-invocation-diagnostic.json"
+if [ "$RECOVER_EXISTING_FAILURE" -eq 1 ]; then
+  [ -d "$RUNNER_WS" ] && [ ! -L "$RUNNER_WS" ] && \
+    [ -f "$FAILURE_RECEIPT" ] && [ ! -L "$FAILURE_RECEIPT" ] && \
+    [ -f "$FAILURE_DIAGNOSTIC" ] && [ ! -L "$FAILURE_DIAGNOSTIC" ] || \
+    fail "existing lane workspace has no complete safe runner failure to recover"
+fi
+BUDGET_RESERVATION_LEDGER="$ROOT/budget-reservations.jsonl"
+BUDGET_RESERVATION_ID="$RUN:g$FACTORY_GENERATION:$ROLE:$RECEIPT_ID"
+if [ "$RECOVER_EXISTING_FAILURE" -eq 1 ]; then
+  [ -f "$BUDGET_RESERVATION_LEDGER" ] && [ ! -L "$BUDGET_RESERVATION_LEDGER" ] || \
+    fail "orphan recovery has no safe prior objective budget reservation ledger"
+fi
+BUDGET_RESERVATION_DIGEST="$(python3 - "$FACTORY_HARNESS_META" \
+  "$BUDGET_RESERVATION_LEDGER" "$RUNNER_MAX_COST_MICROUSD" "$RUN" "$ROLE" \
+  "$FACTORY_GENERATION" "$BUDGET_RESERVATION_ID" "$RECOVER_EXISTING_FAILURE" <<'PY'
+import datetime, decimal, fcntl, hashlib, hmac, json, os, pathlib, stat, string, sys
+metadata_path = pathlib.Path(sys.argv[1])
+ledger_path = pathlib.Path(sys.argv[2])
+requested_text = sys.argv[3]
+run, role, generation, reservation_id, recovery = sys.argv[4:]
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+budget = metadata.get("budget_usd")
+if budget is None:
+    raise SystemExit("model dispatch requires an explicit objective budget")
+requested = int(requested_text)
+if requested <= 0:
+    raise SystemExit("dispatch requires a positive runner cost ceiling")
+try:
+    budget_value = decimal.Decimal(str(budget)) * decimal.Decimal(1_000_000)
+    if budget_value != budget_value.to_integral_value():
+        raise decimal.InvalidOperation
+    budget_microusd = int(budget_value)
+except (decimal.InvalidOperation, ValueError):
+    raise SystemExit("objective budget is not exactly representable in microusd")
+if budget_microusd <= 0:
+    raise SystemExit("objective budget must be positive")
+if ledger_path.is_symlink():
+    raise SystemExit("budget reservation ledger may not be a symlink")
+flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+flags |= getattr(os, "O_NONBLOCK", 0)
+fd = os.open(ledger_path, flags, 0o600)
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    os.close(fd)
+    raise SystemExit("budget reservation ledger must be regular")
+with os.fdopen(fd, "r+", encoding="utf-8") as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    stream.seek(0)
+    rows = [json.loads(line) for line in stream if line.strip()]
+    previous = "0" * 64
+    reserved = 0
+    prior = None
+    for number, row in enumerate(rows, 1):
+        if not isinstance(row, dict) or row.get("run") != run or row.get("prev_hash") != previous:
+            raise SystemExit(f"budget reservation chain mismatch at row {number}")
+        supplied = row.get("hash")
+        if not isinstance(supplied, str) or len(supplied) != 64 or any(
+            character not in string.hexdigits for character in supplied
+        ):
+            raise SystemExit(f"budget reservation hash invalid at row {number}")
+        unsigned = dict(row); del unsigned["hash"]
+        expected = hashlib.sha256(
+            json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if not hmac.compare_digest(supplied, expected):
+            raise SystemExit(f"budget reservation content mismatch at row {number}")
+        value = row.get("reserved_max_cost_microusd")
+        if not isinstance(value, int) or value <= 0:
+            raise SystemExit("budget reservation has no positive ceiling")
+        reserved += value
+        if row.get("reservation_id") == reservation_id:
+            prior = row
+        previous = supplied
+    if prior is not None:
+        if (
+            prior.get("role") != role
+            or prior.get("generation") != int(generation)
+            or prior.get("reserved_max_cost_microusd") != requested
+        ):
+            raise SystemExit("budget reservation id was replayed with different scope")
+        print("sha256:" + str(prior["hash"]))
+        raise SystemExit(0)
+    if recovery == "1":
+        raise SystemExit("orphan recovery has no prior objective budget reservation")
+    if reserved + requested > budget_microusd:
+        raise SystemExit("runner reservations exceed the objective budget")
+    body = {
+        "schema_version": "factory-budget-reservation/1",
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "run": run,
+        "generation": int(generation),
+        "role": role,
+        "reservation_id": reservation_id,
+        "reserved_max_cost_microusd": requested,
+        "objective_budget_microusd": budget_microusd,
+        "prev_hash": previous,
+    }
+    body["hash"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    stream.seek(0, os.SEEK_END)
+    stream.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
+    stream.flush(); os.fsync(stream.fileno())
+directory_fd = os.open(ledger_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+print("sha256:" + body["hash"])
+PY
+ )" || fail "objective budget reservation was refused"
+
+resource_event() {
+  local resource_id="$1" resource_type="$2" identifier="$3" status="$4"
+  local disposition="$5" evidence="$6"
+  factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
+    --resource-id "$resource_id" --resource-type "$resource_type" --identifier "$identifier" \
+    --creator-action lane-dispatch --ownership run-owned \
+    --baseline-json '{"absent_at_plan":true}' --disposition-json "$disposition" \
+    --evidence-json "$evidence" --status "$status" --actor lane-dispatch >/dev/null
+}
+
+if [ "$RECOVER_EXISTING_FAILURE" -eq 0 ]; then
+  resource_event "$WORKSPACE_ID" lane-workspace "$WS" planned '{}' "$EVIDENCE"
+  set +e
+  PROJ=$(HARNESS_PROJECTION_CONF="$PROJECTION_CONF" \
+    "$D/projection.sh" "$ROLE" "$FACTORY_SOURCE_ROOT" "$FACTORY_BASE_COMMIT" "$WS")
+  PROJ_RC=$?
+  set -e
+  if [ "$PROJ_RC" -ne 0 ]; then
+    if [ -e "$WS" ] || [ -L "$WS" ]; then
+      resource_event "$WORKSPACE_ID" lane-workspace "$WS" failed \
+        '{"reason":"projection failed","residue":true}' "$EVIDENCE" || true
+    else
+      resource_event "$WORKSPACE_ID" lane-workspace "$WS" abandoned \
+        '{"reason":"projection failed before creation","residue":false}' "$EVIDENCE" || true
+    fi
+    fail "lane projection failed"
+  fi
+  resource_event "$WORKSPACE_ID" lane-workspace "$WS" active '{}' "$EVIDENCE"
+fi
 
 # The model receives one bounded data projection and a frozen dispatch task. Canonical ratified
 # phase artifacts and the primer are loaded, verified, and inserted by run-model from the exact
@@ -546,130 +676,6 @@ RUNNER_OUTPUT_SCHEMA_DIGEST="$(raw_digest "$RUNNER_OUTPUT_SCHEMA")" || \
   fail "runner output schema digest failed"
 BROKER_REGISTRY_DIGEST="$(json_digest "$BROKER_REGISTRY")" || fail "broker registry digest failed"
 TASK_DIGEST="$(raw_digest "$TASK_FILE")" || fail "runner task digest failed"
-RUNNER_MAX_COST_MICROUSD="$(python3 - "$RUNNER_MANIFEST" <<'PY'
-import json, pathlib, sys
-doc = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-value = doc.get("limits", {}).get("max_cost_microusd")
-if not isinstance(value, int) or value < 0:
-    raise SystemExit(1)
-print(value)
-PY
-)" || fail "runner manifest has no enforceable monetary ceiling"
-RECEIPT_ID="lane-$ROLE-g$FACTORY_GENERATION"
-RUNNER_WS="$RUNNER_WORKSPACE_ROOT/$RUN/$RECEIPT_ID"
-RUNNER_RESOURCE_ID="runner-workspace-$ROLE"
-FAILURE_RECEIPT="$RUNNER_WS/runner-failure-receipt.json"
-FAILURE_DIAGNOSTIC="$RUNNER_WS/validator-invocation-diagnostic.json"
-if [ "$RECOVER_EXISTING_FAILURE" -eq 1 ]; then
-  [ -d "$RUNNER_WS" ] && [ ! -L "$RUNNER_WS" ] && \
-    [ -f "$FAILURE_RECEIPT" ] && [ ! -L "$FAILURE_RECEIPT" ] && \
-    [ -f "$FAILURE_DIAGNOSTIC" ] && [ ! -L "$FAILURE_DIAGNOSTIC" ] || \
-    fail "existing lane workspace has no complete safe runner failure to recover"
-fi
-BUDGET_RESERVATION_LEDGER="$ROOT/budget-reservations.jsonl"
-BUDGET_RESERVATION_ID="$RUN:g$FACTORY_GENERATION:$ROLE:$RECEIPT_ID"
-if [ "$RECOVER_EXISTING_FAILURE" -eq 1 ]; then
-  [ -f "$BUDGET_RESERVATION_LEDGER" ] && [ ! -L "$BUDGET_RESERVATION_LEDGER" ] || \
-    fail "orphan recovery has no safe prior objective budget reservation ledger"
-fi
-BUDGET_RESERVATION_DIGEST="$(python3 - "$FACTORY_HARNESS_META" \
-  "$BUDGET_RESERVATION_LEDGER" "$RUNNER_MAX_COST_MICROUSD" "$RUN" "$ROLE" \
-  "$FACTORY_GENERATION" "$BUDGET_RESERVATION_ID" "$RECOVER_EXISTING_FAILURE" <<'PY'
-import datetime, decimal, fcntl, hashlib, hmac, json, os, pathlib, stat, string, sys
-metadata_path = pathlib.Path(sys.argv[1])
-ledger_path = pathlib.Path(sys.argv[2])
-requested_text = sys.argv[3]
-run, role, generation, reservation_id, recovery = sys.argv[4:]
-metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-budget = metadata.get("budget_usd")
-if budget is None:
-    raise SystemExit("model dispatch requires an explicit objective budget")
-requested = int(requested_text)
-if requested <= 0:
-    raise SystemExit("dispatch requires a positive runner cost ceiling")
-try:
-    budget_value = decimal.Decimal(str(budget)) * decimal.Decimal(1_000_000)
-    if budget_value != budget_value.to_integral_value():
-        raise decimal.InvalidOperation
-    budget_microusd = int(budget_value)
-except (decimal.InvalidOperation, ValueError):
-    raise SystemExit("objective budget is not exactly representable in microusd")
-if budget_microusd <= 0:
-    raise SystemExit("objective budget must be positive")
-if ledger_path.is_symlink():
-    raise SystemExit("budget reservation ledger may not be a symlink")
-flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-flags |= getattr(os, "O_NONBLOCK", 0)
-fd = os.open(ledger_path, flags, 0o600)
-if not stat.S_ISREG(os.fstat(fd).st_mode):
-    os.close(fd)
-    raise SystemExit("budget reservation ledger must be regular")
-with os.fdopen(fd, "r+", encoding="utf-8") as stream:
-    fcntl.flock(stream, fcntl.LOCK_EX)
-    stream.seek(0)
-    rows = [json.loads(line) for line in stream if line.strip()]
-    previous = "0" * 64
-    reserved = 0
-    prior = None
-    for number, row in enumerate(rows, 1):
-        if not isinstance(row, dict) or row.get("run") != run or row.get("prev_hash") != previous:
-            raise SystemExit(f"budget reservation chain mismatch at row {number}")
-        supplied = row.get("hash")
-        if not isinstance(supplied, str) or len(supplied) != 64 or any(
-            character not in string.hexdigits for character in supplied
-        ):
-            raise SystemExit(f"budget reservation hash invalid at row {number}")
-        unsigned = dict(row); del unsigned["hash"]
-        expected = hashlib.sha256(
-            json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        if not hmac.compare_digest(supplied, expected):
-            raise SystemExit(f"budget reservation content mismatch at row {number}")
-        value = row.get("reserved_max_cost_microusd")
-        if not isinstance(value, int) or value <= 0:
-            raise SystemExit("budget reservation has no positive ceiling")
-        reserved += value
-        if row.get("reservation_id") == reservation_id:
-            prior = row
-        previous = supplied
-    if prior is not None:
-        if (
-            prior.get("role") != role
-            or prior.get("generation") != int(generation)
-            or prior.get("reserved_max_cost_microusd") != requested
-        ):
-            raise SystemExit("budget reservation id was replayed with different scope")
-        print("sha256:" + str(prior["hash"]))
-        raise SystemExit(0)
-    if recovery == "1":
-        raise SystemExit("orphan recovery has no prior objective budget reservation")
-    if reserved + requested > budget_microusd:
-        raise SystemExit("runner reservations exceed the objective budget")
-    body = {
-        "schema_version": "factory-budget-reservation/1",
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-        "run": run,
-        "generation": int(generation),
-        "role": role,
-        "reservation_id": reservation_id,
-        "reserved_max_cost_microusd": requested,
-        "objective_budget_microusd": budget_microusd,
-        "prev_hash": previous,
-    }
-    body["hash"] = hashlib.sha256(
-        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    stream.seek(0, os.SEEK_END)
-    stream.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
-    stream.flush(); os.fsync(stream.fileno())
-directory_fd = os.open(ledger_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-try:
-    os.fsync(directory_fd)
-finally:
-    os.close(directory_fd)
-print("sha256:" + body["hash"])
-PY
- )" || fail "objective budget reservation was refused"
 RUNNER_MANIFEST_SOURCE="runner-manifest-$ROLE"
 BROKER_REGISTRY_SOURCE="broker-registry-$ROLE"
 STATE_QUALIFICATION_SOURCE="state-qualification-$ROLE"
