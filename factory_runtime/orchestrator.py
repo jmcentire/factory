@@ -748,7 +748,11 @@ class FactoryOrchestrator:
             execution.acceptance_lifecycle is not None
             and execution.acceptance_lifecycle.setup_failure
         )
-        acceptance_completed = execution.validator.succeeded and not setup_failure
+        lifecycle_incomplete = (
+            execution.acceptance_lifecycle is not None
+            and not execution.acceptance_lifecycle.behavior_complete
+        )
+        acceptance_completed = execution.validator.succeeded and not lifecycle_incomplete
         journal.record(
             "acceptance-tests",
             passed=acceptance_completed,
@@ -784,7 +788,13 @@ class FactoryOrchestrator:
                 },
                 payload={
                     "reason": (
-                        "acceptance-setup-failed" if setup_failure else "acceptance-tests-failed"
+                        "acceptance-setup-failed"
+                        if setup_failure
+                        else (
+                            "acceptance-lifecycle-incomplete"
+                            if execution.repair_signal == "validator-retry"
+                            else "acceptance-tests-failed"
+                        )
                     ),
                     "repair_signal": execution.repair_signal,
                     "acceptance_phase": (

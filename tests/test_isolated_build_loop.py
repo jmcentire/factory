@@ -266,6 +266,8 @@ class _LifecycleFailureBackend(_RecordingQualifiedBackend):
 
 
 class _LifecycleSuccessBackend(_RecordingQualifiedBackend):
+    reached_phase = "behavior-complete"
+
     def run(
         self,
         command: Sequence[str],
@@ -293,12 +295,16 @@ class _LifecycleSuccessBackend(_RecordingQualifiedBackend):
                 "command_digest": values["FACTORY_VALIDATOR_COMMAND_DIGEST"],
                 "configuration_digest": values["FACTORY_VALIDATOR_CONFIGURATION_DIGEST"],
                 "environment_digest": values["FACTORY_VALIDATOR_ENVIRONMENT_DIGEST"],
-                "reached_phase": "behavior-complete",
+                "reached_phase": self.reached_phase,
             }
             Path(values["FACTORY_ACCEPTANCE_LIFECYCLE_PATH"]).write_text(
                 json.dumps(receipt), encoding="utf-8"
             )
         return result
+
+
+class _LifecycleIncompleteSuccessBackend(_LifecycleSuccessBackend):
+    reached_phase = "behavior-started"
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
@@ -622,8 +628,24 @@ def test_required_lifecycle_receipt_cannot_be_omitted_after_validator_success(
     assert result.acceptance_lifecycle.phase is None
 
 
-def test_required_lifecycle_receipt_allows_behavior_complete_success(
+@pytest.mark.parametrize(
+    ("backend", "reached_phase", "expected_passed", "expected_repair_signal"),
+    (
+        (_LifecycleSuccessBackend(), "behavior-complete", True, "pass"),
+        (
+            _LifecycleIncompleteSuccessBackend(),
+            "behavior-started",
+            False,
+            "validator-retry",
+        ),
+    ),
+)
+def test_required_lifecycle_receipt_controls_validator_success(
     tmp_path: Path,
+    backend: _LifecycleSuccessBackend,
+    reached_phase: str,
+    expected_passed: bool,
+    expected_repair_signal: str,
 ) -> None:
     root = temporary_build_loop_root(tmp_path)
     validator = tmp_path / "validator.py"
@@ -647,7 +669,7 @@ def test_required_lifecycle_receipt_allows_behavior_complete_success(
         )
     )
 
-    result = IsolatedBuildLoop(root, sandbox=_LifecycleSuccessBackend()).execute(
+    result = IsolatedBuildLoop(root, sandbox=backend).execute(
         build_input_path=FIXTURES / "build-input.json",
         coder_command=(sys.executable, str(FIXTURES / "coder.py")),
         tester_command=(sys.executable, str(FIXTURES / "tester.py")),
@@ -659,10 +681,10 @@ def test_required_lifecycle_receipt_allows_behavior_complete_success(
         before_validation=lambda *_: {"validator_execution": expected_execution},
     )
 
-    assert result.passed is True
-    assert result.repair_signal == "pass"
+    assert result.passed is expected_passed
+    assert result.repair_signal == expected_repair_signal
     assert result.acceptance_lifecycle is not None
-    assert result.acceptance_lifecycle.phase == "behavior-complete"
+    assert result.acceptance_lifecycle.phase == reached_phase
 
 
 def test_review_callback_runs_only_after_both_snapshots_are_durably_published(

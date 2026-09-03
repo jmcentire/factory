@@ -32,6 +32,10 @@ class AcceptanceLifecycle:
         return self.phase in _BEHAVIOR_PHASES
 
     @property
+    def behavior_complete(self) -> bool:
+        return self.phase == "behavior-complete"
+
+    @property
     def setup_failure(self) -> bool:
         return self.required and not self.behavior_started
 

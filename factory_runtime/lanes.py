@@ -92,9 +92,9 @@ class ValidationExecution:
             self.coder.succeeded
             and self.tester.succeeded
             and self.validator.succeeded
-            and not (
-                self.acceptance_lifecycle is not None
-                and self.acceptance_lifecycle.setup_failure
+            and (
+                self.acceptance_lifecycle is None
+                or self.acceptance_lifecycle.behavior_complete
             )
         )
 
@@ -104,8 +104,11 @@ class ValidationExecution:
 
         if self.passed:
             return "pass"
-        if self.acceptance_lifecycle is not None and self.acceptance_lifecycle.setup_failure:
-            return "validator-retry"
+        if self.acceptance_lifecycle is not None:
+            if self.acceptance_lifecycle.setup_failure:
+                return "validator-retry"
+            if self.validator.succeeded and not self.acceptance_lifecycle.behavior_complete:
+                return "validator-retry"
         return "fail"
 
 
