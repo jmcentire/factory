@@ -10,7 +10,8 @@
 # amendment retracted the one before it, an hour apart. Existence was never the
 # question. Adequacy was, and nothing measured it.
 #
-# This gate measures adequacy on the three axes v8 actually failed, and it is
+# This gate measures the five adequacy surfaces now known to have failed in live
+# runs, and it is
 # fail-closed: a run that cannot pass it should not launch lanes.
 #
 #   usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]
@@ -138,6 +139,55 @@ if [ -s "$ART/oracle-contract.md" ]; then
   pass "D: oracle-contract manifest present"
 else
   fail "D: no oracle-contract.md (test-visible signatures, return shapes, marker locations)"
+fi
+
+# --- E. Evidence-derived semantic closure -----------------------------------
+# res-r1 v2 proved that appended semantics transmit when they are actually
+# written, while known lane-trace ambiguities and adversarial findings were
+# omitted from the amendment assembled from memory. Token presence is not a
+# disposition. The signed Product Specification must contain the exact canonical
+# union derived from every retained source's separately recorded extraction manifests,
+# and every member must have a closed typed ruling before either lane launches.
+semantic_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/semantic_union.py" verify \
+  --artifacts "$ART" --spec "$SPEC" 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "E: signed Product Specification exactly closes the semantic evidence union"
+  note "  $semantic_result"
+else
+  fail "E: semantic evidence union is absent, stale, incomplete, or open"
+  note "  $semantic_result"
+fi
+
+# --- F. Cross-path agreement closure -----------------------------------------
+# A collection of locally adequate path tests is not an oracle for the agreement
+# between those paths. New runs close an exact participant inventory over every
+# configured Product-requirement region and render the resulting single/cross-path
+# classification into the signed Testing Strategy. Runs that predate the ignition
+# metadata remain legacy rather than being silently reinterpreted.
+agreement_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/agreement_contract.py" \
+  verify-plan --root "$ROOT" --artifacts "$ART" 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "F: agreement plan exactly covers every configured requirement region"
+  note "  $agreement_result"
+else
+  fail "F: agreement plan is absent, stale, incomplete, or downgraded"
+  note "  $agreement_result"
+fi
+
+# --- G. One ordered compiler for per-run guidance and agreement --------------
+# Standards, loops, and recipes selected through the external resume checkpoint
+# are configuration until their obligation-by-obligation application is rendered
+# into the three ratified authorities. The compiler verifies those exact regions
+# in semantic-union -> guidance -> agreement order. With no selection this is an
+# explicit none path; a missing or hand-edited selected obligation is a refusal.
+compiler_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/phase_compiler.py" verify \
+  --root "$ROOT" --artifacts "$ART" 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "G: ordered phase compiler exactly applies selected run guidance"
+  note "  $compiler_result"
+else
+  fail "G: selected guidance is absent, stale, misrouted, or out of order"
+  note "  $compiler_result"
 fi
 
 # --- report: post-ratification amendments are the adequacy measurement --------

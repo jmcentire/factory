@@ -20,6 +20,9 @@ DIGEST = "sha256:" + ("a" * 64)
 RUNNER_RECEIPT_V2_SCHEMA_SHA256 = (
     "6e3a432425e2b79395c7c7cfdb59b3f09ba0b6b24daf0c952637e71f055f8e7c"
 )
+EVIDENCE_BUNDLE_V2_SCHEMA_SHA256 = (
+    "59417cac8d6d546573aea2d6ce49242d0096fa49e37f636418fc6ec8788d64c0"
+)
 
 
 def test_runner_receipt_v2_schema_keeps_its_exact_published_bytes() -> None:
@@ -29,6 +32,16 @@ def test_runner_receipt_v2_schema_keeps_its_exact_published_bytes() -> None:
 
     assert hashlib.sha256(historical_schema.read_bytes()).hexdigest() == (
         RUNNER_RECEIPT_V2_SCHEMA_SHA256
+    )
+
+
+def test_evidence_bundle_v2_schema_keeps_its_exact_published_bytes() -> None:
+    historical_schema = files("factory_runtime.schemas").joinpath(
+        "evidence-bundle-v2.schema.json"
+    )
+
+    assert hashlib.sha256(historical_schema.read_bytes()).hexdigest() == (
+        EVIDENCE_BUNDLE_V2_SCHEMA_SHA256
     )
 
 
@@ -235,6 +248,19 @@ def test_evidence_bundle_resolves_the_phase_artifact_schema() -> None:
     }
 
     validate_document("evidence-bundle", document)
+
+    keyed_head = "hmac-sha256:" + ("b" * 64)
+    document["ledger_head"] = keyed_head
+    document["preview_admission"]["validating_ledger_head"] = keyed_head
+    validate_document("evidence-bundle", document)
+
+    historical = load_schema("evidence-bundle-v2")
+    current = load_schema("evidence-bundle")
+    assert historical["properties"]["ledger_head"] == {"$ref": "#/$defs/digest"}
+    assert current["properties"]["ledger_head"] == {"$ref": "#/$defs/ledger_head"}
+    assert current["properties"]["preview_admission"]["properties"][
+        "validating_ledger_head"
+    ] == {"$ref": "#/$defs/ledger_head"}
 
 
 def test_the_bundle_schema_refuses_a_diff_derived_monitor_and_an_unrecorded_tier() -> None:

@@ -16,20 +16,24 @@
 # imports the factory package). The operator installs the factory (console script `factory`
 # on PATH); FACTORY_CLI overrides the binary so tests can point at a venv or module form.
 #
-# HONEST SCOPE (2026-08-14): endgame.sh now invokes this script after every preceding gate,
-# live proof, exact target verification, and resource checks are green, so Gate L is the live
-# harness close path and a missing promotion_inputs.json fails that close. The evidence pipeline
+# HONEST SCOPE (updated 2026-09-02): current-contract runs must present the canonical
+# candidate-bound endgame admission issued after every preceding gate, live proof, exact target
+# verification, and resource check is green. Gate L rechecks that admission against live harness
+# metadata under the close lock. A direct current-run call and a missing promotion_inputs.json
+# both fail closed. The evidence pipeline
 # does not gather
 # promotion_inputs.json automatically, and this harness status update is not a RunStore PROMOTED
 # ledger transition. Those are separate remaining controls; neither is implied by this wiring.
 #
-#   usage: promote.sh <run> [--runs <path>]
+#   usage: promote.sh <run> [--runs <path>] [--endgame-admission <path>]
 set -uo pipefail
 
-RUN="${1:?usage: promote.sh <run> [--runs <path>]}"; shift || true
+RUN="${1:?usage: promote.sh <run> [--runs <path>] [--endgame-admission <path>]}"; shift || true
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
+ENDGAME_ADMISSION=""
 while [ $# -gt 0 ]; do case "$1" in
   --runs) RUNS_ARG="$2"; shift 2 ;;
+  --endgame-admission) ENDGAME_ADMISSION="$2"; shift 2 ;;
   *) echo "promote: unknown argument: $1" >&2; exit 64 ;;
 esac; done
 D="$(cd "$(dirname "$0")" && pwd -P)"
@@ -51,9 +55,9 @@ refusal_event() {
   refusal_event "no checked harness.json" 64
   echo "promote: no checked harness.json at $ROOT" >&2; exit 64;
 }
-python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
-  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY' || { refusal_event "harness metadata check refused" 66; exit 66; }
-import json, os, stat, sys
+CURRENT_CONTRACT=$(python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
+  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY'
+import json, os, re, stat, sys
 path, run, target_state, commit, checkout = sys.argv[1:]
 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
 try:
@@ -79,12 +83,150 @@ base_fields = {
     "launcher_qualification", "lane_isolation", "interactive_validator_boundary",
     "validator_agent", "orchestrator_agent", "validator_contract", "created_at",
 }
+resident_fields = {
+    "orchestrator_mode", "orchestrator_window", "orchestrator_visibility",
+    "orchestrator_effects", "orchestrator_boundary", "orchestrator_cli_version",
+    "orchestrator_cli_contract",
+}
+contract_fields = {
+    "agreement_contract_version", "agreement_requirement_region_families",
+    "guidance_contract_version", "guidance_generation", "guidance_state",
+    "guidance_selection_digest", "guidance_source_digests",
+}
 close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
-if set(doc) not in (base_fields, base_fields | close_fields):
+allowed_shapes = {
+    frozenset(base_fields),
+    frozenset(base_fields | resident_fields),
+    frozenset(base_fields | resident_fields | contract_fields),
+    frozenset(base_fields | close_fields),
+    frozenset(base_fields | resident_fields | close_fields),
+    frozenset(base_fields | resident_fields | contract_fields | close_fields),
+}
+if frozenset(doc) not in allowed_shapes:
     raise SystemExit("promote: harness metadata has unknown or missing fields")
 if doc.get("status") not in {"open", "closed"}:
     raise SystemExit("promote: harness status is invalid")
+if contract_fields <= set(doc):
+    digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+    if doc["agreement_contract_version"] != "factory-agreement-contract/1":
+        raise SystemExit("promote: harness agreement contract is unsupported")
+    if doc["guidance_contract_version"] != "factory-run-guidance/1":
+        raise SystemExit("promote: harness guidance contract is unsupported")
+    generation = doc["guidance_generation"]
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        raise SystemExit("promote: harness guidance generation is invalid")
+    if doc["guidance_state"] not in {
+        "none", "pending-application", "routing-verified", "evidence-complete", "noncompliant"
+    }:
+        raise SystemExit("promote: harness guidance state is invalid")
+    selection = doc["guidance_selection_digest"]
+    sources = doc["guidance_source_digests"]
+    if not isinstance(sources, dict) or any(
+        not isinstance(name, str) or not name or not isinstance(address, str)
+        or not digest.fullmatch(address)
+        for name, address in sources.items()
+    ):
+        raise SystemExit("promote: harness guidance source map is invalid")
+    expected_regions = ["authored-product"]
+    if selection is None:
+        if doc["guidance_state"] != "none" or sources:
+            raise SystemExit("promote: unselected guidance carries selected state")
+    else:
+        if not isinstance(selection, str) or not digest.fullmatch(selection) or not sources:
+            raise SystemExit("promote: selected guidance identity is invalid")
+        expected_regions.append("run-guidance")
+    if doc["agreement_requirement_region_families"] != expected_regions:
+        raise SystemExit("promote: agreement region families differ from guidance selection")
+print("true" if contract_fields <= set(doc) else "false")
 PY
+) || { refusal_event "harness metadata check refused" 66; exit 66; }
+
+if [ "$CURRENT_CONTRACT" = "true" ]; then
+  [ -n "$ENDGAME_ADMISSION" ] || {
+    refusal_event "current contract has no green endgame admission" 66
+    echo "promote: current-contract run must arrive through a green endgame admission" >&2
+    exit 66
+  }
+  if ! python3 - "$ROOT" "$ROOT/harness.json" "$ENDGAME_ADMISSION" "$RUN" \
+    "$FACTORY_TARGET_STATE_DIGEST" <<'PY'
+import hashlib, json, os, pathlib, re, stat, sys
+
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+harness_path = pathlib.Path(sys.argv[2])
+path = pathlib.Path(sys.argv[3])
+run, target_state = sys.argv[4:]
+try:
+    expected_parent = (root / "endgame").resolve(strict=True)
+    installed_parent = path.parent.resolve(strict=True)
+except OSError as exc:
+    raise SystemExit(f"promote: endgame admission parent is invalid: {exc}") from exc
+if installed_parent != expected_parent or path.is_symlink():
+    raise SystemExit("promote: endgame admission is outside the run or linked")
+fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+try:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 16_384:
+        raise SystemExit("promote: endgame admission is not a bounded regular file")
+    raw = os.read(fd, 16_385)
+    after = os.fstat(fd)
+finally:
+    os.close(fd)
+if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+    after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+):
+    raise SystemExit("promote: endgame admission changed while read")
+try:
+    value = json.loads(raw)
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit("promote: endgame admission is not JSON") from exc
+canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+if raw != canonical or not isinstance(value, dict):
+    raise SystemExit("promote: endgame admission is not a canonical object")
+expected_fields = {
+    "schema_version", "run_id", "candidate_sha", "candidate_resource",
+    "target_state_digest", "harness_subject_digest", "checks", "issued_by",
+}
+if set(value) != expected_fields:
+    raise SystemExit("promote: endgame admission fields differ")
+candidate = value.get("candidate_sha")
+candidate_resource = value.get("candidate_resource")
+if (
+    value.get("schema_version") != "factory-endgame-admission/1"
+    or value.get("run_id") != run
+    or not isinstance(candidate, str)
+    or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", candidate)
+    or not isinstance(candidate_resource, str)
+    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", candidate_resource)
+    or value.get("target_state_digest") != target_state
+    or value.get("issued_by") != "endgame.sh"
+):
+    raise SystemExit("promote: endgame admission belongs to another subject")
+if path.name != f"gate-l-{candidate}.json":
+    raise SystemExit("promote: endgame admission address differs from its candidate")
+checks = [
+    "agreement-evidence", "guidance-evidence", "full-gate-suite", "isolation-proof",
+    "live-proof", "target-state", "resource-hygiene",
+]
+if value.get("checks") != checks:
+    raise SystemExit("promote: endgame admission does not close every required check")
+harness = json.loads(harness_path.read_bytes())
+for field in ("closed_at", "promotion_verdict", "promotion_verdict_digest"):
+    harness.pop(field, None)
+harness["status"] = "open"
+harness_subject = json.dumps(harness, sort_keys=True, separators=(",", ":")).encode()
+observed = "sha256:" + hashlib.sha256(harness_subject).hexdigest()
+if value.get("harness_subject_digest") != observed:
+    raise SystemExit("promote: endgame admission harness subject is stale")
+PY
+  then
+    refusal_event "green endgame admission check refused" 66
+    exit 66
+  fi
+elif [ -n "$ENDGAME_ADMISSION" ]; then
+  refusal_event "legacy run supplied an inapplicable endgame admission" 66
+  echo "promote: legacy run may not smuggle a current-contract endgame admission" >&2
+  exit 66
+fi
 
 VERDICT_FILE="$ROOT/promotion_verdict.json"
 VERDICT_STDOUT="$ROOT/promotion_verdict.json.stdout"
@@ -184,7 +326,7 @@ fi
 #
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
 # half-written harness.json. Exit 70 on write-failure so it is distinct from BLOCKED (1).
-python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" <<'PY' 2>>"$REJECTION"
+python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" "$ENDGAME_ADMISSION" <<'PY' 2>>"$REJECTION"
 import datetime, fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
 
 run_path = pathlib.Path(sys.argv[1])
@@ -195,6 +337,7 @@ _lock = os.open(str(run_path.parent / '.harness.write.lock'), os.O_CREAT | os.O_
 fcntl.flock(_lock, fcntl.LOCK_EX)
 run = sys.argv[2]  # the run id — a string, not a path
 verdict_file = pathlib.Path(sys.argv[3])
+admission_file = pathlib.Path(sys.argv[4]) if sys.argv[4] else None
 
 def read_regular(path: pathlib.Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -232,6 +375,32 @@ if doc.get("status") != "open":
         file=sys.stderr,
     )
     sys.exit(71)
+
+# Recheck the endgame route under the same lock as the status flip. The earlier
+# admission check rejects malformed or wrong-subject receipts before doing
+# promotion work; this check prevents harness metadata from changing between
+# that check and the atomic close. Legacy runs remain valid only without an
+# admission, while every current-contract run must still match its retained
+# endgame subject exactly.
+current_contract = "agreement_contract_version" in doc
+if current_contract != (admission_file is not None):
+    print("promote: endgame admission applicability changed before close", file=sys.stderr)
+    sys.exit(72)
+if admission_file is not None:
+    try:
+        admission = json.loads(read_regular(admission_file))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(f"promote: endgame admission unreadable at close: {exc}", file=sys.stderr)
+        sys.exit(72)
+    subject = dict(doc)
+    for field in ("closed_at", "promotion_verdict", "promotion_verdict_digest"):
+        subject.pop(field, None)
+    subject["status"] = "open"
+    subject_raw = json.dumps(subject, sort_keys=True, separators=(",", ":")).encode()
+    expected_subject = "sha256:" + hashlib.sha256(subject_raw).hexdigest()
+    if admission.get("harness_subject_digest") != expected_subject:
+        print("promote: endgame admission became stale before close", file=sys.stderr)
+        sys.exit(72)
 closed_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 verdict_bytes = read_regular(verdict_file)
 doc["status"] = "closed"
@@ -262,6 +431,12 @@ if [ "$flip_rc" -ne 0 ]; then
     echo "promote: terminal NO recorded during close — the NO stands, run NOT closed" >&2
     [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
     exit 71
+  fi
+  if [ "$flip_rc" -eq 72 ]; then
+    refusal_event "green endgame admission changed or became stale before close" 72
+    echo "promote: green endgame admission changed or became stale — run NOT closed" >&2
+    [ -s "$REJECTION" ] && sed 's/^/  /' "$REJECTION" >&2
+    exit 72
   fi
   refusal_event "harness.json close write failed: run NOT closed" 70
   echo "promote: harness.json close write failed — run NOT closed" >&2

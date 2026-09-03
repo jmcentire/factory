@@ -3,6 +3,94 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.6.0] - 2026-09-02
+
+### Added
+
+- `factory-run-guidance/1` lets the user select additional standards, process loops, and recipes
+  per run through the exact external-resume configuration checkpoint. The selector and every
+  source are retained content-addressed; every obligation receives an explicit application or N/A
+  disposition, a subject-derived authority route, and an independent classification/application
+  review.
+- Exact role projections keep selected guidance narrow: Coder receives only applied obligations
+  scoped to its role, while Tester receives behavioral obligations only and never whole source
+  documents or constructional recipes. A main-module/entrypoint recipe therefore becomes an
+  explicit Architecture/Testing conformance requirement without becoming invented Product intent.
+- `phase_compiler.py` owns deterministic semantic-union → run-guidance → agreement generation and
+  verification. Gate GUIDE refuses source substitution, obligation loss, misrouting, dispatch
+  before application, and verdict before exact-candidate observations bound to the current
+  selection, application row, obligation, and raw evidence; resolved findings use a separately
+  typed record with the same candidate binding.
+- Resident Orchestrator assessment/3 binds its guidance judgment to host-derived selection,
+  application, evidence, and finding digests. Pre-dispatch requires `routing-verified`;
+  pre-verdict requires `evidence-complete`; noncompliance forces its monotone block.
+- Current-contract Gate L requires a canonical candidate/run/target/harness-bound green-endgame
+  admission and rechecks it under the atomic close lock. Finishing a judging pass, or calling
+  `promote.sh` directly, can no longer impersonate completion of the full endgame route.
+
+### Changed
+
+- Authored Product requirement identities stop before any generated-region marker, so adding or
+  reordering deterministic compiler regions cannot stale the agreement participant inventory for
+  unchanged authored text.
+- Documentation distinguishes exact selection, correct routing, and substantive compliance.
+  All applied obligations require exact-candidate evidence, while digest, route, and evidence-
+  membership checks do not claim that arbitrary standards prose was exhaustively interpreted or
+  that cited evidence is substantively adequate.
+- Objective-budget reservation now precedes workspace/resource mutation atomically. A crash after
+  the durable reservation and before the first resource record leaves no lane residue, and an
+  exact retry reuses the same reservation rather than charging the objective twice.
+- The agreement and supervision boundaries are explicit: asymmetric mismatch witnesses detect
+  either side drifting but not a shared same-direction error; Orchestrator audit currency is a
+  deny-only prerequisite while its judgment cannot grant; and Kindex informs planning context but
+  cannot select run guidance or become compilation authority.
+- Both hosted platforms now run every Tessera-gated test file after building the pinned verifier,
+  including the registered chain-repair and ledger-unlock denial probes; a collecting but skipped
+  denial probe can no longer hide behind the ordinary no-Tessera suite.
+
+## [0.5.0] - 2026-09-02
+
+### Added
+
+- Real resident tmux sessions for the Validator, Orchestrator, Coder, and Tester. Codex author
+  lanes use standalone repositories with lane-local Git metadata and receive a lane-scoped write
+  profile that includes all of that local `.git`, so they can inspect and checkpoint their own
+  work and audit their delta before committing. The lane owns its local branch and history;
+  isolation is at the standalone-repository boundary, not a restricted Git ref namespace. They
+  retain the actual resumable thread identity, and export only a bounded plain-file candidate for
+  host review. Agent commits are useful checkpoints; the host still judges frozen bytes.
+- A typed, bidirectional lane-question protocol. A Coder or Tester can block on an occurrence-bound
+  specification question retained directly from the completed Codex assistant-message event;
+  only the Validator can bind and deliver the answer back into the same conversation, while the
+  Orchestrator may issue status probes but cannot invent semantics.
+- Typed liveness observations for resident sessions. Silence is `unknown`, a pending question is
+  `waiting-on-validator`, and the supervisors use tmux plus the resumable status channel instead
+  of pretending elapsed-output heuristics distinguish reasoning from I/O hangs.
+- A resident strategic Orchestrator contract over the complete activity cursor. It continuously
+  evaluates the user's goal, direction, implications, side effects, adherence, hidden ambiguity,
+  disproportionate requirements, simpler counterfactuals, task decomposition, Kindex-backed work
+  state, causal discriminators, model-tier routing, and exact harness lifecycle. Its only effects
+  remain monotone `block | no-op`; it can neither grant nor close.
+- Evidence-conserving semantic compilation from every retained planning pass, lane trace, and
+  adversarial review into an exact ruled Product Specification section, so a token mention cannot
+  stand in for an enumerated and closed decision.
+- `factory-agreement-contract/1`, which derives single-path versus cross-path requirements from an
+  exact participant inventory and writes the complete register into the signed Testing Strategy.
+  Gate AGR refuses missing membership, multi-participant downgrades, and endgame without distinct
+  producer/consumer mismatch witnesses bound to the exact candidate, local suite, and relational
+  oracle. This closes the failure where quote and hold were each tested but their shared decision
+  was never tested for agreement.
+
+### Changed
+
+- The default resident Orchestrator launch uses an actual interactive Agy project rather than
+  one-shot print mode. Dispatcher cursor wakes and independent cadence now let it monitor ordinary
+  activity continuously, while typed tmux pokes keep coordination separate from evidence or
+  isolation claims.
+- Gate L remains the only close authority. A finished judging pass with failed tests, a blocking
+  verdict, unanswered questions, stale agreement evidence, or unresolved findings leaves the run
+  open for remediation.
+
 ## [0.4.1] - 2026-08-24
 
 ### Changed

@@ -126,19 +126,31 @@ test-isolation: check-python ## prove enforced Coder/Tester separation on macOS
 		(echo "enforced isolation proof requires macOS Seatbelt" >&2; exit 1)
 	$(PY) -m pytest -m isolation_integration tests/test_isolated_build_loop.py
 
-test-tessera: check-python ## run the real Tessera CLI integration proof
+test-tessera: check-python ## run every real-Tessera integration and denial proof
 	@test -x "$(FACTORY_TESSERA_BIN)" || \
 		(echo "Tessera binary missing or not executable: $(FACTORY_TESSERA_BIN)" >&2; exit 1)
 	FACTORY_TESSERA_BIN="$(FACTORY_TESSERA_BIN)" \
-		$(PY) -m pytest tests/test_tessera_cli_integration.py
+		$(PY) -m pytest \
+			tests/test_tessera_cli_integration.py \
+			tests/test_build_and_validate_cli.py \
+			tests/test_repair_ceremony.py \
+			tests/test_trust_root.py
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \
-		harness/attention_gate.py harness/dispatcher.py harness/supervise_advisory.py harness/watchdog.py
+		harness/agreement_contract.py harness/agreement_probe.py \
+		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
+		harness/lane_dialogue.py harness/lane_repository.py harness/orchestrator_channel.py \
+		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
+		harness/supervise_advisory.py harness/watchdog.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
-		harness/attention_gate.py harness/dispatcher.py harness/supervise_advisory.py harness/watchdog.py
+		harness/agreement_contract.py harness/agreement_probe.py \
+		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
+		harness/lane_dialogue.py harness/lane_repository.py harness/orchestrator_channel.py \
+		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
+		harness/supervise_advisory.py harness/watchdog.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py

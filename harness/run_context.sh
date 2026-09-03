@@ -16,6 +16,7 @@ factory_verify_resume_anchor() {
   # These assignments are intentionally global: later helpers consume the exact verified argv
   # vectors.  Avoid `declare -g`, which macOS's system Bash 3.2 does not implement.
   FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
+  FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS=()
   FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
 
   [ -f "$checkpoint" ] && [ ! -L "$checkpoint" ] || {
@@ -69,13 +70,40 @@ factory_verify_resume_anchor() {
 
   # The expected digest, checkpoint, root key, genesis, and configuration list all arrive from
   # outside the mutable run root.  The runtime freezes those bytes before opening run state.
-  $cli verify-resume-checkpoint \
+  local verification
+  verification="$($cli verify-resume-checkpoint \
     --runs "$runs" --run-id "$run" \
     --checkpoint "$checkpoint" --checkpoint-digest "$checkpoint_digest" \
     --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera" \
     "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
     "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]+"${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}"}" \
-    >/dev/null || return $?
+  )" || return $?
+  local config_digest_rows
+  config_digest_rows="$(printf '%s' "$verification" | python3 -c '
+import json, re, sys
+value = json.load(sys.stdin)
+digests = value.get("configuration_digests")
+if not isinstance(digests, dict):
+    raise SystemExit("resume verification omitted configuration digests")
+identifier = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+for name in sorted(digests):
+    address = digests[name]
+    if not isinstance(name, str) or not identifier.fullmatch(name):
+        raise SystemExit("resume verification returned an invalid configuration name")
+    if not isinstance(address, str) or not digest.fullmatch(address):
+        raise SystemExit("resume verification returned an invalid configuration digest")
+    print(f"{name}={address}")
+')" || return $?
+  while IFS= read -r entry || [ -n "$entry" ]; do
+    [ -n "$entry" ] || continue
+    FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS+=(--config-digest "$entry")
+  done <<< "$config_digest_rows"
+  [ "${#FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS[@]}" -eq \
+    "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" ] || {
+    echo "Factory resume verification configuration membership differs from its source vector" >&2
+    return 72
+  }
   FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST="$checkpoint_digest"
   export FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST
 }
