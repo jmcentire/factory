@@ -686,6 +686,8 @@ defects*). Run every gate; never read a clean gate as a clean bill of health.
    semantic residue because one generated/structural authority carries all of it, retain an
    independent adversarial review of that exact candidate and authority digest; your own assertion
    is not the escape. `endgame.sh` refuses stale, missing, one-direction, or downgraded evidence.
+   This is an agreement control, not redundant implementation diversity: a shared same-direction
+   semantic error can remain green and still needs an independent oracle and adversarial review.
 7. **Close selected-guidance evidence without overstating it.** For every applied G-* obligation,
    retain exact-candidate evidence for its acceptance obligation, process checkpoint, or
    construction conformance requirement. Mechanical checks prove that evidence is present and

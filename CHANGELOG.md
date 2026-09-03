@@ -37,6 +37,13 @@ public API is still pre-1.0.
   All applied obligations require exact-candidate evidence, while digest, route, and evidence-
   membership checks do not claim that arbitrary standards prose was exhaustively interpreted or
   that cited evidence is substantively adequate.
+- Objective-budget reservation now precedes workspace/resource mutation atomically. A crash after
+  the durable reservation and before the first resource record leaves no lane residue, and an
+  exact retry reuses the same reservation rather than charging the objective twice.
+- The agreement and supervision boundaries are explicit: asymmetric mismatch witnesses detect
+  either side drifting but not a shared same-direction error; Orchestrator audit currency is a
+  deny-only prerequisite while its judgment cannot grant; and Kindex informs planning context but
+  cannot select run guidance or become compilation authority.
 
 ## [0.5.0] - 2026-09-02
 

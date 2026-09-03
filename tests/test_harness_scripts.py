@@ -5911,6 +5911,76 @@ def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
     assert reservations[0]["reserved_max_cost_microusd"] == 1000
 
 
+def test_dispatch_sigkill_after_budget_reservation_exact_retry_reuses_once(
+    tmp_path: Path,
+) -> None:
+    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    environment = _dispatch_env(stub, root)
+    marker = tmp_path / "killed-after-budget-reservation"
+    delegate = tmp_path / "kill-dispatch-before-first-resource.py"
+    delegate.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, signal, sys\n"
+        "marker = pathlib.Path(os.environ['FACTORY_TEST_KILL_AFTER_BUDGET_MARKER'])\n"
+        "if sys.argv[1:2] == ['record-resource'] and not marker.exists():\n"
+        "    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n"
+        "    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:\n"
+        "        stream.write('budget reserved before resource mutation\\n')\n"
+        "        stream.flush(); os.fsync(stream.fileno())\n"
+        "    directory = os.open(marker.parent, os.O_RDONLY)\n"
+        "    try: os.fsync(directory)\n"
+        "    finally: os.close(directory)\n"
+        "    os.kill(os.getppid(), signal.SIGKILL)\n"
+        "    raise SystemExit(70)\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    delegate.chmod(0o755)
+    environment.update(
+        {
+            "FACTORY_CLI": str(delegate),
+            "FACTORY_TEST_KILL_AFTER_BUDGET_MARKER": str(marker),
+        }
+    )
+    command = [
+        "bash",
+        str(HARNESS / "dispatch_lane.sh"),
+        "r1",
+        "coder",
+        "--dispatch",
+        str(dispatch),
+    ]
+
+    interrupted = run(command, cwd, environment)
+
+    assert interrupted.returncode != 0
+    assert marker.read_text(encoding="utf-8") == "budget reserved before resource mutation\n"
+    reservations = read_chain(root / "budget-reservations.jsonl")
+    assert len(reservations) == 1
+    assert reservations[0]["reservation_id"] == "r1:g1:coder:lane-coder-g1"
+    assert not (root / "workspaces" / "coder").exists()
+    if (root / "resources.jsonl").exists():
+        resources = ResourceLedger(root, "r1").records()
+        assert not any(
+            record["resource_id"] in {"lane-workspace-coder", "runner-workspace-coder"}
+            for record in resources
+        )
+    assert not (tmp_path / "boundary.log").exists()
+
+    recovered = run(command, cwd, environment)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert read_chain(root / "budget-reservations.jsonl") == reservations
+    assert (root / "workspaces" / "coder").is_dir()
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["lane-workspace-coder"]["status"] == "retained"
+    assert resources["runner-workspace-coder"]["status"] == "retained"
+    assert (tmp_path / "boundary.log").read_text().splitlines() == [
+        "run-model",
+        "execute-broker-handoff",
+    ]
+
+
 def test_dispatch_refuses_model_use_without_an_explicit_objective_budget(
     tmp_path: Path,
 ) -> None:

@@ -135,8 +135,10 @@ interactions. The pressure point must name a counterfactual planning-mode, model
 dependency, or necessary-chunk delta; diff size alone does not qualify. It writes bite-sized work
 state to Kindex, pre-registers outcome
 discriminators for competing causal hypotheses, and recommends the least expensive qualified
-model for each concrete chunk. Kindex is normalized state from which a narrow dispatch projection
-is derived—not a long context dump. Its effect set is exactly `{block, no-op}`: a block forces an exact-subject
+model for each concrete chunk. Kindex-backed notes inform planning and narrow dispatch context,
+not authority: `phase_compiler.py` and `run_guidance.py` never select guidance from Kindex. Only
+the exact external-resume checkpoint can select a standard, loop, or recipe for compilation into
+the three ratified authorities. Its effect set is exactly `{block, no-op}`: a block forces an exact-subject
 human/Validator disposition; no-op grants nothing and can satisfy no gate. Pre-dispatch and
 pre-verdict checkpoints refuse until a retained assessment covers their activity cursor. The
 assessment's observed harness status must match `harness.json`; it cannot call an open run closed.
@@ -146,6 +148,9 @@ reviews classifications, applicability bases, role/authority routing, and substa
 it may not rename `routing-verified` as compliance. Pre-dispatch requires routing and pre-verdict
 requires evidence completion. A changed guidance artifact makes the assessment stale even if no
 pane heuristic noticed the change.
+Audit occurrence, cursor currency, exact-state binding, and a pending block are therefore
+load-bearing deny conditions. The Orchestrator's prose and judgment remain advisory: they cannot
+create the underlying routing/evidence state, satisfy another gate, or grant an advance.
 The block effect becomes durable before the report can make its cursor current. It clears only
 through the existing exact-subject blocking-event disposition, followed by new activity and a new
 assessment; clearing the event does not erase outstanding work.
@@ -578,7 +583,11 @@ dependency-free (bash + python3 + git):
   cross-path requirement needs distinct producer/consumer mismatch receipts that bind the exact
   candidate, unchanged selected local suite, and unchanged agreement oracle; the only alternate
   route is an exact-candidate independent review showing one structural authority carries all
-  semantic residue. Older runs without the ignition field keep their released semantics.
+  semantic residue. These are asymmetric disagreement detectors, not two independent redundant
+  implementations: they prove the relational oracle catches either participant drifting while the
+  other remains correct. Shared same-direction wrong behavior can still pass and remains the job
+  of an independent semantic oracle and adversarial review. Older runs without the ignition field
+  keep their released semantics.
 - `harness/tmux_lane.sh` + `codex_lane_session.py` + `lane_dialogue.py` +
   `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
   mode. Preflight requires a standalone repository whose Git/common directory is local and a
