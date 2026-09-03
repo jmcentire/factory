@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from factory_core.provenance import IntentBackreference
+from factory_runtime.acceptance_lifecycle import AcceptanceLifecycle
 from factory_runtime.repair import (
     RepairBrief,
     RepairCampaignBlocked,
@@ -214,7 +215,17 @@ def test_repair_campaign_block_is_not_a_coder_retry() -> None:
     assert result.terminal_reason == "infrastructure-blocked:external-prerequisite"
 
 
-def test_validator_lifecycle_retry_never_diagnoses_or_retries_the_coder() -> None:
+@pytest.mark.parametrize(
+    ("phase", "expected_reason"),
+    (
+        (None, "acceptance-setup-not-reached"),
+        ("behavior-started", "acceptance-lifecycle-incomplete"),
+    ),
+)
+def test_validator_lifecycle_retry_never_diagnoses_or_retries_the_coder(
+    phase: str | None,
+    expected_reason: str,
+) -> None:
     class Store:
         def build_attempt_ids(self, _run_id):
             return frozenset()
@@ -241,6 +252,9 @@ def test_validator_lifecycle_retry_never_diagnoses_or_retries_the_coder() -> Non
     outcome = SimpleNamespace(
         passed=False,
         repair_signal="validator-retry",
+        execution=SimpleNamespace(
+            acceptance_lifecycle=AcceptanceLifecycle(required=True, phase=phase)
+        ),
         projection=Store().load("run-1"),
         candidate_digest="sha256:" + "e" * 64,
         tests_digest="sha256:" + "f" * 64,
@@ -258,9 +272,7 @@ def test_validator_lifecycle_retry_never_diagnoses_or_retries_the_coder() -> Non
 
     assert result.attempts_run == 1
     assert result.repair_brief_paths == ()
-    assert result.terminal_reason == (
-        "validator-harness-blocked:acceptance-setup-not-reached"
-    )
+    assert result.terminal_reason == f"validator-harness-blocked:{expected_reason}"
 
 
 def test_pre_author_lane_launch_fault_never_mints_empty_digest_repair_brief() -> None:
