@@ -82,6 +82,23 @@ print(digest)
 PY
 ) || exit $?
 
+# Per-run guidance is selected only through the exact configuration vector which
+# verify-resume-checkpoint just accepted. The reserved source name identifies the
+# selector; its bytes and every selected document were already checkpoint-bound.
+# This admission step freezes those exact bytes into the run before metadata can
+# name them. No ambient path or command-line attachment can add guidance.
+GUIDANCE_CONFIG_ARGS=()
+for ((index = 0; index < ${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}; index += 2)); do
+  [ "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$index]}" = "--config-source" ] || exit 72
+  GUIDANCE_CONFIG_ARGS+=(
+    --config-source "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$((index + 1))]}"
+  )
+done
+GUIDANCE_ADMISSION=$(python3 "$D/run_guidance.py" admit --root "$ROOT" \
+  --run-id "$RUN" --generation "$FACTORY_GENERATION" \
+  "${GUIDANCE_CONFIG_ARGS[@]+"${GUIDANCE_CONFIG_ARGS[@]}"}" \
+  "${FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS[@]+"${FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS[@]}"}") || exit $?
+
 case "$ORCHESTRATOR_AGENT" in
   agy)
     ORCHESTRATOR_VERSION=$(agy --version 2>/dev/null) || {
@@ -89,7 +106,7 @@ case "$ORCHESTRATOR_AGENT" in
     }
     ORCHESTRATOR_HELP=$(agy --help 2>/dev/null) || exit 70
     for REQUIRED in --new-project --prompt-interactive --sandbox \
-      --dangerously-skip-permissions --disable-slash-commands --add-dir; do
+      --dangerously-skip-permissions --add-dir; do
       printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
         echo "factory: agy CLI contract lacks $REQUIRED ($ORCHESTRATOR_VERSION)" >&2
         exit 70
@@ -116,12 +133,13 @@ python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
-  "$ORCHESTRATOR_CLI_CONTRACT" <<'PY'
+  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
+    generation_text, guidance_admission_raw,
 ) = sys.argv[1:]
 audit_value = int(audit)
 if audit_value < 1:
@@ -131,6 +149,11 @@ if budget_value is not None and budget_value <= 0:
     raise SystemExit("factory: budget must be positive")
 task_bytes = pathlib.Path(task_source).read_bytes()
 task_path = pathlib.Path(task_dest)
+guidance = json.loads(guidance_admission_raw)
+if set(guidance) != {
+    "required", "schema_version", "selection_digest", "source_digests", "state"
+} or guidance["schema_version"] != "factory-run-guidance/1":
+    raise SystemExit("factory: guidance admission summary is malformed")
 
 def sync_parent(path: pathlib.Path) -> None:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -176,7 +199,16 @@ metadata = {
     "orchestrator_effects": "monotone-block-or-no-op",
     "orchestrator_boundary": "operator-owned-tmux-unqualified",
     "agreement_contract_version": "factory-agreement-contract/1",
-    "agreement_requirement_region_families": ["authored-product"],
+    "agreement_requirement_region_families": (
+        ["authored-product", "run-guidance"]
+        if guidance["required"]
+        else ["authored-product"]
+    ),
+    "guidance_contract_version": "factory-run-guidance/1",
+    "guidance_generation": int(generation_text),
+    "guidance_state": guidance["state"],
+    "guidance_selection_digest": guidance["selection_digest"],
+    "guidance_source_digests": guidance["source_digests"],
     "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
@@ -217,7 +249,9 @@ resource_event '{}' planned
 printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q python3 %q --run %q --root %q' \
   "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$D/dispatcher.py" "$RUN" "$ROOT"
 VALIDATOR_PROMPT="Act as the Validator under docs/VALIDATION-DIRECTIVE.md and the /validate contract. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
+VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. Your only machine effect is block or no-op: you can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
+ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
 case "$VALIDATOR_AGENT" in
   codex)
     printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write %q' \
@@ -246,7 +280,7 @@ case "$ORCHESTRATOR_AGENT" in
     # --sandbox restricts terminal effects; --dangerously-skip-permissions only
     # prevents unattended tool prompts from neutering the resident monitor. It
     # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q agy --new-project --sandbox --disable-slash-commands --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
       "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
       "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
     ;;
@@ -263,10 +297,12 @@ chmod 700 "$ROOT/orchestrator"
 mkdir -p "$ROOT/orchestrator/bin"
 cp "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
 cp "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
+  "$D/run_guidance.py" "$D/agreement_contract.py" \
   "$ROOT/orchestrator/bin/"
 chmod 400 "$ROOT/orchestrator/ROLE.md"
 chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
-  "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py"
+  "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \
+  "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD"; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2

@@ -84,6 +84,16 @@ The three ratified phase artifacts, recipe patterns, and the disposable per-run 
 defined in [`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md) (the definitional prose that
 lived here was a restatement — remediation 5.2). What stays here is the honest boundary:
 
+The harness can also admit per-run standards, loops, and recipes from the exact configuration set
+bound by an externally anchored resume checkpoint. `harness/run_guidance.py` dispositions every
+selected obligation and derives its authority/role route from whether the subject is behavioral,
+procedural, or constructional; `harness/phase_compiler.py` renders those routes into the existing
+three authorities alongside semantic-union and cross-path-agreement regions. This closes source,
+membership, routing, and evidence identity. It does not make arbitrary prose machine-decidable or
+turn `routing-verified` into substantive compliance. See
+[`harness/README.md`](harness/README.md#per-run-selected-standards-loops-and-recipes) for the exact
+selection/configuration shape and the main-entrypoint recipe example.
+
 The runtime currently binds the selected construction mode but does not yet derive and enforce a
 `brownfield` changed-path/surface ceiling against the produced candidate. The mandatory Validator
 review therefore fails closed as `INCOMPLETE` for `brownfield`; `regenerate` is the only mode whose

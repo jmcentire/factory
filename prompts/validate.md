@@ -102,6 +102,13 @@ falsifying mutation (`scripts/check_denial_probes.py` fails the build on a gate 
   requires distinct producer- and consumer-side mutations that leave the selected local suite
   green and turn the shared-boundary oracle red, bound to the exact candidate, suite, and oracle
   digests. A collection of independently green end-to-end paths cannot satisfy this gate.
+- **Per-run selected standards, loops, and recipes → Gate GUIDE.** Selection arrives only through
+  the exact configuration vector bound by the external resume checkpoint. Every selected
+  obligation is dispositioned, independently reviewed, and compiled by subject into the existing
+  three authorities: behavioral → Product/acceptance; procedural → process checkpoint;
+  constructional → Architecture/Testing conformance. Role projections are exact and the Tester
+  receives behavioral obligations only. `routing-verified` is never called compliance; dispatch
+  requires routing and verdict requires exact-candidate evidence plus a fresh assessment/3.
 - **The verdict is a flag, not a negotiation → Gate E** (factual/subjective objection
   classification). `inject.sh` refuses to pass test detail or subjective verdict content into a
   lane's context, so a verdict cannot be negotiated into the lane that owns the pen. You render
@@ -289,7 +296,19 @@ restatement.**
    Cosmetic**, what being wrong costs, and the declared side-effect edges. **An unclassified
    surface is Critical. Cosmetic is an explicit decision, never an omission.** A small diff
    never lowers the class.
-8. **Compile the cross-path agreement register before signing the Testing Strategy.** For every
+8. **Apply checkpoint-selected run guidance before any artifact is signed.** If `harness.json`
+   names `factory-run-guidance/1`, inspect the exact retained selector and source documents under
+   `<run>/guidance/`. Write exactly one `applied|not-applicable` row for every selected G-* item in
+   `<run>/artifacts/guidance/application.json`, with a concrete basis and the subject-derived
+   binding: behavioral items bind acceptance obligations, procedural items bind process
+   checkpoints, and constructional items bind named Architecture/Testing conformance requirements.
+   Obtain an independent classification/application review for every row, bound to the digest of
+   that exact row rather than only its obligation ID. A source label
+   such as `standard` or `recipe` does not choose its authority route; the observable subject does.
+   Selection is configuration, not a fourth intent authority, until the generated obligations are
+   debated and ratified in the three existing artifacts. The selection is immutable for this run;
+   changing selected documents requires a newly checkpointed run.
+9. **Compile the cross-path agreement register before signing the Testing Strategy.** For every
    configured Product-requirement region, retain a participant inventory derived from a route
    table, call graph, schema registry, generated binding, or an explicitly weaker bounded-manual
    enumeration. One participant requires the mechanical inventory digest in its single-path
@@ -298,13 +317,14 @@ restatement.**
    agreement oracle, distinct producer/consumer mismatch plans, and dispositions version skew,
    data at rest, retry, duplication, ordering, and error taxonomy. Then run:
 
-       python3 harness/agreement_contract.py update-strategy \
+       python3 harness/phase_compiler.py update \
          --root <run> --artifacts <run>/artifacts
 
-   `phase1_gate.sh` re-derives exact region, inventory, contract, and rendered-section membership.
-   Do not hand-edit the generated register. Any phase amendment makes it stale and requires fresh
-   derivation before re-ratification.
-9. **Sign, digest, record.** Then the next artifact.
+   This single compiler re-derives semantic union → selected guidance → agreement in a fixed order.
+   `phase1_gate.sh` re-derives exact source, application, region, participant-inventory, contract,
+   and rendered-section membership. Do not hand-edit a generated register. Any phase amendment
+   makes downstream material stale and requires fresh derivation before re-ratification.
+10. **Sign, digest, record.** Then the next artifact.
 
 **Know what the panels cannot do.** They reliably catch interface and contract errors. They
 catch **zero** framing errors, because reviewers drawn from one model reading one target
@@ -527,17 +547,23 @@ defects*). Run every gate; never read a clean gate as a clean bill of health.
    semantic residue because one generated/structural authority carries all of it, retain an
    independent adversarial review of that exact candidate and authority digest; your own assertion
    is not the escape. `endgame.sh` refuses stale, missing, one-direction, or downgraded evidence.
-7. **Drive it live.** A hermetic green suite is necessary and not sufficient. Exercise the
+7. **Close selected-guidance evidence without overstating it.** For every applied G-* obligation,
+   retain exact-candidate evidence for its acceptance obligation, process checkpoint, or
+   construction conformance requirement. Mechanical checks prove that evidence is present and
+   bound to the exact subject, not that its content is adequate; inspect it and have the resident
+   Orchestrator assess it. A missing member, stale selection/application/candidate digest, open
+   finding, or `noncompliant` assessment blocks endgame.
+8. **Drive it live.** A hermetic green suite is necessary and not sufficient. Exercise the
    running system across real boundaries with real (disposable) externals: the happy path per
    Critical surface, an isolation assertion, a rejection assertion, an audit row, a fail-closed
    refusal. **BLOCKED is not PASS.**
-8. **Review adversarially, and filter.** Fan out perspective-diverse finders; for **each**
+9. **Review adversarially, and filter.** Fan out perspective-diverse finders; for **each**
    finding spawn an independent refuter whose job is to **kill** it; record both verdicts;
    dedup; synthesize; run a completeness critic ("what class of problem did nobody look
    for?"); loop until dry. **Detection is cheap and should be exhaustive — escalation must be
    earned.** An unrefuted finding is a hypothesis, and a gate flooded with hypotheses gets
    bypassed as routine, which rebuilds the alert wall inside the thing meant to replace it.
-9. **Gate on the doneness skeptic — it runs *last among the gates* and *before the promotion
+10. **Gate on the doneness skeptic — it runs *last among the gates* and *before the promotion
    decision*.** Both halves are load-bearing and neither survives alone: it only pays after
    everything else is green, **and** nothing is promoted, merged, or released until it clears. Last
    in sequence is not last in weight; read as a closing formality it is worthless. Run Sim against
@@ -584,9 +610,10 @@ mean evidence may lie.
 **Your verdict is a flag the gate consumes, not the thing that advances the run.** **Gate E**
 stops a verdict from leaking into a lane (`inject.sh` refuses test detail / subjective content),
 so a verdict is a flag, not a negotiation. **Gate L** is the sole writer of `closed`: your
-process is not the writer, and `promote.sh` reaches the decision only through the pure gate
-function on the receipts — a blocking verdict, a missing input, or a stale/forged verdict all
-fail closed. This is why the local AI-rendered-verdict mode is safe to run: rendered in any
+process is not the writer, and a current-contract `promote.sh` call first requires the canonical
+candidate-bound green-endgame admission, then reaches the decision only through the pure gate
+function on the receipts — a direct call, a blocking verdict, a missing input, or a stale/forged
+verdict all fail closed. This is why the local AI-rendered-verdict mode is safe to run: rendered in any
 mode, the verdict advances nothing on its own.
 
 Do not conflate “this judging pass is complete” with “the run is complete.” A BLOCK verdict —

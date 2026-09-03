@@ -157,6 +157,13 @@ evidence to investigate, never proof that the complexity exists for a current re
 
 Only after that pass does it choose `direct`, `clarify`, `decompose`, or `deep`, write small
 dependency-linked chunks to Kindex, and recommend the least expensive qualified model for each.
+When a run selects standards, loops, or recipes, the Orchestrator also reads the exact retained
+selection and sources, challenges every classification and applicability decision, and compares
+the generated authority routing and evidence with the host-derived selection/application/evidence
+digests. `routing-verified` means only that the obligation reached its intended control. It is not
+a compliance claim. Pre-dispatch requires routing, pre-verdict requires evidence completion, and
+any noncompliant state or inherited open finding forces the same monotone block as other process
+drift.
 Its closed machine effect remains only `block|no-op`; `no-op` grants nothing. The deterministic
 dispatcher transports every captured cursor range and cadence row but selects no conversation for
 strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
@@ -535,6 +542,31 @@ code generation. The Tester receives only the ratified build input, never the pl
 Coder output: mechanisms must not leak into the independent oracle. The resulting product is
 judged by the agreed user-visible and operational effects. Generated-code aesthetics are not a
 promotion criterion unless a phase artifact explicitly makes one an outcome or constraint.
+
+#### Per-run guidance compiles into the three authorities
+
+The user may select additional standards, process loops, and recipes for one run. Selection is
+an exact external-resume configuration input: a canonical manifest names content-addressed source
+documents and enumerates stable obligations, roles, and the observable subject each obligation
+governs. The source's label does not choose enforcement. Behavioral subjects route into Product
+and Testing as acceptance obligations; procedural subjects route into Architecture and Testing as
+process checkpoints; constructional subjects route into Architecture and Testing as named
+conformance requirements. Thus an infrastructure rule about the name of `main` and its entrypoint
+can constrain construction without becoming a fabricated product behavior or a pretend reference
+to a construction artifact that does not yet exist.
+
+Before ratification the Validator dispositions every selected obligation as applied or not
+applicable, gives a concrete basis, and obtains an independent review of both its classification
+and application bound to the digest of that exact application row. One deterministic compiler renders semantic-evidence union, selected guidance,
+and cross-path agreement in fixed order into the existing three artifacts. Coder and Tester receive
+only applied role projections; the Tester receives behavioral obligations only and never a whole
+guidance document or constructional recipe. Exact membership and routing are mechanical.
+Interpretive completeness, appropriateness, and implementation conformance remain explicit review
+surfaces. Accordingly the intermediate state is named `routing-verified`, never `compliant`.
+Exact-candidate evidence for every applied item and a current Orchestrator assessment of its
+adequacy are required before verdict; each observation binds the run, selection, application,
+obligation, candidate, method, and raw evidence. The checkpoint-selected set is immutable for one run;
+changing it starts a new run.
 
 `regenerate` makes complete replacement ordinary rather than organizationally exceptional;
 `brownfield` permits a deliberately scoped correction. Either mode preserves the same
@@ -1717,6 +1749,12 @@ an authored merge key.
 Materialize the canonical checklist and input-closure digest before ratification, then require the
 Phase A byte-exact verifier to pass. A grep hit or a mention of the right token is not closure.
 
+Apply every checkpoint-selected guidance obligation before ratification. Preserve its exact source,
+classify the subject, record an applied or not-applicable basis, bind the subject-derived control,
+and obtain independent classification/application review. Compile the resulting generated regions
+with the semantic union and agreement register; never let a selected source act as a fourth
+authority or let a whole recipe leak into the Tester context.
+
 **Phase 2 — propose the architecture.** Draft an architecture that satisfies the signed product
 spec and state its consequences plainly: component boundaries, state ownership, dependency
 direction, transaction and trust boundaries, data topology, deployment shape, and what each
@@ -1735,6 +1773,13 @@ their highest class. Leave nothing unclassified; the gate treats anything omitte
 failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name the fail-closed
 disposition of every hazard-class failure and the safe degradation of every other. Continue
 until the human agrees.
+
+For every Product requirement, inventory all participating paths before Phase 3 closes. Two or
+more participants force an agreement oracle at their real shared boundary; testing each path end
+to end in isolation is not evidence that the paths agree. The final candidate needs asymmetric
+producer- and consumer-drift witnesses, or an independently reviewed proof that one structural
+authority carries all semantic residue. Also name the exact evidence route for every applied
+guidance obligation; behavioral and procedural items cannot reach verdict on routing alone.
 
 **Compile and verify the construction IR after ratification.** Bind the exact target ABI,
 pattern catalog, ratified phase versions, and build input. Reject any plan that lacks complete

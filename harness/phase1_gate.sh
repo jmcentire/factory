@@ -174,6 +174,22 @@ else
   note "  $agreement_result"
 fi
 
+# --- G. One ordered compiler for per-run guidance and agreement --------------
+# Standards, loops, and recipes selected through the external resume checkpoint
+# are configuration until their obligation-by-obligation application is rendered
+# into the three ratified authorities. The compiler verifies those exact regions
+# in semantic-union -> guidance -> agreement order. With no selection this is an
+# explicit none path; a missing or hand-edited selected obligation is a refusal.
+compiler_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/phase_compiler.py" verify \
+  --root "$ROOT" --artifacts "$ART" 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "G: ordered phase compiler exactly applies selected run guidance"
+  note "  $compiler_result"
+else
+  fail "G: selected guidance is absent, stale, misrouted, or out of order"
+  note "  $compiler_result"
+fi
+
 # --- report: post-ratification amendments are the adequacy measurement --------
 AMEND=$(grep -h '^## AMENDMENT' "$ART"/*.md 2>/dev/null | wc -l | tr -d ' ')
 echo

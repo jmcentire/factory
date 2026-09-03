@@ -3,18 +3,56 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.6.0] - 2026-09-02
+
+### Added
+
+- `factory-run-guidance/1` lets the user select additional standards, process loops, and recipes
+  per run through the exact external-resume configuration checkpoint. The selector and every
+  source are retained content-addressed; every obligation receives an explicit application or N/A
+  disposition, a subject-derived authority route, and an independent classification/application
+  review.
+- Exact role projections keep selected guidance narrow: Coder receives only applied obligations
+  scoped to its role, while Tester receives behavioral obligations only and never whole source
+  documents or constructional recipes. A main-module/entrypoint recipe therefore becomes an
+  explicit Architecture/Testing conformance requirement without becoming invented Product intent.
+- `phase_compiler.py` owns deterministic semantic-union → run-guidance → agreement generation and
+  verification. Gate GUIDE refuses source substitution, obligation loss, misrouting, dispatch
+  before application, and verdict before exact-candidate observations bound to the current
+  selection, application row, obligation, and raw evidence; resolved findings use a separately
+  typed record with the same candidate binding.
+- Resident Orchestrator assessment/3 binds its guidance judgment to host-derived selection,
+  application, evidence, and finding digests. Pre-dispatch requires `routing-verified`;
+  pre-verdict requires `evidence-complete`; noncompliance forces its monotone block.
+- Current-contract Gate L requires a canonical candidate/run/target/harness-bound green-endgame
+  admission and rechecks it under the atomic close lock. Finishing a judging pass, or calling
+  `promote.sh` directly, can no longer impersonate completion of the full endgame route.
+
+### Changed
+
+- Authored Product requirement identities stop before any generated-region marker, so adding or
+  reordering deterministic compiler regions cannot stale the agreement participant inventory for
+  unchanged authored text.
+- Documentation distinguishes exact selection, correct routing, and substantive compliance.
+  All applied obligations require exact-candidate evidence, while digest, route, and evidence-
+  membership checks do not claim that arbitrary standards prose was exhaustively interpreted or
+  that cited evidence is substantively adequate.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added
 
 - Real resident tmux sessions for the Validator, Orchestrator, Coder, and Tester. Codex author
-  lanes use standalone repositories with lane-local Git metadata, receive the narrow `.git` write
-  profile needed to inspect and checkpoint their own work, audit their delta before committing,
+  lanes use standalone repositories with lane-local Git metadata and receive a lane-scoped write
+  profile that includes all of that local `.git`, so they can inspect and checkpoint their own
+  work and audit their delta before committing. The lane owns its local branch and history;
+  isolation is at the standalone-repository boundary, not a restricted Git ref namespace. They
   retain the actual resumable thread identity, and export only a bounded plain-file candidate for
   host review. Agent commits are useful checkpoints; the host still judges frozen bytes.
 - A typed, bidirectional lane-question protocol. A Coder or Tester can block on an occurrence-bound
-  specification question; only the Validator can bind and deliver the answer back into the same
-  conversation, while the Orchestrator may issue status probes but cannot invent semantics.
+  specification question retained directly from the completed Codex assistant-message event;
+  only the Validator can bind and deliver the answer back into the same conversation, while the
+  Orchestrator may issue status probes but cannot invent semantics.
 - Typed liveness observations for resident sessions. Silence is `unknown`, a pending question is
   `waiting-on-validator`, and the supervisors use tmux plus the resumable status channel instead
   of pretending elapsed-output heuristics distinguish reasoning from I/O hangs.

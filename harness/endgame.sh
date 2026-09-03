@@ -100,6 +100,11 @@ if ! python3 "$D/agreement_contract.py" verify-evidence --root "$ROOT" \
   --artifacts "$ROOT/artifacts" --candidate-sha "$SHA"; then
   AGREEMENT_EVIDENCE_GREEN=0
 fi
+GUIDANCE_EVIDENCE_GREEN=1
+if ! python3 "$D/run_guidance.py" verify-evidence --root "$ROOT" \
+  --artifacts "$ROOT/artifacts" --candidate-sha "$SHA"; then
+  GUIDANCE_EVIDENCE_GREEN=0
+fi
 
 RESOURCE_ID="endgame-checkout-${SHA:0:12}-$$"
 FRESH="$ROOT/endgame/$RESOURCE_ID"
@@ -142,6 +147,14 @@ if [ "$AGREEMENT_EVIDENCE_GREEN" -eq 1 ]; then
 else
   say "== cross-path agreement evidence =="
   say "   exact-subject agreement evidence: RED"
+  FAILED=1
+fi
+if [ "$GUIDANCE_EVIDENCE_GREEN" -eq 1 ]; then
+  say "== selected run-guidance evidence =="
+  say "   exact obligation evidence: GREEN"
+else
+  say "== selected run-guidance evidence =="
+  say "   exact obligation evidence: RED"
   FAILED=1
 fi
 gate() {
@@ -241,8 +254,92 @@ done <<<"$ACTIVE_ROWS"
 
 say "== sole harness close (Gate L) =="
 if [ "$FAILED" -eq 0 ]; then
-  if FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
-       "$D/promote.sh" "$RUN" --runs "$FACTORY_RUNS_ROOT"; then
+  ENDGAME_ADMISSION=$(python3 - "$ROOT" "$RUN" "$SHA" "$CANDIDATE_RESOURCE" \
+    "$FACTORY_TARGET_STATE_DIGEST" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+
+root = pathlib.Path(sys.argv[1])
+run, candidate, resource, target_state = sys.argv[2:]
+harness_path = root / "harness.json"
+fd = os.open(
+    harness_path,
+    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+)
+try:
+    metadata = os.fstat(fd)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64 * 1024:
+        raise SystemExit("endgame: harness metadata is not a bounded regular file")
+    harness = json.loads(os.read(fd, 64 * 1024 + 1))
+finally:
+    os.close(fd)
+if "agreement_contract_version" not in harness:
+    print("")
+    raise SystemExit(0)
+subject = dict(harness)
+for field in ("closed_at", "promotion_verdict", "promotion_verdict_digest"):
+    subject.pop(field, None)
+subject["status"] = "open"
+subject_raw = json.dumps(subject, sort_keys=True, separators=(",", ":")).encode()
+body = {
+    "schema_version": "factory-endgame-admission/1",
+    "run_id": run,
+    "candidate_sha": candidate,
+    "candidate_resource": resource,
+    "target_state_digest": target_state,
+    "harness_subject_digest": "sha256:" + hashlib.sha256(subject_raw).hexdigest(),
+    "checks": [
+        "agreement-evidence",
+        "guidance-evidence",
+        "full-gate-suite",
+        "isolation-proof",
+        "live-proof",
+        "target-state",
+        "resource-hygiene",
+    ],
+    "issued_by": "endgame.sh",
+}
+raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+path = root / "endgame" / f"gate-l-{candidate}.json"
+try:
+    out = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+except FileExistsError:
+    existing = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        installed = os.fstat(existing)
+        if not stat.S_ISREG(installed.st_mode) or os.read(existing, len(raw) + 1) != raw:
+            raise SystemExit("endgame: retained Gate-L admission has conflicting bytes")
+    finally:
+        os.close(existing)
+else:
+    with os.fdopen(out, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    parent = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+print(path)
+PY
+  ) || {
+    say "   Gate L: RED — green endgame admission could not be retained"
+    FAILED=1
+    ENDGAME_ADMISSION=""
+  }
+  PROMOTE_ARGS=("$RUN" --runs "$FACTORY_RUNS_ROOT")
+  [ -z "$ENDGAME_ADMISSION" ] || \
+    PROMOTE_ARGS+=(--endgame-admission "$ENDGAME_ADMISSION")
+  if [ "$FAILED" -eq 0 ] && \
+     FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
+       "$D/promote.sh" "${PROMOTE_ARGS[@]}"; then
     say "   Gate L: GREEN"
   else
     say "   Gate L: RED"; FAILED=1

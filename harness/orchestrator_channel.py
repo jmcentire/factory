@@ -33,6 +33,12 @@ from lane_dialogue import (  # noqa: E402
     LaneDialogueError,
     pending_questions,
 )
+from run_guidance import (  # noqa: E402
+    RunGuidanceError,
+)
+from run_guidance import (  # noqa: E402
+    assessment_state as guidance_assessment_state,
+)
 
 
 class OrchestratorChannelError(RuntimeError):
@@ -40,9 +46,11 @@ class OrchestratorChannelError(RuntimeError):
 
 
 _ACTIVITY_SCHEMA = "factory-orchestrator-activity/1"
-_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/2"
+_LEGACY_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/2"
+_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/3"
 _REPORT_SCHEMA = "factory-orchestrator-report/1"
 _KIN_ID = re.compile(r"^[0-9a-f]{12}$")
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ACTIVITY_KINDS = frozenset(
     {
         "pane_delta",
@@ -69,6 +77,9 @@ _COMPLEXITY_DRIVERS = frozenset({"intrinsic", "interaction", "assumption"})
 _HOTSPOT_DISPOSITIONS = frozenset({"confirmed-required", "derived-constraint", "question-required"})
 _JUDGING_PASS_STATES = frozenset({"not-started", "active", "complete"})
 _HARNESS_STATES = frozenset({"open", "closed", "no"})
+_GUIDANCE_STATES = frozenset(
+    {"none", "pending-application", "routing-verified", "evidence-complete", "noncompliant"}
+)
 _FALSE_CLOSE = re.compile(
     r"\b(?:run\s+(?:is\s+|[A-Za-z0-9._/-]+\s+is\s+)?|officially\s+)"
     r"(?:closed|complete|completed|done|finished)\b",
@@ -374,7 +385,7 @@ def activity_highwater(root: pathlib.Path) -> int:
         return _validate_activity_rows(_read_jsonl(directory / "activity.jsonl"))
 
 
-def _read_harness_state(root: pathlib.Path) -> str:
+def _read_harness(root: pathlib.Path) -> dict[str, Any]:
     path = root / "harness.json"
     try:
         descriptor = os.open(
@@ -400,7 +411,67 @@ def _read_harness_state(root: pathlib.Path) -> str:
             os.close(descriptor)
     if not isinstance(document, dict) or document.get("status") not in _HARNESS_STATES:
         raise OrchestratorChannelError("harness status is missing or invalid")
-    return str(document["status"])
+    return document
+
+
+def _guidance_expected(root: pathlib.Path, harness: Mapping[str, Any]) -> dict[str, Any] | None:
+    if "guidance_contract_version" not in harness:
+        return None
+    try:
+        return guidance_assessment_state(root, root / "artifacts")
+    except (OSError, RunGuidanceError) as exc:
+        raise OrchestratorChannelError(f"run guidance state cannot be derived: {exc}") from exc
+
+
+def _nullable_digest(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise OrchestratorChannelError(f"assessment {field} must be null or a sha256 digest")
+    return value
+
+
+def _guidance_fields(value: Mapping[str, Any]) -> dict[str, Any]:
+    state = value.get("guidance_state")
+    if state not in _GUIDANCE_STATES:
+        raise OrchestratorChannelError("assessment has an invalid guidance_state")
+    selection = _nullable_digest(
+        value.get("guidance_selection_digest"), field="guidance_selection_digest"
+    )
+    application = _nullable_digest(
+        value.get("guidance_application_digest"), field="guidance_application_digest"
+    )
+    evidence = _nullable_digest(
+        value.get("guidance_evidence_digest"), field="guidance_evidence_digest"
+    )
+    findings = _text_list(value.get("guidance_findings"), field="guidance_findings")
+    if findings != sorted(set(findings)):
+        raise OrchestratorChannelError("assessment guidance_findings must be sorted and unique")
+    if state == "none" and any(item is not None for item in (selection, application, evidence)):
+        raise OrchestratorChannelError("none guidance state cannot carry digests")
+    if state == "pending-application" and (
+        selection is None or application is not None or evidence is not None or findings
+    ):
+        raise OrchestratorChannelError("pending guidance state has inconsistent evidence")
+    if state == "routing-verified" and (
+        selection is None or application is None or evidence is not None or findings
+    ):
+        raise OrchestratorChannelError("routing-verified guidance state has inconsistent evidence")
+    if state == "evidence-complete" and (
+        selection is None or application is None or evidence is None or findings
+    ):
+        raise OrchestratorChannelError("evidence-complete guidance state has inconsistent evidence")
+    if state == "noncompliant" and not findings:
+        raise OrchestratorChannelError("noncompliant guidance state must identify a finding")
+    if state != "noncompliant" and findings:
+        raise OrchestratorChannelError("only noncompliant guidance state may carry findings")
+    return {
+        "state": state,
+        "selection_digest": selection,
+        "application_digest": application,
+        "evidence_digest": evidence,
+        "findings": findings,
+    }
 
 
 def _validate_assessment(
@@ -409,10 +480,11 @@ def _validate_assessment(
     highwater: int,
     current_harness_state: str | None = None,
     pending_lane_questions: Sequence[str] = (),
+    guidance_expected: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise OrchestratorChannelError("assessment must be an object")
-    expected = {
+    base_fields = {
         "schema_version",
         "through_cursor",
         "ultimate_goal",
@@ -450,8 +522,32 @@ def _validate_assessment(
         "kindex_context",
         "kindex_basis",
     }
-    if set(value) != expected or value.get("schema_version") != _ASSESSMENT_SCHEMA:
+    guidance_fields = {
+        "guidance_state",
+        "guidance_selection_digest",
+        "guidance_application_digest",
+        "guidance_evidence_digest",
+        "guidance_findings",
+    }
+    schema = value.get("schema_version")
+    if schema == _LEGACY_ASSESSMENT_SCHEMA:
+        expected = base_fields
+    elif schema == _ASSESSMENT_SCHEMA:
+        expected = base_fields | guidance_fields
+    else:
+        expected = set()
+    if set(value) != expected:
         raise OrchestratorChannelError("assessment has unknown or missing fields")
+    checked_guidance: dict[str, Any] | None = None
+    if schema == _ASSESSMENT_SCHEMA:
+        checked_guidance = _guidance_fields(value)
+    if guidance_expected is not None:
+        if checked_guidance is None:
+            raise OrchestratorChannelError("current run requires assessment/3 guidance evidence")
+        if checked_guidance != dict(guidance_expected):
+            raise OrchestratorChannelError(
+                "assessment guidance state differs from the retained run record"
+            )
     cursor = value.get("through_cursor")
     if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 1 or cursor > highwater:
         raise OrchestratorChannelError("assessment through_cursor is outside the activity journal")
@@ -566,6 +662,8 @@ def _validate_assessment(
         or bool(findings)
         or bool(simplification_questions)
         or planning_mode == "clarify"
+        or bool(checked_guidance and checked_guidance["state"] == "noncompliant")
+        or bool(checked_guidance and checked_guidance["findings"])
     )
     if should_block and decision != "block":
         raise OrchestratorChannelError("a divergent or non-adherent assessment must block")
@@ -655,11 +753,13 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
             )
         except LaneDialogueError as exc:
             raise OrchestratorChannelError(f"lane dialogue is invalid: {exc}") from exc
+        harness = _read_harness(root)
         assessment = _validate_assessment(
             value,
             highwater=highwater,
-            current_harness_state=_read_harness_state(root),
+            current_harness_state=str(harness["status"]),
             pending_lane_questions=pending,
+            guidance_expected=_guidance_expected(root, harness),
         )
         report_path = directory / "reports.jsonl"
         existing = _read_jsonl(report_path)
@@ -714,6 +814,31 @@ def resident_mode(root: pathlib.Path) -> bool:
     return isinstance(metadata, dict) and metadata.get("orchestrator_mode") == "resident-monitoring"
 
 
+def _latest_assessment(rows: Sequence[Mapping[str, object]]) -> Mapping[str, Any] | None:
+    if not rows:
+        return None
+    value = rows[-1].get("assessment")
+    return value if isinstance(value, dict) else None
+
+
+def _require_current_guidance(
+    root: pathlib.Path,
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, Any] | None:
+    harness = _read_harness(root)
+    expected = _guidance_expected(root, harness)
+    if expected is None:
+        return None
+    latest = _latest_assessment(rows)
+    if latest is None or latest.get("schema_version") != _ASSESSMENT_SCHEMA:
+        raise OrchestratorChannelError("current run has no assessment/3 guidance evidence")
+    if _guidance_fields(latest) != expected:
+        raise OrchestratorChannelError(
+            "resident Orchestrator guidance assessment is stale against the run record"
+        )
+    return expected
+
+
 def require_current(root: pathlib.Path) -> tuple[int, int]:
     """Refuse a resident-mode transition whose complete activity stream is unassessed."""
 
@@ -722,10 +847,9 @@ def require_current(root: pathlib.Path) -> tuple[int, int]:
         return 0, 0
     with _channel_lock(root) as directory:
         highwater = _validate_activity_rows(_read_jsonl(directory / "activity.jsonl"))
-        reported = _validate_report_rows(
-            _read_jsonl(directory / "reports.jsonl"),
-            highwater=highwater,
-        )
+        report_rows = _read_jsonl(directory / "reports.jsonl")
+        reported = _validate_report_rows(report_rows, highwater=highwater)
+        _require_current_guidance(root, report_rows)
     if highwater < 1 or reported != highwater:
         raise OrchestratorChannelError(
             f"resident Orchestrator is not current: activity={highwater} assessed={reported}"
@@ -742,16 +866,33 @@ def require_through(root: pathlib.Path, cursor: int) -> int:
     if not resident_mode(root):
         return 0
     with _channel_lock(root) as directory:
-        highwater = _validate_activity_rows(_read_jsonl(directory / "activity.jsonl"))
-        reported = _validate_report_rows(
-            _read_jsonl(directory / "reports.jsonl"),
-            highwater=highwater,
-        )
+        activity_rows = _read_jsonl(directory / "activity.jsonl")
+        highwater = _validate_activity_rows(activity_rows)
+        report_rows = _read_jsonl(directory / "reports.jsonl")
+        reported = _validate_report_rows(report_rows, highwater=highwater)
+        guidance = _require_current_guidance(root, report_rows)
     if cursor > highwater:
         raise OrchestratorChannelError("required cursor is beyond the activity journal")
     if reported < cursor:
         raise OrchestratorChannelError(
             f"resident Orchestrator has not assessed checkpoint {cursor}: assessed={reported}"
+        )
+    checkpoint = next(row for row in activity_rows if row.get("cursor") == cursor)
+    kind = checkpoint.get("kind")
+    if guidance is not None and kind == "pre_dispatch" and guidance["state"] not in {
+        "none",
+        "routing-verified",
+        "evidence-complete",
+    }:
+        raise OrchestratorChannelError(
+            f"selected run guidance is not routing-verified before dispatch: {guidance['state']}"
+        )
+    if guidance is not None and kind == "pre_verdict" and guidance["state"] not in {
+        "none",
+        "evidence-complete",
+    }:
+        raise OrchestratorChannelError(
+            f"selected run guidance is not evidence-complete before verdict: {guidance['state']}"
         )
     return reported
 

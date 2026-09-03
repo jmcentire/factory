@@ -560,19 +560,14 @@ class Dispatcher:
         if cursor <= self.last_delivered_cursor:
             return
         start = self.last_delivered_cursor + 1
-        journal = self.root / "orchestrator" / "activity.jsonl"
-        report = self.root / "orchestrator" / f"assessment-{cursor}.json"
-        channel = self.root / "orchestrator" / "bin" / "orchestrator_channel.py"
+        report = f"orchestrator/assessment-{cursor}.json"
         message = (
-            f"FACTORY_ACTIVITY cursors={start}..{cursor} journal={journal}. "
-            "Consume EVERY record in that range (no semantic filtering), inspect the full run "
-            "record, and use Kindex as normalized bite-sized work and experiment state rather "
-            "than a prompt dump. Challenge requirement provenance and disproportionate "
-            "complexity before decomposing; then reassess ambiguity, chunk/model routing, causal "
-            "discriminators, and exact harness lifecycle state; update OUTSTANDING-WORK.md, "
-            "then write the closed assessment/2 "
-            f"to {report} and run: python3 {channel} "
-            f"report --root {self.root} --input {report}. Decide only block or no-op; never grant."
+            f"FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
+            "in that range from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's "
+            "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
+            f"assessment/3 to {report}, then submit: python3 "
+            f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
+            "Decide only block or no-op; never grant or close."
         )
         environment = dict(os.environ)
         environment.update(

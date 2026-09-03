@@ -50,7 +50,7 @@ THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
   exit 70
 }
 
-read -r REPOSITORY AGENT < <("$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
+exec 3< <("$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 run, lane = sys.argv[2:]
@@ -61,9 +61,20 @@ active = [
 ]
 if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
-print(active[0]["repository"], active[0]["agent"])
+values = (active[0].get("repository"), active[0].get("agent"))
+if any(not isinstance(value, str) or "\0" in value for value in values):
+    raise SystemExit("lane-message: retained launch fields are malformed")
+for value in values:
+    sys.stdout.buffer.write(value.encode("utf-8") + b"\0")
 PY
 )
+IFS= read -r -d '' REPOSITORY <&3 || {
+  echo "lane-message: retained repository is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' AGENT <&3 || {
+  echo "lane-message: retained agent is missing or malformed" >&2; exit 70;
+}
+exec 3<&-
 case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: unsupported retained agent" >&2; exit 70 ;; esac
 
 MESSAGE_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-message.XXXXXX")"
@@ -176,10 +187,10 @@ if [ "$PANE_DEAD" = "0" ]; then
 elif [ "$PANE_DEAD" = "1" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
   SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
-  printf -v RESUME_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %q -' \
+  printf -v RESUME_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %q -' \
     "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$LOCAL_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$THREAD_ID"
   tmux respawn-pane -k -t "$RUN:$LANE" -c "$REPOSITORY" "$RESUME_CMD"
   TRANSPORT="resume"

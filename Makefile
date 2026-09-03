@@ -137,7 +137,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/agreement_contract.py harness/agreement_probe.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/lane_dialogue.py harness/lane_repository.py harness/orchestrator_channel.py \
-		harness/semantic_union.py \
+		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
 		harness/supervise_advisory.py harness/watchdog.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
@@ -145,7 +145,7 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/agreement_contract.py harness/agreement_probe.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/lane_dialogue.py harness/lane_repository.py harness/orchestrator_channel.py \
-		harness/semantic_union.py \
+		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
 		harness/supervise_advisory.py harness/watchdog.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)

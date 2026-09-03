@@ -234,10 +234,10 @@ PY
   fi
   THREAD_FILE="$TMUX_ROOT/$ROLE-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$ROLE-codex-events.jsonl"
-  printf -v LANE_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -' \
+  printf -v LANE_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -' \
     "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$LOCAL_ARGS" "$REPOSITORY" \
+    "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$ROLE" "$LOCAL_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY"
 
   tmux set-option -t "$RUN" remain-on-exit on >/dev/null

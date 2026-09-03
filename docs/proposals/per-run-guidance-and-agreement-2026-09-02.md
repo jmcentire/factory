@@ -51,11 +51,13 @@ compilation discipline; they do not share a publication or rollback unit.
    guidance regions before deriving the enumerated Product requirement set, then emits the
    agreement region, with disjoint markers and a fixed total order. Byte-exact verification
    refuses a stale, hand-edited, missing, or extra member. Thus those three artifacts remain the
-   only intent authorities. A recipe is mechanism rather than intent: an applied recipe must bind
-   a qualified Pattern Catalog entry and exact Build Plan step. Standards that claim product
-   compliance must bind ratified acceptance-obligation IDs. Process loops bind named process
-   checkpoints. `not-applicable` is visible in a ratified authority and is never an unrecorded
-   omission.
+   only intent authorities. An applied behavioral item binds named acceptance obligations, a
+   procedural item binds named process checkpoints, and a constructional item binds named
+   Architecture/Testing conformance requirements. These bindings become real through the
+   generated and ratified authority regions; they do not pretend that a syntactically valid ID
+   resolves to a Pattern Catalog or Build Plan artifact which may not yet exist. If a later build
+   plan uses a qualified pattern, the ordinary build-plan verifier owns that separate claim.
+   `not-applicable` is visible in a ratified authority and is never an unrecorded omission.
 3. **Small role projections.** Validator and resident Orchestrator can inspect the complete
    retained selection. Coder and Tester receive only applied obligations scoped to their role.
    The Tester projection is constructed from exact `behavioral` obligations only; it never
@@ -74,13 +76,11 @@ compilation discipline; they do not share a publication or rollback unit.
    noncompliant state forces the Orchestrator's monotone block. The host independently verifies
    application at Phase 1 and exact evidence membership before endgame. Assessment
    state is re-derived from the exact selection, application, and evidence digests rather than
-   accepted as an Orchestrator claim. A selection-digest change starts a fresh generation at
-   `pending-application`; application and evidence from the prior digest is
-   non-transferable. This reset is the deliberate non-monotone exception; grant effects remain
-   monotone. The Orchestrator judges whether mechanically complete routing is semantically
-   appropriate. Findings and blocks are run-scoped and monotone across generations. A superseding
-   selection names its predecessor and must disposition inherited findings; changing the selector
-   can invalidate evidence but can never erase a prior block.
+   accepted as an Orchestrator claim. The Orchestrator judges whether mechanically complete routing
+   is semantically appropriate. The checkpoint-selected set is immutable after ignition; changing
+   selection creates a new externally checkpointed run rather than silently changing the meaning
+   of one underway. Findings and blocks therefore stay run-scoped and monotone without an
+   unsupported in-place selection-reset path.
 5. **Agreement contract.** Add a derived `factory-agreement-contract/1` beside the Testing and
    Monitoring Strategy. For runs ignited with `agreement_contract_version` set to this schema, it
    has exactly one entry for every requirement in the complete Product Specification after all
@@ -117,7 +117,7 @@ external checkpoint configuration
   -> exact selected documents + selection manifest
   -> Validator application record
   -> generated sections in the three ratified authorities
-  -> role-specific projection / Pattern Catalog / acceptance obligations
+  -> role-specific projection / generated acceptance, process, and conformance routes
   -> Validator evidence + resident Orchestrator assessment
   -> Phase 1 and endgame refusal gates
 ```
@@ -134,15 +134,15 @@ external checkpoint configuration
   or observable behavior is labelled constructional. Projection rules prevent constructional
   text reaching the Tester, while the application record requires a concrete classification
   basis in both directions. Independent adversarial review owns the semantic classification; the
-  host proves only routing. Constructional items remain visible as
-  `routed-and-structurally-untested` in the evidence record.
+  host proves only routing. Every applied constructional item still requires exact-candidate
+  conformance evidence before verdict.
 - **`routed` — standard lacks real compliance.** A selected behavioral standard has an acceptance
   route but its test does not reach the requirement. Exact membership keeps the run short of
   `evidence-complete`; Validator oracle-quality review and independent adversarial review own the
   substantive adequacy question. The route alone is never described as compliance.
 - **`routed` — inappropriate application.** The Orchestrator and independent reviewer examine
-  every subject classification, classification basis, `not-applicable`, structural-residue claim,
-  and routing choice. A semantic finding creates a monotone run-scoped block. The host does not
+  every subject classification, classification basis, `not-applicable` disposition, and routing
+  choice. A semantic finding creates a monotone run-scoped block. The host does not
   claim hashes understand standards prose.
 - **`disclosed` — bounded-manual inventory.** When no mechanical participant inventory exists,
   the exact inventory artifact, limitation, closure class, and criticality disposition live in
@@ -174,8 +174,9 @@ compliance.
 
 - Product Specification, Architecture Specification, and Testing and Monitoring Strategy remain
   the only product/architecture/testing intent authorities.
-- Recipes remain qualified construction mechanisms and disposable Build Plan IR; selection alone
-  never qualifies or authorizes a recipe.
+- A selected recipe remains guidance until its obligation is compiled and human-ratified in the
+  existing Architecture/Testing authorities. Selection alone never creates intent or claims that
+  an external Pattern Catalog/Build Plan referent has resolved.
 - The guidance selector must be externally checkpoint-bound, content-addressed, stable-read,
   bounded, canonical, and per-run/per-generation. There is no ambient override.
 - Coder and Tester independence remains intact; Tester never receives a whole guidance document or
@@ -205,9 +206,6 @@ compliance.
 - **Load-bearing:** run authors can express the portions of an arbitrary standards document they
   intend to apply as stable obligations. Factory cannot soundly infer complete normative meaning
   from arbitrary prose without another reviewed extraction step.
-- **Load-bearing:** qualified Pattern Catalog, Build Plan, and ratified acceptance-obligation
-  catalog artifacts are available before a selected recipe or compliance standard is called
-  routing-verified.
 - Phase artifacts can host deterministic generated sections before their ratification digests are
   written, as the semantic-evidence union already does.
 - The existing task digest and retained runner task make a generated role projection part of the
@@ -225,9 +223,13 @@ compliance.
   Omitted normative content is not refused by this version; it is a `disclosed` recall risk in the
   run record. No failure-mode language promotes that disclosure into a mechanical guarantee.
 - A digest proves byte identity, not correctness, authorship, or applicability.
-- A qualified-pattern/build-step binding proves only that a recipe was routed through a qualified
-  mechanism. It does not prove the produced implementation conformed to the recipe. Conformance is
-  an explicit adversarial-review subject and is never implied by `routing-verified`.
+- The independent-review record binds the exact application row but its reviewer identity is
+  asserted audit text, not a cryptographically authenticated principal. The control refuses stale
+  or self-labelled Validator review; it does not prove who operated the independent seat.
+- A generated conformance route proves only that the recipe obligation was placed in the correct
+  authority and evidence plan. It does not prove the produced implementation conformed to the
+  recipe. Exact-candidate evidence plus Validator, independent-reviewer, and Orchestrator judgment
+  own that claim; `routing-verified` never implies it.
 - The agreement register proves that a test plan names composition; it does not by itself prove a
   future test genuinely reaches the live relationship. Existing receipts, mutation runs, Phase-C
   reading, and adversarial review provide that evidence.
@@ -246,8 +248,8 @@ compliance.
    boundary and creates precedence questions whenever a standard and ratified product decision
    disagree.
 3. **Put everything in the global directive ledger.** Rejected: it is not naturally per-run,
-   makes recipe mechanisms look like behavioral directives, and cannot bind Build Plan or
-   acceptance evidence.
+   makes recipe mechanisms look like behavioral directives, and cannot disposition applicability
+   or bind exact-candidate evidence.
 4. **Require only more end-to-end tests.** Rejected: “more” does not name the relationship and can
    reproduce the 173/173 failure. The subject must be a declared cross-path contract with two-way
    asymmetric drift.

@@ -112,7 +112,14 @@ def note(value):
             stream.write(value + "\\n")
 
 if verb == "verify-resume-checkpoint":
-    print(json.dumps({"verified": True, "test_fixture": True}))
+    configuration_digests = {}
+    for index, value in enumerate(sys.argv):
+        if value == "--config-source":
+            name, path = sys.argv[index + 1].split("=", 1)
+            configuration_digests[name] = "sha256:" + hashlib.sha256(
+                pathlib.Path(path).read_bytes()
+            ).hexdigest()
+    print(json.dumps({"configuration_digests": configuration_digests}))
     raise SystemExit(0)
 if verb in {
     "status",
@@ -1437,6 +1444,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
     assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
     assert harness["agreement_requirement_region_families"] == ["authored-product"]
+    assert harness["guidance_contract_version"] == "factory-run-guidance/1"
+    assert harness["guidance_generation"] == 1
+    assert harness["guidance_state"] == "none"
+    assert harness["guidance_selection_digest"] is None
+    assert harness["guidance_source_digests"] == {}
     assert (root / "TASK.md").read_text() == task
     assert "repo" not in harness and "base_sha" not in harness
     tmux_calls = tmux_log.read_text()
@@ -1446,13 +1458,16 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert "agy --new-project --sandbox" in tmux_calls
     assert "--new-project" in tmux_calls
     assert "--prompt-interactive" in tmux_calls
+    assert "--disable-slash-commands" not in tmux_calls
     assert "agy -p" not in tmux_calls and "agy --print" not in tmux_calls
     assert "-n validator" in tmux_calls and "-n ctl" in tmux_calls
     orchestrator_bin = root / "orchestrator" / "bin"
     assert {path.name for path in orchestrator_bin.iterdir()} == {
+        "agreement_contract.py",
         "attention_gate.py",
         "lane_dialogue.py",
         "orchestrator_channel.py",
+        "run_guidance.py",
     }
     imported = subprocess.run(
         [sys.executable, str(orchestrator_bin / "orchestrator_channel.py"), "--help"],
@@ -1566,7 +1581,7 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread(
         harness_status="open",
     )
     env, tmux_log = factory_ignition_env(tmp_path, root)
-    lane = tmp_path / "standalone-tester"
+    lane = tmp_path / "standalone tester"
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
@@ -1867,8 +1882,20 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     command, kwargs = invocations[0]
     assert command[1:3] == ["r1", "orchestrator"]
     assert "cursors=1..2" in command[3]
-    assert "Consume EVERY record" in command[3]
+    assert "Consume EVERY unassessed record" in command[3]
+    assert "orchestrator/ROLE.md" in command[3]
+    assert str(root) not in command[3]
+    assert len(command[3]) < 1_000
     assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
+
+
+def test_resident_checkpoint_notification_cannot_outgrow_default_inject_ceiling() -> None:
+    source = (HARNESS / "orchestrator_checkpoint.sh").read_text(encoding="utf-8")
+    line = next(row for row in source.splitlines() if row.startswith('MESSAGE="FACTORY_CHECKPOINT'))
+
+    assert "$ROOT" not in line
+    assert "orchestrator/ROLE.md" in line
+    assert len(line) < 1_000
 
 
 def test_resident_orchestrator_signal_joins_activity_stream_instead_of_spawning_wake(
@@ -1929,6 +1956,17 @@ def test_dispatcher_registers_a_lane_question_without_guessing_its_answer(
     trigger = json.loads(activity["snapshot"])
     assert trigger["kind"] == "lane_question"
     assert dialogue[0]["question_id"] in trigger["detail"]
+
+
+def test_lane_roles_require_typed_question_before_guessing() -> None:
+    """Both author seats must know the executable channel, not only their supervisors."""
+
+    for role_prompt in ("engineer.md", "test.md"):
+        text = (HARNESS.parent / "prompts" / role_prompt).read_text(encoding="utf-8")
+        assert "FACTORY_QUESTION: <one concrete question>" in text
+        assert "Ask one question at a time and stop" in text
+        assert "same Codex thread" in text
+        assert "guess" in text.lower()
 
 
 def test_dispatcher_does_not_reopen_answered_question_from_unchanged_scrollback(
@@ -2312,6 +2350,30 @@ def test_phase1_gate_refuses_missing_agreement_contract_for_new_run(tmp_path: Pa
 
     assert result.returncode == 71
     assert "agreement plan is absent, stale, incomplete, or downgraded" in result.stdout
+
+
+def test_phase1_gate_refuses_missing_checkpoint_selected_guidance(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    root = tmp / ".factory" / "runs" / "r1"
+    (root / "harness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "factory-harness/2",
+                "run_id": "r1",
+                "guidance_contract_version": "factory-run-guidance/1",
+                "guidance_generation": 1,
+                "guidance_state": "pending-application",
+                "guidance_selection_digest": "sha256:" + "0" * 64,
+                "guidance_source_digests": {"infra-recipe": "sha256:" + "1" * 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "selected guidance is absent, stale, misrouted, or out of order" in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -7404,6 +7466,68 @@ def _run_status(root: Path) -> str:
     return json.loads((root / "harness.json").read_text())["status"]
 
 
+def _add_current_harness_contract(root: Path) -> dict[str, object]:
+    harness_path = root / "harness.json"
+    harness = json.loads(harness_path.read_text(encoding="utf-8"))
+    harness.update(
+        {
+            "orchestrator_mode": "resident-monitoring",
+            "orchestrator_window": "orchestrator",
+            "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
+            "orchestrator_effects": "monotone-block-or-no-op",
+            "orchestrator_boundary": "operator-owned-tmux-unqualified",
+            "orchestrator_cli_version": "agy 1.1.24-test",
+            "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
+            "agreement_contract_version": "factory-agreement-contract/1",
+            "agreement_requirement_region_families": ["authored-product"],
+            "guidance_contract_version": "factory-run-guidance/1",
+            "guidance_generation": 1,
+            "guidance_state": "none",
+            "guidance_selection_digest": None,
+            "guidance_source_digests": {},
+        }
+    )
+    harness_path.write_text(json.dumps(harness, indent=2) + "\n", encoding="utf-8")
+    return harness
+
+
+def _write_green_endgame_admission(root: Path, harness: dict[str, object]) -> Path:
+    subject = dict(harness)
+    subject["status"] = "open"
+    for field in ("closed_at", "promotion_verdict", "promotion_verdict_digest"):
+        subject.pop(field, None)
+    subject_raw = json.dumps(subject, sort_keys=True, separators=(",", ":")).encode()
+    candidate = str(harness["resolved_commit"])
+    path = root / "endgame" / f"gate-l-{candidate}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        json.dumps(
+            {
+                "schema_version": "factory-endgame-admission/1",
+                "run_id": str(harness["run_id"]),
+                "candidate_sha": candidate,
+                "candidate_resource": "target-source",
+                "target_state_digest": str(harness["target_state_digest"]),
+                "harness_subject_digest": digest_bytes(subject_raw),
+                "checks": [
+                    "agreement-evidence",
+                    "guidance-evidence",
+                    "full-gate-suite",
+                    "isolation-proof",
+                    "live-proof",
+                    "target-state",
+                    "resource-hygiene",
+                ],
+                "issued_by": "endgame.sh",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    return path
+
+
 def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     """The happy path: a run with gathered promoting evidence closes through decide_promotion.
     This is the sole harness-close path — promote.sh writes 'closed' iff the verdict allows."""
@@ -7436,6 +7560,112 @@ def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     assert (root / "promotion_verdict.json").exists()
     verdict = json.loads((root / "promotion_verdict.json").read_text())
     assert verdict["allowed"] is True
+
+
+def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
+    tmp_path: Path,
+) -> None:
+    """The current ignition schema must survive the exact Gate-L metadata check."""
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    harness = _add_current_harness_contract(root)
+    admission = _write_green_endgame_admission(root, harness)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+
+    promoted = run(
+        [
+            "bash",
+            str(HARNESS / "promote.sh"),
+            "r1",
+            "--endgame-admission",
+            str(admission),
+        ],
+        tmp_path,
+        _factory_cli_env(),
+    )
+
+    assert promoted.returncode == 0, promoted.stderr
+    assert _run_status(root) == "closed"
+
+
+def test_promote_refuses_current_contract_without_green_endgame_admission(
+    tmp_path: Path,
+) -> None:
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    _add_current_harness_contract(root)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+
+    promoted = run(
+        ["bash", str(HARNESS / "promote.sh"), "r1"],
+        tmp_path,
+        _factory_cli_env(),
+    )
+
+    assert promoted.returncode == 66
+    assert _run_status(root) == "open"
+    assert "must arrive through a green endgame admission" in promoted.stderr
+
+
+def test_promote_refuses_stale_endgame_admission_at_close(tmp_path: Path) -> None:
+    """The admission subject is rechecked under the same lock as the close.
+
+    This exercises the gap between the early route check and the status flip: a
+    concurrent metadata substitution cannot reuse an admission for the former
+    harness subject and still make ``closed`` visible.
+    """
+    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
+
+    root = _make_run(tmp_path)
+    harness = _add_current_harness_contract(root)
+    admission = _write_green_endgame_admission(root, harness)
+    (root / "promotion_inputs.json").write_text(
+        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
+    )
+    write_promoting_chain(root)
+    env = _factory_cli_env()
+    wrapper = tmp_path / "cli_then_stale_harness.sh"
+    wrapper.write_text(
+        "#!/bin/bash\n"
+        f'{env["FACTORY_CLI"]} "$@"\n'
+        "rc=$?\n"
+        'if [ "$1" != "promote" ]; then exit $rc; fi\n'
+        f"python3 - {shlex.quote(str(root / 'harness.json'))} <<'EOF'\n"
+        "import json, pathlib, sys\n"
+        "path = pathlib.Path(sys.argv[1])\n"
+        "doc = json.loads(path.read_text())\n"
+        "doc['task_digest'] = 'sha256:' + ('9' * 64)\n"
+        "path.write_text(json.dumps(doc))\n"
+        "EOF\n"
+        "exit $rc\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    env["FACTORY_CLI"] = str(wrapper)
+
+    promoted = run(
+        [
+            "bash",
+            str(HARNESS / "promote.sh"),
+            "r1",
+            "--endgame-admission",
+            str(admission),
+        ],
+        tmp_path,
+        env,
+    )
+
+    assert promoted.returncode == 72, promoted.stderr
+    assert _run_status(root) == "open"
+    assert "became stale" in promoted.stderr
 
 
 def test_promote_never_erases_a_terminal_no_recorded_during_close(tmp_path: Path) -> None:
@@ -7629,14 +7859,20 @@ def test_promote_is_sole_writer_of_closed() -> None:
 
 
 def test_endgame_routes_only_a_fully_green_run_through_gate_l() -> None:
-    """Live close wiring is structural: endgame owns the call, but never owns the verdict."""
+    """Endgame alone issues the current-contract admission consumed by Gate L."""
 
     text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
-    invocation = '"$D/promote.sh" "$RUN" --runs "$FACTORY_RUNS_ROOT"'
+    invocation = '"$D/promote.sh" "${PROMOTE_ARGS[@]}"'
     assert invocation in text
     assert text.index(invocation) > text.index("== exact-subject and run-owned-resource hygiene")
-    assert text.index(invocation) < text.index('python3 - "$ROOT" "$RUN" "$SHA"')
+    verdict_writer = (
+        'python3 - "$ROOT" "$RUN" "$SHA" "$CANDIDATE_RESOURCE" "$FAILED"'
+    )
+    assert text.index(invocation) < text.index(verdict_writer)
     assert 'if [ "$FAILED" -eq 0 ]; then' in text[text.index("== sole harness close") :]
+    admission = 'PROMOTE_ARGS+=(--endgame-admission "$ENDGAME_ADMISSION")'
+    assert admission in text
+    assert text.index(admission) < text.index(invocation)
 
     missing_target_branch = text[
         text.index('if [ -f "$TARGET_CONF" ]') : text.index(
@@ -8010,7 +8246,7 @@ def _unattributed_refusal_exits(
     return unattributed
 
 
-_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70|71)(?!\d)|"\$rc")'
+_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70|71|72)(?!\d)|"\$rc")'
 _ENDGAME_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:70(?!\d)|"\$rc")'
 
 

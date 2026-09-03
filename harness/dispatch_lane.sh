@@ -377,6 +377,23 @@ FENCE="You are the $ROLE lane. One pen only: you hold implementation OR tests, n
 TASK_FILE="$ROOT/runner-tasks/$ROLE.md"
 TASK_INPUTS=("$DISPATCH_TASK")
 TASK_LABELS=("FROZEN DISPATCH")
+GUIDANCE_PROJECTION="$RUNNER_EVIDENCE/run-guidance.json"
+GUIDANCE_RESULT=$(python3 "$D/run_guidance.py" projection --root "$ROOT" \
+  --artifacts "$ART" --role "$ROLE" --output "$GUIDANCE_PROJECTION") || \
+  fail "run-guidance projection was refused"
+GUIDANCE_REQUIRED=$(printf '%s' "$GUIDANCE_RESULT" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+if set(value) != {"digest", "path", "required", "schema_version"}:
+    raise SystemExit(1)
+if value["schema_version"] != "factory-run-guidance-projection/1":
+    raise SystemExit(1)
+print("true" if value["required"] is True else "false")
+') || fail "run-guidance projection result was malformed"
+if [ "$GUIDANCE_REQUIRED" = true ]; then
+  TASK_INPUTS+=("$GUIDANCE_PROJECTION")
+  TASK_LABELS+=("SELECTED RUN GUIDANCE — ROLE PROJECTION")
+fi
 if [ "$RECOVER_EXISTING_FAILURE" -eq 0 ]; then
   python3 - "$PROJECTION_RECEIPT" "$PROJ" <<'PY' || \
     fail "projection receipt could not be frozen"
@@ -416,6 +433,7 @@ PY
 else
   PROJ=$(PYTHONPATH="$D/.." python3 - \
     "$PROJECTION_RECEIPT" "$MODEL_PROJECTION" "$WS" "$TASK_FILE" "$DISPATCH_TASK" \
+    "$GUIDANCE_PROJECTION" "$GUIDANCE_REQUIRED" \
     "$ROLE" "$FENCE" "$RUN" "$FACTORY_GENERATION" "$FACTORY_TARGET_STATE_DIGEST" \
     "$FACTORY_BASE_COMMIT" "$FACTORY_BASE_TREE" "$FACTORY_SOURCE_ROOT" <<'PY'
 import json, pathlib, sys
@@ -425,7 +443,8 @@ from factory_runtime.state_admission import read_stable_regular_bytes
 
 (
     receipt_path_text, projection_path_text, workspace_text, task_path_text,
-    dispatch_task_text, role, fence, run_id, generation_text, target_state_digest,
+    dispatch_task_text, guidance_path_text, guidance_required_text,
+    role, fence, run_id, generation_text, target_state_digest,
     resolved_commit, resolved_tree, source_root_text,
 ) = sys.argv[1:]
 receipt_path = pathlib.Path(receipt_path_text)
@@ -488,7 +507,21 @@ except UnicodeDecodeError as exc:
 expected_task = (
     f"# Qualified Factory lane task: {role}\n\n## FENCE\n{fence}\n"
     f"\n## FROZEN DISPATCH\n{dispatch_task}\n"
-).encode("utf-8")
+)
+if guidance_required_text == "true":
+    guidance_raw = read_stable_regular_bytes(
+        pathlib.Path(guidance_path_text),
+        label="run-guidance role projection",
+        max_bytes=4_194_304,
+    )
+    try:
+        guidance = guidance_raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit("run-guidance role projection is not UTF-8") from exc
+    expected_task += "\n## SELECTED RUN GUIDANCE — ROLE PROJECTION\n" + guidance + "\n"
+elif guidance_required_text != "false":
+    raise SystemExit("run-guidance recovery flag is invalid")
+expected_task = expected_task.encode("utf-8")
 task_raw = read_stable_regular_bytes(task_path, label="runner task", max_bytes=5_242_880)
 if task_raw != expected_task:
     raise SystemExit("runner task differs from the current frozen dispatch")

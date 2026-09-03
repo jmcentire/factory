@@ -46,7 +46,7 @@ fi
 
 CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
   --kind "$KIND" --source validator --detail "$DETAIL") || exit $?
-MESSAGE="FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND journal=$ROOT/orchestrator/activity.jsonl. Consume every unassessed row through this cursor, consult the full run record, and use Kindex as normalized bite-sized work state rather than a context dump. Classify goal/direction/consequences/adherence; enumerate apparent requirements; challenge implicit, inherited, or interacting requirements that drive disproportionate complexity; state the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta; and either cite why each hotspot is fixed or raise its simplifying question. Only then classify complexity, latent ambiguity, planning mode, chunk/model routing, causal discriminators, and the exact harness lifecycle status. Update OUTSTANDING-WORK.md and submit assessment/2 with $ROOT/orchestrator/bin/orchestrator_channel.py. Decide only block or no-op; no-op grants nothing and an open run cannot be called closed."
+MESSAGE="FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3, and submit it with orchestrator/bin/orchestrator_channel.py. Decide only block or no-op; never grant or close."
 if ! INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" INJECT_SUBMIT_DELAY=0.1 \
   "$D/inject.sh" "$RUN" orchestrator "$MESSAGE" >/dev/null; then
   echo "orchestrator-checkpoint: resident Orchestrator notification failed" >&2

@@ -15,7 +15,9 @@
 > exists. Build-time gates remain in the `make ship`
 > order (purity → doctrine → authority → harness → denial-probes → lint → typecheck → test).
 > `endgame.sh` invokes Gate L only after deterministic gates, live proof, exact target
-> re-verification, and a terminal run-resource seal. Gate L closes `harness.json`; it does not
+> re-verification, and terminal run-resource hygiene, retaining an exact candidate/run/target/
+> harness-bound green-endgame admission. Gate L requires that receipt for current-contract runs,
+> rechecks it under the close lock, and then seals resources and closes `harness.json`; it does not
 > itself create a RunStore `PROMOTED` transition, although that transition now independently
 > requires and binds the same sealed resource head. The evidence pipeline still does not automatically
 > produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
@@ -138,6 +140,12 @@ is derived—not a long context dump. Its effect set is exactly `{block, no-op}`
 human/Validator disposition; no-op grants nothing and can satisfy no gate. Pre-dispatch and
 pre-verdict checkpoints refuse until a retained assessment covers their activity cursor. The
 assessment's observed harness status must match `harness.json`; it cannot call an open run closed.
+For runs carrying `factory-run-guidance/1`, assessment/3 additionally binds the exact current
+selection, application, evidence, and open-finding state re-derived by the host. The Orchestrator
+reviews classifications, applicability bases, role/authority routing, and substantive evidence;
+it may not rename `routing-verified` as compliance. Pre-dispatch requires routing and pre-verdict
+requires evidence completion. A changed guidance artifact makes the assessment stale even if no
+pane heuristic noticed the change.
 The block effect becomes durable before the report can make its cursor current. It clears only
 through the existing exact-subject blocking-event disposition, followed by new activity and a new
 assessment; clearing the event does not erase outstanding work.
@@ -358,6 +366,24 @@ Testing/Monitoring item. Any change to the
 run, target, catalog, build input, or phase artifacts invalidates it. Coder and Validator receive
 this IR; Tester receives only the common ratified build input.
 
+A per-run guidance selection is likewise not a fourth artifact. The user selects exact
+standards, loops, or recipes by adding a canonical `factory-run-guidance-selection/1` plus every
+named source to the externally anchored resume checkpoint's configuration set. Ignition retains
+those exact bytes using both the accepted source vector and the verifier-returned digest map, so a
+post-verification path substitution refuses. Before ratification, the Validator dispositions every selected obligation,
+states why its subject is behavioral, procedural, or constructional, binds it to the corresponding
+acceptance obligation, process checkpoint, or Architecture/Testing conformance requirement, and obtains an
+independent review of classification and application bound to that exact application row.
+`phase_compiler.py` then renders the
+obligations into only the relevant portions of the three authorities in a fixed order. As a
+worked infrastructure case, “the package main is named X and exposes entrypoint Y” is
+constructional: it binds Architecture and a conformance-evidence route, reaches the Coder, and does
+not become a Tester-visible product behavior unless the human separately ratifies an observable behavior.
+`not-applicable` is a visible ratified disposition, not omission. The generated state is called
+`routing-verified`; substantive compliance needs observations bound to the exact candidate,
+selection, application, obligation, and raw evidence plus independent judgment. The selected set
+is immutable for one run; a different set requires a new external checkpoint and run.
+
 Validation now includes a mandatory adversarial code review over the same immutable evidence, not
 an optional instruction to "look carefully." Before the Validator runs, the host issues a closed
 review subject binding the exact Stage-E execution-request bytes from the externally anchored
@@ -503,10 +529,15 @@ dependency-free (bash + python3 + git):
 - `harness/ground.sh` — verifies the runtime-selected target-state, authority ledger, cadence,
   tripwire, channel list, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
 - `harness/factory.sh` — ignition only after Stage E; verifies exact task bytes and target-state,
+  admits any `factory-run-guidance` selector and its named source documents only from the exact
+  external-resume configuration vector already verified against its independently held digest,
+  and freezes those bytes into the run before metadata names them;
   writes separate coordination metadata, records tmux intent, then opens persistent
   `orchestrator`, interactive `validator`, and deterministic `ctl` windows. The resident Agy
   launch uses `--new-project --prompt-interactive`, never print mode; the explicit new-project
-  launch prevents an unattended project-trust prompt from swallowing the initial brief.
+  launch prevents an unattended project-trust prompt from swallowing the initial brief. It does
+  not pass `--disable-slash-commands`, so host-supported interactive controls such as `/loop`
+  remain available to the resident monitor.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
@@ -523,14 +554,23 @@ dependency-free (bash + python3 + git):
   bounded observed activity snapshot under a monotonic cursor; validate the closed strategic
   assessment (goal, input class, trajectory, side effects, adherence, requirement-pressure
   analysis, planning mode, Kindex-backed chunks, causal discriminators, and exact harness
-  lifecycle state); and admit only
-  `block|no-op`. Dispatch and verdict wait for the checkpoint cursor.
+  lifecycle state plus exact selected-guidance state); and admit only `block|no-op`. Dispatch and
+  verdict wait for the checkpoint cursor and the required routing/evidence state.
 - `harness/semantic_union.py` + `phase1_gate.sh` — discover the closed retained source tree,
   require two separately recorded source-digest-bound extraction manifests, preserve every
   distinct observation, require an exact typed ruling, render the input closure into the Product
   Specification, and refuse missing/open/stale/hand-edited unions before dispatch. The compiler
   enforces post-extraction conservation, not semantic recall, authenticated provenance, or wisdom;
   producer-enrollment coverage remains machine-visible as unknown until its inventory is joined.
+- `harness/run_guidance.py` + `phase_compiler.py` — admit checkpoint-selected standards, loops,
+  and recipes; require exact obligation membership, subject-derived enforcement routes, concrete
+  applicability bases, and independent classification/application reviews; project only applied
+  role-scoped obligations; and render semantic union → guidance → agreement in one deterministic
+  order. Behavioral items enter Product/Testing, procedural items enter Architecture/Testing,
+  and constructional items enter Architecture/Testing as conformance requirements.
+  The controls prove byte identity, exact-row review binding, membership, routing, and
+  exact-candidate observation references—not that arbitrary standards prose was exhaustively
+  interpreted, that reviewer identity is authenticated, or that routed code substantively conforms.
 - `harness/agreement_contract.py` + `agreement_probe.py` — for runs whose ignition metadata names
   `factory-agreement-contract/1`, close an exact participant inventory over the configured Product
   requirement-region families, derive single-path versus cross-path from participant cardinality,
@@ -543,11 +583,14 @@ dependency-free (bash + python3 + git):
   `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
   mode. Preflight requires a standalone repository whose Git/common directory is local and a
   Codex CLI exposing the exact permission/session flags; the retained launch records its version.
-  Codex is launched as the agent harness with a custom permission profile that reopens only
-  `.git` inside that lane. Before each checkpoint the lane inspects its own status/diff, runs
+  Codex is launched as the agent harness with a lane-scoped permission profile that reopens the
+  whole `.git` directory inside that standalone repository. The author owns that local branch and
+  history; Factory claims repository isolation, not per-ref Git ACLs. Before each checkpoint the
+  lane inspects its own status/diff, runs
   relevant checks, and commits only its assigned work. The JSON event wrapper retains the real
-  thread ID, so typed status probes and exact-question answers can queue or resume that
-  conversation. From agent start onward
+  thread ID and records an exact `FACTORY_QUESTION` only from a completed assistant-message event,
+  so question blocking does not depend on lossy pane sampling and typed status probes or answers
+  can queue or resume that conversation. From agent start onward
   the whole repository—including Git hooks and config—is untrusted and host Git is forbidden.
   After the pane is dead, a descriptor-relative bounded walk excludes root `.git`, rejects links,
   special entries, nested Git metadata, portable-name collisions, privileged modes and ceiling
@@ -562,17 +605,28 @@ dependency-free (bash + python3 + git):
   does not declare a filesystem sandbox. Agy/Codex CLI sandboxing remains explicitly unqualified
   as a kernel-enforced read boundary.
 - `harness/endgame.sh` — accepts only an exact candidate SHA in a named run-owned resource,
-  verifies cross-path agreement evidence when the run declared that contract, archives the exact
+  verifies cross-path agreement evidence and every selected run-guidance obligation against that
+  candidate when the run declared those contracts, archives the exact
   object into a recorded endgame worktree, runs ship/isolation/live proof, verifies exact target
-  and terminal resource dispositions, and never inspects or cleans ambient user state.
+  and terminal resource dispositions, then retains the canonical green-endgame admission for
+  that exact candidate and harness subject. It never inspects or cleans ambient user state.
 - `harness/promote.sh` — Gate L harness close, driven only by the pure promotion verdict and its
-  chain-anchor checks. After an allowing verdict it seals the exact terminal resource head. It
-  does not create a RunStore `PROMOTED` transition.
+  chain-anchor checks. A current-contract run also requires the run-local green-endgame admission;
+  the subject is checked before promotion and again under the atomic close lock. After an allowing
+  verdict it seals the exact terminal resource head. It does not create a RunStore `PROMOTED`
+  transition.
+
+The green-endgame admission is a deterministic receipt from the trusted host control script, not
+a signature that defends against a malicious operator who can rewrite the harness or run control
+root. Its purpose is to make the supported current-run close path executable and fail closed:
+agents cannot mint it, `promote.sh` cannot omit it, and an accidental direct promotion call cannot
+stand in for the endgame. The operator and host substrate remain the trust root.
 
 A completed judging pass is not a completed run. `VERDICT: BLOCK`, failing tests, unresolved
 review findings, missing inputs, or a refused Gate L all leave `harness.json` open and route to
 remediation. A run becomes terminal only through Gate L writing `closed` after an allowing
-promotion verdict, or `record_no.sh` writing `no`; ending a model turn, closing a Kindex session
+promotion verdict and, for current runs, a candidate-bound green-endgame admission, or
+`record_no.sh` writing `no`; ending a model turn, closing a Kindex session
 tag, or declaring completion in chat has no lifecycle effect.
 
 The active scripts live in `~/Code/factory/harness/`; tests and the denial-probe registry are the

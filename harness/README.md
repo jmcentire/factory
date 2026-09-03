@@ -38,13 +38,13 @@
 |---|---|
 | 0. Authorize exact execution | Runtime Stage R authorizes bounded target resolution; `resolve-target` creates the exact run-owned target-state; distinct Stage E authorizes the verbatim request against that state. No tmux or lane exists yet. |
 | 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens persistent `orchestrator`, `validator`, and deterministic `ctl` windows. |
-| 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Before decomposition it challenges explicit, implicit, and inherited requirements that disproportionately drive complexity. Retained planning/lane/review sources get two separately recorded, source-bound extraction passes; `semantic_union.py update-spec` materializes every observation and ruling into the Product Specification before artifacts are settled and content-addressed. Phase A refuses an open or stale union. |
+| 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Before decomposition it challenges explicit, implicit, and inherited requirements that disproportionately drive complexity. Retained planning/lane/review sources get two separately recorded, source-bound extraction passes. Any checkpoint-selected standards, loops, and recipes are dispositioned obligation-by-obligation and independently reviewed. `phase_compiler.py` materializes semantic union → guidance → agreement into only the proper authorities before they are settled and content-addressed. Phase A refuses an open, stale, missing, or misrouted member. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
 | 7. Fire up orchestrator, engineer, tester | The strategic Orchestrator is already resident. `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` remains the qualified path: closed dispatch, asymmetric projection, structural qualification, hard ceilings, and signed typed broker operations. `harness/tmux_lane.sh` is the explicitly unqualified dogfood/coordination alternate: it launches a real Codex agent in a standalone repository with agent-owned `.git`, then crosses only a no-Git content-addressed regular-file export. |
-| 8. Orchestrator tracks goal and tasks | `dispatcher.py` appends every bounded sampled pane snapshot and cadence record to `orchestrator/activity.jsonl`; notifications go only to the Orchestrator's own pane. The agent uses Kindex as normalized bite-sized work/experiment state, derives chunk-specific dispatch context, identifies disproportionate requirement/assumption pressure before decomposing, classifies complexity/ambiguity, recommends the least expensive qualified model per chunk, and emits a closed goal/direction/consequence/adherence/lifecycle assessment. `minutes/` remains `[INFERRED]` and non-authoritative. |
+| 8. Orchestrator tracks goal and tasks | `dispatcher.py` appends every bounded sampled pane snapshot and cadence record to `orchestrator/activity.jsonl`; notifications go only to the Orchestrator's own pane. The agent uses Kindex as normalized bite-sized work/experiment state, derives chunk-specific dispatch context, identifies disproportionate requirement/assumption pressure before decomposing, classifies complexity/ambiguity, recommends the least expensive qualified model per chunk, and emits a closed goal/direction/consequence/adherence/lifecycle assessment. Assessment/3 also audits selected-guidance classification, application, N/A bases, routing, evidence, and open findings against host-derived digests. `minutes/` remains `[INFERRED]` and non-authoritative. |
 | 9. Validator dispatches immutable objectives; active poll | Validator dispatches through `dispatch_lane.sh`; unqualified tmux author lanes use `tmux_lane.sh`. A lane emits `FACTORY_QUESTION` instead of guessing. `lane_dialogue.py` binds a Validator answer to that exact lane/question, while either supervisor can issue the generated status probe through `tmux_lane_message.sh`; Codex queue/resume preserves the thread. |
 | Stalls / lulls | In resident tmux mode quiet time emits `liveness_unknown`, never a guessed stall. A lane with a pending typed question is already `waiting-on-validator` and does not raise a liveness alarm. Otherwise Validator and Orchestrator inspect tmux and use the typed status probe; `/loop`, when available, repeats `status.sh`/inspection rather than model attempts. `idle-awaiting-handoff` is healthy and repo-diff metrics remain forbidden. |
-| Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then routes to Gate L. A BLOCK completes only the judging pass; the run stays open. Only Gate L can write `closed`, while `record_no.sh` alone writes terminal `no`. |
+| Done-ness | `endgame.sh <run> <final-sha> --candidate-resource <resource-id> --runs <runs-root>` — accepts only a recorded run-owned candidate, archives the exact object into a recorded endgame worktree, runs deterministic gates and live proof, verifies target/resource closure, then issues the candidate-bound green-endgame admission consumed by Gate L. A direct current-run `promote.sh` call without that admission refuses. A BLOCK completes only the judging pass; the run stays open. Only Gate L can write `closed`, while `record_no.sh` alone writes terminal `no`. |
 | Click-and-test proof | `proof.sh <run>` reads `.factory/target.conf` (see `target.conf.example`): a declared provision script, real entry-point probes (HTTP hits, CLI runs, out-of-band DB checks, screenshot/video captures — each receipted, outputs kept as evidence), access instructions for the human, teardown always. No target.conf = a **declared gap**, never a quiet pass. |
 | Postmortem | `postmortem.py --root .factory/runs/<run>` — derives every number from recorded artifacts or prints UNDERIVED; per-agent feedback collected by the Validator, coordination-vs-build split for the next iteration. |
 
@@ -84,6 +84,76 @@ records are the escape evidence used to measure and improve them. Until producer
 lands, the generated section and CLI summary render
 `producer_enrollment_coverage=unknown-until-producer-inventory-is-joined`; an enrolled union must
 not be presented as whole-run semantic coverage.
+
+## Per-run selected standards, loops, and recipes
+
+The user may add run-specific guidance only through the external resume checkpoint's exact
+configuration set. Add the canonical selector under the reserved name `factory-run-guidance` and
+add every source document under the source name used by that selector. The same complete
+`--config-source NAME=/absolute/path` vector must be supplied when deriving and independently
+verifying the checkpoint; `factory.sh` consumes that verified vector together with the per-source
+digests returned by the verifier, then stable-reads every source against those digests. The paths
+cannot be swapped consistently between checkpoint verification and admission. There is no ambient
+attachment or post-ignition add-on:
+
+```bash
+factory derive-resume-checkpoint ... \
+  --config-source factory-run-guidance=/abs/run-guidance.json \
+  --config-source infra-recipe=/abs/infrastructure-standard.md
+```
+
+The readable shape below shows a construction requirement such as the package's main-module name
+and executable entrypoint. The file on disk must be canonical compact JSON with sorted keys; its
+run id, generation, source digest, document membership, obligation membership, roles, and
+subject-derived authority targets are all exact.
+
+```json
+{
+  "schema_version": "factory-run-guidance-selection/1",
+  "run_id": "example-r1",
+  "generation": 1,
+  "documents": [{
+    "source_name": "infra-recipe",
+    "source_digest": "sha256:<digest-of-infrastructure-standard.md>",
+    "kind": "recipe",
+    "obligations": [{
+      "obligation_id": "G-MAIN-ENTRYPOINT",
+      "text": "Name the main module as specified and expose the required executable entrypoint.",
+      "subject_class": "constructional",
+      "classification_basis": "This constrains assembly shape rather than caller-visible behavior.",
+      "roles": ["validator", "orchestrator", "coder"],
+      "authority_targets": ["architecture", "testing-strategy"]
+    }]
+  }]
+}
+```
+
+Before ratification the Validator dispositions every G-* obligation in
+`artifacts/guidance/application.json` as `applied` or `not-applicable`, supplies the required
+acceptance-obligation, process-checkpoint, or architecture-conformance binding, and obtains an
+independent classification/application review whose subject digest covers that exact application
+row. The selection is immutable after ignition; changing
+the selected documents starts a new run rather than mutating the meaning of one underway. Then one
+compiler owns every generated region:
+
+```bash
+python3 harness/phase_compiler.py update \
+  --root .factory/runs/<run> \
+  --artifacts .factory/runs/<run>/artifacts
+```
+
+`phase1_gate.sh` re-derives semantic union → guidance → agreement and byte-compares the result.
+Dispatch automatically adds only the role's applied projection; the Tester receives behavioral
+obligations only and never the source document or a constructional recipe. The Orchestrator's
+assessment/3 is bound to the current selection, application, evidence, and finding digests.
+Pre-dispatch requires `routing-verified`; pre-verdict requires `evidence-complete`. Endgame verifies
+`artifacts/guidance/evidence.json` against the exact candidate for every applied obligation. Each
+cited observation binds the run, generation, selection, application, obligation, candidate,
+verification method, and non-empty raw evidence references. A resolved finding requires the same
+candidate-bound typed resolution shape; an old remediation receipt cannot be relabelled under a
+new candidate. Mechanical verification proves exact
+source, routing, subject, and evidence membership; the Validator, independent reviewer, and
+resident Orchestrator judge whether the route and evidence actually satisfy the selected guidance.
 
 ## Cross-path agreement evidence
 

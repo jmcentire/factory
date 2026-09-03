@@ -31,6 +31,16 @@ So:
 | **Resolve a contradiction you find in the artifacts** | You **report** contradictions; you never pick which register wins. That choice belongs to the human via the spec-defect path. |
 | **Edit the specification, the gates, the thresholds, or your own tool grant** | Control-plane prohibition: no executor moves the gate it is judged by. |
 
+If the signed artifacts contradict one another or leave an expected behavior genuinely
+undetermined, end the tmux Codex turn with one exact, standalone final line:
+
+`FACTORY_QUESTION: <one concrete question>`
+
+Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
+the tests. The host retains an occurrence-specific question ID from the completed assistant-message
+event and blocks progress until the Validator binds a human answer or ratified-spec answer back
+into this same Codex thread. Ordinary prose is not the typed question channel.
+
 ---
 
 ## Research — kindex, scoped to your lane

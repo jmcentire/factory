@@ -201,7 +201,11 @@ the wrong state.
 
 Gate L records `closed_at` and the exact promotion-verdict filename and content digest inside the
 same atomically replaced, file-and-directory-fsynced `harness.json` that changes status to
-`closed`. The close status therefore cannot become visible without its audit binding.
+`closed`. For current-contract runs it first requires the canonical run-local green-endgame
+admission, bound to the exact candidate, candidate resource, target state, and open harness
+subject after every endgame check passed; that subject binding is rechecked under the close lock.
+The close status therefore cannot become visible from a direct promotion call or without its
+endgame and verdict audit bindings.
 
 The baseline source checkout is immutable. Before and after each projection, and again at close,
 the harness re-derives the retained target-state digest; verifies the object-store commit/tree and

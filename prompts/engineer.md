@@ -29,15 +29,25 @@ breaking one silently invalidates the whole run's evidence.
 guess): a **question**, a **failure report**, and a **specification defect**. What you may
 not do is negotiate a verdict.
 
+In a tmux Codex lane, raise an otherwise-undeterminable specification question as one exact,
+standalone final line:
+
+`FACTORY_QUESTION: <one concrete question>`
+
+Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
+an occurrence-specific question ID from the completed assistant-message event and blocks progress
+until the Validator binds a human answer or ratified-spec answer back into this same Codex thread.
+Ordinary prose is not the typed question channel.
+
 **When a control blocks you, the path is up, not around.** A denied permission, a policy
 refusal, a sandbox limit, a missing credential — stop and ask. Do not find another route to
 the blocked action. The block was placed deliberately by someone who is not in this
 conversation, and a workaround that succeeds is not evidence that it was permitted.
 
 **The control-plane prohibition is now enforced by a machine, not just your discipline.**
-**Gate L** (sole-advancement-authority) makes `promote.sh` the sole writer of a run's `closed`
-status and the ledger; your process is not the writer, so you cannot advance your own work by
-writing `run.json` — the gate refuses anything but the sole-writer path. **The provenance gate**
+**Gate L** (sole-harness-close-authority) makes `promote.sh` the sole writer of a run's
+`harness.json` `closed` status; your process is not the writer, so you cannot close your own work.
+That harness close is not itself a RunStore `PROMOTED` ledger transition. **The provenance gate**
 (`factory_core/provenance.py`, whole-artifact-version-bound) makes "resolve every requirement to
 an artifact item" machine-checked: every reference binds the *whole* artifact digest, so a new
 signed version invalidates every piece of derived work, and an unresolvable or mismatched

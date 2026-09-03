@@ -13,7 +13,10 @@ from harness.orchestrator_channel import (
     append_activity,
     record_assessment,
     require_current,
+    require_through,
 )
+from harness.run_guidance import assessment_state as guidance_assessment_state
+from tests.test_run_guidance import guidance_fixture, write_complete_evidence
 
 
 def resident_root(tmp_path: Path) -> Path:
@@ -67,6 +70,29 @@ def assessment(cursor: int, **overrides: object) -> dict[str, object]:
         "kindex_context": ["34b8fe8ebcb6"],
         "kindex_basis": "Recovered the founder-specified intent-check fields and triggers.",
     }
+    body.update(overrides)
+    return body
+
+
+def resident_guidance_root(tmp_path: Path) -> tuple[Path, Path]:
+    root, artifacts, _admission = guidance_fixture(tmp_path)
+    metadata = json.loads((root / "harness.json").read_text())
+    metadata.update({"orchestrator_mode": "resident-monitoring", "status": "open"})
+    (root / "harness.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return root, artifacts
+
+
+def guidance_assessment(root: Path, cursor: int, **overrides: object) -> dict[str, object]:
+    state = guidance_assessment_state(root, root / "artifacts")
+    body = assessment(
+        cursor,
+        schema_version="factory-orchestrator-assessment/3",
+        guidance_state=state["state"],
+        guidance_selection_digest=state["selection_digest"],
+        guidance_application_digest=state["application_digest"],
+        guidance_evidence_digest=state["evidence_digest"],
+        guidance_findings=state["findings"],
+    )
     body.update(overrides)
     return body
 
@@ -459,3 +485,101 @@ def test_pending_lane_question_mechanically_forces_clarification_block(
         ),
     )
     assert report["assessment"]["decision"] == "block"
+
+
+def test_guidance_run_requires_assessment_three_bound_to_retained_state(tmp_path: Path) -> None:
+    root, _artifacts = resident_guidance_root(tmp_path)
+    append_activity(
+        root,
+        kind="cadence",
+        source="dispatcher",
+        detail="audit selected run guidance",
+    )
+
+    with pytest.raises(OrchestratorChannelError, match="requires assessment/3"):
+        record_assessment(root, assessment(1))
+    with pytest.raises(OrchestratorChannelError, match="differs from the retained"):
+        record_assessment(
+            root,
+            guidance_assessment(root, 1, guidance_selection_digest="sha256:" + "f" * 64),
+        )
+
+    record_assessment(root, guidance_assessment(root, 1))
+    assert require_current(root) == (1, 1)
+
+
+def test_pending_guidance_cannot_cross_pre_dispatch(tmp_path: Path) -> None:
+    root, artifacts = resident_guidance_root(tmp_path)
+    (artifacts / "guidance" / "application.json").unlink()
+    append_activity(
+        root,
+        kind="pre_dispatch",
+        source="validator",
+        detail="before dispatching a selected-guidance run",
+    )
+    record_assessment(root, guidance_assessment(root, 1))
+
+    with pytest.raises(OrchestratorChannelError, match="not routing-verified"):
+        require_through(root, 1)
+
+
+def test_routing_verified_guidance_can_cross_pre_dispatch(tmp_path: Path) -> None:
+    root, _artifacts = resident_guidance_root(tmp_path)
+    append_activity(
+        root,
+        kind="pre_dispatch",
+        source="validator",
+        detail="before dispatching a selected-guidance run",
+    )
+    record_assessment(root, guidance_assessment(root, 1))
+
+    assert require_through(root, 1) == 1
+
+
+def test_guidance_evidence_and_fresh_assessment_are_required_before_verdict(
+    tmp_path: Path,
+) -> None:
+    root, artifacts = resident_guidance_root(tmp_path)
+    append_activity(
+        root,
+        kind="pre_verdict",
+        source="validator",
+        detail="before rendering a verdict",
+    )
+    record_assessment(root, guidance_assessment(root, 1))
+    with pytest.raises(OrchestratorChannelError, match="not evidence-complete"):
+        require_through(root, 1)
+
+    write_complete_evidence(root, artifacts, "a" * 40)
+    with pytest.raises(OrchestratorChannelError, match="stale against"):
+        require_through(root, 1)
+
+    append_activity(
+        root,
+        kind="deterministic_signal",
+        source="validator",
+        detail="guidance evidence became complete",
+    )
+    record_assessment(root, guidance_assessment(root, 2))
+    assert require_through(root, 1) == 2
+
+
+def test_noncompliant_guidance_assessment_must_block(tmp_path: Path) -> None:
+    root, artifacts = resident_guidance_root(tmp_path)
+    write_complete_evidence(root, artifacts, "a" * 40)
+    evidence_path = artifacts / "guidance" / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["results"][1]["evidence"] = []
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    append_activity(
+        root,
+        kind="pre_verdict",
+        source="validator",
+        detail="invalid selected-guidance evidence",
+    )
+
+    with pytest.raises(OrchestratorChannelError, match="must block"):
+        record_assessment(root, guidance_assessment(root, 1))
+
+    report = record_assessment(root, guidance_assessment(root, 1, decision="block"))
+    assert report["assessment"]["guidance_findings"] == ["guidance-evidence-invalid"]
