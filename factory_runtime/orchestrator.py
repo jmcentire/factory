@@ -111,7 +111,7 @@ class BuildOutcome:
 
     @property
     def repair_signal(self) -> str:
-        return "pass" if self.passed else "fail"
+        return "pass" if self.passed else self.execution.repair_signal
 
 
 def digest_artifact_tree(root: str | Path) -> str:
@@ -744,18 +744,39 @@ class FactoryOrchestrator:
         if journal is None or not candidate_digest or not tests_digest:
             raise OrchestrationError("validation entered without candidate evidence")
 
+        setup_failure = (
+            execution.acceptance_lifecycle is not None
+            and execution.acceptance_lifecycle.setup_failure
+        )
+        lifecycle_incomplete = (
+            execution.acceptance_lifecycle is not None
+            and not execution.acceptance_lifecycle.behavior_complete
+        )
+        acceptance_completed = execution.validator.succeeded and not lifecycle_incomplete
         journal.record(
             "acceptance-tests",
-            passed=execution.validator.succeeded,
+            passed=acceptance_completed,
             detail=(
                 "Validator executed the Tester suite successfully"
-                if execution.validator.succeeded
+                if acceptance_completed
                 else "Validator observed an acceptance-test failure"
             ),
             actor="validator",
-            observations={"repair_signal": execution.repair_signal},
+            observations={
+                "repair_signal": execution.repair_signal,
+                "acceptance_phase": (
+                    execution.acceptance_lifecycle.phase
+                    if execution.acceptance_lifecycle is not None
+                    else "not-required"
+                ),
+            },
         )
-        if not execution.validator.succeeded:
+        if not acceptance_completed:
+            lifecycle_artifacts = (
+                execution.acceptance_lifecycle.artifact_digests
+                if execution.acceptance_lifecycle is not None
+                else {}
+            )
             projection = self.workflow.store.transition(
                 run_id,
                 RunState.BLOCKED,
@@ -763,10 +784,24 @@ class FactoryOrchestrator:
                 artifact_digests={
                     "candidate": candidate_digest,
                     "acceptance-tests": tests_digest,
+                    **lifecycle_artifacts,
                 },
                 payload={
-                    "reason": "acceptance-tests-failed",
-                    "repair_signal": "fail",
+                    "reason": (
+                        "acceptance-setup-failed"
+                        if setup_failure
+                        else (
+                            "acceptance-lifecycle-incomplete"
+                            if execution.repair_signal == "validator-retry"
+                            else "acceptance-tests-failed"
+                        )
+                    ),
+                    "repair_signal": execution.repair_signal,
+                    "acceptance_phase": (
+                        execution.acceptance_lifecycle.phase
+                        if execution.acceptance_lifecycle is not None
+                        else "not-required"
+                    ),
                     "tester_identity": tester_identity,
                 },
                 implementer_identity=implementer_identity,

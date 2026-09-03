@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory://schemas/acceptance-lifecycle/1",
+  "title": "Factory Validator acceptance lifecycle receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_digest", "acceptance_tests_digest", "command_digest", "configuration_digest", "environment_digest", "reached_phase"],
+  "properties": {
+    "schema_version": {"const": "factory-acceptance-lifecycle/1"},
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "acceptance_tests_digest": {"$ref": "#/$defs/digest"},
+    "command_digest": {"$ref": "#/$defs/digest"},
+    "configuration_digest": {"$ref": "#/$defs/digest"},
+    "environment_digest": {"$ref": "#/$defs/digest"},
+    "reached_phase": {"enum": ["candidate-launched", "candidate-ready", "tester-connected", "behavior-started", "behavior-complete"]}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}
