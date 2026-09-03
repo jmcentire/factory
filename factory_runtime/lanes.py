@@ -88,7 +88,15 @@ class ValidationExecution:
 
     @property
     def passed(self) -> bool:
-        return self.coder.succeeded and self.tester.succeeded and self.validator.succeeded
+        return (
+            self.coder.succeeded
+            and self.tester.succeeded
+            and self.validator.succeeded
+            and not (
+                self.acceptance_lifecycle is not None
+                and self.acceptance_lifecycle.setup_failure
+            )
+        )
 
     @property
     def repair_signal(self) -> str:

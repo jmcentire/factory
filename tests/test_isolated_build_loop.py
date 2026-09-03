@@ -265,6 +265,42 @@ class _LifecycleFailureBackend(_RecordingQualifiedBackend):
         return result
 
 
+class _LifecycleSuccessBackend(_RecordingQualifiedBackend):
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
+    ) -> IsolatedProcessResult:
+        values = dict(environment or {})
+        result = super().run(
+            command,
+            cwd=cwd,
+            readable_paths=readable_paths,
+            writable_paths=writable_paths,
+            environment=environment,
+            stdin_bytes=stdin_bytes,
+        )
+        if values.get("FACTORY_ROLE") == "validator":
+            receipt = {
+                "schema_version": "factory-acceptance-lifecycle/1",
+                "candidate_digest": values["FACTORY_CANDIDATE_DIGEST"],
+                "acceptance_tests_digest": values["FACTORY_ACCEPTANCE_TESTS_DIGEST"],
+                "command_digest": values["FACTORY_VALIDATOR_COMMAND_DIGEST"],
+                "configuration_digest": values["FACTORY_VALIDATOR_CONFIGURATION_DIGEST"],
+                "environment_digest": values["FACTORY_VALIDATOR_ENVIRONMENT_DIGEST"],
+                "reached_phase": "behavior-complete",
+            }
+            Path(values["FACTORY_ACCEPTANCE_LIFECYCLE_PATH"]).write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+        return result
+
+
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
 @pytest.mark.isolation_integration
 def test_coder_and_tester_are_isolated_and_validator_alone_runs_tests(
@@ -540,6 +576,93 @@ def test_required_lifecycle_receipt_routes_pre_behavior_failure_to_validator(
     assert result.acceptance_lifecycle is not None
     assert result.acceptance_lifecycle.phase == "tester-connected"
     assert result.acceptance_lifecycle.setup_failure is True
+
+
+def test_required_lifecycle_receipt_cannot_be_omitted_after_validator_success(
+    tmp_path: Path,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    validator.write_text("print('validator')\n", encoding="utf-8")
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    catalog = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+        lifecycle_receipt_required=True,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command, trusted_paths=validator_trusted_paths
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+
+    result = IsolatedBuildLoop(root, sandbox=_RecordingQualifiedBackend()).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+        tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=catalog,
+        coder_trusted_paths=(FIXTURES / "coder.py",),
+        tester_trusted_paths=(FIXTURES / "tester.py",),
+        validator_trusted_paths=validator_trusted_paths,
+        before_validation=lambda *_: {"validator_execution": expected_execution},
+    )
+
+    assert result.validator.succeeded is True
+    assert result.passed is False
+    assert result.repair_signal == "validator-retry"
+    assert result.acceptance_lifecycle is not None
+    assert result.acceptance_lifecycle.phase is None
+
+
+def test_required_lifecycle_receipt_allows_behavior_complete_success(
+    tmp_path: Path,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    validator.write_text("print('validator')\n", encoding="utf-8")
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    catalog = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+        lifecycle_receipt_required=True,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command, trusted_paths=validator_trusted_paths
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+
+    result = IsolatedBuildLoop(root, sandbox=_LifecycleSuccessBackend()).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+        tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=catalog,
+        coder_trusted_paths=(FIXTURES / "coder.py",),
+        tester_trusted_paths=(FIXTURES / "tester.py",),
+        validator_trusted_paths=validator_trusted_paths,
+        before_validation=lambda *_: {"validator_execution": expected_execution},
+    )
+
+    assert result.passed is True
+    assert result.repair_signal == "pass"
+    assert result.acceptance_lifecycle is not None
+    assert result.acceptance_lifecycle.phase == "behavior-complete"
 
 
 def test_review_callback_runs_only_after_both_snapshots_are_durably_published(

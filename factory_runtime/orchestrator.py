@@ -744,12 +744,17 @@ class FactoryOrchestrator:
         if journal is None or not candidate_digest or not tests_digest:
             raise OrchestrationError("validation entered without candidate evidence")
 
+        setup_failure = (
+            execution.acceptance_lifecycle is not None
+            and execution.acceptance_lifecycle.setup_failure
+        )
+        acceptance_completed = execution.validator.succeeded and not setup_failure
         journal.record(
             "acceptance-tests",
-            passed=execution.validator.succeeded,
+            passed=acceptance_completed,
             detail=(
                 "Validator executed the Tester suite successfully"
-                if execution.validator.succeeded
+                if acceptance_completed
                 else "Validator observed an acceptance-test failure"
             ),
             actor="validator",
@@ -762,15 +767,11 @@ class FactoryOrchestrator:
                 ),
             },
         )
-        if not execution.validator.succeeded:
+        if not acceptance_completed:
             lifecycle_artifacts = (
                 execution.acceptance_lifecycle.artifact_digests
                 if execution.acceptance_lifecycle is not None
                 else {}
-            )
-            setup_failure = (
-                execution.acceptance_lifecycle is not None
-                and execution.acceptance_lifecycle.setup_failure
             )
             projection = self.workflow.store.transition(
                 run_id,
