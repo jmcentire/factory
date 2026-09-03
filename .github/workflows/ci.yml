@@ -77,7 +77,7 @@ jobs:
       - name: Prove real Tessera integration
         env:
           FACTORY_TESSERA_BIN: ${{ github.workspace }}/tessera/target/release/tessera
-        run: python -m pytest tests/test_tessera_cli_integration.py
+        run: make test-tessera
 
   isolation:
     runs-on: macos-14

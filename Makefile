@@ -126,11 +126,15 @@ test-isolation: check-python ## prove enforced Coder/Tester separation on macOS
 		(echo "enforced isolation proof requires macOS Seatbelt" >&2; exit 1)
 	$(PY) -m pytest -m isolation_integration tests/test_isolated_build_loop.py
 
-test-tessera: check-python ## run the real Tessera CLI integration proof
+test-tessera: check-python ## run every real-Tessera integration and denial proof
 	@test -x "$(FACTORY_TESSERA_BIN)" || \
 		(echo "Tessera binary missing or not executable: $(FACTORY_TESSERA_BIN)" >&2; exit 1)
 	FACTORY_TESSERA_BIN="$(FACTORY_TESSERA_BIN)" \
-		$(PY) -m pytest tests/test_tessera_cli_integration.py
+		$(PY) -m pytest \
+			tests/test_tessera_cli_integration.py \
+			tests/test_build_and_validate_cli.py \
+			tests/test_repair_ceremony.py \
+			tests/test_trust_root.py
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \

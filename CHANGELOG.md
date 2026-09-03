@@ -44,6 +44,9 @@ public API is still pre-1.0.
   either side drifting but not a shared same-direction error; Orchestrator audit currency is a
   deny-only prerequisite while its judgment cannot grant; and Kindex informs planning context but
   cannot select run guidance or become compilation authority.
+- Both hosted platforms now run every Tessera-gated test file after building the pinned verifier,
+  including the registered chain-repair and ledger-unlock denial probes; a collecting but skipped
+  denial probe can no longer hide behind the ordinary no-Tessera suite.
 
 ## [0.5.0] - 2026-09-02
 
