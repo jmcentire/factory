@@ -13,6 +13,7 @@ from referencing import Registry, Resource
 
 SCHEMA_NAMES = frozenset(
     {
+        "acceptance-lifecycle",
         "acceptance-obligation-catalog",
         "acceptance-obligation-observations",
         "acceptance-obligation-report",

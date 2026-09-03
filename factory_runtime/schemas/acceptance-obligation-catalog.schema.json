@@ -127,6 +127,7 @@
         "command_digest": {"$ref": "#/$defs/digest"},
         "configuration_digest": {"$ref": "#/$defs/digest"},
         "environment_digest": {"$ref": "#/$defs/digest"},
+        "lifecycle_receipt_required": {"type": "boolean"},
         "obligations": {
           "type": "array",
           "minItems": 1,

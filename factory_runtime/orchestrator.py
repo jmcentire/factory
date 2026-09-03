@@ -111,7 +111,7 @@ class BuildOutcome:
 
     @property
     def repair_signal(self) -> str:
-        return "pass" if self.passed else "fail"
+        return "pass" if self.passed else self.execution.repair_signal
 
 
 def digest_artifact_tree(root: str | Path) -> str:
@@ -753,9 +753,25 @@ class FactoryOrchestrator:
                 else "Validator observed an acceptance-test failure"
             ),
             actor="validator",
-            observations={"repair_signal": execution.repair_signal},
+            observations={
+                "repair_signal": execution.repair_signal,
+                "acceptance_phase": (
+                    execution.acceptance_lifecycle.phase
+                    if execution.acceptance_lifecycle is not None
+                    else "not-required"
+                ),
+            },
         )
         if not execution.validator.succeeded:
+            lifecycle_artifacts = (
+                execution.acceptance_lifecycle.artifact_digests
+                if execution.acceptance_lifecycle is not None
+                else {}
+            )
+            setup_failure = (
+                execution.acceptance_lifecycle is not None
+                and execution.acceptance_lifecycle.setup_failure
+            )
             projection = self.workflow.store.transition(
                 run_id,
                 RunState.BLOCKED,
@@ -763,10 +779,18 @@ class FactoryOrchestrator:
                 artifact_digests={
                     "candidate": candidate_digest,
                     "acceptance-tests": tests_digest,
+                    **lifecycle_artifacts,
                 },
                 payload={
-                    "reason": "acceptance-tests-failed",
-                    "repair_signal": "fail",
+                    "reason": (
+                        "acceptance-setup-failed" if setup_failure else "acceptance-tests-failed"
+                    ),
+                    "repair_signal": execution.repair_signal,
+                    "acceptance_phase": (
+                        execution.acceptance_lifecycle.phase
+                        if execution.acceptance_lifecycle is not None
+                        else "not-required"
+                    ),
                     "tester_identity": tester_identity,
                 },
                 implementer_identity=implementer_identity,

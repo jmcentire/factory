@@ -47,6 +47,8 @@ def _acceptance_catalog(
     tmp_path: Path,
     validator_command: tuple[str, ...],
     validator_trusted_paths: tuple[Path, ...],
+    *,
+    lifecycle_receipt_required: bool = False,
 ) -> Path:
     build_input = json.loads((FIXTURES / "build-input.json").read_text())
     phases = {
@@ -76,6 +78,7 @@ def _acceptance_catalog(
                 "command_digest": command_digest,
                 "configuration_digest": configuration_digest,
                 "environment_digest": environment_digest,
+                "lifecycle_receipt_required": lifecycle_receipt_required,
                 "obligations": [
                     {
                         "obligation_id": "addition-examples",
@@ -218,6 +221,48 @@ class _MutatingValidatorSnapshotBackend(_RecordingQualifiedBackend):
             environment=environment,
             stdin_bytes=stdin_bytes,
         )
+
+
+class _LifecycleFailureBackend(_RecordingQualifiedBackend):
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path,
+        readable_paths: Sequence[str | Path] = (),
+        writable_paths: Sequence[str | Path] = (),
+        environment: dict[str, str] | None = None,
+        stdin_bytes: bytes | None = None,
+    ) -> IsolatedProcessResult:
+        values = dict(environment or {})
+        result = super().run(
+            command,
+            cwd=cwd,
+            readable_paths=readable_paths,
+            writable_paths=writable_paths,
+            environment=environment,
+            stdin_bytes=stdin_bytes,
+        )
+        if values.get("FACTORY_ROLE") == "validator":
+            receipt = {
+                "schema_version": "factory-acceptance-lifecycle/1",
+                "candidate_digest": values["FACTORY_CANDIDATE_DIGEST"],
+                "acceptance_tests_digest": values["FACTORY_ACCEPTANCE_TESTS_DIGEST"],
+                "command_digest": values["FACTORY_VALIDATOR_COMMAND_DIGEST"],
+                "configuration_digest": values["FACTORY_VALIDATOR_CONFIGURATION_DIGEST"],
+                "environment_digest": values["FACTORY_VALIDATOR_ENVIRONMENT_DIGEST"],
+                "reached_phase": "tester-connected",
+            }
+            Path(values["FACTORY_ACCEPTANCE_LIFECYCLE_PATH"]).write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            return IsolatedProcessResult(
+                command=result.command,
+                returncode=1,
+                stdout="",
+                stderr="",
+            )
+        return result
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS Seatbelt integration")
@@ -451,6 +496,50 @@ def test_validator_launch_uses_frozen_bytes_after_live_path_mutation(tmp_path: P
     )
     assert frozen_manifest.is_relative_to(root / "validator-execution")
     assert digest_bytes(frozen_manifest.read_bytes()) == execution_digests[0]
+
+
+def test_required_lifecycle_receipt_routes_pre_behavior_failure_to_validator(
+    tmp_path: Path,
+) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    validator = tmp_path / "validator.py"
+    validator.write_text("print('validator')\n", encoding="utf-8")
+    validator_command = (sys.executable, str(validator))
+    validator_trusted_paths = (validator,)
+    catalog = _acceptance_catalog(
+        tmp_path,
+        validator_command,
+        validator_trusted_paths,
+        lifecycle_receipt_required=True,
+    )
+    execution_digests = validator_execution_digests(
+        validator_command, trusted_paths=validator_trusted_paths
+    )
+    expected_execution = dict(
+        zip(
+            ("command_digest", "configuration_digest", "environment_digest"),
+            execution_digests,
+            strict=True,
+        )
+    )
+
+    result = IsolatedBuildLoop(root, sandbox=_LifecycleFailureBackend()).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(sys.executable, str(FIXTURES / "coder.py")),
+        tester_command=(sys.executable, str(FIXTURES / "tester.py")),
+        validator_command=validator_command,
+        acceptance_catalog_path=catalog,
+        coder_trusted_paths=(FIXTURES / "coder.py",),
+        tester_trusted_paths=(FIXTURES / "tester.py",),
+        validator_trusted_paths=validator_trusted_paths,
+        before_validation=lambda *_: {"validator_execution": expected_execution},
+    )
+
+    assert result.passed is False
+    assert result.repair_signal == "validator-retry"
+    assert result.acceptance_lifecycle is not None
+    assert result.acceptance_lifecycle.phase == "tester-connected"
+    assert result.acceptance_lifecycle.setup_failure is True
 
 
 def test_review_callback_runs_only_after_both_snapshots_are_durably_published(

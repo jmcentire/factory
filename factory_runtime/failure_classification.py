@@ -40,6 +40,8 @@ def classify_terminal_failure(
     coder_receipt_present: bool,
     tester_receipt_present: bool,
     invocation_termination_reason: str | None = None,
+    acceptance_lifecycle_required: bool = False,
+    acceptance_phase: str | None = None,
 ) -> FailureCapsule:
     """Classify an attempt without serialising raw lane or oracle output.
 
@@ -94,6 +96,18 @@ def classify_terminal_failure(
             owner="coder",
             code="coder-receipt-missing",
             summary="Coder did not produce a valid completed receipt for this attempt.",
+        )
+    if acceptance_lifecycle_required and acceptance_phase not in {
+        "behavior-started",
+        "behavior-complete",
+    }:
+        return FailureCapsule(
+            owner="validator-harness",
+            code="acceptance-setup-not-reached",
+            summary=(
+                "The Validator-owned acceptance topology did not reach a recorded "
+                "behavioral phase."
+            ),
         )
     if caller_returncode != 0:
         return FailureCapsule(

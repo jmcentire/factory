@@ -333,6 +333,16 @@ class RepairSupervisor:
                 raise RepairSupervisorError("attempt outcome belongs to a different run")
             if outcome.projection.ledger_head != current.ledger_head:
                 raise RepairSupervisorError("attempt outcome is stale against the run ledger")
+            if getattr(outcome, "repair_signal", "fail") == "validator-retry":
+                # The sealed suite never reached candidate behavior.  No Coder
+                # RepairBrief is safe or useful here, and this attempt must not
+                # consume the candidate-repair budget.
+                return self._terminal(
+                    run_id,
+                    attempts_run,
+                    briefs,
+                    "validator-harness-blocked:acceptance-setup-not-reached",
+                )
             candidate_attempts += 1
             if outcome.passed:
                 return RepairCampaignResult(
