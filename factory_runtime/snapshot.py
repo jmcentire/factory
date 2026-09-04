@@ -577,11 +577,43 @@ def _digest_rows(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def _capture_rows(root: Path, *, allow_empty: bool) -> list[dict[str, Any]]:
+    """Digest a regular tree without retaining any file bytes.
+
+    ``tree_digest`` needs only the per-file rows, never the content map. For large
+    checkpoint sources (a sealed candidate runtime is ~140 MB / thousands of files) holding
+    every byte resident, several times per attempt, is needless pressure. This streams: read,
+    hash, drop. Symlinks are refused exactly as ``_capture_tree`` refuses them, so a source
+    must be materially symlink-free (e.g. a ``cp -RL`` runtime export) to be addressable.
+    """
+
+    if root.is_symlink() or not root.is_dir():
+        raise SnapshotError(f"snapshot source is not a regular directory: {root}")
+    rows: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise SnapshotError(f"snapshot source contains a forbidden symlink: {relative}")
+        if path.is_dir():
+            continue
+        data, mode = _read_regular(path)
+        rows.append(
+            {
+                "path": relative,
+                "mode": mode,
+                "frozen_mode": mode & ~0o222,
+                "digest": digest_bytes(data),
+            }
+        )
+    if not rows and not allow_empty:
+        raise SnapshotError(f"snapshot source tree is empty: {root}")
+    return rows
+
+
 def tree_digest(root: str | Path, *, allow_empty: bool = False) -> str:
     """Address a regular tree by relative paths, original modes, and exact bytes."""
 
-    rows, _ = _capture_tree(Path(root), allow_empty=allow_empty)
-    return _digest_rows(rows)
+    return _digest_rows(_capture_rows(Path(root), allow_empty=allow_empty))
 
 
 def freeze_blob(

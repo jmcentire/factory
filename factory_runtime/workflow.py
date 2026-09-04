@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory_core.build_plan import PatternCatalog
 from factory_core.manifest import (
     SegregationPolicy,
     digest_bytes,
@@ -25,6 +26,7 @@ from factory_core.manifest import (
 )
 from factory_core.provenance import REQUIRED_PHASES, IntentBackreference, PhaseArtifact
 from factory_core.target import TargetManifestError, load_target_manifest
+from factory_runtime.adversarial_review import canonical_document_bytes
 from factory_runtime.authority import (
     AuthorityPolicy,
     AuthorityVerificationError,

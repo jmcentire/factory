@@ -83,6 +83,17 @@ class TargetManifest:
     source_digest: str = ""  # content address of the raw TOML bytes
     raw: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def test_entrypoint(self) -> tuple[str, ...]:
+        """The target-native acceptance-test argv, or empty when the target declares none.
+
+        This is target data, bound by the manifest's content/source digests at admission. The
+        core never interprets it beyond running it as an exact argv (no shell) in the Validator.
+        """
+
+        raw = self.build.get("test_entrypoint", ())
+        return tuple(str(part) for part in raw)
+
 
 def _walk_strings(obj: Any) -> list[str]:
     """Collect every string value reachable in a nested dict/list structure."""

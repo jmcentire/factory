@@ -723,6 +723,18 @@ def _parser() -> argparse.ArgumentParser:
     build_and_validate.add_argument("--test-change-human-receipt", default=None)
     build_and_validate.add_argument("--test-change-validator-receipt", default=None)
 
+    submit_one_attempt = commands.add_parser(
+        "submit-one-attempt",
+        help="admit and dispatch one signed typed attempt through the existing executor",
+    )
+    _add_authority_arguments(submit_one_attempt)
+    submit_one_attempt.add_argument("--runs", required=True)
+    submit_one_attempt.add_argument(
+        "--admission-package",
+        required=True,
+        help="Validator-signed factory-one-attempt-admission envelope",
+    )
+
     return parser
 
 
@@ -2563,6 +2575,42 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "acceptance_report_digest": outcome.acceptance_report_digest,
                 "adversarial_review_digest": outcome.adversarial_review_digest,
                 "run_state": outcome.projection.state,
+            }
+        )
+        return
+    if arguments.command == "submit-one-attempt":
+        from factory_runtime.attempt_admission import (
+            AttemptAdmissionError,
+            admit_attempt_package,
+            dispatch_admitted_attempt,
+        )
+        from factory_runtime.orchestrator import FactoryOrchestrator
+
+        workflow = _load_workflow(arguments)
+        try:
+            admitted = admit_attempt_package(
+                arguments.admission_package,
+                policy=workflow.policy,
+                tessera=workflow.tessera,
+            )
+            package_genesis = admitted.build.get("genesis_path")
+            if not isinstance(package_genesis, str) or Path(package_genesis).resolve() != Path(
+                arguments.genesis
+            ).resolve():
+                raise AttemptAdmissionError(
+                    "admission package genesis path differs from the externally pinned trust root"
+                )
+            outcome = dispatch_admitted_attempt(FactoryOrchestrator(workflow), admitted)
+        except AttemptAdmissionError as exc:
+            raise ValueError(str(exc)) from exc
+        _emit(
+            {
+                "candidate_digest": outcome.candidate_digest,
+                "tests_digest": outcome.tests_digest,
+                "passed": outcome.passed,
+                "repair_signal": outcome.repair_signal,
+                "run_state": outcome.projection.state,
+                "admission_receipt": admitted.receipt,
             }
         )
         return

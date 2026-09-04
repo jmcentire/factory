@@ -852,3 +852,169 @@ def test_phase_receipt_nonce_cannot_be_replayed(tmp_path: Path) -> None:
             human_receipt_path=human_receipt,
             validator_receipt_path=validator_receipt,
         )
+
+
+def _guard_manifest(tmp_path: Path, pinned_digest: str) -> Path:
+    path = tmp_path / "guard-target.toml"
+    path.write_text(
+        "\n".join(
+            (
+                'schema_version = "factory-target-manifest/2"',
+                'target_id = "guard-target"',
+                "[repo]",
+                'url = "https://example.invalid/acme/widget.git"',
+                'ref = "main"',
+                'provider = "github"',
+                'scope_tier = "read"',
+                "[adapters]",
+                'repo = "git"',
+                'knowledge = "none"',
+                'compliance = "file"',
+                'idp = "none"',
+                'artifact_sink = "local_posix"',
+                "[compliance]",
+                'rules_path = "rules.yaml"',
+                'format = "yaml"',
+                "[build]",
+                f'pattern_catalog_digest = "{pinned_digest}"',
+                "max_attempts = 2",
+                'construction_modes = ["brownfield"]',
+                "[build.signal]",
+                "signal_pass_deadline = 2",
+                "signal_pass_warn = 1",
+                "signal_wall_clock_cap_hours = 24",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_stage_r_preflight_rejects_a_legacy_shape_catalog(tmp_path: Path) -> None:
+    """A pin addressing a pre-contract document must reject the run actionably."""
+
+    legacy = {
+        "schema_version": "factory-pattern-catalog/1",
+        "catalog_id": "legacy-catalog",
+        "qualified_by": "human:founder",
+        "patterns": [
+            {
+                "pattern_id": "legacy-pattern",
+                "construction_mode": "brownfield",
+                "language": "python",
+                "environment": "uv",
+                "scope": "legacy scope",
+            }
+        ],
+    }
+    catalog_path = tmp_path / "legacy-catalog.json"
+    catalog_path.write_text(json.dumps(legacy), encoding="utf-8")
+    manifest = load_target_manifest(_guard_manifest(tmp_path, digest_obj(legacy)))
+
+    with pytest.raises(WorkflowError, match="predates the current catalog contract"):
+        workflow_module.preflight_pattern_catalog(manifest, catalog_path)
+
+
+def test_stage_r_preflight_rejects_a_digest_mismatch(tmp_path: Path) -> None:
+    valid = json.loads(SYNTHETIC_CATALOG.read_text())
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(valid), encoding="utf-8")
+    wrong_pin = "sha256:" + "b" * 64
+    manifest = load_target_manifest(_guard_manifest(tmp_path, wrong_pin))
+
+    with pytest.raises(WorkflowError, match="content digest is sha256:"):
+        workflow_module.preflight_pattern_catalog(manifest, catalog_path)
+
+
+def test_stage_r_preflight_admits_the_exact_pinned_current_format_catalog(
+    tmp_path: Path,
+) -> None:
+    from factory_core.build_plan import PatternCatalog
+
+    document = json.loads(SYNTHETIC_CATALOG.read_text())
+    pinned = PatternCatalog.from_dict(document).content_digest
+    manifest = load_target_manifest(_guard_manifest(tmp_path, pinned))
+
+    workflow_module.preflight_pattern_catalog(manifest, SYNTHETIC_CATALOG)
+
+
+def test_stage_e_admission_requires_canonical_execution_request_bytes(
+    tmp_path: Path,
+) -> None:
+    """Review byte-binds the retained request; admission fails fast on other forms."""
+
+    tessera = _Tessera()
+    workflow = _resolve(tmp_path, tessera)
+    request_path, request = _execution_request(tmp_path, workflow)
+    pretty = tmp_path / "pretty-request.json"
+    pretty.write_text(json.dumps(request, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    receipt_path = tessera.add(
+        tmp_path / "authorize-canonical.tessera.json",
+        _receipt(
+            receipt_id="authorize-canonical",
+            action="authorize-change",
+            subject_digest=digest_obj(request),
+            signer="human:founder",
+            nonce="authorize-canonical-nonce",
+        ),
+        key=ROOT_KEY,
+        kind="factory-authority-receipt",
+    )
+
+    with pytest.raises(WorkflowError, match="canonical JSON serialization"):
+        workflow.authorize_change(
+            "run-1", request_path=pretty, receipt_path=receipt_path
+        )
+
+    assert request_path.read_bytes() == canonical_document_bytes(request)
+
+
+def test_stage_e_canonical_form_is_shared_with_the_review_plane() -> None:
+    """Admission and review byte-bind one UTF-8 canonical form, non-ASCII included."""
+
+    from factory_runtime.adversarial_review import (
+        canonical_document_bytes as review_canonical,
+    )
+    from factory_runtime.workflow import canonical_document_bytes as admission_canonical
+
+    document = {"verbatim_request": "# Stage 2 PRD — bound data-channel text turns"}
+    admitted = admission_canonical(document)
+
+    assert admission_canonical is review_canonical
+    assert admitted == review_canonical(document)
+    assert "—".encode() in admitted
+    assert b"\\u2014" not in admitted
+
+
+def test_intake_retains_the_exact_shared_canonical_request_bytes(tmp_path: Path) -> None:
+    """The retained Stage-E copy is byte-identical to the review's canonical form."""
+
+    tessera = _Tessera()
+    workflow = _resolve(tmp_path, tessera)
+    request_path, request = _execution_request(tmp_path, workflow)
+    request["verbatim_request"] = "Build the — non-ASCII — authorized behavior."
+    request["verbatim_request_digest"] = digest_bytes(
+        request["verbatim_request"].encode("utf-8")
+    )
+    request_path.write_bytes(canonical_document_bytes(request))
+    receipt_path = tessera.add(
+        tmp_path / "authorize-utf8.tessera.json",
+        _receipt(
+            receipt_id="authorize-utf8",
+            action="authorize-change",
+            subject_digest=digest_obj(request),
+            signer="human:founder",
+            nonce="authorize-utf8-nonce",
+        ),
+        key=ROOT_KEY,
+        kind="factory-authority-receipt",
+    )
+
+    workflow.authorize_change("run-1", request_path=request_path, receipt_path=receipt_path)
+
+    retained = (
+        tmp_path / "runs" / "run-1" / "evidence" / "intake" / "execution-request.json"
+    ).read_bytes()
+    assert retained == canonical_document_bytes(request)
+    assert "—".encode() in retained
