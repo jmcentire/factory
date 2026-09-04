@@ -735,6 +735,24 @@ def _parser() -> argparse.ArgumentParser:
         help="Validator-signed factory-one-attempt-admission envelope",
     )
 
+    catalog_proposal = commands.add_parser(
+        "propose-acceptance-catalog",
+        help="canonicalize an untrusted non-executable catalog proposal outside run evidence",
+    )
+    catalog_proposal.add_argument("--runs", required=True)
+    catalog_proposal.add_argument("--proposal-input", required=True)
+    catalog_proposal.add_argument("--proposal-output", required=True)
+
+    activate_catalog = commands.add_parser(
+        "activate-acceptance-catalog",
+        help="verify dual-signed catalog proposal and retain its catalog through the verifier",
+    )
+    _add_authority_arguments(activate_catalog)
+    activate_catalog.add_argument("--runs", required=True)
+    activate_catalog.add_argument("--proposal", required=True)
+    activate_catalog.add_argument("--human-receipt", required=True)
+    activate_catalog.add_argument("--validator-receipt", required=True)
+
     return parser
 
 
@@ -2575,6 +2593,49 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "acceptance_report_digest": outcome.acceptance_report_digest,
                 "adversarial_review_digest": outcome.adversarial_review_digest,
                 "run_state": outcome.projection.state,
+            }
+        )
+        return
+    if arguments.command == "propose-acceptance-catalog":
+        from factory_runtime.catalog_activation import (
+            CatalogProposalError,
+            create_catalog_proposal,
+        )
+
+        try:
+            digest = create_catalog_proposal(
+                arguments.proposal_input,
+                arguments.proposal_output,
+                runs_root=arguments.runs,
+            )
+        except CatalogProposalError as exc:
+            raise ValueError(str(exc)) from exc
+        _emit({"proposal_digest": digest, "executable": False, "retained": False})
+        return
+    if arguments.command == "activate-acceptance-catalog":
+        from factory_runtime.catalog_activation import (
+            CatalogProposalError,
+            activate_catalog_proposal,
+        )
+
+        workflow = _load_workflow(arguments)
+        try:
+            activated = activate_catalog_proposal(
+                arguments.proposal,
+                human_receipt_path=arguments.human_receipt,
+                validator_receipt_path=arguments.validator_receipt,
+                runs_root=arguments.runs,
+                policy=workflow.policy,
+                tessera=workflow.tessera,
+            )
+        except CatalogProposalError as exc:
+            raise ValueError(str(exc)) from exc
+        _emit(
+            {
+                "proposal_digest": activated.proposal_digest,
+                "catalog_digest": activated.stored_catalog.catalog.content_digest,
+                "native_runtime_profile": activated.native_runtime_profile,
+                "activated": True,
             }
         )
         return

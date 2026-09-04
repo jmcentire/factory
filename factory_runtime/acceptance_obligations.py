@@ -958,11 +958,13 @@ def verify_and_retain_acceptance_catalog(
     runs_root: str | Path,
     run_id: str,
     *,
-    catalog_path: str | Path,
+    catalog_path: str | Path | None = None,
+    catalog_document: Mapping[str, Any] | None = None,
     human_receipt_path: str | Path,
     validator_receipt_path: str | Path,
     policy: AuthorityPolicy,
     tessera: TesseraCli,
+    receipt_subject_digest: str | None = None,
     clock: Callable[[], int] | None = None,
 ) -> StoredAcceptanceCatalog:
     """Verify independent ratification and retain exact catalog/receipt bytes before build."""
@@ -973,8 +975,24 @@ def verify_and_retain_acceptance_catalog(
         raise AcceptanceObligationError(
             "a new acceptance-obligation catalog requires operational-maturity ratification"
         )
-    document = _read_object(catalog_path, label="acceptance-obligation catalog")
+    if (catalog_path is None) == (catalog_document is None):
+        raise AcceptanceObligationError(
+            "supply exactly one acceptance-obligation catalog path or verified document"
+        )
+    if catalog_document is None:
+        assert catalog_path is not None
+        document = _read_object(catalog_path, label="acceptance-obligation catalog")
+    else:
+        if not isinstance(catalog_document, Mapping):
+            raise AcceptanceObligationError("acceptance-obligation catalog document is invalid")
+        # Retention always re-derives the catalog schema and content address.  The
+        # document form exists only for a caller that has already authenticated a
+        # larger signed subject containing this exact catalog; it is never a raw
+        # bypass of the verifier below.
+        document = dict(catalog_document)
     catalog = AcceptanceObligationCatalog.from_dict(document)
+    if receipt_subject_digest is not None and not _DIGEST.fullmatch(receipt_subject_digest):
+        raise AcceptanceObligationError("catalog receipt subject digest is invalid")
     expected = {
         "run_id": run_id,
         "generation": projection.generation,
@@ -1005,7 +1023,7 @@ def verify_and_retain_acceptance_catalog(
             human_receipt_path,
             policy=policy,
             expected_action=RATIFY_ACTION,
-            expected_subject_digest=catalog.content_digest,
+            expected_subject_digest=receipt_subject_digest or catalog.content_digest,
             expected_run_id=run_id,
             expected_signer_identity=human_identity,
             tessera=tessera,
@@ -1021,7 +1039,7 @@ def verify_and_retain_acceptance_catalog(
             validator_receipt_path,
             policy=policy,
             expected_action=RATIFY_ACTION,
-            expected_subject_digest=catalog.content_digest,
+            expected_subject_digest=receipt_subject_digest or catalog.content_digest,
             expected_run_id=run_id,
             expected_signer_identity=validator_identity,
             tessera=tessera,
