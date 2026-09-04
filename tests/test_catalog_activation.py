@@ -106,6 +106,7 @@ def _proposal(projection: SimpleNamespace, source: Path) -> dict[str, object]:
                 "max_attempts": 15,
             },
             "loopback": [{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+            "port_bindings": [{"tcp_slot": 0, "target_input": "PORT"}],
         },
     }
 

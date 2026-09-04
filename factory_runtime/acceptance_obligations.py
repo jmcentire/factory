@@ -602,11 +602,22 @@ def verify_retained_native_execution(
         "readiness_timeout_seconds",
         "readiness_interval_seconds",
         "readiness_max_attempts",
+        "port_bindings",
         "command_digest",
         "configuration_digest",
         "environment_digest",
     } or document.get("schema_version") != NATIVE_EXECUTION_MANIFEST_SCHEMA:
         raise AcceptanceObligationError("retained native execution manifest is malformed")
+    raw_bindings = document["port_bindings"]
+    if not isinstance(raw_bindings, list) or any(
+        not isinstance(binding, Mapping)
+        or set(binding) != {"tcp_slot", "target_input"}
+        or not isinstance(binding["tcp_slot"], int)
+        or isinstance(binding["tcp_slot"], bool)
+        or not isinstance(binding["target_input"], str)
+        for binding in raw_bindings
+    ):
+        raise AcceptanceObligationError("retained native execution port bindings are malformed")
     # Re-derive the identity from the retained argvs/bounds; it must match the ledger digests.
     try:
         rederived = native_test_execution_digests(
@@ -616,6 +627,10 @@ def verify_retained_native_execution(
             readiness_timeout_seconds=document["readiness_timeout_seconds"],
             readiness_interval_seconds=document["readiness_interval_seconds"],
             readiness_max_attempts=document["readiness_max_attempts"],
+            port_bindings=[
+                (binding["tcp_slot"], binding["target_input"])
+                for binding in raw_bindings
+            ],
         )
     except (ValueError, TypeError) as exc:
         raise AcceptanceObligationError(

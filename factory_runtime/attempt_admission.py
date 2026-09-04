@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ SCHEMA_VERSION = "factory-one-attempt-admission/3"
 _LEGACY_SCHEMA_VERSION = "factory-one-attempt-admission/1"
 _V2_SCHEMA_VERSION = "factory-one-attempt-admission/2"
 ENVELOPE_KIND = "factory-one-attempt-admission"
+_TARGET_INPUT = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 
 class AttemptAdmissionError(ValueError):
@@ -173,14 +175,27 @@ def _target_profile(
     raw = payload.get("target_runtime_profile")
     if not isinstance(raw, Mapping):
         raise AttemptAdmissionError("admission package has no target_runtime_profile")
-    allowed = {"candidate_launch", "runtime_read_paths", "readiness", "loopback", "mode", "test_entrypoint"}
+    allowed = {
+        "candidate_launch",
+        "runtime_read_paths",
+        "readiness",
+        "loopback",
+        "mode",
+        "test_entrypoint",
+        "port_bindings",
+    }
     if set(raw) - allowed:
         raise AttemptAdmissionError("target runtime profile has unsupported fields")
     launch = _command(raw.get("candidate_launch"), "target candidate_launch")
     if raw.get("mode") == "native-two-profile":
         test = _command(raw.get("test_entrypoint"), "target test_entrypoint")
         readiness = raw.get("readiness")
-        if not isinstance(readiness, Mapping) or set(readiness) != {"entrypoint", "timeout_seconds", "interval_seconds", "max_attempts"}:
+        if not isinstance(readiness, Mapping) or set(readiness) != {
+            "entrypoint",
+            "timeout_seconds",
+            "interval_seconds",
+            "max_attempts",
+        }:
             raise AttemptAdmissionError("native readiness declaration is invalid")
         ready = _command(readiness.get("entrypoint"), "native readiness")
         bounds = ("timeout_seconds", "interval_seconds", "max_attempts")
@@ -190,17 +205,68 @@ def _target_profile(
         if not isinstance(loopback, list) or not loopback:
             raise AttemptAdmissionError("native loopback must declare endpoint shapes")
         endpoints: list[Mapping[str, object]] = []
+        tcp_slots = 0
         for endpoint in loopback:
-            if not isinstance(endpoint, Mapping) or set(endpoint) != {"protocol", "operations", "count"}:
+            if not isinstance(endpoint, Mapping) or set(endpoint) != {
+                "protocol",
+                "operations",
+                "count",
+            }:
                 raise AttemptAdmissionError("native loopback endpoint shape is invalid")
-            if endpoint["protocol"] not in {"tcp", "udp"} or not isinstance(endpoint["operations"], list) or not endpoint["operations"] or set(endpoint["operations"]) - {"bind", "connect"} or not isinstance(endpoint["count"], int) or not 1 <= endpoint["count"] <= 64:
+            protocol = endpoint["protocol"]
+            operations = endpoint["operations"]
+            count = endpoint["count"]
+            if (
+                protocol not in {"tcp", "udp"}
+                or not isinstance(operations, list)
+                or not operations
+                or set(operations) - {"bind", "connect"}
+                or not isinstance(count, int)
+                or not 1 <= count <= 64
+            ):
                 raise AttemptAdmissionError("native loopback endpoint is unsupported")
-            endpoints.append({"protocol": endpoint["protocol"], "operations": sorted(set(endpoint["operations"])), "count": endpoint["count"]})
+            endpoints.append(
+                {
+                    "protocol": protocol,
+                    "operations": sorted(set(operations)),
+                    "count": count,
+                }
+            )
+            if protocol == "tcp":
+                tcp_slots += count
+        raw_bindings = raw.get("port_bindings", [])
+        if not isinstance(raw_bindings, list):
+            raise AttemptAdmissionError("native port bindings must be an array")
+        bindings: list[tuple[int, str]] = []
+        for binding in raw_bindings:
+            if not isinstance(binding, Mapping) or set(binding) != {"tcp_slot", "target_input"}:
+                raise AttemptAdmissionError("native port binding is invalid")
+            slot = binding["tcp_slot"]
+            target_input = binding["target_input"]
+            if (
+                not isinstance(slot, int)
+                or isinstance(slot, bool)
+                or not 0 <= slot < tcp_slots
+                or not isinstance(target_input, str)
+                or not _TARGET_INPUT.fullmatch(target_input)
+                or target_input.startswith("FACTORY_")
+            ):
+                raise AttemptAdmissionError("native port binding is unsupported")
+            bindings.append((slot, target_input))
+        if len({slot for slot, _ in bindings}) != len(bindings):
+            raise AttemptAdmissionError("native port binding reuses a declared TCP endpoint")
+        if len({target_input for _, target_input in bindings}) != len(bindings):
+            raise AttemptAdmissionError("native port binding reuses a target input")
+        if len(bindings) != tcp_slots:
+            raise AttemptAdmissionError(
+                "native port bindings must bind every declared TCP endpoint"
+            )
         execution = native_test_execution_digests(
             launch, test, readiness_entrypoint=ready,
             readiness_timeout_seconds=readiness["timeout_seconds"],
             readiness_interval_seconds=readiness["interval_seconds"],
             readiness_max_attempts=readiness["max_attempts"],
+            port_bindings=bindings,
         )
         return {}, _paths(raw.get("runtime_read_paths", []), "target runtime"), DENY_ALL_NETWORK, {
             "candidate_launch": launch, "test_entrypoint": test, "readiness_entrypoint": ready,
@@ -208,6 +274,7 @@ def _target_profile(
             "readiness_interval_seconds": readiness["interval_seconds"],
             "readiness_max_attempts": readiness["max_attempts"],
             "loopback": tuple(endpoints), "identity": native_execution_identity_digest(execution),
+            "port_bindings": execution.port_bindings,
         }
     readiness = raw.get("readiness")
     if not isinstance(readiness, Mapping) or set(readiness) - {
@@ -259,7 +326,12 @@ def _target_profile(
                 )
             )
     network_policy = NetworkPolicy.declared_loopback(grants) if grants else DENY_ALL_NETWORK
-    return environment, _paths(raw.get("runtime_read_paths", []), "target runtime"), network_policy, None
+    return (
+        environment,
+        _paths(raw.get("runtime_read_paths", []), "target runtime"),
+        network_policy,
+        None,
+    )
 
 
 def _verify_predecessors(
@@ -580,6 +652,10 @@ def dispatch_admitted_attempt(orchestrator: Any, admitted: AdmittedAttempt) -> A
             native_readiness_max_attempts=(
                 admitted.native_runtime["readiness_max_attempts"]
                 if admitted.native_runtime is not None else 120
+            ),
+            native_port_bindings=(
+                admitted.native_runtime["port_bindings"]
+                if admitted.native_runtime is not None else ()
             ),
             native_runtime_read_paths=admitted.validator_runtime_paths,
         )

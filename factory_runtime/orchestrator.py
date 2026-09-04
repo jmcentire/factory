@@ -249,6 +249,7 @@ class FactoryOrchestrator:
         native_readiness_timeout_seconds: float = 30.0,
         native_readiness_interval_seconds: float = 0.5,
         native_readiness_max_attempts: int = 120,
+        native_port_bindings: Sequence[tuple[int, str]] = (),
         native_runtime_read_paths: Sequence[str | Path] = (),
         validator_profile_environment: Mapping[str, str] | None = None,
         validator_runtime_paths: Sequence[str | Path] = (),
@@ -486,6 +487,7 @@ class FactoryOrchestrator:
                 readiness_timeout_seconds=native_readiness_timeout_seconds,
                 readiness_interval_seconds=native_readiness_interval_seconds,
                 readiness_max_attempts=native_readiness_max_attempts,
+                port_bindings=native_port_bindings,
             )
             command_digest, configuration_digest, environment_digest = native_execution.digests
             native_execution_identity = native_execution_identity_digest(native_execution)
@@ -777,6 +779,7 @@ class FactoryOrchestrator:
                 native_readiness_timeout_seconds=native_readiness_timeout_seconds,
                 native_readiness_interval_seconds=native_readiness_interval_seconds,
                 native_readiness_max_attempts=native_readiness_max_attempts,
+                native_port_bindings=native_port_bindings,
                 native_runtime_read_paths=native_runtime_read_paths,
                 before_validation=enter_validation,
             )

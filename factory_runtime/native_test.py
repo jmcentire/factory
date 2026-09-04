@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 from factory_core.manifest import digest_obj
 
-CONTRACT_VERSION = "factory-native-test-executor/2"
+CONTRACT_VERSION = "factory-native-test-executor/3"
 
 # Disjoint materialization roots. The candidate tree and the test tree are never siblings inside a
 # single readable directory: each profile is rooted at, and may read, only its own tree.
@@ -131,6 +131,7 @@ class NativeTestExecution:
     readiness_timeout_seconds: float
     readiness_interval_seconds: float
     readiness_max_attempts: int
+    port_bindings: tuple[tuple[int, str], ...]
     command_digest: str
     configuration_digest: str
     environment_digest: str
@@ -149,7 +150,7 @@ class NativeTestExecution:
 # The retained native-execution evidence variant. Its presence as a ledger artifact key is the
 # explicit positive discriminator that a VALIDATING/PREVIEW entry was produced by the two-profile
 # native executor rather than a frozen validator-runner; the checked projection dispatches on it.
-NATIVE_EXECUTION_MANIFEST_SCHEMA = "factory-native-execution-identity/1"
+NATIVE_EXECUTION_MANIFEST_SCHEMA = "factory-native-execution-identity/2"
 NATIVE_EXECUTION_IDENTITY_KEY = "native-execution-identity"
 
 
@@ -169,6 +170,10 @@ def native_execution_manifest_document(execution: NativeTestExecution) -> dict[s
         "readiness_timeout_seconds": execution.readiness_timeout_seconds,
         "readiness_interval_seconds": execution.readiness_interval_seconds,
         "readiness_max_attempts": execution.readiness_max_attempts,
+        "port_bindings": [
+            {"tcp_slot": slot, "target_input": target_input}
+            for slot, target_input in execution.port_bindings
+        ],
         "command_digest": execution.command_digest,
         "configuration_digest": execution.configuration_digest,
         "environment_digest": execution.environment_digest,
@@ -183,7 +188,7 @@ def native_execution_identity_digest(execution: NativeTestExecution) -> str:
 
 def _environment_contract() -> dict[str, object]:
     return {
-        "schema_version": "factory-native-test-environment/2",
+        "schema_version": "factory-native-test-environment/3",
         "ambient_environment": "closed",
         "candidate_environment_keys": list(CANDIDATE_ENV_KEYS),
         "test_environment_keys": list(TEST_ENV_KEYS),
@@ -193,6 +198,7 @@ def _environment_contract() -> dict[str, object]:
         "acceptance_catalog_key": "FACTORY_ACCEPTANCE_CATALOG",
         "output_dir_key": "FACTORY_OUTPUT_DIR",
         "loopback_port_keys": ["FACTORY_LOOPBACK_TCP_PORTS", "FACTORY_LOOPBACK_UDP_PORTS"],
+        "target_port_inputs": "declared-loopback-tcp-bindings-only/1",
         "cross_artifact_reads": "denied",
     }
 
@@ -216,12 +222,14 @@ def native_test_execution_digests(
     readiness_timeout_seconds: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
     readiness_interval_seconds: float = DEFAULT_READINESS_INTERVAL_SECONDS,
     readiness_max_attempts: int = DEFAULT_READINESS_MAX_ATTEMPTS,
+    port_bindings: Sequence[tuple[int, str]] = (),
 ) -> NativeTestExecution:
     """Bind the exact candidate/readiness/test argvs to a ratifiable execution identity."""
 
     candidate = _clean_argv(candidate_launch, label="candidate launch", allow_empty=False)
     test = _clean_argv(test_entrypoint, label="test entrypoint", allow_empty=False)
     readiness = _clean_argv(readiness_entrypoint, label="readiness entrypoint", allow_empty=True)
+    normalized_bindings = tuple(sorted((int(slot), str(name)) for slot, name in port_bindings))
 
     if readiness:
         if not (readiness_timeout_seconds > 0 and readiness_interval_seconds > 0):
@@ -251,6 +259,10 @@ def native_test_execution_digests(
             "candidate_launch": list(candidate),
             "readiness_entrypoint": list(readiness),
             "test_entrypoint": list(test),
+            "port_bindings": [
+                {"tcp_slot": slot, "target_input": target_input}
+                for slot, target_input in normalized_bindings
+            ],
         }
     )
     configuration_digest = digest_obj(
@@ -259,6 +271,10 @@ def native_test_execution_digests(
             "candidate_launch": list(candidate),
             "test_entrypoint": list(test),
             "readiness": readiness_config,
+            "port_bindings": [
+                {"tcp_slot": slot, "target_input": target_input}
+                for slot, target_input in normalized_bindings
+            ],
         }
     )
     environment_digest = digest_obj(_environment_contract())
@@ -269,6 +285,7 @@ def native_test_execution_digests(
         readiness_timeout_seconds=timeout,
         readiness_interval_seconds=interval,
         readiness_max_attempts=attempts,
+        port_bindings=normalized_bindings,
         command_digest=command_digest,
         configuration_digest=configuration_digest,
         environment_digest=environment_digest,

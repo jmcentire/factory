@@ -130,6 +130,7 @@ def test_native_v3_profile_binds_only_declared_executor_facts(tmp_path: Path) ->
             "max_attempts": 15,
         },
         "loopback": [{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        "port_bindings": [{"tcp_slot": 0, "target_input": "PORT"}],
     }
     admitted = admit_attempt_package(
         tmp_path / "package.tessera.json", policy=_policy(), tessera=FakeTessera(payload, [])
@@ -137,7 +138,76 @@ def test_native_v3_profile_binds_only_declared_executor_facts(tmp_path: Path) ->
     assert admitted.native_runtime is not None
     assert admitted.native_runtime["candidate_launch"] == ("/usr/bin/python3", "server.py")
     assert admitted.native_runtime["identity"].startswith("sha256:")
+    assert admitted.native_runtime["port_bindings"] == ((0, "PORT"),)
     assert admitted.validator_network_policy.identity == {"label": "deny-all", "grants": []}
+
+
+def test_native_port_bindings_support_multiple_declared_tcp_slots(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    payload["target_runtime_profile"] = {
+        "mode": "native-two-profile",
+        "candidate_launch": ["/usr/bin/python3", "server.py"],
+        "test_entrypoint": ["/usr/bin/python3", "-m", "pytest"],
+        "runtime_read_paths": [str(tmp_path / "runtime")],
+        "readiness": {
+            "entrypoint": ["/usr/bin/python3", "ready.py"],
+            "timeout_seconds": 15,
+            "interval_seconds": 1,
+            "max_attempts": 15,
+        },
+        "loopback": [{"protocol": "tcp", "operations": ["bind", "connect"], "count": 2}],
+        "port_bindings": [
+            {"tcp_slot": 0, "target_input": "HTTP_PORT"},
+            {"tcp_slot": 1, "target_input": "ADMIN_PORT"},
+        ],
+    }
+
+    admitted = admit_attempt_package(
+        tmp_path / "package.tessera.json", policy=_policy(), tessera=FakeTessera(payload, [])
+    )
+
+    assert admitted.native_runtime is not None
+    assert admitted.native_runtime["port_bindings"] == ((0, "HTTP_PORT"), (1, "ADMIN_PORT"))
+
+
+@pytest.mark.parametrize(
+    "bindings, match",
+    [
+        (
+            [
+                {"tcp_slot": 0, "target_input": "PORT"},
+                {"tcp_slot": 0, "target_input": "ADMIN_PORT"},
+            ],
+            "reuses a declared",
+        ),
+        ([{"tcp_slot": 1, "target_input": "PORT"}], "unsupported"),
+        ([{"tcp_slot": 0, "target_input": "FACTORY_OUTPUT_DIR"}], "unsupported"),
+        ([], "must bind every declared"),
+    ],
+)
+def test_native_port_bindings_refuse_duplicate_undeclared_and_reserved_inputs(
+    tmp_path: Path, bindings, match: str
+) -> None:
+    payload = _payload(tmp_path)
+    payload["target_runtime_profile"] = {
+        "mode": "native-two-profile",
+        "candidate_launch": ["/usr/bin/python3", "server.py"],
+        "test_entrypoint": ["/usr/bin/python3", "-m", "pytest"],
+        "runtime_read_paths": [str(tmp_path / "runtime")],
+        "readiness": {
+            "entrypoint": ["/usr/bin/python3", "ready.py"],
+            "timeout_seconds": 15,
+            "interval_seconds": 1,
+            "max_attempts": 15,
+        },
+        "loopback": [{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        "port_bindings": bindings,
+    }
+
+    with pytest.raises(AttemptAdmissionError, match=match):
+        admit_attempt_package(
+            tmp_path / "package.tessera.json", policy=_policy(), tessera=FakeTessera(payload, [])
+        )
 
 
 @pytest.mark.parametrize(

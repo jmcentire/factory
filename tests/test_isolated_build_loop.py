@@ -875,6 +875,7 @@ def _native_acceptance_catalog(
     readiness_timeout_seconds: float = 30.0,
     readiness_interval_seconds: float = 0.5,
     readiness_max_attempts: int = 120,
+    port_bindings: Sequence[tuple[int, str]] = (),
     test_assertions: Sequence[Mapping[str, str]] | None = None,
 ) -> Path:
     """An acceptance catalog whose trigger binds a two-profile native-test execution identity.
@@ -898,6 +899,7 @@ def _native_acceptance_catalog(
         readiness_timeout_seconds=readiness_timeout_seconds,
         readiness_interval_seconds=readiness_interval_seconds,
         readiness_max_attempts=readiness_max_attempts,
+        port_bindings=port_bindings,
     )
     document = {
         "schema_version": "factory-acceptance-obligation-catalog/1",
@@ -1104,6 +1106,7 @@ def _expected_execution(
     readiness_timeout_seconds: float = 30.0,
     readiness_interval_seconds: float = 0.5,
     readiness_max_attempts: int = 120,
+    port_bindings: Sequence[tuple[int, str]] = (),
 ) -> dict[str, str]:
     execution = native_test_execution_digests(
         candidate_launch,
@@ -1112,12 +1115,53 @@ def _expected_execution(
         readiness_timeout_seconds=readiness_timeout_seconds,
         readiness_interval_seconds=readiness_interval_seconds,
         readiness_max_attempts=readiness_max_attempts,
+        port_bindings=port_bindings,
     )
     return {
         "command_digest": execution.command_digest,
         "configuration_digest": execution.configuration_digest,
         "environment_digest": execution.environment_digest,
     }
+
+
+@pytest.mark.isolation_integration
+def test_native_port_binding_projects_only_the_allocated_declared_port(tmp_path: Path) -> None:
+    root = temporary_build_loop_root(tmp_path)
+    candidate, tester = _stage_native_target(
+        tmp_path,
+        candidate_source=_CANDIDATE_SERVER.replace(
+            'os.environ["FACTORY_LOOPBACK_TCP_PORTS"].split(",")[0]',
+            'os.environ["PORT"]',
+        ),
+    )
+    assertions = [{"test_id": "native-port", "assertion_digest": "sha256:" + "1" * 64}]
+    catalog = _native_acceptance_catalog(
+        tmp_path,
+        candidate_launch=_CANDIDATE_LAUNCH,
+        test_entrypoint=_TEST_ENTRY,
+        test_assertions=assertions,
+        port_bindings=((0, "PORT"),),
+    )
+
+    result = IsolatedBuildLoop(root).execute(
+        build_input_path=FIXTURES / "build-input.json",
+        coder_command=(),
+        tester_command=(),
+        validator_command=_TEST_ENTRY,
+        acceptance_catalog_path=catalog,
+        prebuilt_author_outputs={LaneRole.CODER: candidate, LaneRole.TESTER: tester},
+        candidate_loopback=[{"protocol": "tcp", "operations": ["bind", "connect"], "count": 1}],
+        candidate_launch=_CANDIDATE_LAUNCH,
+        native_test_entrypoint=_TEST_ENTRY,
+        native_port_bindings=((0, "PORT"),),
+        before_validation=lambda *_: {
+            "validator_execution": _expected_execution(
+                _CANDIDATE_LAUNCH, _TEST_ENTRY, port_bindings=((0, "PORT"),)
+            )
+        },
+    )
+
+    assert result.validator.succeeded
 
 
 @pytest.mark.isolation_integration

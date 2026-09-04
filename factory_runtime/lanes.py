@@ -384,6 +384,7 @@ class IsolatedBuildLoop:
         native_readiness_timeout_seconds: float = 30.0,
         native_readiness_interval_seconds: float = 0.5,
         native_readiness_max_attempts: int = 120,
+        native_port_bindings: Sequence[tuple[int, str]] = (),
         native_runtime_read_paths: Sequence[str | Path] = (),
         before_validation: Callable[
             [LaneExecution, LaneExecution, FrozenTree, FrozenTree], Mapping[str, object]
@@ -453,6 +454,7 @@ class IsolatedBuildLoop:
                     readiness_timeout_seconds=native_readiness_timeout_seconds,
                     readiness_interval_seconds=native_readiness_interval_seconds,
                     readiness_max_attempts=native_readiness_max_attempts,
+                    port_bindings=native_port_bindings,
                 )
                 # Retain the positive native execution identity as a content-addressed manifest, so
                 # the orchestrator and every checked state projection can re-derive and verify it
@@ -789,12 +791,25 @@ class IsolatedBuildLoop:
         specs = [EndpointSpec.from_dict(spec) for spec in candidate_loopback]
 
         def candidate_env(ports: Mapping[str, str]) -> dict[str, str]:
-            return {
+            environment = {
                 "FACTORY_OUTPUT_DIR": str(candidate_output),
                 "FACTORY_CANDIDATE_DIR": str(candidate_root),
                 "FACTORY_ICE_HOST": "127.0.0.1",
                 **ports,
             }
+            tcp_ports = tuple(
+                int(value)
+                for value in str(ports.get("FACTORY_LOOPBACK_TCP_PORTS", "")).split(",")
+                if value
+            )
+            for slot, target_input in native_execution.port_bindings:
+                try:
+                    environment[target_input] = str(tcp_ports[slot])
+                except IndexError as exc:
+                    raise LaneError(
+                        "native port binding does not match the reserved TCP endpoint slots"
+                    ) from exc
+            return environment
 
         def test_env(ports: Mapping[str, str], *, with_catalog: bool) -> dict[str, str]:
             env = {
