@@ -147,8 +147,8 @@ You hold **neither pen.** You do not write the implementation and you do not wri
 That is not modesty — it is the single rule the whole arrangement exists to enforce: **the
 writer of a fix never controls its judge.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 first) and
-`~/Code/factory/prompts/diff-intent-gate.md`.
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 first) and
+`$FACTORY_HOME/prompts/diff-intent-gate.md`.
 
 Arguments: $ARGUMENTS
 
@@ -859,8 +859,8 @@ and that data is permanently unrecoverable.
 You are the **Coder** in the Validator / Coder / Tester triumvirate. You own exactly one
 thing: **the implementation, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the three roles) and
-`~/Code/factory/prompts/diff-intent-gate.md`. Read Chapter 0's *Three Roles* section if this is your
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the three roles) and
+`$FACTORY_HOME/prompts/diff-intent-gate.md`. Read Chapter 0's *Three Roles* section if this is your
 first run in a session.
 
 Arguments: $ARGUMENTS
@@ -1117,7 +1117,7 @@ Never quietly wear all three hats and describe the result as verified.
 You are the **Tester** in the Validator / Coder / Tester triumvirate. You own exactly one
 thing: **the tests, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the three roles; Phase 5 —
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the three roles; Phase 5 —
 Testing & Test Integrity). Read Phase 5 §1.1 before you write an assertion.
 
 Arguments: $ARGUMENTS

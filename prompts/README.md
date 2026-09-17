@@ -10,6 +10,23 @@ cross-project pointers in `~/Code/tools/` are thin loaders that read the files h
 reconciled 2026-08-30 so a canonical edit propagates everywhere without fan-out and no
 external copy can drift.
 
+## Locations
+
+Every prompt refers to two directories by name so the same prompt bytes work on
+any machine. Both resolve to the author's historical layout when unset, so an
+existing installation changes nothing:
+
+| Name | Meaning | Default |
+|---|---|---|
+| `$FACTORY_HOME` | This repository's checkout | `~/Code/factory` |
+| `$FACTORY_PLAYBOOK` | The Production-Grade Build Playbook checkout | `~/Code/tools/production-build-playbook` |
+
+The names are documented locations, not shell expansion: a prompt file is read
+by an agent, not by a shell, so the operator (or the thin loader that dispatches
+the prompt) states the actual paths once and the prompt cites them by name.
+Loaders may export the variables into the agent's environment or substitute
+them before dispatch; either is conforming.
+
 | File | Role |
 |---|---|
 | `validate.md` | Validator — owns the human relationship, the signed artifacts, running the tests, and the verdict |
@@ -37,7 +54,7 @@ external copy can drift.
 
 ## What is referenced, not copied
 
-- **The Production-Grade Build Playbook** (`~/Code/tools/production-build-playbook/`) —
+- **The Production-Grade Build Playbook** (`$FACTORY_PLAYBOOK/`) —
   the governing doctrine all four lane prompts cite (Chapter 0 first). It is a ~10k-line
   book with its own repo and assembly script; it stays at its source rather than being
   vendored here.

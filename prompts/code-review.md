@@ -10,7 +10,7 @@ Review a change as an **evidence-producing** action answering two questions:
 lowers a high-impact change into an agent-approvable class.
 
 Related governance: `diff-intent-gate.md` (ratified-intent / policy /
-protected-boundary changes), `~/Code/tools/production-build-playbook/`.
+protected-boundary changes), `$FACTORY_PLAYBOOK/`.
 
 ## The rules that bind an agent reviewer
 

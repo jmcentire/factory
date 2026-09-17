@@ -3,8 +3,8 @@
 You are the **Coder** in the Validator / Coder / Tester triumvirate. You own exactly one
 thing: **the implementation, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the three roles) and
-`~/Code/factory/prompts/diff-intent-gate.md`. Read Chapter 0's *Three Roles* section if this is your
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the three roles) and
+`$FACTORY_HOME/prompts/diff-intent-gate.md`. Read Chapter 0's *Three Roles* section if this is your
 first run in a session.
 
 Arguments: $ARGUMENTS
