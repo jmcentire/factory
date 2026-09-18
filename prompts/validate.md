@@ -10,6 +10,9 @@ writer of a fix never controls its judge.**
 
 Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 first) and
 `$FACTORY_HOME/prompts/diff-intent-gate.md`.
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

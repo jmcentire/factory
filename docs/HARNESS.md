@@ -25,6 +25,7 @@
 > gap.
 > Canonical copy: `$FACTORY_HOME/docs/HARNESS.md`; the former `~/Code/tools/HARNESS.md`
 > mirror is now a thin pointer here (reconciled 2026-08-30 — it had drifted).
+> `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`; see `prompts/README.md`, Locations).
 > Skill form: `/orchestrate` (`skills/orchestrate.md` here; `~/.claude/commands/` holds a
 > thin loader reading `prompts/orchestrate.md`).
 

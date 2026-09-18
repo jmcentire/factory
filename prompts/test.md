@@ -5,6 +5,8 @@ thing: **the tests, against the signed specification.**
 
 Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the three roles; Phase 5 —
 Testing & Test Integrity). Read Phase 5 §1.1 before you write an assertion.
+Locations: `$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`); defined in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

@@ -6,6 +6,9 @@ thing: **the implementation, against the signed specification.**
 Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the three roles) and
 `$FACTORY_HOME/prompts/diff-intent-gate.md`. Read Chapter 0's *Three Roles* section if this is your
 first run in a session.
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

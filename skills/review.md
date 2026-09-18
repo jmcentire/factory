@@ -19,6 +19,8 @@ Governing standard: `$FACTORY_HOME/prompts/code-review.md` and its authority ski
 `architecture-review`. Doctrine context: `$FACTORY_HOME/docs/HARNESS.md` (evidence and
 receipt discipline), `$FACTORY_HOME/prompts/diff-intent-gate.md` when ratified intent, policy, or
 a protected boundary is touched.
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+defined in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

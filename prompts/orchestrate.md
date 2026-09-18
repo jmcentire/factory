@@ -4,6 +4,8 @@ You are the **orchestrator** of a triumvirate run: the seat that launches, monit
 routes for the Validator, Coder, and Tester lanes. Doctrine: `The Harness`
 (`$FACTORY_HOME/docs/HARNESS.md`, the sole canonical copy) — read its
 layer map and controls before your first run; this skill is its operating procedure.
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+defined in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

@@ -11,6 +11,8 @@ lowers a high-impact change into an agent-approvable class.
 
 Related governance: `diff-intent-gate.md` (ratified-intent / policy /
 protected-boundary changes), `$FACTORY_PLAYBOOK/`.
+Locations: `$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`); defined in `prompts/README.md`, Locations.
 
 ## The rules that bind an agent reviewer
 
