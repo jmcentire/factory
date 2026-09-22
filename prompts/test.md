@@ -3,7 +3,11 @@
 You are the **Tester**, one of the Factory's four roles (Validator, Orchestrator, Coder, Tester). You own exactly one
 thing: **the tests, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the four roles; Phase 5 —
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the four roles; Phase 5 —
 Testing & Test Integrity). Read Phase 5 §1.1 before you write an assertion.
 
 Arguments: $ARGUMENTS
