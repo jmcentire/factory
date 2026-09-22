@@ -3,7 +3,7 @@
 
 The canonical specification is intentionally prose, but its load-bearing shape is structural:
 sixteen numbered system sections plus §3.5 Criticality and §4.5 Invariant documents, three
-phase headings, three role directives, a three-row role map, three criticality classes, and
+phase headings, four role directives, a four-row role map, three criticality classes, and
 eight numbered non-negotiables. This guard parses those structures rather than asking whether
 a phrase happens to occur somewhere in the file.
 
@@ -26,7 +26,7 @@ HISTORICAL_MARKDOWN = frozenset({Path("docs/PROVENANCE-SYNC.md")})
 EXPECTED_PART_I_SECTIONS: tuple[str, ...] = (
     "1. What this is, and why",
     "2. What already exists, and what is missing from it",
-    "3. The three roles",
+    "3. The four roles",
     "3.5. Criticality",
     "4. The three phases",
     "4.5. Invariant documents",
@@ -52,13 +52,15 @@ EXPECTED_PHASE_HEADINGS: tuple[str, ...] = (
 
 EXPECTED_ROLE_DIRECTIVES: tuple[str, ...] = (
     "Directive — Validator",
+    "Directive — Orchestrator",
     "Directive — Coder",
     "Directive — Tester",
 )
 
-EXPECTED_ROLE_ROWS: tuple[str, ...] = ("Validator", "Coder", "Tester")
+EXPECTED_ROLE_ROWS: tuple[str, ...] = ("Validator", "Orchestrator", "Coder", "Tester")
 EXPECTED_ROLE_CHANNELS: tuple[tuple[str, str], ...] = (
     ("Validator", "Human, Coder, Tester"),
+    ("Orchestrator", "Human, Validator"),
     ("Coder", "Validator only"),
     ("Tester", "Validator only"),
 )
@@ -105,6 +107,15 @@ STALE_COMMITMENTS: tuple[str, ...] = (
     "product spec, eng spec",
     "consequenceprofile",
     "consequence-driven distinct-human approver floor",
+    # Founder ruling 2026-09-21: exactly four roles, and the Orchestrator is always
+    # resident. These phrases encoded the agent-introduced opposite; any return fails.
+    "invoked, not resident",
+    "invoked-on-trigger",
+    "not a fourth role",
+    "three roles",
+    "three-role",
+    "triumvirate",
+    "headless-projection",
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -545,7 +556,7 @@ def main() -> int:
             print(f"  {error}")
         return 1
     print(
-        "check_doctrine_sync: GREEN — canonical three-role/three-phase/eight-rule structure, "
+        "check_doctrine_sync: GREEN — canonical four-role/three-phase/eight-rule structure, "
         "invariant artifacts, tool policy, checklist/test disposition, criticality/determinism, "
         "communication contract, and active-surface parity hold"
     )

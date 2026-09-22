@@ -31,7 +31,7 @@ tree; the tree is the authority (remediation 5.2).
 
 ```bash
 make check-purity   # the boundary guarantee — run this first
-make check-doctrine # structural doctrine parity (three roles / phases / eight rules)
+make check-doctrine # structural doctrine parity (four roles / three phases / eight rules)
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy

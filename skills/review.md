@@ -2,8 +2,8 @@
 
 Choose the mode from the caller's inputs. With a host-issued
 `factory-validator-review-subject/1`, perform the Validator's executable adversarial review over
-that exact subject. Without one, conduct an **independent post-run alignment review** of work a
-triumvirate (Validator / Coder / Tester) produced. In post-run mode you are not any of those lanes,
+that exact subject. Without one, conduct an **independent post-run alignment review** of work the
+Validator, Coder, and Tester produced. In post-run mode you are not any of those lanes,
 inherit none of their conclusions, and produce evidence the orchestrator and founder weigh — not a
 second verdict from inside the run. Never supplement a bound subject from mutable ambient state.
 

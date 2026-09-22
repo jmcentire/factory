@@ -814,6 +814,16 @@ def resident_mode(root: pathlib.Path) -> bool:
     return isinstance(metadata, dict) and metadata.get("orchestrator_mode") == "resident-monitoring"
 
 
+def require_resident(root: pathlib.Path) -> None:
+    """Refuse a run whose metadata does not declare a resident Orchestrator."""
+
+    if not resident_mode(root):
+        raise OrchestratorChannelError(
+            "run has no resident Orchestrator: every Factory run requires one "
+            "(orchestrator_mode=resident-monitoring); there is no orchestrator-less mode"
+        )
+
+
 def _latest_assessment(rows: Sequence[Mapping[str, object]]) -> Mapping[str, Any] | None:
     if not rows:
         return None
@@ -840,11 +850,15 @@ def _require_current_guidance(
 
 
 def require_current(root: pathlib.Path) -> tuple[int, int]:
-    """Refuse a resident-mode transition whose complete activity stream is unassessed."""
+    """Refuse any transition whose complete activity stream is unassessed.
+
+    Every run has a resident Orchestrator (founder ruling 2026-09-21: exactly
+    four roles, and the Orchestrator is always running). A run without one is
+    refused here, never waved through: there is no orchestrator-less mode.
+    """
 
     root = pathlib.Path(root)
-    if not resident_mode(root):
-        return 0, 0
+    require_resident(root)
     with _channel_lock(root) as directory:
         highwater = _validate_activity_rows(_read_jsonl(directory / "activity.jsonl"))
         report_rows = _read_jsonl(directory / "reports.jsonl")
@@ -863,8 +877,7 @@ def require_through(root: pathlib.Path, cursor: int) -> int:
     if cursor < 1:
         raise OrchestratorChannelError("required cursor must be positive")
     root = pathlib.Path(root)
-    if not resident_mode(root):
-        return 0
+    require_resident(root)
     with _channel_lock(root) as directory:
         activity_rows = _read_jsonl(directory / "activity.jsonl")
         highwater = _validate_activity_rows(activity_rows)

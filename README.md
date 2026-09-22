@@ -12,7 +12,8 @@ The foundation of this repository is a written doctrine, and the code implements
 it. The doctrine is authoritative; this repository reports its running subset below.
 
 - **[`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)** — the unified specification:
-  exactly three roles (**Validator, Coder, Tester**), exactly three pre-build phases, the
+  exactly four roles (**Validator, Orchestrator, Coder, Tester**; the Orchestrator is resident
+  and always running for every run), exactly three pre-build phases, the
   eight non-negotiables, and every rule the factory enforces. Part II contains the
   authoritative self-contained role directives. The former ~25-rule digest here was a
   restatement that drifted; the specification is the authority (remediation 5.2).
@@ -49,7 +50,7 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `comprehensiveness.py` | The intake-completeness gate (the entrance) — a deterministic, injection-resistant registry of structural field predicates that decides comprehensive vs needs-info without an LLM. Fields/thresholds/rules are data. | **Implemented** |
 | `adapters.py` + `target.py` | The target-as-data boundary + the environment-ladder dependency seams — the five `Protocol` seams for all target contact, resolved by name from a signed data-only `TargetManifest` (never a code import). The manifest also binds the operational build ABI: authorized pattern-catalog digest, construction modes, and hard attempt ceiling. | **Implemented** |
 | `roles.py` | Target RBAC bundles — capabilities as the atomic unit, roles as per-target named bundles, grants as per-target data. These target roles are not additional factory workflow roles. | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
-| `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical three-role/three-phase structure. | **Implemented** |
+| `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical four-role/three-phase structure. | **Implemented** |
 
 ### Executable runtime status
 

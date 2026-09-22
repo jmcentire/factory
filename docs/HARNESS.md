@@ -108,13 +108,15 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Qualification | **Benchie** as configuration CI | `qualification_id = hash(model + prompts + runner + tool schemas + policy + projection + verifier + environment)`; any change requalifies. The session-start canary is a smoke test for gross configuration failure, never certification of the next trajectory. |
 | Verdict | Validator + human gates | Validator executes an oracle it did not author; the judge of the judge is the qualification suite plus the human gate — the gap the Validator postmortem named ("who judges the judge") closes structurally, not with a fourth agent. |
 
-One seat the map must name explicitly: the **orchestrator** — and it is two seats, not
-one. The **dispatcher** is a script. It owns deterministic transport, launches lanes through
+One role the map must name explicitly: the **Orchestrator**, one of the Factory's four roles
+(Validator, Orchestrator, Coder, Tester), with two parts that both run for the whole run. The
+**dispatcher** is its script part. It owns deterministic transport, launches lanes through
 `lane_env`, relays, collects receipts, and enforces budgets, leases, blocks, and sole
 advancement. It reasons about nothing.
 
-In an interactive tmux run the **orchestrator-agent is resident** from ignition to terminal
-disposition. The dispatcher samples a bounded last-60-line snapshot whenever a
+In every run the **orchestrator-agent is resident** from ignition to terminal disposition; the
+dispatcher, the pre-dispatch and pre-verdict checkpoints, and the orchestrator channel refuse a
+run without it. The dispatcher samples a bounded last-60-line snapshot whenever a
 Validator/Coder/Tester capture changes and appends every sample it obtained plus every
 deterministic signal under a monotonic activity cursor and an independent cadence record. It
 addresses only the Orchestrator's own pane with the complete captured cursor range. It may
@@ -180,14 +182,15 @@ travel through `codex queue` or `codex exec resume` to the exact retained thread
 terminal input. Planned and delivered records are separate, cross-lane answers and conflicting
 second answers refuse, and neither author's work is projected into the other lane.
 
-The **qualified non-interactive path remains one-shot**. There the dispatcher invokes the
-Orchestrator only on defined exception triggers and hands it a closed projection, not a
-transcript. That mode is reproducible and separately receipted; resident tmux coordination is
+There is **no one-shot orchestrator mode**. `orchestrator_wake.sh` remains as a frozen-projection
+audit: it runs only beside a resident Orchestrator, hands a sandboxed reviewer a closed projection
+rather than a transcript, and is reproducible and separately receipted. It never substitutes for
+the resident Orchestrator and refuses any run without one. Resident tmux coordination is
 explicitly `operator-owned-tmux-unqualified`. Neither mode gives the model grant authority.
 tmux pane capture is an inferred observation and never the retained response or an isolation
 boundary.
 
-For the qualified headless path, the executable projection is a closed nine-section document (trigger, task, phase snapshot,
+For the frozen-projection audit, the executable projection is a closed nine-section document (trigger, task, phase snapshot,
 receipt/event/minutes tails, active directives, run projection, and harness metadata), built
 from one stable-open confirmed read of each bounded input and one stable bounded-suffix read of
 each append-only log, then bound by a state-dependency capsule. A mature log may grow without
@@ -606,7 +609,8 @@ dependency-free (bash + python3 + git):
   violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
   checkpoints, never promotion evidence.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
-  projection plus capsule, and invokes a one-shot advisory orchestrator in a fresh empty directory.
+  projection plus capsule, and runs a sandboxed frozen-projection audit in a fresh empty directory.
+  It refuses any run without a resident Orchestrator and never substitutes for one.
   Append-only sources are read as stable bounded suffixes rather than rejected when their full
   history grows; `supervise_advisory.py` enforces the live wall/output ceilings before retention.
   The agent choice is frozen in harness metadata; ambient substitution denies. Antigravity is the
