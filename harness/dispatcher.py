@@ -45,6 +45,7 @@ from orchestrator_channel import (  # noqa: E402 - adjacent harness module
     OrchestratorChannelError,
     activity_highwater,
     append_activity,
+    assessed_through,
 )
 from watchdog import SignalWatchdog  # noqa: E402 - adjacent harness module
 
@@ -231,10 +232,16 @@ class Dispatcher:
             "--tessera-bin",
             os.environ.get("FACTORY_TESSERA_BIN", "tessera"),
         )
-        # The check-in loop cannot be disabled: a missing, zero, or negative interval
-        # falls back to the default instead of turning the cadence off.
-        configured_interval = int(cfg.get("audit_interval_min") or 0)
+        # The check-in loop cannot be disabled: a missing, malformed, zero, or negative
+        # interval falls back to the default instead of turning the cadence off.
+        try:
+            configured_interval = int(cfg.get("audit_interval_min") or 0)
+        except (TypeError, ValueError):
+            configured_interval = 0
         self.audit_interval_min = configured_interval if configured_interval > 0 else 15
+        # Orchestrator liveness watch: who watches the watcher.
+        self.last_assessed = 0
+        self.assessed_progress_at = time.monotonic()
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
         self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "")
         self.last_delivered_cursor = 0
@@ -351,7 +358,11 @@ class Dispatcher:
         halt = self.root.parent.parent / "HALT"
         if halt.exists() and not self.halted:
             self.halted = True
-            head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"
+            try:
+                lines = halt.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines = []  # unreadable HALT is still HALT: fail closed
+            head = lines[0] if lines else "HALT"
             self.event("halt", head, wake=False)  # deterministic path, no agent in loop
             if head.startswith("ORCHESTRATOR HALT"):
                 # The Orchestrator stopped the Validator. Enforce it here too, so a
@@ -497,12 +508,49 @@ class Dispatcher:
             kind="cadence",
             source="dispatcher",
             detail=(
-                "check-in loop: check in on the Validator, Coder, and Tester; answer every "
-                "check-in question in orchestrator/ROLE.md; reconstruct the user's ultimate goal, "
-                "test direction and consequences, audit rule adherence, and update "
+                "check-in loop: check in on the Validator, Coder, and Tester; answer the "
+                "every-tick check-in questions in orchestrator/ROLE.md from what the journal "
+                "shows since the last tick; audit rule adherence; and update "
                 "orchestrator/OUTSTANDING-WORK.md with the Validator's reminders"
             ),
         )
+
+    def check_orchestrator_liveness(self) -> None:
+        """Block the run when the resident Orchestrator stops assessing.
+
+        Delivering bytes to its pane proves nothing. The principal is a recorded
+        assessment: if activity keeps arriving and the assessed cursor has not
+        advanced for two check-in intervals, the Orchestrator is dead, hung, or
+        not doing its job, and the run stops until a human looks.
+        """
+
+        if self.orchestrator_mode != "resident-monitoring":
+            return
+        try:
+            highwater = activity_highwater(self.root)
+            assessed = assessed_through(self.root)
+        except OrchestratorChannelError as exc:
+            self._record_orchestrator_transport_failure(str(exc))
+            return
+        now_mono = time.monotonic()
+        if assessed > self.last_assessed or highwater <= assessed:
+            self.last_assessed = assessed
+            self.assessed_progress_at = now_mono
+            return
+        stalled_min = (now_mono - self.assessed_progress_at) / 60
+        if stalled_min < 2 * self.audit_interval_min:
+            return
+        key = f"orchestrator-unresponsive:{self.last_assessed}"
+        if key in self.notified:
+            return
+        self.notified.add(key)
+        detail = (
+            f"resident Orchestrator has not assessed past cursor {assessed} for "
+            f"{stalled_min:.0f}m while activity reached {highwater}; nothing is watching"
+        )
+        self.event("orchestrator_unresponsive", detail, wake=False)
+        self._block("validator", "orchestrator_unresponsive", detail[:200])
+        self._banner(f"INCIDENT — {detail[:160]}")
 
     def _record_orchestrator_transport_failure(self, detail: str) -> None:
         key = f"orchestrator-transport:{hashlib.sha256(detail.encode()).hexdigest()}"
@@ -780,6 +828,7 @@ class Dispatcher:
             self.signal_watchdog.check(self.event, self._block)
             self.snapshot_minutes()
             self.deliver_pending_activity()
+            self.check_orchestrator_liveness()
             time.sleep(self.interval)
 
 

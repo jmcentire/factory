@@ -119,7 +119,13 @@ runs a check-in loop on a cadence that cannot be disabled (15 minutes by default
 negative interval falls back to the default), and its `orchestrator/OUTSTANDING-WORK.md` plan and
 reminders are printed into the Validator's own output at every pre-dispatch and pre-verdict
 checkpoint and shown by `status.sh`. The dispatcher, the pre-dispatch and pre-verdict
-checkpoints, and the orchestrator channel refuse a run without it. The dispatcher samples a bounded last-60-line snapshot whenever a
+checkpoints, and the orchestrator channel refuse a run without it. The dispatcher also watches the
+Orchestrator: if activity keeps arriving and the assessed cursor has not advanced for two check-in
+intervals, it records `orchestrator_unresponsive`, blocks the Validator, and banners the incident.
+An Orchestrator `halt` writes HALT and kills the Validator's window. Residual, stated honestly:
+every seat runs as the same POSIX user, so "only a human clears HALT" rests on the Validator being
+dead and the author lanes being sandboxed, not on file ownership; a separate owner for the HALT
+path is the mechanical fix and is not yet built. The dispatcher samples a bounded last-60-line snapshot whenever a
 Validator/Coder/Tester capture changes and appends every sample it obtained plus every
 deterministic signal under a monotonic activity cursor and an independent cadence record. It
 addresses only the Orchestrator's own pane with the complete captured cursor range. It may

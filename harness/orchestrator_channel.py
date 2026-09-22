@@ -386,6 +386,23 @@ def activity_highwater(root: pathlib.Path) -> int:
         return _validate_activity_rows(_read_jsonl(directory / "activity.jsonl"))
 
 
+def assessed_through(root: pathlib.Path) -> int:
+    """Highest cursor the Orchestrator has recorded an assessment through.
+
+    A cheap progress read for the dispatcher's liveness watch; full report
+    validation stays with require_current/require_through.
+    """
+
+    with _channel_lock(pathlib.Path(root)) as directory:
+        rows = _read_jsonl(directory / "reports.jsonl")
+    cursors = [
+        row["assessment"].get("through_cursor")
+        for row in rows
+        if isinstance(row.get("assessment"), dict)
+    ]
+    return max((c for c in cursors if isinstance(c, int) and not isinstance(c, bool)), default=0)
+
+
 def _read_harness(root: pathlib.Path) -> dict[str, Any]:
     path = root / "harness.json"
     try:
@@ -823,9 +840,30 @@ def resident_mode(root: pathlib.Path) -> bool:
 
 
 def halt_path(root: pathlib.Path) -> pathlib.Path:
-    """The run-wide HALT marker that lane_env and the dispatcher already honor."""
+    """The run-wide HALT marker that lane_env and the dispatcher already honor.
 
-    return pathlib.Path(root).parent.parent / "HALT"
+    The Orchestrator reports with ``--root .``, so the root is resolved first; a
+    relative root would otherwise put HALT inside the run directory, where
+    nothing looks. The run root must sit directly under a ``runs/`` directory,
+    the layout lane_env and the dispatcher use; anything else is refused.
+    """
+
+    resolved = pathlib.Path(root).resolve()
+    if resolved.parent.name != "runs":
+        raise OrchestratorChannelError(
+            f"halt refused: run root {resolved} is not under a runs/ directory"
+        )
+    return resolved.parent.parent / "HALT"
+
+
+def _run_id(root: pathlib.Path) -> str:
+    resolved = pathlib.Path(root).resolve()
+    try:
+        metadata = json.loads((resolved / "harness.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return resolved.name
+    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+    return run_id if isinstance(run_id, str) and run_id else resolved.name
 
 
 def halt_validator(root: pathlib.Path, summary: str) -> None:
@@ -854,7 +892,7 @@ def halt_validator(root: pathlib.Path, summary: str) -> None:
             os.fsync(stream.fileno())
     try:
         subprocess.run(
-            ["tmux", "kill-window", "-t", f"{pathlib.Path(root).name}:validator"],
+            ["tmux", "kill-window", "-t", f"{_run_id(root)}:validator"],
             capture_output=True,
             timeout=10,
         )

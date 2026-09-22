@@ -659,3 +659,34 @@ def test_orchestrator_halt_requires_findings_and_preserves_an_existing_halt(
         ),
     )
     assert (tmp_path / ".factory" / "HALT").read_text() == "TRIPWIRE: secret in transcript\n"
+
+
+def test_orchestrator_halt_works_with_the_relative_root_the_runtime_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher tells the Orchestrator to run `report --root .`. A halt must
+    still land HALT where lane_env and the dispatcher look, and kill the right
+    session's Validator window."""
+    root = _halt_root(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        orchestrator_channel.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(list(command)),
+    )
+    monkeypatch.chdir(root)
+    append_activity(Path("."), kind="cadence", source="dispatcher", detail="cadence")
+    record_assessment(
+        Path("."),
+        assessment(
+            1,
+            aligned=False,
+            adherence_findings=["Validator wrote implementation code."],
+            decision="halt",
+            summary="halting the Validator",
+        ),
+    )
+    assert (tmp_path / ".factory" / "HALT").read_text().startswith("ORCHESTRATOR HALT")
+    assert not (root / "HALT").exists()
+    assert ["tmux", "kill-window", "-t", "r1:validator"] in calls

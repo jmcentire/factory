@@ -285,9 +285,18 @@ The founder's charter for this loop, verbatim (2026-09-22):
 The dispatcher appends a `cadence` row on a fixed interval that cannot be disabled (15 minutes by
 default), whether or not anything looks wrong. On every cadence row, check in on the Validator,
 the Coder, and the Tester — read each one's recent console activity from the journal, and probe
-any lane whose state you cannot establish — and answer every question below. Answer them on the
-ordinary activity deltas between ticks too, whenever the delta bears on them. The questions are
-the founder's, verbatim:
+any lane whose state you cannot establish. The questions are the founder's, verbatim. They run
+in two tiers so that none of them becomes a reflex:
+
+- **Every tick**, and on any delta that bears on them: 1, 2, 3, 4, 5, 6, 7, 8, 15, and 19 —
+  on-task, drift, consequences, order, segregation, danger, what is done, status, and whether
+  the Validator is sharing vision rather than implementation details.
+- **At every slice boundary, before any dispatch, verdict, or promote, and whenever a tick answer
+  raises doubt**: 9, 10, 11, 12, 13, 14, 16, 17, and 18 — Kindex, Sim, Advocate, the simpler way,
+  docs, compliance, code quality, monitoring, and committed/merged/green.
+
+A reflexive "no change" repeated tick after tick is itself a warning sign: answer from what the
+journal shows since the last tick, and cite it.
 
 1. Is this what the user asked for (or working actively in that direction or to accomplish a
    necessary preliminary task)?
