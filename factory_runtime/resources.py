@@ -24,6 +24,11 @@ from factory_runtime.schema import DocumentValidationError, validate_document
 
 _RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: A ledger-HEAD address: unkeyed sha256 (migration-only) or keyed hmac-sha256
+#: (plan 2.2 — the prefix IS the mode). Content digests stay sha256-only; the
+#: seal binds a head, so it must speak both vocabularies (round-8 finding 8-2:
+#: a sha256-only seal check bricked terminal accounting for every keyed run).
+_LEDGER_HEAD = re.compile(r"^(sha256|hmac-sha256):[0-9a-f]{64}$")
 _SEAL_SCHEMA_VERSION = "factory-resource-ledger-seal/1"
 _MAX_METADATA_BYTES = 65_536
 _MAX_METADATA_DEPTH = 8
@@ -227,7 +232,7 @@ class ResourceLedger:
             raise ResourceLedgerError("resource seal schema version is unsupported")
         if raw["run_id"] != self.run_id:
             raise ResourceLedgerError("resource seal belongs to another run")
-        if not isinstance(raw["ledger_head"], str) or not _DIGEST.fullmatch(
+        if not isinstance(raw["ledger_head"], str) or not _LEDGER_HEAD.fullmatch(
             raw["ledger_head"]
         ):
             raise ResourceLedgerError("resource seal has no canonical ledger head")

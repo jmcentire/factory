@@ -2,7 +2,7 @@
 
 ### How we build and how we repair
 
-**Three roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
+**Four roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
 implements, proves conformance, and produces the evidence.**
 
 ---
@@ -33,7 +33,7 @@ the strength of a description — applies to the factory's own description of it
 
 1. [What this is, and why](#1-what-this-is-and-why)
 2. [What already exists, and what is missing from it](#2-what-already-exists-and-what-is-missing-from-it)
-3. [The three roles](#3-the-three-roles)
+3. [The four roles](#3-the-four-roles)
 3.5. [Criticality](#35-criticality)
 4. [The three phases](#4-the-three-phases)
 4.5. [Invariant documents](#45-invariant-documents)
@@ -124,16 +124,57 @@ where **the human is shown a calibrated decision rather than a wall of logs.**
 
 ---
 
-## 3. The three roles
+## 3. The four roles
 
-There are three roles. There are no others. Everything else in this document is a phase, an
+There are four roles. There are no others. Everything else in this document is a phase, an
 artifact, or a control — not a role.
 
 | Role | Owns |
 |---|---|
 | **Validator** | Coordinates with the human. Holds the context. Co-authors the spec. All questions route here. Runs the tests once code and tests are both complete. Judges. |
+| **Orchestrator** | Resident and always running for every run. Watches every lane continuously, keeps the Validator on the plan and the outstanding-work ledger, audits adherence to the rules and to what the human explicitly said, and speaks up unprompted. Blocks; never implements, tests, judges, grants, or advances. |
 | **Coder** | Implements against the spec. |
 | **Tester** | Writes tests against the spec. |
+
+### The Orchestrator is always resident
+
+Every run has a resident Orchestrator from ignition until terminal disposition. The dispatcher,
+the pre-dispatch and pre-verdict checkpoints, and the orchestrator channel refuse a run without
+one; there is no one-shot, wake-only, or orchestrator-less mode (founder ruling 2026-09-21). It
+owns no implementation, test, verdict, grant, or close authority, so the Coder/Tester
+independence and the Validator's judgment do not change. Its job is to observe every bounded sampled pane snapshot
+the dispatcher captures, without semantic filtering, plus independent cadence; recover the
+user's continuing goal from the retained run and Kindex; question whether the current direction
+and side effects advance that goal; audit the rules; and preserve normalized outstanding work
+across turns.
+
+Before it decomposes a task, it inventories the apparent requirements. It distinguishes explicit
+user intent and ratified artifacts from implicit assumptions and inherited code behavior, then
+identifies whether one requirement contributes disproportionate complexity intrinsically or by
+interacting with another. Each pressure point names its assumptions and the simpler path that
+would exist if it changed. It qualifies as a pressure point only when relaxing it changes the
+planning mode or model tier, or removes a named boundary, dependency, or necessary work chunk—not
+merely because the resulting diff is large. It either cites why the requirement is fixed or raises
+a concrete simplification question and blocks further decomposition. Existing complexity is
+evidence to investigate, never proof that the complexity exists for a current reason.
+
+Only after that pass does it choose `direct`, `clarify`, `decompose`, or `deep`, write small
+dependency-linked chunks to Kindex, and recommend the least expensive qualified model for each.
+When a run selects standards, loops, or recipes, the Orchestrator also reads the exact retained
+selection and sources, challenges every classification and applicability decision, and compares
+the generated authority routing and evidence with the host-derived selection/application/evidence
+digests. `routing-verified` means only that the obligation reached its intended control. It is not
+a compliance claim. Pre-dispatch requires routing, pre-verdict requires evidence completion, and
+any noncompliant state or inherited open finding forces the same monotone block as other process
+drift.
+Its closed machine effect is only `block|halt|no-op`; `halt` stops the Validator (HALT is set and its
+window killed; only a human clears it); `no-op` grants nothing. The deterministic
+dispatcher transports every captured cursor range and cadence row but selects no conversation for
+strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
+Orchestrator inspects tmux and sends a typed status probe to the exact retained author session.
+A block becomes durable before its assessment is current, names its reason, and clears only through
+an exact-subject Validator/human disposition plus a new assessment; clearing it closes neither the
+outstanding work nor the run.
 
 ### The two rules that make this work
 
@@ -246,6 +287,34 @@ than asking the human to proofread dense text.
 
 The loop continues until the specification is **specific enough to be implemented** and both
 parties agree it is.
+
+Before calling it specific enough, pressure-test the requirement set itself. A single explicit,
+implicit, or inherited requirement can dominate the solution cost or interact with another to do
+so. State that contribution and the simpler observable goal that might satisfy the user without
+it; ask rather than silently preserve accidental complexity. Decomposition begins only after
+those questions close.
+
+Semantic closure is derived from evidence, not recall. Retain each planning pass, prior lane
+trace, and adversarial review as a source; bind two separately recorded, source-digest-bound
+extraction manifests to every source; preserve every extracted observation under a
+content-derived identity; and give
+each an explicit typed ruling plus `open|closed` state. A generated section in the signed Product
+Specification binds the complete input closure. Phase A re-derives and byte-compares it, and any
+missing extraction/ruling, source drift, hand edit, or open item blocks. This mechanically proves
+that no **retained and extracted** observation disappeared. Claimed extractor/configuration
+provenance is retained but not authenticated. The mechanism does not prove extraction recall or
+ruling wisdom; questions discovered downstream are escape evidence to enroll in the next pass.
+Until every producer is mechanically joined to source enrollment, the generated section must render
+producer-enrollment coverage as unknown; a closed enrolled union is not whole-run completeness.
+
+Agreement closure is relational, not a count of complete paths. Before Phase 3 is ratified, derive
+an exact participant inventory for each Product requirement from the strongest available
+structural evidence. One participant is single-path; two or more force a cross-path agreement
+entry in the generated Testing Strategy. That entry names the shared authority, the semantic
+residue, a shared-boundary oracle, two asymmetric mismatch directions, and rollout/data/error
+axes. Phase C must show that producer-side and consumer-side drift can each evade their unchanged
+local suite while the agreement oracle catches it, on the exact candidate. Thus “quote was tested”
+plus “hold was tested” is not evidence that quote and hold make the same availability decision.
 
 **Specific enough to be implemented is not detailed enough to be built one way.** The Product
 Specification asserts *what ought to be true* — a capability, a guarantee, an outcome the system
@@ -478,6 +547,31 @@ Coder output: mechanisms must not leak into the independent oracle. The resultin
 judged by the agreed user-visible and operational effects. Generated-code aesthetics are not a
 promotion criterion unless a phase artifact explicitly makes one an outcome or constraint.
 
+#### Per-run guidance compiles into the three authorities
+
+The user may select additional standards, process loops, and recipes for one run. Selection is
+an exact external-resume configuration input: a canonical manifest names content-addressed source
+documents and enumerates stable obligations, roles, and the observable subject each obligation
+governs. The source's label does not choose enforcement. Behavioral subjects route into Product
+and Testing as acceptance obligations; procedural subjects route into Architecture and Testing as
+process checkpoints; constructional subjects route into Architecture and Testing as named
+conformance requirements. Thus an infrastructure rule about the name of `main` and its entrypoint
+can constrain construction without becoming a fabricated product behavior or a pretend reference
+to a construction artifact that does not yet exist.
+
+Before ratification the Validator dispositions every selected obligation as applied or not
+applicable, gives a concrete basis, and obtains an independent review of both its classification
+and application bound to the digest of that exact application row. One deterministic compiler renders semantic-evidence union, selected guidance,
+and cross-path agreement in fixed order into the existing three artifacts. Coder and Tester receive
+only applied role projections; the Tester receives behavioral obligations only and never a whole
+guidance document or constructional recipe. Exact membership and routing are mechanical.
+Interpretive completeness, appropriateness, and implementation conformance remain explicit review
+surfaces. Accordingly the intermediate state is named `routing-verified`, never `compliant`.
+Exact-candidate evidence for every applied item and a current Orchestrator assessment of its
+adequacy are required before verdict; each observation binds the run, selection, application,
+obligation, candidate, method, and raw evidence. The checkpoint-selected set is immutable for one run;
+changing it starts a new run.
+
 `regenerate` makes complete replacement ordinary rather than organizationally exceptional;
 `brownfield` permits a deliberately scoped correction. Either mode preserves the same
 authority, oracle, evidence, and promotion rules. Cheap rewriting is freedom to replace an
@@ -496,7 +590,7 @@ A **translation boundary** is any point where intent is restated in a different 
 dangerous property is the same at each one: **the output of the translation becomes the target
 for everything downstream.**
 
-In the three-role structure the Validator is the translation boundary — in all three phases,
+In the four-role structure the Validator is the translation boundary — in all three phases,
 and again when it answers a Coder or Tester question from the spec.
 
 > **The Coder and the Tester do not consume the human's intent. They consume the Validator's
@@ -779,7 +873,7 @@ is reported as unverified rather than described as done.
 
 ## 8. Two flows, one structure
 
-Same three roles, same three phases. What differs is the input and the strength of the oracle
+Same four roles, same three phases. What differs is the input and the strength of the oracle
 available.
 
 | | **Capability** | **Correction** |
@@ -930,10 +1024,12 @@ Once the three phases are agreed, the loop runs.
    pattern catalog; the Tester is mechanically denied both.
 2. **Coder** implements. The plan supplies qualified mechanisms and configuration, but every
    consequential choice still resolves to the ratified phase artifacts. Questions go to the
-   Validator, which answers by quoting the authorizing language or escalates to the human.
+   Validator over an occurrence-bound typed channel, which blocks the lane until the Validator
+   delivers an answer from quoted ratified language or a retained human ruling to that exact
+   session. The Orchestrator may inspect status but may not answer.
 3. **Tester** writes integration-level acceptance and feature tests, deriving every expectation
    from the ratified build input and never from the construction IR or implementation. Questions
-   go to the Validator on the same terms.
+   go to the Validator on the same terms. No answer may cross from one author lane to the other.
 4. The runtime freezes the exact Coder and Tester outputs independently before review. A hash
    without recoverable subject bytes is not an immutable review artifact. **Validator** runs the
    tests only from those frozen subjects when both are complete.
@@ -1412,8 +1508,9 @@ and owning risk policy.
 
 ## 16. The core guarantee
 
-Three roles. The Validator co-authors the spec with the human across three phases, holds the
-context, and judges. The Coder implements against the spec. The Tester writes tests against the
+Four roles. The Validator co-authors the spec with the human across three phases, holds the
+context, and judges. The Orchestrator is resident for the whole run, watches every lane, and
+blocks when the process drifts. The Coder implements against the spec. The Tester writes tests against the
 spec. They share the spec and have no channel to each other, and the Validator — holding neither
 pen — runs the tests.
 
@@ -1455,7 +1552,7 @@ handoff.**
 
 ### The structure
 
-Three roles: **Validator**, **Coder**, **Tester**. There are no others.
+Four roles: **Validator**, **Orchestrator**, **Coder**, **Tester**. There are no others.
 
 The Validator coordinates with the human, holds the context, co-authors the spec across three
 phases, answers questions, runs the tests, and judges. The Coder implements. The Tester writes
@@ -1641,6 +1738,28 @@ does not resolve, and present concrete derived behaviors for acceptance or refut
 than asking the human to proofread. Preserve the original ask verbatim. Continue until it is
 specific enough to be implemented and the human agrees it is.
 
+Before decomposition, inventory explicit/ratified requirements separately from implicit
+assumptions and inherited behavior. Identify any one requirement or interaction with
+disproportionate solution cost, expose the assumptions that keep it in scope, and present the
+simpler path that would follow if it changed. Record the counterfactual planning-mode, model-tier,
+boundary, dependency, or necessary-chunk delta that makes the cost high; diff size alone does not.
+Either cite a binding basis or ask the human; do not turn an avoidably complex premise into an
+elaborate plan that future agents will mistake for an implicit requirement.
+
+Build the Product Specification's semantic checklist from the deterministic union of all
+retained planning, lane-trace, and adversarial-review extractions. Every source requires two
+separately recorded, source-digest-bound extraction manifests. Every distinct observation gets an
+explicit typed ruling and `open|closed` state; differing questions fork rather than collapse under
+an authored merge key.
+Materialize the canonical checklist and input-closure digest before ratification, then require the
+Phase A byte-exact verifier to pass. A grep hit or a mention of the right token is not closure.
+
+Apply every checkpoint-selected guidance obligation before ratification. Preserve its exact source,
+classify the subject, record an applied or not-applicable basis, bind the subject-derived control,
+and obtain independent classification/application review. Compile the resulting generated regions
+with the semantic union and agreement register; never let a selected source act as a fourth
+authority or let a whole recipe leak into the Tester context.
+
 **Phase 2 — propose the architecture.** Draft an architecture that satisfies the signed product
 spec and state its consequences plainly: component boundaries, state ownership, dependency
 direction, transaction and trust boundaries, data topology, deployment shape, and what each
@@ -1659,6 +1778,13 @@ their highest class. Leave nothing unclassified; the gate treats anything omitte
 failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name the fail-closed
 disposition of every hazard-class failure and the safe degradation of every other. Continue
 until the human agrees.
+
+For every Product requirement, inventory all participating paths before Phase 3 closes. Two or
+more participants force an agreement oracle at their real shared boundary; testing each path end
+to end in isolation is not evidence that the paths agree. The final candidate needs asymmetric
+producer- and consumer-drift witnesses, or an independently reviewed proof that one structural
+authority carries all semantic residue. Also name the exact evidence route for every applied
+guidance obligation; behavioral and procedural items cannot reach verdict on routing alone.
 
 **Compile and verify the construction IR after ratification.** Bind the exact target ABI,
 pattern catalog, ratified phase versions, and build input. Reject any plan that lacks complete
@@ -1833,6 +1959,47 @@ For each ruling you issued, name what it changed about the target, name the part
 it, and — where it changed what a requirement means — confirm a signed artifact now carries it. For each surface classified below Critical, name the worst outcome of that
 surface being wrong and confirm it is bounded to what the class tolerates. For each Critical
 surface, trace which components' side effects reach it.
+
+---
+
+## Directive — Orchestrator
+
+### Purpose
+
+You are resident and always running for the whole run, from ignition to terminal disposition.
+You watch every lane — every activity delta the dispatcher transports, plus independent cadence
+— and you speak up without being asked. You keep the Validator on the plan, keep the
+outstanding-work ledger, call adherence when any agent drifts from the rules, the plan, or what
+the human explicitly said, and block when the process is wrong. A run without you is refused;
+there is no one-shot, wake-only, or orchestrator-less mode.
+
+### What you hold, and what you never hold
+
+You hold the watch, the ledger, the block, and the halt. Your authority runs over every other
+role, including the Validator: you see all three consoles, and when the Validator acts as if it
+owns the run you can stop it outright. You hold no pen: no implementation, no tests, no
+verdict, no grant, no advancement, no close. Your machine effect is exactly `block`, `halt`, or
+`no-op`, and `no-op` grants nothing. The dispatcher is the deterministic part of your role: it transports
+every captured change without choosing what deserves your attention, and it enforces receipts,
+budgets, leases, and blocks because a script cannot be talked past.
+
+### The check-in loop
+
+On a fixed cadence that cannot be disabled, you check in on the Validator, the Coder, and the
+Tester and answer the founder's check-in questions (`prompts/orchestrate.md`): is this what the
+user asked for, will it address the issue, what else might happen, what is forgotten or out of
+order, is segregation holding, is anything dangerous, what is done, is Kindex in use, what do Sim
+and Advocate say, is there an easier way, are specs and docs current, any compliance issue, is
+the status current, is the code sound, is monitoring sufficient, is everything committed, merged,
+and green, and is the Validator sharing vision rather than implementation details. You hold the
+plan and the task list in `orchestrator/OUTSTANDING-WORK.md`. It is printed into the Validator's
+own output at every checkpoint, which is how your reminders reach it.
+
+### Why this role exists
+
+Models make things up and substitute their own design for what the human said, most of all when
+nothing is watching. An orchestrator that only answers when asked cannot know whether the work
+is right. Your operating procedure is `prompts/orchestrate.md`.
 
 ---
 
@@ -2051,10 +2218,11 @@ satisfy it.
 | Role | Talks to | Reads | Writes | Runs |
 |---|---|---|---|---|
 | **Validator** | Human, Coder, Tester | Everything | The spec (with the human) | The tests |
+| **Orchestrator** | Human, Validator | Every lane's activity, the run record, Kindex | Assessments, blocks, the outstanding-work ledger | Nothing it judges |
 | **Coder** | Validator only | Ratified build input + derived construction IR | The implementation | Nothing it is judged by |
 | **Tester** | Validator only | Ratified build input only | The tests | Nothing |
 
-### The correction flow uses the same three roles and the same three phases
+### The correction flow uses the same four roles and the same three phases
 
 Phase 1 becomes diagnosis — symptom traced to cause until the cause is specific enough to
 repair against. Phase 2 becomes confirmation that the repair fits the settled architecture, or
@@ -2273,7 +2441,7 @@ Defined question and specification-defect paths to the Validator remain open.
 
 ### Inferences in this revision, marked for refutation
 
-Three things follow from the three-role structure but were not stated explicitly. They are
+Three things follow from the role structure but were not stated explicitly. They are
 written into the document and flagged here so they can be refuted rather than inherited.
 
 1. **Diagnosis is phase 1 of the correction flow.** Symptom-to-cause is a human proposing and

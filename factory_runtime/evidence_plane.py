@@ -56,6 +56,7 @@ class EvidencePlaneError(ValueError):
 
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_LEDGER_HEAD = re.compile(r"^(sha256|hmac-sha256):[0-9a-f]{64}$")
 _ATTEMPT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 EVIDENCE_VERIFICATION_RECEIPT_VERSION = "factory-evidence-verification-receipt/1"
 TESSERA_EVIDENCE_VERIFIER_ID = "factory-tessera-evidence-verifier/1"
@@ -101,12 +102,17 @@ def build_preview_admission(
         raise EvidencePlaneError("preview admission subject has an invalid run id")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise EvidencePlaneError("preview admission subject has an invalid generation")
-    for label, value in (
-        ("validating ledger head", validating_ledger_head),
-        ("authority genesis digest", authority_genesis_digest),
-    ):
-        if not _DIGEST.fullmatch(value):
-            raise EvidencePlaneError(f"preview admission {label} is not a content address")
+    # The ledger HEAD speaks both address vocabularies (plan 2.2 — the schemas'
+    # ledger_head $def already did); the genesis digest is a content address and
+    # stays sha256-only (round-8 8-2: sha256-only head checks bricked keyed runs).
+    if not _LEDGER_HEAD.fullmatch(validating_ledger_head):
+        raise EvidencePlaneError(
+            "preview admission validating ledger head is not a ledger-head address"
+        )
+    if not _DIGEST.fullmatch(authority_genesis_digest):
+        raise EvidencePlaneError(
+            "preview admission authority genesis digest is not a content address"
+        )
     identities = {
         "implementer": implementer_identity.strip(),
         "tester": tester_identity.strip(),

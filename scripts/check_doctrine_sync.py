@@ -3,7 +3,7 @@
 
 The canonical specification is intentionally prose, but its load-bearing shape is structural:
 sixteen numbered system sections plus §3.5 Criticality and §4.5 Invariant documents, three
-phase headings, three role directives, a three-row role map, three criticality classes, and
+phase headings, four role directives, a four-row role map, three criticality classes, and
 eight numbered non-negotiables. This guard parses those structures rather than asking whether
 a phrase happens to occur somewhere in the file.
 
@@ -26,7 +26,7 @@ HISTORICAL_MARKDOWN = frozenset({Path("docs/PROVENANCE-SYNC.md")})
 EXPECTED_PART_I_SECTIONS: tuple[str, ...] = (
     "1. What this is, and why",
     "2. What already exists, and what is missing from it",
-    "3. The three roles",
+    "3. The four roles",
     "3.5. Criticality",
     "4. The three phases",
     "4.5. Invariant documents",
@@ -52,13 +52,15 @@ EXPECTED_PHASE_HEADINGS: tuple[str, ...] = (
 
 EXPECTED_ROLE_DIRECTIVES: tuple[str, ...] = (
     "Directive — Validator",
+    "Directive — Orchestrator",
     "Directive — Coder",
     "Directive — Tester",
 )
 
-EXPECTED_ROLE_ROWS: tuple[str, ...] = ("Validator", "Coder", "Tester")
+EXPECTED_ROLE_ROWS: tuple[str, ...] = ("Validator", "Orchestrator", "Coder", "Tester")
 EXPECTED_ROLE_CHANNELS: tuple[tuple[str, str], ...] = (
     ("Validator", "Human, Coder, Tester"),
+    ("Orchestrator", "Human, Validator"),
     ("Coder", "Validator only"),
     ("Tester", "Validator only"),
 )
@@ -105,6 +107,15 @@ STALE_COMMITMENTS: tuple[str, ...] = (
     "product spec, eng spec",
     "consequenceprofile",
     "consequence-driven distinct-human approver floor",
+    # Founder ruling 2026-09-21: exactly four roles, and the Orchestrator is always
+    # resident. These phrases encoded the agent-introduced opposite; any return fails.
+    "invoked, not resident",
+    "invoked-on-trigger",
+    "not a fourth role",
+    "three roles",
+    "three-role",
+    "triumvirate",
+    "headless-projection",
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -196,21 +207,38 @@ def _normalized(text: str) -> str:
 
 def _active_markdown(root: Path) -> tuple[Path, ...]:
     """Enumerate every active Markdown surface so a new site cannot evade parity scanning."""
+    # Ruling 5c: root markdown enumerates by rglob (depth 1) and prompts/*.md
+    # joins the scanned surface set — a new file is scanned with no registration
+    # step. Generated ROLE-DOCTRINE.md and historical/proposal surfaces stay out.
     root_docs = tuple(
-        path
-        for path in (Path("README.md"), Path("CLAUDE.md"), Path("AGENTS.md"))
-        if (root / path).exists()
+        path.relative_to(root)
+        for path in sorted(root.glob("*.md"))
+        if path.is_file()
     )
     docs = tuple(
         path.relative_to(root)
         for path in sorted((root / "docs").rglob("*.md"))
-        if path.relative_to(root) not in HISTORICAL_MARKDOWN and path.relative_to(root) != CANONICAL
+        if path.relative_to(root) not in HISTORICAL_MARKDOWN
+        and path.relative_to(root) != CANONICAL
+        and "HISTORICAL_MARKDOWN" not in path.parts
+        and "proposals" not in path.parts
+        and path.name != "ROLE-DOCTRINE.md"
     )
-    return root_docs + docs
+    prompts = tuple(
+        path.relative_to(root) for path in sorted((root / "prompts").rglob("*.md"))
+    )
+    return root_docs + docs + prompts
 
 
 def _active_python(root: Path) -> tuple[Path, ...]:
-    return tuple(path.relative_to(root) for path in sorted((root / "factory_core").rglob("*.py")))
+    # Ruling 5c: factory_runtime, harness/*.py, and scripts/*.py join the parity
+    # scope — the same one-line rglob per tree.
+    trees = ("factory_core", "factory_runtime", "harness", "scripts")
+    return tuple(
+        path.relative_to(root)
+        for tree in trees
+        for path in sorted((root / tree).rglob("*.py"))
+    )
 
 
 def check_repository(root: Path = ROOT) -> tuple[str, ...]:
@@ -507,6 +535,11 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         errors.append("tester-construction-ir-isolation-missing")
 
     for path in _active_markdown(root) + _active_python(root):
+        if path.name == "check_doctrine_sync.py":
+            # The denylist's own definition site: the tokens appear here as the
+            # LIST, not as commitments — a denylist that flagged itself would
+            # make every entry unaddable.
+            continue
         text = _read(root, path).casefold()
         for stale in STALE_COMMITMENTS:
             if stale in text:
@@ -523,7 +556,7 @@ def main() -> int:
             print(f"  {error}")
         return 1
     print(
-        "check_doctrine_sync: GREEN — canonical three-role/three-phase/eight-rule structure, "
+        "check_doctrine_sync: GREEN — canonical four-role/three-phase/eight-rule structure, "
         "invariant artifacts, tool policy, checklist/test disposition, criticality/determinism, "
         "communication contract, and active-surface parity hold"
     )

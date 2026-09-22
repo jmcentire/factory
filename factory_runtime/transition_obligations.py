@@ -494,7 +494,7 @@ def _verify_obligation(
     elif verifier_id == "stage-r-subject-resource-check":
         passed = (
             supplied.get("target-state") == target_state_digest
-            and _is_digest(supplied.get("resource-ledger", ""))
+            and _is_ledger_head(supplied.get("resource-ledger", ""))
             and target_state.get("resource_ledger_head") == supplied.get("resource-ledger")
         )
     elif verifier_id == "stage-e-authority-binding-check":
@@ -527,7 +527,13 @@ def _verify_obligation(
         passed = (
             _is_digest(supplied.get("resume-checkpoint", ""))
             and bool(str(payload.get("resume_checkpoint_id", "")))
-            and _is_digest(payload.get("anchored_run_ledger_head", ""))
+            # The anchored RUN LEDGER HEAD speaks both address vocabularies
+            # (plan 2.2: hmac-sha256 when keyed); the resume-checkpoint above is
+            # a content digest and stays sha256-only. Round-8 8-2 completeness
+            # sweep: this head site was missed in the first pass and would have
+            # bricked the external-checkpoint binding obligation under a keyed
+            # deployment.
+            and _is_ledger_head(payload.get("anchored_run_ledger_head", ""))
             and isinstance(payload.get("anchored_run_ledger_length"), int)
             and int(payload["anchored_run_ledger_length"]) >= 1
             and _is_digest(acceptance_obligation_catalog_digest)
@@ -608,7 +614,11 @@ def _verify_obligation(
             and supplied.get("promoted-artifact") == approved_candidate_digest
         )
     elif verifier_id == "resource-ledger-seal-binding-check":
-        passed = _require_digests(supplied, ("resource-ledger", "resource-ledger-seal"))
+        # The ledger HEAD speaks both address vocabularies (plan 2.2); the seal
+        # digest is digest_obj output and stays sha256-only (round-8 8-2).
+        passed = _is_ledger_head(supplied.get("resource-ledger", "")) and _is_digest(
+            supplied.get("resource-ledger-seal", "")
+        )
     elif verifier_id == "phase-invalidation-check":
         passed = str(payload.get("phase", "")) in set(_PHASE_BY_DESTINATION.values())
     elif verifier_id == "bounded-blocked-handoff-check":

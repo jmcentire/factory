@@ -61,6 +61,27 @@ else
 fi
 
 say ""
+say "## strategic orchestrator"
+orch_live=$(tmux display -p -t "$RUN:orchestrator" '#{pane_current_command}' 2>/dev/null || echo gone)
+say "  pane          : $orch_live"
+if [ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ]; then
+  orch_mode=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("orchestrator_mode", "MISSING — no resident Orchestrator; run is refused"))' "$ROOT/harness.json")
+  say "  mode          : $orch_mode"
+  if [ "$orch_mode" = "resident-monitoring" ]; then
+    orch_state=$(python3 "$D/orchestrator_channel.py" status --root "$ROOT" 2>/dev/null || echo INVALID)
+    say "  cursor state  : $orch_state"
+    dialogue_state=$(python3 "$D/lane_dialogue.py" pending --root "$ROOT" 2>/dev/null || echo INVALID)
+    say "  open questions: $dialogue_state"
+    if [ -f "$ROOT/orchestrator/OUTSTANDING-WORK.md" ] && [ ! -L "$ROOT/orchestrator/OUTSTANDING-WORK.md" ]; then
+      say "  outstanding work and reminders (orchestrator/OUTSTANDING-WORK.md):"
+      head -n 40 "$ROOT/orchestrator/OUTSTANDING-WORK.md" | sed 's/^/    /'
+    else
+      say "  outstanding work: MISSING — the Orchestrator has not written OUTSTANDING-WORK.md"
+    fi
+  fi
+fi
+
+say ""
 say "## judge (from result.json)"
 latest=""
 while IFS= read -r -d '' directory; do

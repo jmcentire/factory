@@ -385,9 +385,18 @@ def test_checkpoint_bytes_root_and_configuration_are_not_substitutable(tmp_path:
             tessera=tessera,  # type: ignore[arg-type]
             configuration_sources={"runner": config},
         )
+    # 4.2 change 5: a drifted configuration SOURCE is a TYPED reconciliation
+    # refusal — per-field delta retained under run evidence, the one repair
+    # named — never the undifferentiated identity refusal above.
+    from factory_runtime.resume import ResumeReconciliationError
+
     config.write_text('{"runner":"other"}\n', encoding="utf-8")
-    with pytest.raises(ResumeVerificationError, match="configuration_digests"):
+    with pytest.raises(ResumeReconciliationError, match="mint a fresh checkpoint") as excinfo:
         _verify(workflow, tessera, genesis_path, config, checkpoint_path, checkpoint_digest)
+    assert "runner" in excinfo.value.deltas
+    runner_delta = excinfo.value.deltas["runner"]
+    assert runner_delta["checkpoint"] != runner_delta["observed"]
+    assert excinfo.value.retained_path.is_file()  # the delta is a retained fact
 
 
 def test_whole_control_root_copy_and_ledger_rollback_are_denied(tmp_path: Path) -> None:

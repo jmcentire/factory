@@ -25,11 +25,25 @@ from factory_core.manifest import (
     SegregationPolicy,
     digest_obj,
 )
+from factory_runtime.ci_evidence import CiOutputError, verify_retained_ci_output
 from factory_runtime.durability import load_chain_key
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 from factory_runtime.transition_admission import (
+    ACCEPTANCE_OBLIGATION_CATALOG_KEY,
+    ACCEPTANCE_OBLIGATION_REPORT_KEY,
+    IMMUTABLE_AFTER_VALIDATION_KEYS,
+    PREVIEW_REQUIRED_ARTIFACT_KEYS,
+    TEST_CHANGE_AUTHORIZATION_KEY,
+    VALIDATION_SUBJECT_KEYS,
+    VALIDATOR_EXECUTION_ARTIFACT_KEYS,
+    AdmissionRefusal,
+)
+from factory_runtime.transition_admission import (
     allowed_authority_nonce_counts as allowed_authority_nonce_counts_for,
+)
+from factory_runtime.transition_admission import (
+    transition_activations as transition_activations_for,
 )
 from factory_runtime.transition_obligations import (
     REPORT_KEY as TRANSITION_OBLIGATION_REPORT_KEY,
@@ -60,6 +74,9 @@ TARGET_STATE_RUN_SCHEMA_VERSIONS = frozenset(
 GENERATION_RUN_SCHEMA_VERSIONS = frozenset(
     {"factory-run/2", "factory-run/3", "factory-run/4", RUN_SCHEMA_VERSION}
 )
+# The resolved CI row (plan 4.1) is v5-only: released ledgers promoted without a
+# retained CI output under their frozen replay profiles and must keep doing so.
+CI_OUTPUT_RUN_SCHEMA_VERSIONS = frozenset({RUN_SCHEMA_VERSION})
 # v5 is the first schema that binds the immutable Validator execution/review tuple and a
 # replayable cryptographic evidence-verification receipt. Released v4 has a separate frozen,
 # read-only replay contract; it must not be interpreted with v5 semantics.
@@ -85,16 +102,11 @@ GENERATION_ARTIFACT_KEYS: tuple[str, ...] = (
     "generation-readiness",
 )
 
-ACCEPTANCE_OBLIGATION_CATALOG_KEY = "acceptance-obligation-catalog"
+# ACCEPTANCE_OBLIGATION_CATALOG_KEY / TEST_CHANGE_AUTHORIZATION_KEY /
+# ACCEPTANCE_OBLIGATION_REPORT_KEY / VALIDATOR_EXECUTION_ARTIFACT_KEYS are
+# defined in transition_admission (shared admission axes assemble membership
+# tuples from them) and re-exported above for this module's existing consumers.
 ACCEPTANCE_OBLIGATION_CATALOG_STRUCTURAL_KEY = "acceptance_obligation_catalog"
-ACCEPTANCE_OBLIGATION_REPORT_KEY = "acceptance-obligation-report"
-TEST_CHANGE_AUTHORIZATION_KEY = "test-change-authorization"
-VALIDATOR_EXECUTION_ARTIFACT_KEYS: tuple[str, ...] = (
-    "validator-execution-manifest",
-    "validator-execution-configuration",
-    "validator-execution-environment",
-    "validator-execution-snapshot",
-)
 PREVIEW_EVIDENCE_VERIFICATION_KEY = "evidence_verification_receipt"
 
 
@@ -204,6 +216,12 @@ _PHASE_STATE_KEYS: Mapping[RunState, str] = {
     RunState.ARCHITECTURE_RATIFIED: "architecture",
     RunState.OPERATIONAL_MATURITY_RATIFIED: "operational-maturity",
 }
+#: The ratification destinations, exported for the admission-table authority
+#: walk (preflight consumes it); the phase-state map above stays the single
+#: authority.
+RATIFICATION_DESTINATIONS: tuple[str, ...] = tuple(
+    str(state) for state in _PHASE_STATE_KEYS
+)
 _PHASE_ORDER = (
     "product-specification",
     "architecture",
@@ -315,6 +333,17 @@ def _as_int(value: Any) -> int:
 def _require_digest(value: str, field_name: str) -> None:
     if not _DIGEST.fullmatch(value):
         raise RunStateError(f"{field_name} must be a canonical sha256 digest")
+
+
+#: Ledger HEADS speak two address vocabularies (plan 2.2: the prefix is the
+#: mode); content digests never do. Round-8 8-2: sha256-only head checks
+#: bricked keyed terminal accounting.
+_LEDGER_HEAD = re.compile(r"^(sha256|hmac-sha256):[0-9a-f]{64}$")
+
+
+def _require_ledger_head(value: str, field_name: str) -> None:
+    if not _LEDGER_HEAD.fullmatch(value):
+        raise RunStateError(f"{field_name} must be a canonical ledger-head address")
 
 
 def _require_generation_artifacts(
@@ -1361,25 +1390,25 @@ class RunStore:
                     + ", ".join(forbidden_subject_keys)
                 )
         phase_key = _PHASE_STATE_KEYS.get(destination)
-        catalog_activation = destination is RunState.BUILDING and not next_acceptance_catalog_digest
-        changed_tests_raw = transition_payload.get("changed_existing_tests", [])
-        if not isinstance(changed_tests_raw, list):
-            raise RunStateError("changed_existing_tests must be an exact array")
-        changed_tests = [str(test_id) for test_id in changed_tests_raw]
-        test_change_activation = bool(changed_tests)
-        if test_change_activation and destination is not RunState.BUILDING:
-            raise RunStateError(
-                "test expectation changes may be authorized only when entering building"
+        # 4.1c second axis: the write path consumes the SAME activation
+        # derivation the replay path consumes — catalog activation, test-change
+        # activation, and the ratified-key set are one answer, not twins.
+        try:
+            activations = transition_activations_for(
+                destination=str(destination),
+                phase_key=phase_key,
+                changed_existing_tests_raw=transition_payload.get(
+                    "changed_existing_tests", []
+                ),
+                catalog_digest_recorded=bool(next_acceptance_catalog_digest),
+                obligation_replay=RUN_SCHEMA_VERSION
+                in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS,
             )
-        ratified_artifact_keys = {
-            key
-            for key in (
-                phase_key,
-                ACCEPTANCE_OBLIGATION_CATALOG_KEY if catalog_activation else None,
-                TEST_CHANGE_AUTHORIZATION_KEY if test_change_activation else None,
-            )
-            if key is not None
-        }
+        except AdmissionRefusal as exc:
+            raise RunStateError(str(exc)) from exc
+        catalog_activation = activations.catalog_activation
+        test_change_activation = activations.test_change_activation
+        ratified_artifact_keys = activations.ratified_artifact_keys
         _require_receipts_belong_here(
             supplied,
             ratified_artifact_keys,
@@ -1505,45 +1534,23 @@ class RunStore:
                 ),
                 context="preview admission",
             )
+            # 4.1c third axis: the membership tuples are shared admission data.
             _require_digest_keys(
                 supplied,
-                (
-                    "candidate",
-                    "acceptance-tests",
-                    ACCEPTANCE_OBLIGATION_REPORT_KEY,
-                    "validator-review-subject",
-                    "validator-adversarial-review",
-                    "base-source-snapshot",
-                    "candidate-change-set",
-                    "validator-review-authority-context",
-                    "validator-review-observations-source",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                    "evidence-bundle",
-                    "evidence-envelope",
-                ),
+                PREVIEW_REQUIRED_ARTIFACT_KEYS,
                 context=str(destination),
             )
             prior_artifacts = self.current_artifact_digests(run_id)
             trusted_evidence = {
                 key: str(prior_artifacts.get(key, ""))
-                for key in (
-                    "candidate",
-                    "acceptance-tests",
-                    "coder-output-snapshot",
-                    "tester-output-snapshot",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                )
+                for key in VALIDATION_SUBJECT_KEYS
             }
             _require_digest_keys(
                 trusted_evidence,
                 trusted_evidence,
                 context=f"{destination} prior validation",
             )
-            for key in (
-                "candidate",
-                "acceptance-tests",
-                *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-            ):
+            for key in IMMUTABLE_AFTER_VALIDATION_KEYS:
                 if supplied[key] != trusted_evidence[key]:
                     raise RunStateError(
                         f"{destination} changes {key} after immutable validation began"
@@ -1747,6 +1754,25 @@ class RunStore:
                     "promoted artifact does not match the approved candidate digest "
                     "(the artifact promoted must be byte-for-byte what was approved)"
                 )
+        if destination is RunState.CI:
+            approved = current.approved_candidate_digest
+            if not approved:
+                raise RunStateError(
+                    f"{destination} requires a previously approved candidate digest"
+                )
+            # The resolved CI row (plan 4.1): the cited CI output must be a
+            # retained document whose body binds the EXACT approved candidate.
+            # The obligation layer's ci-evidence-binding-check verifies shape
+            # only (pre-existing); this is the real binding, and the replay
+            # path calls the same verifier.
+            try:
+                verify_retained_ci_output(
+                    self._run_dir(run_id),
+                    candidate_digest=approved,
+                    expected_digest=str(supplied.get("ci-evidence", "")),
+                )
+            except CiOutputError as exc:
+                raise RunStateError(f"{destination} ci-evidence is invalid: {exc}") from exc
 
         required_phase_keys = _required_phase_keys(destination, transition_payload)
         phases = {key: phases[key] for key in _PHASE_ORDER if key in required_phase_keys}
@@ -1998,6 +2024,29 @@ class RunStore:
                     raise RunStateError(
                         f"run genesis has unsupported schema version {schema_version!r}"
                     )
+                # Round-8 finding 8-1 (version-downgrade masquerade): every
+                # v5-only admission row (CI evidence, causal verifier, evidence
+                # receipts, the immutable-review membership tuples) keys off this
+                # per-entry schema_version, which a direct-ledger forger controls.
+                # A KEYED deployment has no legitimate legacy ledger — keyed
+                # chains are v5-only and a real v1-v4 ledger carries unkeyed
+                # sha256 addresses that already fail a keyed verify at entry 0 —
+                # so a legacy schema under a chain-root-governed tree is an
+                # integrity signal, not a replay. Fail closed explicitly rather
+                # than relying on the incidental address mismatch. Unkeyed
+                # (migration-mode) trees keep legacy replay; their forgeability
+                # is the stated 2.2 residual and its true fix is the keyed
+                # migration path (founder-gated).
+                if (
+                    schema_version in LEGACY_RUN_SCHEMA_VERSIONS
+                    and load_chain_key(self._run_dir(run_id) / "ledger.jsonl")
+                    is not None
+                ):
+                    raise RunStateError(
+                        f"legacy schema {schema_version!r} under a chain-root-keyed "
+                        "deployment: keyed chains are v5-only, so a legacy ledger "
+                        "here is a downgrade masquerade, not a replay — refused"
+                    )
                 expected_genesis = (
                     RunState.TARGET_RESOLUTION_AUTHORIZED
                     if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS
@@ -2110,31 +2159,24 @@ class RunStore:
                 raise RunStateError(f"ledger entry {index} changes the legacy run subject")
 
             derived_phase_key = _PHASE_STATE_KEYS.get(destination)
-            derived_catalog_activation = (
-                schema_version in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS
-                and destination is RunState.BUILDING
-                and not acceptance_obligation_catalog_digest
-            )
-            derived_changed_tests_raw = payload_raw.get("changed_existing_tests", [])
-            if not isinstance(derived_changed_tests_raw, list):
-                raise RunStateError(
-                    f"ledger entry {index} changed_existing_tests must be an exact array"
+            # 4.1c second axis: same activation derivation as the write path.
+            try:
+                derived_activations = transition_activations_for(
+                    destination=str(destination),
+                    phase_key=derived_phase_key,
+                    changed_existing_tests_raw=payload_raw.get(
+                        "changed_existing_tests", []
+                    ),
+                    catalog_digest_recorded=bool(acceptance_obligation_catalog_digest),
+                    obligation_replay=schema_version
+                    in OBLIGATION_REPLAY_RUN_SCHEMA_VERSIONS,
+                    context=f"ledger entry {index} ",
                 )
-            derived_changed_tests = [str(test_id) for test_id in derived_changed_tests_raw]
-            derived_test_change_activation = bool(derived_changed_tests)
-            if derived_test_change_activation and destination is not RunState.BUILDING:
-                raise RunStateError(
-                    f"ledger entry {index} authorizes a test expectation change outside building"
-                )
-            derived_ratified_keys = {
-                key
-                for key in (
-                    derived_phase_key,
-                    (ACCEPTANCE_OBLIGATION_CATALOG_KEY if derived_catalog_activation else None),
-                    (TEST_CHANGE_AUTHORIZATION_KEY if derived_test_change_activation else None),
-                )
-                if key is not None
-            }
+            except AdmissionRefusal as exc:
+                raise RunStateError(str(exc)) from exc
+            derived_catalog_activation = derived_activations.catalog_activation
+            derived_test_change_activation = derived_activations.test_change_activation
+            derived_ratified_keys = derived_activations.ratified_artifact_keys
             _require_receipts_belong_here(
                 digests, derived_ratified_keys, context=f"ledger entry {index}"
             )
@@ -2294,9 +2336,9 @@ class RunStore:
                         f"ledger entry {index} promotes a digest that was never approved"
                     )
                 if schema_version in TARGET_STATE_RUN_SCHEMA_VERSIONS:
-                    _require_digest(
+                    _require_ledger_head(
                         str(digests.get("resource-ledger", "")),
-                        f"ledger entry {index} promotion resource-ledger digest",
+                        f"ledger entry {index} promotion resource-ledger head",
                     )
                     _require_digest(
                         str(digests.get("resource-ledger-seal", "")),
@@ -2318,6 +2360,21 @@ class RunStore:
                         raise RunStateError(
                             f"ledger entry {index} resource-ledger seal digest does not match"
                         )
+            elif destination is RunState.CI and (
+                schema_version in CI_OUTPUT_RUN_SCHEMA_VERSIONS
+            ):
+                # Same CI-row verifier as the write path — a directly appended
+                # ci entry citing no (or an unbound) CI output cannot project.
+                try:
+                    verify_retained_ci_output(
+                        self._run_dir(run_id),
+                        candidate_digest=approved_candidate,
+                        expected_digest=str(digests.get("ci-evidence", "")),
+                    )
+                except CiOutputError as exc:
+                    raise RunStateError(
+                        f"ledger entry {index} ci-evidence is invalid: {exc}"
+                    ) from exc
 
             phases_raw = digests.get("phase_artifacts")
             if not isinstance(phases_raw, Mapping):
@@ -2498,13 +2555,8 @@ class RunStore:
                 elif destination is RunState.SPECIFICATION_DEFECT:
                     validation_evidence = {}
             elif schema_version in IMMUTABLE_REVIEW_RUN_SCHEMA_VERSIONS:
-                validation_keys = (
-                    "candidate",
-                    "acceptance-tests",
-                    "coder-output-snapshot",
-                    "tester-output-snapshot",
-                    *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                )
+                # 4.1c third axis: same membership tuples as the write path.
+                validation_keys = VALIDATION_SUBJECT_KEYS
                 if destination is RunState.BUILDING:
                     validation_evidence = {}
                 elif destination is RunState.VALIDATING:
@@ -2551,31 +2603,14 @@ class RunStore:
                     )
                     _require_digest_keys(
                         digests,
-                        (
-                            "candidate",
-                            "acceptance-tests",
-                            ACCEPTANCE_OBLIGATION_REPORT_KEY,
-                            "validator-review-subject",
-                            "validator-adversarial-review",
-                            "base-source-snapshot",
-                            "candidate-change-set",
-                            "validator-review-authority-context",
-                            "validator-review-observations-source",
-                            *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                            "evidence-bundle",
-                            "evidence-envelope",
-                        ),
+                        PREVIEW_REQUIRED_ARTIFACT_KEYS,
                         context=f"ledger entry {index} preview",
                     )
                     if not validation_evidence:
                         raise RunStateError(
                             f"ledger entry {index} preview has no immutable validation subject"
                         )
-                    for key in (
-                        "candidate",
-                        "acceptance-tests",
-                        *VALIDATOR_EXECUTION_ARTIFACT_KEYS,
-                    ):
+                    for key in IMMUTABLE_AFTER_VALIDATION_KEYS:
                         if digests[key] != validation_evidence[key]:
                             raise RunStateError(
                                 f"ledger entry {index} preview changes {key} after validation"

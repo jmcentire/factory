@@ -85,7 +85,7 @@ protected-boundary changes), `~/Code/tools/production-build-playbook/`.
   acceptance criteria / policy / a protected boundary; unresolved gate →
   `INCOMPLETE`.
 
-## Applying it in the triumvirate (how the Validator uses this)
+## Applying it in the Factory (how the Validator uses this)
 
 The Validator reviews BOTH the producer code (Coder) and the tests (Tester) to
 this standard — not just "tests green." Test-sensitivity (lens 6) is the

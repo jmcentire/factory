@@ -14,10 +14,13 @@ Reference data (verified artifact citations in acceptance_baseline.json, extract
 the four retained dogfood runs): first NO-relevant signals at 0.22 / 0.30 / 1.13 / 3.67 h;
 **max healthy inter-pass gap 6.98 h** (ci-r1 overnight operator wait).
 
-- **Proposed default: 24 h** cap, **12 h** warn — 3.4× the max healthy gap, dies 5×
-  sooner than the 127-hour case. **Floor 12 h** (anything lower halts a healthy
-  overnight run). Alternative: 72 h if you prefer a run-total-style backstop.
-- [ ] 24 / 12 as proposed [ ] other value: ______
+- **Proposed default: 24 h** cap — 3.4× the max healthy gap, dies 5× sooner than
+  the 127-hour case. **Floor 12 h** (anything lower halts a healthy overnight
+  run). Alternative: 72 h if you prefer a run-total-style backstop. (An earlier
+  draft proposed a paired "12 h warn", but no wall-clock warn knob exists in the
+  committed schema — WARN is pass-denominated per plan 0.4; ratifying a
+  wall-clock warn would need a schema knob first, so it is not offered here.)
+- [ ] 24 as proposed [ ] other value: ______
 
 ## 2. Pass knobs (already ruled — restated for the record)
 
@@ -78,3 +81,13 @@ The 11 primary-artifact citations (paths + sha256 under ~/WanderRepos/repos, ver
 live before commit) with the pre-instrumentation honesty caveat on every row.
 
 - [ ] ratified as the acceptance baseline's reference corpus
+
+## 8. DOCTRINE-KERNEL deletion (plan 5.2 Step 1)
+
+The kernel-statement inventory is at
+`docs/proposals/doctrine-kernel-inventory-2026-08-31.md`: a mechanical first pass
+found 22 of 36 rows already duplicated in the canonical and 14 needing migration
+or named ratification. The kernel file stays alive until you sign; migration
+commits land the exact wording for whichever rows you route that way.
+
+- [ ] ratify per the inventory's checkboxes  [ ] veto: ______

@@ -14,9 +14,9 @@ subsequent reader — agent and human-adjacent alike — inherited it as gospel 
 founder spot-checked it (2026-07-20). The founder then supplied the settled
 Validator/Coder/Tester and three-phase structure directly (2026-07-26). The lesson:
 *reading* cannot be trusted to catch what *diffing against a quoted invariant* will. The
-three-role re-assertion is the canonical worked example — changing the count, changing one
-of the three role identities, or promoting a phase/artifact into a role is a material
-change, full stop.
+role-count re-assertion is the canonical worked example — changing the count, changing a
+role identity, or promoting a phase/artifact into a role is a material change, full stop.
+The count is four (Validator, Orchestrator, Coder, Tester) by founder ruling, 2026-09-21.
 
 ## The rule
 

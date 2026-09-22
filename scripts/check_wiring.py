@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime as _dt
+import hashlib as _hashlib
 import json
 import subprocess
 import sys
@@ -410,6 +412,9 @@ def load_baseline(path: Path) -> frozenset[str]:
     if not isinstance(data, list):
         raise WiringError(f"baseline {path} must be a JSON array of objects")
     lines: set[str] = set()
+    today = _dt.date.today()
+    warn_horizon = today + _dt.timedelta(days=14)
+    expiring: list[str] = []
     for i, entry in enumerate(data):
         if (
             not isinstance(entry, dict)
@@ -422,7 +427,50 @@ def load_baseline(path: Path) -> frozenset[str]:
                 f"baseline {path} entry {i}: each entry needs non-empty "
                 "'finding' and 'justification' strings"
             )
+        # 4.2 change 6: a suppression is a LOAN, not a title deed — every entry
+        # names its owner and expiry (dates batched to one quarterly event so the
+        # single operator faces one bounded re-ratification), and the
+        # justification digest pins the justified text: renewal requires a fresh
+        # justification digest, never a bulk date bump over unread prose.
+        owner = entry.get("owner")
+        expires_raw = entry.get("expires")
+        digest = entry.get("justification_digest")
+        if not isinstance(owner, str) or not owner.strip():
+            raise WiringError(f"baseline {path} entry {i}: missing 'owner'")
+        if not isinstance(expires_raw, str):
+            raise WiringError(f"baseline {path} entry {i}: missing 'expires' (YYYY-MM-DD)")
+        try:
+            expires = _dt.date.fromisoformat(expires_raw)
+        except ValueError as exc:
+            raise WiringError(
+                f"baseline {path} entry {i}: bad 'expires' {expires_raw!r}"
+            ) from exc
+        expected_digest = "sha256:" + _hashlib.sha256(
+            entry["justification"].encode("utf-8")
+        ).hexdigest()
+        if digest != expected_digest:
+            raise WiringError(
+                f"baseline {path} entry {i} ({entry['finding']}): justification "
+                f"edited without re-deriving justification_digest — renewal "
+                f"requires a fresh justification, mechanically pinned"
+            )
+        if expires < today:
+            raise WiringError(
+                f"baseline {path} entry {i} EXPIRED {expires_raw}: "
+                f"{entry['finding']} (owner {owner}) — re-ratify or delete; an "
+                f"expired suppression is a red finding, not a quiet permission"
+            )
+        if expires <= warn_horizon:
+            expiring.append(f"{entry['finding']} (expires {expires_raw}, owner {owner})")
         lines.add(entry["finding"])
+    if expiring:
+        print(
+            "check_wiring WARN: baseline entries expiring within 14 days "
+            "(quarterly re-ratification due):",
+            file=sys.stderr,
+        )
+        for line in expiring:
+            print(f"  - {line}", file=sys.stderr)
     return frozenset(lines)
 
 

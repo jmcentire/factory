@@ -320,3 +320,31 @@ def test_cli_disposition_carries_immutable_resource_identity_forward(tmp_path: P
         "reason": "preserve evidence",
         "residue": True,
     }
+
+
+def test_keyed_ledger_seals_with_an_hmac_head_and_retries_idempotently(
+    tmp_path: Path,
+) -> None:
+    """Round-8 finding 8-2: a keyed resource ledger's head is an hmac-sha256
+    address; the seal must mint, reload, retry idempotently, and verify with
+    that vocabulary — the sha256-only seal check bricked every keyed run's
+    terminal accounting."""
+    from factory_runtime.durability import CHAIN_ROOT_KEY_FILENAME
+
+    (tmp_path / CHAIN_ROOT_KEY_FILENAME).write_bytes(b"founder-root-material\n")
+    ledger = ResourceLedger(tmp_path / "run-1", "run-1", clock=lambda: 100)
+    _append(ledger, "source", status="planned")
+    _append(ledger, "source", status="active")
+    _append(
+        ledger,
+        "source",
+        status="retained",
+        disposition={"reason": "retained evidence", "residue": True},
+    )
+    assert ledger.head().startswith("hmac-sha256:")  # vacuous otherwise
+
+    first = ledger.seal_for_close(actor="validator")
+    assert first["ledger_head"].startswith("hmac-sha256:")
+    second = ledger.seal_for_close(actor="validator")  # the retry _load_seal path
+    assert second == first
+    assert ledger.verify_sealed_for_close()[0] == first

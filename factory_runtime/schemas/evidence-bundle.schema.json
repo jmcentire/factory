@@ -55,7 +55,7 @@
       "$ref": "factory://schemas/evidence-bundle/2#/properties/build_attempt"
     },
     "ledger_head": {
-      "$ref": "factory://schemas/evidence-bundle/2#/$defs/ledger_head"
+      "$ref": "#/$defs/ledger_head"
     },
     "phase_artifacts": {
       "$ref": "factory://schemas/evidence-bundle/2#/properties/phase_artifacts"
@@ -95,7 +95,7 @@
           "const": "preview"
         },
         "validating_ledger_head": {
-          "$ref": "factory://schemas/evidence-bundle/2#/$defs/ledger_head"
+          "$ref": "#/$defs/ledger_head"
         },
         "authority_genesis_digest": {
           "$ref": "factory://schemas/evidence-bundle/2#/$defs/digest"

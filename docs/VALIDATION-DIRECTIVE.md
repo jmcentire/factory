@@ -285,6 +285,23 @@ obtained. A checked item without that citation is still unchecked.
    the wrong reason, every gate in the run stayed green, and an adversary reading
    the fixture found it only after release.
 
+   Oracle quality includes **agreement between paths**, not merely complete execution of each
+   path alone. For every Product requirement, verify the exact participant inventory. Two or more
+   participants require a shared-boundary oracle plus distinct producer- and consumer-side drift
+   probes which the unchanged local suite misses and the agreement oracle catches. A structural
+   authority may replace those probes only when an independent review proves it carries all
+   semantic residue on the exact candidate. “Quote passed” plus “hold passed” does not establish
+   that quote and hold apply one availability decision.
+
+   For any checkpoint-selected standard, loop, or recipe, verify exact selector/source/application
+   membership and the subject-derived route before trusting its result. Behavioral items bind
+   acceptance obligations; procedural items bind process checkpoints; constructional items bind
+   Architecture/Testing conformance requirements without masquerading as Product behavior. Inspect
+   the independent classification/application review and every N/A basis. `routing-verified` is not
+   compliance. Every applied item needs exact-candidate evidence, and the Validator and resident
+   Orchestrator must judge its substantive adequacy. Open findings, stale digests, missing members,
+   or an out-of-date Orchestrator assessment block.
+
 8. **Fresh baseline, controls, and final gate.** The trusted baseline is green
    before new tests are trusted, unless a pre-existing red is individually
    attributed and recorded. In a correction, the negative control (**red-now**)

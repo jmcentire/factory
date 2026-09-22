@@ -762,6 +762,12 @@ class FidelityMismatch:
 class FidelityResult:
     status: str
     mismatches: tuple[FidelityMismatch, ...] = ()
+    # 4.2 change 4: declared-not-observed is a STALE DECLARATION, not a violation —
+    # it no longer blocks here; its mechanical consumer is
+    # stale_declarations_block_ratification, which blocks the NEXT version of the
+    # declaring artifact while any delta stays open. (Prospective, stated honestly:
+    # check_delta_fidelity has no runtime caller yet.)
+    stale_declarations: tuple[FidelityMismatch, ...] = ()
 
     @property
     def blocked(self) -> bool:
@@ -785,16 +791,42 @@ def check_delta_fidelity(delta: CapabilityDelta, facts: SourceFacts) -> Fidelity
     observed = {f.key for f in facts.flows}
     locations = {f.key: f.location for f in facts.flows}
     mismatches: list[FidelityMismatch] = []
+    stale: list[FidelityMismatch] = []
     for src, tgt, rel in sorted(observed - declared):
         mismatches.append(FidelityMismatch(
             reason="source_flow_not_declared", source=src, target=tgt, relation=rel,
             location=locations.get((src, tgt, rel), ""),
         ))
+    # 4.2 change 4: declared-not-observed no longer blocks HERE — it becomes a
+    # recorded stale-declaration delta whose consumer blocks the next ratification
+    # of the declaring artifact (below). Observed-not-declared still violates.
     for src, tgt, rel in sorted(declared - observed):
-        mismatches.append(FidelityMismatch(
+        stale.append(FidelityMismatch(
             reason="declared_flow_not_source_observed", source=src, target=tgt, relation=rel,
         ))
     return FidelityResult(
         status=STATUS_VIOLATED if mismatches else STATUS_SATISFIED,
         mismatches=tuple(mismatches),
+        stale_declarations=tuple(stale),
     )
+
+
+def stale_declarations_block_ratification(
+    open_results: Sequence[FidelityResult],
+) -> tuple[str, ...]:
+    """The mechanical consumer 4.2 change 4 requires in the same change.
+
+    An open stale-declaration delta blocks ratification of the NEXT version of
+    the declaring artifact: the declaration was checked against source once and
+    found to describe flows that do not exist, so re-ratifying it unchanged
+    would launder the staleness into fresh authority. Returns blocking reasons;
+    empty means ratifiable. Prospective until fidelity checking gains a runtime
+    caller — stated here, in the plan, and in the ledger row.
+    """
+    reasons: list[str] = []
+    for result in open_results:
+        for item in result.stale_declarations:
+            reasons.append(
+                f"stale-declaration-open:{item.source}->{item.target}:{item.relation}"
+            )
+    return tuple(reasons)

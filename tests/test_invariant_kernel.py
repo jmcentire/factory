@@ -365,10 +365,12 @@ def test_fidelity_flags_undeclared_and_missing_flows() -> None:
         SourceFlowFact(source="store_x", target="egress_y", relation="export", location="g:2"),
     ))
     result = check_delta_fidelity(delta, facts)
-    assert result.status == STATUS_VIOLATED
+    assert result.status == STATUS_VIOLATED  # observed-not-declared still blocks
     reasons = {(m.reason, m.source, m.target) for m in result.mismatches}
     assert ("source_flow_not_declared", "store_x", "egress_y") in reasons
-    assert ("declared_flow_not_source_observed", "role_a", "store_x") in reasons
+    # 4.2 change 4: declared-not-observed moved to the stale-declaration channel.
+    stale = {(m.reason, m.source, m.target) for m in result.stale_declarations}
+    assert ("declared_flow_not_source_observed", "role_a", "store_x") in stale
 
 
 # --------------------------------------------------------------------------- #
@@ -400,3 +402,20 @@ def test_fixtures_name_nothing_target_specific() -> None:
         runs = _runs(path.read_text(encoding="utf-8"))
         hits = [tok for tok in DENYLIST_TOKENS if tok in runs]
         assert hits == [], f"{path.name} must name nothing target-specific; found {hits}"
+
+
+def test_stale_declaration_no_longer_violates_but_blocks_the_next_ratification() -> None:
+    """4.2 change 4, both halves: declared-not-observed is a recorded
+    stale-declaration delta (SATISFIED — no longer a violation here, never
+    silent), and the mechanical consumer blocks the next ratification of the
+    declaring artifact while the delta stays open."""
+    from factory_core.invariant_kernel import stale_declarations_block_ratification
+
+    delta = CapabilityDelta(id="feat", flows=(
+        CapabilityFlow(source="a", target="b", relation="calls"),
+    ))
+    result = check_delta_fidelity(delta, SourceFacts(flows=()))
+    assert result.status == STATUS_SATISFIED
+    assert result.stale_declarations
+    blocking = stale_declarations_block_ratification([result])
+    assert blocking == ("stale-declaration-open:a->b:calls",)

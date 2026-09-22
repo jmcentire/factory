@@ -814,12 +814,15 @@ def test_cli_preflight_no_leaves_zero_new_files(tmp_path: Path) -> None:
     binary = _binary()
     fixture = _build_fixture(tmp_path, binary)
 
-    # Strip the signal knobs from the target manifest: the preflight's
-    # configuration-determined hard NO.
+    # Keep the schema/2 manifest valid while making its deadline exceed the ratified build
+    # attempt ceiling: this reaches the preflight's cross-field hard NO instead of stopping at
+    # target-schema parsing.
     target_path = fixture["target_path"]
     text = target_path.read_text(encoding="utf-8")
-    head, _, _ = text.partition("[build.signal]")
-    target_path.write_text(head.rstrip() + "\n", encoding="utf-8")
+    target_path.write_text(
+        text.replace("signal_pass_deadline = 2", "signal_pass_deadline = 3", 1),
+        encoding="utf-8",
+    )
 
     run_root = fixture["runs_root"] / "cli-synthetic-run"
     before = sorted(str(p) for p in run_root.rglob("*"))
@@ -828,7 +831,7 @@ def test_cli_preflight_no_leaves_zero_new_files(tmp_path: Path) -> None:
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert "preflight refused" in result.stderr
-    assert "signal-knobs-undeclared" in result.stderr
+    assert "signal-pass-deadline-exceeds-max-attempts" in result.stderr
     after = sorted(str(p) for p in run_root.rglob("*"))
     assert after == before, "a preflight NO must leave zero new files"
     assert (

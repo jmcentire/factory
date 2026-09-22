@@ -673,3 +673,103 @@ def test_long_action_refuses_unknown_run_without_creating_a_namespace(
 
     assert called is False
     assert not (tmp_path / "future-run").exists()
+
+
+def test_forbidden_runner_roots_derivation_covers_the_control_root(tmp_path) -> None:
+    """Round-7 mutation B closed: the WPX red_now's CLI arm. The field tuple is
+    pinned (a one-token deletion reds HERE, not silently in every dispatch), the
+    derivation puts every root — control_root first — in the forbidden set, and
+    the fail-closed branch refuses a target-state missing any field."""
+    from factory_runtime.cli import _FORBIDDEN_ROOT_FIELDS, _derive_forbidden_runner_roots
+
+    assert _FORBIDDEN_ROOT_FIELDS == (
+        "control_root",
+        "source_root",
+        "workdir",
+        "object_store",
+    )
+
+    roots = {}
+    for name in _FORBIDDEN_ROOT_FIELDS:
+        directory = tmp_path / name
+        directory.mkdir()
+        roots[name] = str(directory)
+    derived = _derive_forbidden_runner_roots(roots)
+    assert (tmp_path / "control_root").resolve() in derived
+    assert len(derived) == 4
+
+    incomplete = dict(roots)
+    del incomplete["control_root"]
+    with pytest.raises(ValueError, match="no forbidden runner root control_root"):
+        _derive_forbidden_runner_roots(incomplete)
+    with pytest.raises(ValueError, match="control_root"):
+        _derive_forbidden_runner_roots({**roots, "control_root": ""})
+
+
+def test_retained_capsule_freshness_check_refuses_a_moved_projection(tmp_path) -> None:
+    """4.2 change 3's retained site: the lane-dispatch capsule pre-check stays
+    (no proven consumption-time arbiter for the capsule's frozen head) and must
+    refuse when the projection moved between assembly and capsule derivation.
+    The two deleted siblings' arbiters are already forcing-tested where they
+    live: the transition expected-head refusal (test_runtime_state) and the
+    resource ledger's in-lock CAS (test_runtime_resources)."""
+    import dataclasses
+
+    from factory_core.manifest import digest_obj
+    from factory_runtime.cli import _require_fresh_projection_before_capsule
+    from factory_runtime.state import RunStore
+    from tests.conftest import create_intake_run
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    create_intake_run(
+        store,
+        run_id="r1",
+        target_digest="sha256:" + "a" * 64,
+        source_digest=digest_obj({"source": "r1"}),
+    )
+    frozen = store.load("r1")
+    _require_fresh_projection_before_capsule(runs, "r1", frozen)  # unmoved: passes
+    stale = dataclasses.replace(frozen, generation=frozen.generation + 7)
+    with pytest.raises(ValueError, match="projection changed"):
+        _require_fresh_projection_before_capsule(runs, "r1", stale)
+
+
+def test_ci_retain_retains_a_verifiable_candidate_bound_document(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The CI seam's entrypoint (the resolved CI row, plan 4.1): the printed
+    digest resolves through the same verifier the ci admission calls."""
+    from factory_runtime.ci_evidence import CiOutputError, verify_retained_ci_output
+
+    candidate = "sha256:" + "a" * 64
+    document = tmp_path / "ci.json"
+    document.write_text(
+        json.dumps({"candidate": candidate, "conclusion": "success"}),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    assert (
+        main(
+            [
+                "ci-retain",
+                "--runs",
+                str(tmp_path / "runs"),
+                "--run-id",
+                "r1",
+                "--document",
+                str(document),
+            ]
+        )
+        == 0
+    )
+    digest = capsys.readouterr().out.strip()
+    verify_retained_ci_output(
+        run_dir, candidate_digest=candidate, expected_digest=digest
+    )
+    with pytest.raises(CiOutputError, match="different candidate"):
+        verify_retained_ci_output(
+            run_dir, candidate_digest="sha256:" + "b" * 64, expected_digest=digest
+        )

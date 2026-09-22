@@ -98,7 +98,17 @@ def _add_dead_export(root: Path) -> None:
 
 
 def _write_baseline(path: Path, finding: str) -> None:
-    entries = [{"finding": finding, "justification": "ratified synthetic suppression"}]
+    import hashlib as _h
+
+    justification = "ratified synthetic suppression"
+    entries = [{
+        "finding": finding,
+        "justification": justification,
+        "owner": "human:founder",
+        "expires": "2099-01-01",
+        "justification_digest": "sha256:"
+        + _h.sha256(justification.encode("utf-8")).hexdigest(),
+    }]
     path.write_text(json.dumps(entries), encoding="utf-8")
 
 

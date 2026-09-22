@@ -765,8 +765,6 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         "architecture",
         "operational-maturity",
     }
-    # 4.1b single-seat authority consumes the human/founder receipts only;
-    # validator signatures are provenance, not replay authority.
     assert workflow.store.consumed_authority_nonces("synthetic-run") == frozenset(
         {
             "synthetic-resolution-nonce",
@@ -1064,6 +1062,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     attempted: list[tuple[str, Path | None]] = []
     attempt_outcomes: list[BuildOutcome] = []
+    rejected_repair_envelopes: set[Path] = set()
 
     def run_attempt(attempt_id: str, repair_brief_path: Path | None) -> BuildOutcome:
         attempted.append((attempt_id, repair_brief_path))
@@ -1118,6 +1117,15 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                 envelope=malicious_envelope,
                 validator_identity="agent:coder",
             )
+        rejected_path = (
+            workflow.root
+            / "synthetic-run"
+            / "evidence"
+            / "repair-briefs"
+            / f"{malicious_envelope.payload_digest.removeprefix('sha256:')}.tessera.json"
+        )
+        assert rejected_path.is_file()
+        rejected_repair_envelopes.add(rejected_path)
         return plan
 
     record_repair_brief = workflow.record_repair_brief
@@ -1138,19 +1146,13 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         )
 
     orphaned_envelopes = tuple(
-        sorted(
-            (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob(
-                "*.tessera.json"
-            )
+        path
+        for path in (workflow.root / "synthetic-run" / "evidence" / "repair-briefs").glob(
+            "*.tessera.json"
         )
+        if path not in rejected_repair_envelopes
     )
-    # The rejected Coder-signed brief remains unauthoritative evidence while the
-    # Validator-signed brief is the one publish-before-ledger orphan to recover.
-    orphaned_by_signer = {
-        cli.verify_json(path, expected_kind="factory-repair-brief").public_key: path
-        for path in orphaned_envelopes
-    }
-    assert set(orphaned_by_signer) == {coder_public_key, validator_public_key}
+    assert len(orphaned_envelopes) == 1
     assert workflow.store.load("synthetic-run").state == RunState.BLOCKED
 
     monkeypatch.setattr(workflow, "record_repair_brief", record_repair_brief)
@@ -1168,7 +1170,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         validator_diagnose=lambda *_args, **_kwargs: pytest.fail(
             "a recovered brief must make the retry pass without another diagnosis"
         ),
-        initial_repair_brief_path=orphaned_by_signer[validator_public_key],
+        initial_repair_brief_path=orphaned_envelopes[0],
     )
     assert attempted[0] == ("attempt-failed", None)
     assert attempted[1][0] == "attempt-1"

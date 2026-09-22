@@ -1,7 +1,8 @@
 # The Doctrine Kernel — tiered intent inventory
 
 > **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
-> three-role/three-phase doctrine revision, 2026-07-26, and Criticality amendment,
+> role/phase doctrine revision, 2026-07-26 (four-role ruling: the Orchestrator is a role and
+> is always resident, 2026-09-21), and Criticality amendment,
 > 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27, and the
 > Validator-as-product-manager capability/technical-guidance amendment, 2026-07-30.** An agent may still
 > treat a statement as *more* protected than listed, never
@@ -28,7 +29,7 @@ judgment. Four tiers:
 | # | Statement (anchor) |
 |---|---|
 | S1 | Humans own product intent, architectural decisions, authority, and acceptable risk. The Validator drafts and the human decides; the factory implements, proves conformance, and produces evidence. |
-| S2 | **Exactly three roles: Validator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
+| S2 | **Exactly four roles: Validator, Orchestrator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** The Orchestrator is resident and always running for every run; a run without one is refused. Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
 | S3 | Intent authority exists only in the Product Specification, Architecture Specification, and Testing and Monitoring Strategy, each signed, content-addressed, immutable for the run, and compared with the preserved verbatim input — never memory, a mutable ticket, a comment, or an agent's summary. The manifest records evidence; it does not originate intent. |
 | S4 | Agents escalate; humans ratify. No agent ratifies a material change to declared intent; genesis and mutation of doctrine require a human signature. |
 | S5 | Honesty in self-reports: nothing marked done, implemented, or satisfied that is partial or absent. |

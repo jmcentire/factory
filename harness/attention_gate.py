@@ -28,6 +28,9 @@ _DISPATCHER_CLASSES = frozenset(
         "stall",
         "target_state_diverged",
         "target_state_verifier_unavailable",
+        "orchestrator_transport_failed",
+        "orchestrator_not_resident",
+        "orchestrator_unresponsive",
         "invalid_legacy_abandonment",
         "legacy_harness",
     }
@@ -163,7 +166,7 @@ def validate_blocking_event(event: object) -> dict[str, object]:
             raise AttentionGateError("blocking event is not an admitted producer event")
         _bounded_text(event["evidence"], field="evidence")
     _validate_timestamp(event["ts"])
-    if cls.startswith("orchestrator_") and (
+    if cls in {"orchestrator_response", "orchestrator_dead"} and (
         event["trust_class"] != "untrusted-advisory"
         or event["effect_route"] != "validator-blocking-only"
     ):
