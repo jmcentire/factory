@@ -1,4 +1,4 @@
-"""Executable build/validate/evidence slice over the three-role runtime."""
+"""Executable build/validate/evidence slice over the Validator/Coder/Tester lanes."""
 
 from __future__ import annotations
 

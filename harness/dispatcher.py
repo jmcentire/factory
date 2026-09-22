@@ -61,7 +61,7 @@ HEALTHY_IDLE = "idle-awaiting-handoff"
 FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
 
 # Validator failure modes the Orchestrator audits (founder, 2026-08-09): announces
-# work and doesn't do it; forgets the triumvirate and codes itself; misattributes
+# work and doesn't do it; forgets the role separation and codes itself; misattributes
 # authority; drifts from the ask. Detection here is DETERMINISTIC (pattern + timer +
 # receipt count); judgment stays with the Orchestrator, whose closed report can
 # only block the Validator path or do nothing.
@@ -233,7 +233,7 @@ class Dispatcher:
         )
         self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
-        self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "headless-projection")
+        self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "")
         self.last_delivered_cursor = 0
         # Plan §0.4c: the signal-deadline watchdog rides this seam. Knobs come
         # only from the frozen generation blob via the CLI door; passes only
@@ -288,28 +288,16 @@ class Dispatcher:
             self.wake_orchestrator(body)
 
     def wake_orchestrator(self, trigger: dict[str, object]) -> None:
-        """Route a deterministic signal without making it the attention boundary.
+        """Route a deterministic signal into the resident Orchestrator's journal.
 
-        Resident mode appends the signal to the same complete activity journal
-        as ordinary pane changes; delivery happens once after the observation
-        pass.  The legacy qualified headless projection remains available for
-        non-tmux runs and retains its single-flight behavior.
+        Every run has a resident Orchestrator (founder ruling 2026-09-21: exactly
+        four roles; the Orchestrator is always running and watches every lane).
+        A signal is appended to the same complete activity journal as ordinary
+        pane changes, and delivery happens once after the observation pass.
 
-        SINGLE-FLIGHT. Without this, one busy minute spawns a seat per event and
-        they file contradictory records against each other — batch0 had three live
-        at once, one of which filed remediation from a stale snapshot that a sibling
-        had already overtaken (upstream finding #5). A wake that arrives while a
-        seat is working is COALESCED: the running seat reads events.jsonl and sees
-        it anyway, so dropping the duplicate loses no information.
-
-        BOUNDED-TIME LIVENESS (Amend 2.5): the coalescing predicate was
-        `proc.poll() is None` with no deadline. A hung wake (claude -p that never
-        returns) left poll() None forever, so every later trigger coalesced as "a
-        seat is still working" — the orchestrator dead but reported healthy, for
-        the whole endgame, while this check said it was fine. The liveness
-        detector must watch the PRINCIPAL (the process) against a deadline, not a
-        surface (the pane that stays warm). Past the deadline the seat is hung,
-        not working: kill it, record the death, let a new wake spawn.
+        There is no one-shot substitute. A run without a resident Orchestrator
+        is refused: the signal becomes a blocking event on the Validator, never
+        a throwaway headless session that answers once and exits.
         """
         if self.orchestrator_mode == "resident-monitoring":
             try:
@@ -324,60 +312,24 @@ class Dispatcher:
                 self._record_orchestrator_transport_failure(str(exc))
             return
 
-        wake = self.harness / "orchestrator_wake.sh"
-        if not wake.exists():
-            return
-        wake_timeout = float(os.environ.get("WAKE_TIMEOUT", "600"))
-        proc = getattr(self, "_wake_proc", None)
-        if proc is not None and proc.poll() is None:
-            wake_start = getattr(self, "_wake_start", None)
-            # Explicit None check, not `or`: a start time of 0.0 is a real value
-            # (monotonic origin), and `0.0 or fallback` would discard it and report
-            # a live seat as healthy. A proc with no recorded start is suspicious —
-            # treat it as already past the deadline so it is killed, not coalesced.
-            elapsed = (time.monotonic() - wake_start) if wake_start is not None else wake_timeout
-            if elapsed < wake_timeout:
-                self.coalesced_wakes = getattr(self, "coalesced_wakes", 0) + 1
-                print(
-                    f"[wake coalesced] a seat is still working "
-                    f"({self.coalesced_wakes} since it started); not spawning a rival"
-                )
-                return
-            # past the deadline — the seat is hung, not working. Kill it, record
-            # the death, and fall through to spawn a fresh wake.
-            kill_scope = terminate_wake_group(proc)
-            kill_detail = (
-                f"orchestrator wake hung past {wake_timeout:.0f}s and was killed "
-                f"with scope={kill_scope}; no independent check is running"
-            )
-            self.event("orchestrator_dead", kill_detail, wake=False)
-            # A dead orchestrator that is only silently recorded is the opposite of
-            # the founder's "get the validator's attention" requirement. Banner it
-            # (a non-executing display-message, like HALT/stall) and record the death
-            # into wakes/receipts.jsonl — the wake script was killed before it could
-            # write its own dead-wake record, so without this the labeled count in
-            # status.sh misses the death the dispatcher itself caused.
-            self._banner(f"INCIDENT — {kill_detail}")
-            wd = self.root / "wakes"
-            wd.mkdir(parents=True, exist_ok=True)
-            with open(wd / "receipts.jsonl", "a") as wf:
-                wf.write(
-                    json.dumps(
-                        {"ts": now(), "status": "ORCHESTRATOR_DID_NOT_RUN", "detail": kill_detail},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-            self._wake_proc = None
-        self._wake_proc = subprocess.Popen(
-            [str(wake), self.run, json.dumps(trigger)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
+        self._refuse_without_resident_orchestrator(
+            f"deterministic signal {trigger.get('kind', 'unknown')} arrived"
         )
-        self._wake_start = time.monotonic()
-        self.coalesced_wakes = 0
+
+    def _refuse_without_resident_orchestrator(self, context: str) -> None:
+        """Block the run: no resident Orchestrator means nothing is watching."""
+
+        detail = (
+            f"{context} but this run has no resident Orchestrator "
+            f"(orchestrator_mode={self.orchestrator_mode or 'missing'}); every Factory "
+            "run requires one and there is no orchestrator-less mode"
+        )
+        key = f"orchestrator-not-resident:{self.orchestrator_mode}"
+        if key not in self.notified:
+            self.notified.add(key)
+            self.event("orchestrator_not_resident", detail[:300], wake=False)
+            self._block("validator", "orchestrator_not_resident", detail[:200])
+            self._banner(f"INCIDENT — {detail[:160]}")
 
     # -- observe --------------------------------------------------------------
     def windows(self) -> list[str]:
@@ -629,7 +581,7 @@ class Dispatcher:
 
     def check_validator_failure_modes(self, fresh: str) -> None:
         """The Orchestrator's charter, detected deterministically, judged on wake:
-        announced-but-undone, authority misattribution, triumvirate bypass, drift."""
+        announced-but-undone, authority misattribution, role-separation bypass, drift."""
         # 1. Promises: announced intent must discharge into receipts or dispatches.
         rc, dc = self.counts()
         for line in detect_promises(fresh):
@@ -828,7 +780,14 @@ def main() -> None:
     root = pathlib.Path(args.root)
     if not (root / "run.json").exists() or not (root / "harness.json").exists():
         sys.exit(f"no checked run.json + harness.json under {root}")
-    Dispatcher(args.run, root, args.interval).run_loop()
+    dispatcher = Dispatcher(args.run, root, args.interval)
+    if dispatcher.orchestrator_mode != "resident-monitoring":
+        dispatcher._refuse_without_resident_orchestrator("dispatcher start requested")
+        sys.exit(
+            "dispatcher refused: run has no resident Orchestrator "
+            "(harness.json orchestrator_mode must be resident-monitoring)"
+        )
+    dispatcher.run_loop()
 
 
 if __name__ == "__main__":

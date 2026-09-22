@@ -65,7 +65,7 @@ say "## strategic orchestrator"
 orch_live=$(tmux display -p -t "$RUN:orchestrator" '#{pane_current_command}' 2>/dev/null || echo gone)
 say "  pane          : $orch_live"
 if [ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ]; then
-  orch_mode=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("orchestrator_mode", "headless-projection"))' "$ROOT/harness.json")
+  orch_mode=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("orchestrator_mode", "MISSING — no resident Orchestrator; run is refused"))' "$ROOT/harness.json")
   say "  mode          : $orch_mode"
   if [ "$orch_mode" = "resident-monitoring" ]; then
     orch_state=$(python3 "$D/orchestrator_channel.py" status --root "$ROOT" 2>/dev/null || echo INVALID)

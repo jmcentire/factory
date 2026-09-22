@@ -21,7 +21,7 @@
   Orchestrator reconstructs the user's ultimate goal, classifies recent input, tests whether the current direction
   advances that goal, and projects implications and side effects. It also audits the
   *Validator's* failure modes: announced
-  work with no receipt; forgetting the triumvirate and doing lane work itself;
+  work with no receipt; forgetting the role separation and doing lane work itself;
   misattributing authority (claims that resolve to no ledger entry); doing the
   opposite of the recorded ask; hyper-focus on what the founder doesn't care
   about; waiting on input it doesn't need; and cleanup debt accruing (the

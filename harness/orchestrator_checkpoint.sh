@@ -33,7 +33,7 @@ try:
 except (OSError, ValueError):
     print("invalid")
 else:
-    print(doc.get("orchestrator_mode", "headless-projection"))
+    print(doc.get("orchestrator_mode", "missing"))
 PY
 )
 if [ "$MODE" != "resident-monitoring" ]; then
@@ -41,7 +41,10 @@ if [ "$MODE" != "resident-monitoring" ]; then
     echo "orchestrator-checkpoint: harness metadata is unreadable" >&2
     exit 70
   }
-  exit 0
+  # Every run has a resident Orchestrator; a checkpoint without one is refused,
+  # never passed (founder ruling 2026-09-21).
+  echo "orchestrator-checkpoint: run has no resident Orchestrator (mode=$MODE); refused" >&2
+  exit 70
 fi
 
 CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
