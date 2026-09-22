@@ -48,6 +48,40 @@ def test_completed_acceptance_failure_routes_to_coder() -> None:
     assert capsule.code == "candidate-failed-acceptance"
 
 
+def test_required_lifecycle_before_behavior_routes_to_validator_harness() -> None:
+    capsule = classify_terminal_failure(
+        final={"status": "runtime-terminal", "passed": False},
+        caller_returncode=0,
+        caller_stdout="private assertion output",
+        caller_stderr="private fixture output",
+        validator_result_present=True,
+        coder_receipt_present=True,
+        tester_receipt_present=True,
+        acceptance_lifecycle_required=True,
+        acceptance_phase="tester-connected",
+    )
+
+    assert capsule.owner == "validator-harness"
+    assert capsule.code == "acceptance-setup-not-reached"
+
+
+def test_required_lifecycle_after_behavior_routes_to_coder() -> None:
+    capsule = classify_terminal_failure(
+        final={"status": "runtime-terminal", "passed": False},
+        caller_returncode=0,
+        caller_stdout="private assertion output",
+        caller_stderr="private fixture output",
+        validator_result_present=True,
+        coder_receipt_present=True,
+        tester_receipt_present=True,
+        acceptance_lifecycle_required=True,
+        acceptance_phase="behavior-started",
+    )
+
+    assert capsule.owner == "coder"
+    assert capsule.code == "candidate-failed-acceptance"
+
+
 def test_invocation_timeout_precedes_missing_terminal_report() -> None:
     capsule = classify_terminal_failure(
         final=None,

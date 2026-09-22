@@ -333,6 +333,27 @@ class RepairSupervisor:
                 raise RepairSupervisorError("attempt outcome belongs to a different run")
             if outcome.projection.ledger_head != current.ledger_head:
                 raise RepairSupervisorError("attempt outcome is stale against the run ledger")
+            if getattr(outcome, "repair_signal", "fail") == "validator-retry":
+                # Validator-owned lifecycle failures never justify a Coder
+                # RepairBrief or consume the candidate-repair budget. Preserve
+                # whether setup failed before behavior or the lifecycle merely
+                # stopped before recording completion.
+                lifecycle = getattr(
+                    getattr(outcome, "execution", None),
+                    "acceptance_lifecycle",
+                    None,
+                )
+                lifecycle_reason = (
+                    "acceptance-setup-not-reached"
+                    if lifecycle is not None and lifecycle.setup_failure
+                    else "acceptance-lifecycle-incomplete"
+                )
+                return self._terminal(
+                    run_id,
+                    attempts_run,
+                    briefs,
+                    f"validator-harness-blocked:{lifecycle_reason}",
+                )
             candidate_attempts += 1
             if outcome.passed:
                 return RepairCampaignResult(

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from factory_core.provenance import IntentBackreference
+from factory_runtime.acceptance_lifecycle import AcceptanceLifecycle
 from factory_runtime.repair import (
     RepairBrief,
     RepairCampaignBlocked,
@@ -212,6 +213,66 @@ def test_repair_campaign_block_is_not_a_coder_retry() -> None:
     assert result.attempts_run == 1
     assert result.repair_brief_paths == ()
     assert result.terminal_reason == "infrastructure-blocked:external-prerequisite"
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_reason"),
+    (
+        (None, "acceptance-setup-not-reached"),
+        ("behavior-started", "acceptance-lifecycle-incomplete"),
+    ),
+)
+def test_validator_lifecycle_retry_never_diagnoses_or_retries_the_coder(
+    phase: str | None,
+    expected_reason: str,
+) -> None:
+    class Store:
+        def build_attempt_ids(self, _run_id):
+            return frozenset()
+
+        def load(self, _run_id):
+            from factory_runtime.state import RunState
+
+            return SimpleNamespace(
+                run_id="run-1",
+                state=RunState.BLOCKED,
+                ledger_head="sha256:" + "a" * 64,
+                phase_artifact_digests={},
+            )
+
+    class Workflow:
+        store = Store()
+
+    supervisor = RepairSupervisor(
+        Workflow(),  # type: ignore[arg-type]
+        validator_identity="validator",
+        validator_key_path="unused",
+        policy=RepairPolicy(max_attempts=3, max_elapsed_seconds=60),
+    )
+    outcome = SimpleNamespace(
+        passed=False,
+        repair_signal="validator-retry",
+        execution=SimpleNamespace(
+            acceptance_lifecycle=AcceptanceLifecycle(required=True, phase=phase)
+        ),
+        projection=Store().load("run-1"),
+        candidate_digest="sha256:" + "e" * 64,
+        tests_digest="sha256:" + "f" * 64,
+    )
+
+    result = supervisor.run(
+        "run-1",
+        initial_attempt_id="attempt-1",
+        next_attempt_id=lambda index: f"attempt-{index}",
+        attempt_runner=lambda _attempt_id, _brief: outcome,
+        validator_diagnose=lambda *_args, **_kwargs: pytest.fail(
+            "Validator-owned lifecycle failure must not diagnose the Coder"
+        ),
+    )
+
+    assert result.attempts_run == 1
+    assert result.repair_brief_paths == ()
+    assert result.terminal_reason == f"validator-harness-blocked:{expected_reason}"
 
 
 def test_pre_author_lane_launch_fault_never_mints_empty_digest_repair_brief() -> None:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Protocol
 
 from factory_core.manifest import digest_bytes, digest_obj
+from factory_runtime.acceptance_lifecycle import AcceptanceLifecycle, load_acceptance_lifecycle
 from factory_runtime.acceptance_obligations import (
     AcceptanceObligationCatalog,
     AcceptanceObligationError,
@@ -83,16 +84,32 @@ class ValidationExecution:
     qualification: IsolationQualification
     coder_snapshot: FrozenTree | None = None
     tester_snapshot: FrozenTree | None = None
+    acceptance_lifecycle: AcceptanceLifecycle | None = None
 
     @property
     def passed(self) -> bool:
-        return self.coder.succeeded and self.tester.succeeded and self.validator.succeeded
+        return (
+            self.coder.succeeded
+            and self.tester.succeeded
+            and self.validator.succeeded
+            and (
+                self.acceptance_lifecycle is None
+                or self.acceptance_lifecycle.behavior_complete
+            )
+        )
 
     @property
     def repair_signal(self) -> str:
         """The only verdict safe to return to an automated Coder retry."""
 
-        return "pass" if self.passed else "fail"
+        if self.passed:
+            return "pass"
+        if self.acceptance_lifecycle is not None:
+            if self.acceptance_lifecycle.setup_failure:
+                return "validator-retry"
+            if self.validator.succeeded and not self.acceptance_lifecycle.behavior_complete:
+                return "validator-retry"
+        return "fail"
 
 
 @dataclass(frozen=True)
@@ -460,6 +477,16 @@ class IsolatedBuildLoop:
             catalog_bytes,
             acceptance_catalog_bytes,
             canonical_document_bytes(review_subject),
+            lifecycle_receipt_required=bool(trigger.get("lifecycle_receipt_required", False)),
+        )
+        lifecycle = load_acceptance_lifecycle(
+            validator_result.output_directory / "acceptance-lifecycle.json",
+            required=bool(trigger.get("lifecycle_receipt_required", False)),
+            candidate_digest=tree_digest(coder_snapshot.files_directory / "artifact"),
+            acceptance_tests_digest=tree_digest(tester_snapshot.files_directory / "tests"),
+            command_digest=actual_execution["command_digest"],
+            configuration_digest=actual_execution["configuration_digest"],
+            environment_digest=actual_execution["environment_digest"],
         )
         return ValidationExecution(
             coder=coder_result,
@@ -468,6 +495,7 @@ class IsolatedBuildLoop:
             qualification=qualification,
             coder_snapshot=coder_snapshot,
             tester_snapshot=tester_snapshot,
+            acceptance_lifecycle=lifecycle,
         )
 
     def _prepare_lane(
@@ -576,6 +604,7 @@ class IsolatedBuildLoop:
         catalog_bytes: bytes | None,
         acceptance_catalog_bytes: bytes | None,
         review_subject_bytes: bytes,
+        lifecycle_receipt_required: bool,
     ) -> LaneExecution:
         lane = self.root / LaneRole.VALIDATOR
         input_directory = lane / "input"
@@ -669,6 +698,10 @@ class IsolatedBuildLoop:
                     validator_execution.manifest.payload_path
                 ),
                 "FACTORY_VALIDATOR_EXECUTION_SNAPSHOT_DIGEST": validator_execution.tree.digest,
+                "FACTORY_ACCEPTANCE_LIFECYCLE_PATH": str(output / "acceptance-lifecycle.json"),
+                "FACTORY_ACCEPTANCE_LIFECYCLE_REQUIRED": (
+                    "1" if lifecycle_receipt_required else "0"
+                ),
             }
         )
         process = self.sandbox.run(
