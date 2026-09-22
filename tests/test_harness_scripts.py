@@ -4053,6 +4053,81 @@ def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
     assert kinds == ["halt", "orchestrator_halt_enforced"]
 
 
+def test_checkpoint_delivers_orchestrator_reminders_into_validator_output(
+    tmp_path: Path,
+) -> None:
+    """The Orchestrator's check-in loop reaches the Validator without pane injection:
+    its OUTSTANDING-WORK.md is printed into the Validator's own checkpoint output."""
+    _cwd, root, _dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    ledger = root / "orchestrator" / "OUTSTANDING-WORK.md"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "- NEXT: ask the human about per-line rounding before dispatching the Tester\n"
+    )
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "orchestrator_checkpoint.sh"),
+            "r1",
+            "pre_dispatch",
+            "before dispatching the coder lane",
+            "--runs",
+            str(root.parent),
+        ],
+        root,
+        _dispatch_env(stub, root),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ORCHESTRATOR — outstanding work and reminders" in result.stderr
+    assert "ask the human about per-line rounding" in result.stderr
+
+
+def test_check_in_cadence_cannot_be_disabled(tmp_path: Path) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    for configured in (0, -5):
+        (root / "harness.json").write_text(
+            json.dumps(
+                {"orchestrator_mode": "resident-monitoring", "audit_interval_min": configured}
+            )
+        )
+        d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+        assert d.audit_interval_min == 15  # type: ignore[attr-defined]
+
+
+def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Who watches the watcher: activity keeps arriving, the assessed cursor does
+    not move for two check-in intervals, and the run is blocked."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "audit_interval_min": 15})
+    )
+    (root / "events.jsonl").write_text("")
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: 9)
+    monkeypatch.setattr(mod, "assessed_through", lambda _root: 4)
+
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+    assert not (root / "lanes" / "validator.blocking").exists()
+
+    d.assessed_progress_at -= 31 * 60  # type: ignore[attr-defined]
+    d.last_assessed = 4  # type: ignore[attr-defined]
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+
+    assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
+    kinds = [json.loads(line)["kind"] for line in (root / "events.jsonl").read_text().splitlines()]
+    assert kinds.count("orchestrator_unresponsive") == 1
+
+
 def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
     tmp_path: Path,
 ) -> None:

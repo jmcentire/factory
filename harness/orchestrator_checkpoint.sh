@@ -67,6 +67,20 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
     --cursor "$CURSOR" >/dev/null 2>&1 && \
     python3 "$D/orchestrator_channel.py" require-current --root "$ROOT" \
       >/dev/null 2>&1; then
+      # Deliver the Orchestrator's plan and reminders into the Validator's own tool
+      # output. This is how the state-keeper reaches the Validator without typing
+      # into its pane (Gate F); stderr keeps the caller's stdout contract intact.
+      LEDGER="$ROOT/orchestrator/OUTSTANDING-WORK.md"
+      if [ -f "$LEDGER" ] && [ ! -L "$LEDGER" ]; then
+        {
+          echo "=== ORCHESTRATOR — outstanding work and reminders (orchestrator/OUTSTANDING-WORK.md) ==="
+          head -c 8192 "$LEDGER"
+          echo
+          echo "=== end of Orchestrator reminders ==="
+        } >&2
+      else
+        echo "orchestrator-checkpoint: the Orchestrator has not written OUTSTANDING-WORK.md" >&2
+      fi
       exit 0
   fi
   sleep 1
