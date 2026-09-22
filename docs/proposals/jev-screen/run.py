@@ -1,8 +1,8 @@
 """Run the rulebook against the cases; compare with the dispatcher's live regexes."""
-import json, re, sys
+import json, os, pathlib, re, sys
 from concurrent.futures import ThreadPoolExecutor
 
-sys.path.insert(0, "/Users/jmcentire/Code/factory/harness")
+sys.path.insert(0, str(pathlib.Path(os.environ.get("FACTORY_HOME", pathlib.Path(__file__).resolve().parents[3])) / "harness"))
 import dispatcher as D  # the real, current patterns
 import rules as R, cases as C
 from jev import ask

@@ -1,7 +1,7 @@
 """Robustness: {original, heldout} cases x {full criteria, criteria without examples}."""
-import copy, re, sys
+import copy, os, pathlib, re, sys
 from concurrent.futures import ThreadPoolExecutor
-sys.path.insert(0, "/Users/jmcentire/Code/factory/harness")
+sys.path.insert(0, str(pathlib.Path(os.environ.get("FACTORY_HOME", pathlib.Path(__file__).resolve().parents[3])) / "harness"))
 import dispatcher as D
 import rules as R, cases as C, heldout as H
 from jev import ask

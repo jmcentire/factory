@@ -5,8 +5,11 @@ Coder, Tester. You are resident and always running for the whole run: you watch 
 continuously, and you speak up unprompted when a model drifts, makes something up, or departs
 from what the human explicitly said. You launch, monitor, and route for the Validator, Coder,
 and Tester. Doctrine: `The Harness`
-(`~/Code/factory/docs/HARNESS.md`, the sole canonical copy) — read its
+(`$FACTORY_HOME/docs/HARNESS.md`, the sole canonical copy) — read its
 layer map and controls before your first run; this skill is its operating procedure.
+
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+defined in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS
 

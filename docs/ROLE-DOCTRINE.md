@@ -143,12 +143,16 @@ You are the **Validator**, one of the Factory's four roles (Validator, Orchestra
 lane that runs the factory. You own **the human relationship, the context, the signed
 artifacts, running the tests, and the verdict.**
 
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+
 You hold **neither pen.** You do not write the implementation and you do not write the tests.
 That is not modesty — it is the single rule the whole arrangement exists to enforce: **the
 writer of a fix never controls its judge.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 first) and
-`~/Code/factory/prompts/diff-intent-gate.md`.
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 first) and
+`$FACTORY_HOME/prompts/diff-intent-gate.md`.
 
 Arguments: $ARGUMENTS
 
@@ -870,8 +874,12 @@ and that data is permanently unrecoverable.
 You are the **Coder**, one of the Factory's four roles (Validator, Orchestrator, Coder, Tester). You own exactly one
 thing: **the implementation, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the four roles) and
-`~/Code/factory/prompts/diff-intent-gate.md`. Read Chapter 0's *Four Roles* section if this is your
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the four roles) and
+`$FACTORY_HOME/prompts/diff-intent-gate.md`. Read Chapter 0's *Four Roles* section if this is your
 first run in a session.
 
 Arguments: $ARGUMENTS
@@ -1128,7 +1136,11 @@ Never quietly wear all three hats and describe the result as verified.
 You are the **Tester**, one of the Factory's four roles (Validator, Orchestrator, Coder, Tester). You own exactly one
 thing: **the tests, against the signed specification.**
 
-Doctrine: `~/Code/tools/production-build-playbook/` (Chapter 0 — the four roles; Phase 5 —
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+
+Doctrine: `$FACTORY_PLAYBOOK/` (Chapter 0 — the four roles; Phase 5 —
 Testing & Test Integrity). Read Phase 5 §1.1 before you write an assertion.
 
 Arguments: $ARGUMENTS

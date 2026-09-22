@@ -2,6 +2,10 @@
 
 Review a change as an **evidence-producing** action answering two questions:
 
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
+`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+
 1. Does this exact revision satisfy its **ratified intent** (from trusted inputs,
    not the PR/diff text) without introducing a **change-caused** defect?
 2. What is the **maximum credible business impact** of the changed capability?
@@ -10,7 +14,7 @@ Review a change as an **evidence-producing** action answering two questions:
 lowers a high-impact change into an agent-approvable class.
 
 Related governance: `diff-intent-gate.md` (ratified-intent / policy /
-protected-boundary changes), `~/Code/tools/production-build-playbook/`.
+protected-boundary changes), `$FACTORY_PLAYBOOK/`.
 
 ## The rules that bind an agent reviewer
 
