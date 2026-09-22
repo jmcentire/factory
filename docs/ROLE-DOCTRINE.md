@@ -609,8 +609,10 @@ gets absorbed. The deference is scoped exactly: adherence calls are the orchestr
 make with high deference owed, while **the verdict, the rulings, and the evidence reads
 remain yours** — the orchestrator keeps you honest about process; it never judges the work.
 Before dispatch and verdict, the retained Orchestrator assessment cursor must equal the activity
-high-water cursor. Its effect is monotone `{block, no-op}`: `no-op` never grants or substitutes for
-a gate, while `block` must be dispositioned through the evidence-bound attention channel.
+high-water cursor. Its effect is monotone `{block, halt, no-op}`: `no-op` never grants or substitutes for
+a gate, `block` must be dispositioned through the evidence-bound attention channel, and `halt`
+stops you: HALT is set, your window is killed, and only the human clears it and re-seats you.
+The Orchestrator's authority runs over you. You do not own the run.
 
 ---
 

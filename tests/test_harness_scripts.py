@@ -1202,6 +1202,14 @@ def execution_truth_fixture(
                     "launcher_qualification": "UNQUALIFIED_PR2",
                     "lane_isolation": "UNQUALIFIED_PR2",
                     "created_at": "2026-08-15T00:00:00+00:00",
+                    # Every run has a resident Orchestrator (founder ruling 2026-09-21).
+                    "orchestrator_mode": "resident-monitoring",
+                    "orchestrator_window": "orchestrator",
+                    "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
+                    "orchestrator_effects": "monotone-block-halt-or-no-op",
+                    "orchestrator_boundary": "operator-owned-tmux-unqualified",
+                    "orchestrator_cli_version": "agy 1.1.24-test",
+                    "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
                 },
                 indent=2,
             ),
@@ -1441,7 +1449,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["orchestrator_agent"] == "agy"
     assert harness["orchestrator_mode"] == "resident-monitoring"
     assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
-    assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
+    assert harness["orchestrator_effects"] == "monotone-block-halt-or-no-op"
     assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
     assert harness["agreement_requirement_region_families"] == ["authored-product"]
     assert harness["guidance_contract_version"] == "factory-run-guidance/1"
@@ -4016,6 +4024,33 @@ def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
     assert "orchestrator_not_resident" in [e["kind"] for e in events]
     blocking = (root / "lanes" / "validator.blocking").read_text()
     assert "orchestrator_not_resident" in blocking
+
+
+def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(json.dumps({"orchestrator_mode": "resident-monitoring"}))
+    (root / "events.jsonl").write_text("")
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod, "sh", lambda command: commands.append(command) or "")
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    (tmp_path / ".harness" / "HALT").write_text("ORCHESTRATOR HALT: validator went rogue\n")
+
+    d.check_halt()  # type: ignore[attr-defined]
+
+    assert ["tmux", "kill-window", "-t", "r1:validator"] in commands
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (root / "events.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert kinds == ["halt", "orchestrator_halt_enforced"]
 
 
 def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
@@ -7656,7 +7691,7 @@ def _add_current_harness_contract(root: Path) -> dict[str, object]:
             "orchestrator_mode": "resident-monitoring",
             "orchestrator_window": "orchestrator",
             "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
-            "orchestrator_effects": "monotone-block-or-no-op",
+            "orchestrator_effects": "monotone-block-halt-or-no-op",
             "orchestrator_boundary": "operator-owned-tmux-unqualified",
             "orchestrator_cli_version": "agy 1.1.24-test",
             "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
