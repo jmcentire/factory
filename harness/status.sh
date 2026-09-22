@@ -72,6 +72,12 @@ if [ -f "$ROOT/harness.json" ] && [ ! -L "$ROOT/harness.json" ]; then
     say "  cursor state  : $orch_state"
     dialogue_state=$(python3 "$D/lane_dialogue.py" pending --root "$ROOT" 2>/dev/null || echo INVALID)
     say "  open questions: $dialogue_state"
+    if [ -f "$ROOT/orchestrator/OUTSTANDING-WORK.md" ] && [ ! -L "$ROOT/orchestrator/OUTSTANDING-WORK.md" ]; then
+      say "  outstanding work and reminders (orchestrator/OUTSTANDING-WORK.md):"
+      head -n 40 "$ROOT/orchestrator/OUTSTANDING-WORK.md" | sed 's/^/    /'
+    else
+      say "  outstanding work: MISSING — the Orchestrator has not written OUTSTANDING-WORK.md"
+    fi
   fi
 fi
 

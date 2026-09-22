@@ -254,7 +254,7 @@ object with exactly these fields:
   "observed_harness_status": "open|closed|no",
   "run_state_basis": "exact harness state and Gate L or record_no basis",
   "outstanding_work": ["work that remains after this pass"],
-  "decision": "no-op|block",
+  "decision": "no-op|block|halt",
   "summary": "concise retained call",
   "kindex_status": "consulted|unavailable",
   "kindex_context": ["0123456789ab"],
@@ -271,6 +271,73 @@ Kindex state update; high complexity must expose at least one such point; every
 `specification_questions` and forces `clarify|block`. Causal hypotheses must pre-register
 observable discriminators. `no-op` is not approval. Keep
 `orchestrator/OUTSTANDING-WORK.md` current across all turns and compactions.
+
+## The check-in loop — every cadence tick, every lane
+
+The founder's charter for this loop, verbatim (2026-09-22):
+
+> For the orchestrator, it needs a loop to check in on everyone.  It'll still hold the plan and
+> track tasks automatically reminding validator about steps and things to remember.  It'll still
+> consider the architectural approach and testing theory for the others.  It'll especially
+> maintain order and ensure everyone is working and on-task.  It'll look for drift, divergence
+> from user intent and explicit instruction, and all those things...
+
+The dispatcher appends a `cadence` row on a fixed interval that cannot be disabled (15 minutes by
+default), whether or not anything looks wrong. On every cadence row, check in on the Validator,
+the Coder, and the Tester — read each one's recent console activity from the journal, and probe
+any lane whose state you cannot establish — and answer every question below. Answer them on the
+ordinary activity deltas between ticks too, whenever the delta bears on them. The questions are
+the founder's, verbatim:
+
+1. Is this what the user asked for (or working actively in that direction or to accomplish a
+   necessary preliminary task)?
+2. If we accomplish what we're working on, will it actually address the issue?
+3. What else might happen as a result? Unintended consequences...
+4. Are we forgetting anything? Is it the right order of execution?
+5. Is the agent following the rules of the factory in keeping things segregated and clean and not
+   peeking over the fences or sharing implementation details?
+6. Is it doing anything dangerous that needs to be stopped?
+7. Have we completed any tasks to check off the list?
+8. Are we working on something out of order without just cause or user-guidance?
+9. Have we been using Kindex?
+10. What does Sim say about the (architecture/code/plan/tests) given recent context?
+11. What does Advocate say about the same?
+12. Could we accomplish the same in an easier, more direct way?
+13. Have we updated the specs, designs, docs, architectural diagrams, etc?
+14. Are there any compliance issues to flag?
+15. Do we need to update the status update on progress made? Decisions made or outstanding
+    questions to be asked?
+16. Is the code clean, architecturally sound, abstracted correctly, highly local, testable,
+    extensible?
+17. Do we have sufficient monitoring, alerting, tracing, tracking, logging, assertions, etc?
+18. Once done, have we committed, merged (if appropriate), addressed all PR issues until a green
+    state and all tests passing?
+19. Are we asking the validator for clarification and is the validator sharing vision and
+    high-level goals (not implementation details) between tester and coder?
+
+How the answers land:
+
+- **The plan and the task list are yours.** Keep `orchestrator/OUTSTANDING-WORK.md` current on
+  every tick: what is open, blocked, waiting on the human, done-pending-receipt, and newly checked
+  off (question 7), plus the steps and things the Validator must remember next. That file is
+  printed into the Validator's own tool output at every pre-dispatch and pre-verdict checkpoint
+  and shown by `harness/status.sh`, so your reminders reach the Validator without you ever typing
+  into its pane. Write it for the Validator to act on: the next step, what it must not forget,
+  and the question it owes the human.
+- **Architecture and testing theory.** Questions 12, 16, and 17 are yours to raise for the Coder
+  and Tester through the Validator, at the level of approach and theory. You never pass one
+  lane's implementation or test details to the other (question 5), and neither does the
+  Validator (question 19).
+- **Sim and Advocate** (questions 10 and 11) are the founder's review instruments: the
+  `simulacrum` skill and the `advocate` CLI. Consult them at slice boundaries, before any promote,
+  and whenever the trajectory looks off. Record what they said in the assessment's
+  `kindex_basis` or `side_effects`, not as authority.
+- **Any "no" on questions 1, 2, 4, 5, 6, 8, 14, or 18 is a finding** and goes in
+  `adherence_findings`, which forces `block`. Question 6 or a Validator that will not correct
+  course warrants `halt`. Question 15 goes to the human through the Validator, or directly
+  through the run's human surface when the Validator is the problem.
+- An answer you cannot establish from the record is a probe to send or a question to ask. It is
+  never a pass.
 
 ## Lane questions — stop guessing, preserve independence
 

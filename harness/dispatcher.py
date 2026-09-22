@@ -231,7 +231,10 @@ class Dispatcher:
             "--tessera-bin",
             os.environ.get("FACTORY_TESSERA_BIN", "tessera"),
         )
-        self.audit_interval_min = int(cfg.get("audit_interval_min") or 45)
+        # The check-in loop cannot be disabled: a missing, zero, or negative interval
+        # falls back to the default instead of turning the cadence off.
+        configured_interval = int(cfg.get("audit_interval_min") or 0)
+        self.audit_interval_min = configured_interval if configured_interval > 0 else 15
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
         self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "")
         self.last_delivered_cursor = 0
@@ -494,9 +497,10 @@ class Dispatcher:
             kind="cadence",
             source="dispatcher",
             detail=(
-                "independent strategic cadence: reconstruct the user's ultimate goal, "
-                "classify recent input, test direction and consequences, inspect side effects, "
-                "and audit rule adherence"
+                "check-in loop: check in on the Validator, Coder, and Tester; answer every "
+                "check-in question in orchestrator/ROLE.md; reconstruct the user's ultimate goal, "
+                "test direction and consequences, audit rule adherence, and update "
+                "orchestrator/OUTSTANDING-WORK.md with the Validator's reminders"
             ),
         )
 
@@ -664,8 +668,6 @@ class Dispatcher:
 
     def check_alignment_audit(self) -> None:
         """Append an independent cadence record; the Orchestrator supplies judgment."""
-        if self.audit_interval_min <= 0:
-            return
         if (time.monotonic() - self.last_audit) / 60 >= self.audit_interval_min:
             self.last_audit = time.monotonic()
             if self.orchestrator_mode == "resident-monitoring":
