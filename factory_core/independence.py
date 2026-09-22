@@ -57,7 +57,8 @@ ROLE_CODER = "coder"
 ROLE_TESTER = "tester"
 ROLE_VALIDATOR = "validator"
 
-# The three roles that produce or judge a change. Every one of them is recorded, because the
+# The roles that produce or judge a change (the Orchestrator, the fourth role, neither produces
+# nor judges one). Every one of them is recorded, because the
 # manifest requirement is about verdict provenance, not only about the two isolated lanes.
 RECORDED_ROLES: tuple[str, ...] = (ROLE_CODER, ROLE_TESTER, ROLE_VALIDATOR)
 

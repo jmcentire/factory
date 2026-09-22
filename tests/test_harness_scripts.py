@@ -1202,6 +1202,14 @@ def execution_truth_fixture(
                     "launcher_qualification": "UNQUALIFIED_PR2",
                     "lane_isolation": "UNQUALIFIED_PR2",
                     "created_at": "2026-08-15T00:00:00+00:00",
+                    # Every run has a resident Orchestrator (founder ruling 2026-09-21).
+                    "orchestrator_mode": "resident-monitoring",
+                    "orchestrator_window": "orchestrator",
+                    "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
+                    "orchestrator_effects": "monotone-block-halt-or-no-op",
+                    "orchestrator_boundary": "operator-owned-tmux-unqualified",
+                    "orchestrator_cli_version": "agy 1.1.24-test",
+                    "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
                 },
                 indent=2,
             ),
@@ -1441,7 +1449,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["orchestrator_agent"] == "agy"
     assert harness["orchestrator_mode"] == "resident-monitoring"
     assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
-    assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
+    assert harness["orchestrator_effects"] == "monotone-block-halt-or-no-op"
     assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
     assert harness["agreement_requirement_region_families"] == ["authored-product"]
     assert harness["guidance_contract_version"] == "factory-run-guidance/1"
@@ -1803,6 +1811,31 @@ def test_proof_green_when_all_probes_pass(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 # Validator failure-mode detectors (deterministic layer of the Orchestrator seat)
 # --------------------------------------------------------------------------
+
+
+def wake_harness(agent: str) -> str:
+    """Harness metadata for a headless-audit fixture. The audit script refuses
+    any run without a resident Orchestrator, so its fixtures declare one."""
+    return json.dumps(
+        {"status": "open", "orchestrator_mode": "resident-monitoring", "orchestrator_agent": agent}
+    )
+
+
+def test_headless_audit_refuses_a_run_without_a_resident_orchestrator(tmp_path: Path) -> None:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(
+        json.dumps({"status": "open", "orchestrator_agent": "codex"})
+    )
+    r = run(
+        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
+        cwd=tmp_path,
+        env_extra={"ORCH_AGENT": "codex"},
+    )
+    assert r.returncode == 72
+    assert "no resident Orchestrator" in r.stderr
+    assert not (root / "wakes").exists()
 
 
 def load_dispatcher() -> object:
@@ -2548,7 +2581,7 @@ def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
     )
     (root / "TASK.md").write_text("task\n")
     (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "codex"})
+        wake_harness("codex")
     )
     # PATH without any agent binary: the invocation cannot succeed.
     r = run(
@@ -2575,7 +2608,7 @@ def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task-" + ("t" * 60_000) + "\n")
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
     (root / "events.jsonl").write_text(
         json.dumps({"padding": "e" * 59_000}, separators=(",", ":")) + "\n"
     )
@@ -2714,7 +2747,7 @@ def test_orchestrator_rejects_malformed_agy_terminal_stream(tmp_path: Path) -> N
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
@@ -2755,7 +2788,7 @@ def test_orchestrator_receipts_live_supervisor_output_truncation(tmp_path: Path)
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
     binary = tmp_path / "bin"
     binary.mkdir()
     agy = binary / "agy"
@@ -2805,7 +2838,7 @@ def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
     (receipts / "chain.jsonl").write_text(
         "".join(f'{{"receipt":{index}}}\n' for index in range(12_000))
         + '{"receipt":"receipt-final"}\n'
@@ -3276,7 +3309,7 @@ def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path)
         json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
     )
     (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
     for index in range(65):
         (minutes / f"{index:02d}.log").write_text("minute\n")
 
@@ -3354,7 +3387,7 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
 def test_orchestrator_refuses_ambient_agent_substitution(tmp_path: Path) -> None:
     root = tmp_path / ".factory" / "runs" / "r1"
     (root / "wakes").mkdir(parents=True)
-    (root / "harness.json").write_text(json.dumps({"status": "open", "orchestrator_agent": "agy"}))
+    (root / "harness.json").write_text(wake_harness("agy"))
 
     result = run(
         ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
@@ -3370,7 +3403,7 @@ def test_orchestrator_refuses_unsandboxed_claude_adapter(tmp_path: Path) -> None
     root = tmp_path / ".factory" / "runs" / "r1"
     root.mkdir(parents=True)
     (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "claude"})
+        wake_harness("claude")
     )
 
     result = run(
@@ -3944,7 +3977,7 @@ def test_dead_auditor_writes_blocking_event_not_injection(tmp_path: Path) -> Non
     )
     (root / "TASK.md").write_text("task\n")
     (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "codex"})
+        wake_harness("codex")
     )
     r = run(
         ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
@@ -3960,81 +3993,176 @@ def test_dead_auditor_writes_blocking_event_not_injection(tmp_path: Path) -> Non
     assert "ORCHESTRATOR DID NOT RUN" in r.stderr
 
 
-def test_dispatcher_kills_hung_wake_past_timeout(tmp_path: Path) -> None:
-    """Amend 2.5: a hung wake (poll() None forever) left every later trigger
-    coalesced as 'a seat is still working' — orchestrator dead but reported
-    healthy, for the whole endgame. Past the deadline the seat is hung, not
-    working: kill it, record the death, spawn a fresh wake."""
+def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Founder ruling 2026-09-21: exactly four roles, and the Orchestrator is
+    always running. A run without a resident Orchestrator is refused with a
+    blocking event; it is never served by a throwaway headless session that
+    answers once and exits."""
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
     root.mkdir(parents=True)
     (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
     (root / "events.jsonl").write_text("")
     d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
-    os.environ["WAKE_TIMEOUT"] = "0"  # deadline already elapsed
+    monkeypatch.setattr(
+        mod.subprocess,
+        "Popen",
+        lambda *_a, **_k: pytest.fail("a non-resident run must not spawn a one-shot wake"),
+    )
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
 
-    class _Hung:
-        killed = False
+    d.wake_orchestrator({"kind": "spec_defect"})  # type: ignore[attr-defined]
 
-        def poll(self) -> int | None:
-            return None
-
-        def kill(self) -> None:
-            _Hung.killed = True
-
-        def wait(self) -> int:
-            return -9
-
-    hung = _Hung()
-    d._wake_proc = hung  # type: ignore[attr-defined]
-    d._wake_start = 0.0  # type: ignore[attr-defined]
-
-    class _FakeProc:
-        args: tuple = ()
-
-        def poll(self) -> int | None:
-            return 0
-
-        def kill(self) -> None:
-            pass
-
-        def wait(self) -> int:
-            return 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc: object) -> bool:
-            return False
-
-        def communicate(self, input=None, timeout=None):
-            return (b"", b"")
-
-    invocation: dict[str, object] = {}
-    orig = mod.subprocess.Popen  # type: ignore[attr-defined]
-
-    def fake_popen(*args: object, **kwargs: object) -> _FakeProc:
-        invocation["args"] = args
-        invocation["kwargs"] = kwargs
-        return _FakeProc()
-
-    mod.subprocess.Popen = fake_popen  # type: ignore[assignment]
-    try:
-        d.wake_orchestrator({"kind": "test"})  # type: ignore[attr-defined]
-    finally:
-        mod.subprocess.Popen = orig  # type: ignore[assignment]
-        del os.environ["WAKE_TIMEOUT"]
-    assert _Hung.killed, "a hung wake past its deadline must be killed"
-    assert invocation["kwargs"]["start_new_session"] is True  # type: ignore[index]
     events = [
         json.loads(line)
         for line in (root / "events.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    assert any(e["kind"] == "orchestrator_dead" for e in events), (
-        "killing a hung wake must record orchestrator_dead, not report it healthy"
+    assert "orchestrator_not_resident" in [e["kind"] for e in events]
+    blocking = (root / "lanes" / "validator.blocking").read_text()
+    assert "orchestrator_not_resident" in blocking
+
+
+def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(json.dumps({"orchestrator_mode": "resident-monitoring"}))
+    (root / "events.jsonl").write_text("")
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod, "sh", lambda command: commands.append(command) or "")
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    (tmp_path / ".harness" / "HALT").write_text("ORCHESTRATOR HALT: validator went rogue\n")
+
+    d.check_halt()  # type: ignore[attr-defined]
+
+    assert ["tmux", "kill-window", "-t", "r1:validator"] in commands
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (root / "events.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert kinds == ["halt", "orchestrator_halt_enforced"]
+
+
+def test_checkpoint_delivers_orchestrator_reminders_into_validator_output(
+    tmp_path: Path,
+) -> None:
+    """The Orchestrator's check-in loop reaches the Validator without pane injection:
+    its OUTSTANDING-WORK.md is printed into the Validator's own checkpoint output."""
+    _cwd, root, _dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    ledger = root / "orchestrator" / "OUTSTANDING-WORK.md"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "- NEXT: ask the human about per-line rounding before dispatching the Tester\n"
     )
-    assert any("scope=wrapper-only-fallback" in str(e["detail"]) for e in events)
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "orchestrator_checkpoint.sh"),
+            "r1",
+            "pre_dispatch",
+            "before dispatching the coder lane",
+            "--runs",
+            str(root.parent),
+        ],
+        root,
+        _dispatch_env(stub, root),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ORCHESTRATOR — outstanding work and reminders" in result.stderr
+    assert "ask the human about per-line rounding" in result.stderr
+
+
+def test_check_in_cadence_cannot_be_disabled(tmp_path: Path) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    for configured in (0, -5):
+        (root / "harness.json").write_text(
+            json.dumps(
+                {"orchestrator_mode": "resident-monitoring", "audit_interval_min": configured}
+            )
+        )
+        d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+        assert d.audit_interval_min == 15  # type: ignore[attr-defined]
+
+
+def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Who watches the watcher: activity keeps arriving, the assessed cursor does
+    not move for two check-in intervals, and the run is blocked."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "audit_interval_min": 15})
+    )
+    (root / "events.jsonl").write_text("")
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: 9)
+    monkeypatch.setattr(mod, "assessed_through", lambda _root: 4)
+
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+    assert not (root / "lanes" / "validator.blocking").exists()
+
+    d.assessed_progress_at -= 31 * 60  # type: ignore[attr-defined]
+    d.last_assessed = 4  # type: ignore[attr-defined]
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+
+    assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
+    kinds = [json.loads(line)["kind"] for line in (root / "events.jsonl").read_text().splitlines()]
+    assert kinds.count("orchestrator_unresponsive") == 1
+
+
+def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
+    (root / "harness.json").write_text(json.dumps({"status": "open"}))
+    r = run(
+        [sys.executable, str(HARNESS / "dispatcher.py"), "--run", "r1", "--root", str(root)],
+        cwd=tmp_path,
+    )
+    assert r.returncode != 0
+    assert "no resident Orchestrator" in r.stderr
+    assert "orchestrator_not_resident" in (root / "lanes" / "validator.blocking").read_text()
+
+
+def test_orchestrator_channel_refuses_transitions_for_a_non_resident_run(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "harness.json").write_text(json.dumps({"status": "open"}))
+    for command in (["require-current"], ["require-through", "--cursor", "1"]):
+        r = run(
+            [
+                sys.executable,
+                str(HARNESS / "orchestrator_channel.py"),
+                *command,
+                "--root",
+                str(root),
+            ],
+            cwd=tmp_path,
+        )
+        assert r.returncode != 0, command
+        assert "no resident Orchestrator" in (r.stderr + r.stdout), command
 
 
 def test_dispatcher_gives_supervisor_term_grace_before_group_kill(
@@ -5155,6 +5283,46 @@ def _lane_dispatch(
     }
 
 
+RESIDENT_NOOP_ASSESSMENT: dict[str, object] = {
+    "schema_version": "factory-orchestrator-assessment/2",
+    "through_cursor": 0,
+    "ultimate_goal": "Prove the Factory workflow, not merely produce code.",
+    "current_action": "Assess a lane checkpoint in a fixture run.",
+    "latest_input": "Continue the already specified four-role run.",
+    "latest_input_class": "aside",
+    "classified_because": "The checkpoint names no change to the user's goal.",
+    "direction_correct": True,
+    "if_continued": "The lane produces reviewable evidence.",
+    "side_effects": ["None beyond the dispatched lane's own work."],
+    "desirable_outcome": True,
+    "advances_goal": True,
+    "aligned": True,
+    "adherence_findings": [],
+    "task_complexity": "low",
+    "latent_ambiguity": "low",
+    "requirements_considered": ["Preserve independent lanes and the resident Orchestrator."],
+    "complexity_hotspots": [],
+    "planning_mode": "direct",
+    "specification_questions": [],
+    "work_breakdown": ["Dispatch the bounded fixture lane."],
+    "model_routing": ["Fixture lane -> fixture model."],
+    "causal_hypotheses": [],
+    "outcome_discriminators": [],
+    "dispatch_context_mode": "chunk-specific",
+    "kindex_state_updates": [],
+    "recommended_strategy": "Continue the ratified lane method.",
+    "judging_pass_state": "active",
+    "observed_harness_status": "open",
+    "run_state_basis": "harness.json is open; no Gate L close exists.",
+    "outstanding_work": ["Complete the fixture lane."],
+    "decision": "no-op",
+    "summary": "Direction and process remain aligned.",
+    "kindex_status": "consulted",
+    "kindex_context": ["22c90265226a"],
+    "kindex_basis": "Four-role ruling: the Orchestrator is resident for every run.",
+}
+
+
 def dispatch_success_fixture(
     tmp_path: Path, role: str = "coder", primer: bool = True
 ) -> tuple[Path, Path, Path, Path]:
@@ -5189,9 +5357,52 @@ def dispatch_success_fixture(
     dispatch.write_text(json.dumps(_lane_dispatch(role)) + "\n", encoding="utf-8")
     stub = tmp_path / "bin"
     stub.mkdir()
-    (stub / "tmux").write_text("#!/usr/bin/env bash\nexit 0\n")
-    os.chmod(stub / "tmux", 0o755)
+    install_resident_orchestrator_stub(stub, root)
     return workdir, root, dispatch, stub
+
+
+def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
+    """Model the resident Orchestrator every Factory run has (founder ruling
+    2026-09-21: exactly four roles; the Orchestrator is always running).
+
+    Fixtures used to pass checkpoints by omitting the Orchestrator entirely; the
+    runtime now refuses that. This stand-in declares resident mode and answers
+    each FACTORY_CHECKPOINT notification with a no-op assessment submitted
+    through the real orchestrator channel, so the checkpoint is genuinely
+    assessed rather than skipped."""
+    metadata_path = root / "harness.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["orchestrator_mode"] = "resident-monitoring"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assessor = stub / "resident_orchestrator.py"
+    assessor.write_text(
+        "import json, pathlib, re, subprocess, sys\n"
+        "root, message = pathlib.Path(sys.argv[1]), sys.argv[2]\n"
+        "match = re.search(r'FACTORY_CHECKPOINT cursor=(\\d+)', message)\n"
+        "if not match:\n"
+        "    raise SystemExit(0)\n"
+        f"body = json.loads({json.dumps(json.dumps(RESIDENT_NOOP_ASSESSMENT))})\n"
+        "body['through_cursor'] = int(match.group(1))\n"
+        "status = json.loads((root / 'harness.json').read_text())['status']\n"
+        "body['observed_harness_status'] = status\n"
+        "body['run_state_basis'] = f'harness.json is {status}; no Gate L close exists.'\n"
+        "report = root / 'orchestrator' / f'assessment-{match.group(1)}.json'\n"
+        "report.write_text(json.dumps(body))\n"
+        f"subprocess.run([sys.executable, {str(HARNESS / 'orchestrator_channel.py')!r}, "
+        "'report', '--root', str(root), '--input', str(report)], check=True)\n",
+        encoding="utf-8",
+    )
+    (stub / "tmux").write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$1" in\n'
+        "  display) echo agy ;;\n"
+        '  send-keys) if [ "$4" = "-l" ]; then\n'
+        f'      {sys.executable} {assessor} {root} "$6" 2>>{stub / "assessor.log"}; fi ;;\n'
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    os.chmod(stub / "tmux", 0o755)
 
 
 def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
@@ -7555,7 +7766,7 @@ def _add_current_harness_contract(root: Path) -> dict[str, object]:
             "orchestrator_mode": "resident-monitoring",
             "orchestrator_window": "orchestrator",
             "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
-            "orchestrator_effects": "monotone-block-or-no-op",
+            "orchestrator_effects": "monotone-block-halt-or-no-op",
             "orchestrator_boundary": "operator-owned-tmux-unqualified",
             "orchestrator_cli_version": "agy 1.1.24-test",
             "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
@@ -8827,6 +9038,7 @@ def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
         encoding="utf-8",
     )
     tar_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
 
     env = _factory_cli_env()
     env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"

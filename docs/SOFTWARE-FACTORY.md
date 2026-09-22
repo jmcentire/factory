@@ -2,7 +2,7 @@
 
 ### How we build and how we repair
 
-**Three roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
+**Four roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
 implements, proves conformance, and produces the evidence.**
 
 ---
@@ -33,7 +33,7 @@ the strength of a description — applies to the factory's own description of it
 
 1. [What this is, and why](#1-what-this-is-and-why)
 2. [What already exists, and what is missing from it](#2-what-already-exists-and-what-is-missing-from-it)
-3. [The three roles](#3-the-three-roles)
+3. [The four roles](#3-the-four-roles)
 3.5. [Criticality](#35-criticality)
 4. [The three phases](#4-the-three-phases)
 4.5. [Invariant documents](#45-invariant-documents)
@@ -124,22 +124,25 @@ where **the human is shown a calibrated decision rather than a wall of logs.**
 
 ---
 
-## 3. The three roles
+## 3. The four roles
 
-There are three roles. There are no others. Everything else in this document is a phase, an
+There are four roles. There are no others. Everything else in this document is a phase, an
 artifact, or a control — not a role.
 
 | Role | Owns |
 |---|---|
 | **Validator** | Coordinates with the human. Holds the context. Co-authors the spec. All questions route here. Runs the tests once code and tests are both complete. Judges. |
+| **Orchestrator** | Resident and always running for every run. Watches every lane continuously, keeps the Validator on the plan and the outstanding-work ledger, audits adherence to the rules and to what the human explicitly said, and speaks up unprompted. Blocks; never implements, tests, judges, grants, or advances. |
 | **Coder** | Implements against the spec. |
 | **Tester** | Writes tests against the spec. |
 
-### The resident Orchestrator is a supervisory control, not a fourth role
+### The Orchestrator is always resident
 
-Interactive tmux operation may run a resident Orchestrator agent from ignition until terminal
-disposition. It owns no implementation, test, verdict, grant, or close authority, so the three
-role separation above does not change. Its job is to observe every bounded sampled pane snapshot
+Every run has a resident Orchestrator from ignition until terminal disposition. The dispatcher,
+the pre-dispatch and pre-verdict checkpoints, and the orchestrator channel refuse a run without
+one; there is no one-shot, wake-only, or orchestrator-less mode (founder ruling 2026-09-21). It
+owns no implementation, test, verdict, grant, or close authority, so the Coder/Tester
+independence and the Validator's judgment do not change. Its job is to observe every bounded sampled pane snapshot
 the dispatcher captures, without semantic filtering, plus independent cadence; recover the
 user's continuing goal from the retained run and Kindex; question whether the current direction
 and side effects advance that goal; audit the rules; and preserve normalized outstanding work
@@ -164,7 +167,8 @@ digests. `routing-verified` means only that the obligation reached its intended 
 a compliance claim. Pre-dispatch requires routing, pre-verdict requires evidence completion, and
 any noncompliant state or inherited open finding forces the same monotone block as other process
 drift.
-Its closed machine effect remains only `block|no-op`; `no-op` grants nothing. The deterministic
+Its closed machine effect is only `block|halt|no-op`; `halt` stops the Validator (HALT is set and its
+window killed; only a human clears it); `no-op` grants nothing. The deterministic
 dispatcher transports every captured cursor range and cadence row but selects no conversation for
 strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
 Orchestrator inspects tmux and sends a typed status probe to the exact retained author session.
@@ -586,7 +590,7 @@ A **translation boundary** is any point where intent is restated in a different 
 dangerous property is the same at each one: **the output of the translation becomes the target
 for everything downstream.**
 
-In the three-role structure the Validator is the translation boundary — in all three phases,
+In the four-role structure the Validator is the translation boundary — in all three phases,
 and again when it answers a Coder or Tester question from the spec.
 
 > **The Coder and the Tester do not consume the human's intent. They consume the Validator's
@@ -869,7 +873,7 @@ is reported as unverified rather than described as done.
 
 ## 8. Two flows, one structure
 
-Same three roles, same three phases. What differs is the input and the strength of the oracle
+Same four roles, same three phases. What differs is the input and the strength of the oracle
 available.
 
 | | **Capability** | **Correction** |
@@ -1504,8 +1508,9 @@ and owning risk policy.
 
 ## 16. The core guarantee
 
-Three roles. The Validator co-authors the spec with the human across three phases, holds the
-context, and judges. The Coder implements against the spec. The Tester writes tests against the
+Four roles. The Validator co-authors the spec with the human across three phases, holds the
+context, and judges. The Orchestrator is resident for the whole run, watches every lane, and
+blocks when the process drifts. The Coder implements against the spec. The Tester writes tests against the
 spec. They share the spec and have no channel to each other, and the Validator — holding neither
 pen — runs the tests.
 
@@ -1547,7 +1552,7 @@ handoff.**
 
 ### The structure
 
-Three roles: **Validator**, **Coder**, **Tester**. There are no others.
+Four roles: **Validator**, **Orchestrator**, **Coder**, **Tester**. There are no others.
 
 The Validator coordinates with the human, holds the context, co-authors the spec across three
 phases, answers questions, runs the tests, and judges. The Coder implements. The Tester writes
@@ -1957,6 +1962,47 @@ surface, trace which components' side effects reach it.
 
 ---
 
+## Directive — Orchestrator
+
+### Purpose
+
+You are resident and always running for the whole run, from ignition to terminal disposition.
+You watch every lane — every activity delta the dispatcher transports, plus independent cadence
+— and you speak up without being asked. You keep the Validator on the plan, keep the
+outstanding-work ledger, call adherence when any agent drifts from the rules, the plan, or what
+the human explicitly said, and block when the process is wrong. A run without you is refused;
+there is no one-shot, wake-only, or orchestrator-less mode.
+
+### What you hold, and what you never hold
+
+You hold the watch, the ledger, the block, and the halt. Your authority runs over every other
+role, including the Validator: you see all three consoles, and when the Validator acts as if it
+owns the run you can stop it outright. You hold no pen: no implementation, no tests, no
+verdict, no grant, no advancement, no close. Your machine effect is exactly `block`, `halt`, or
+`no-op`, and `no-op` grants nothing. The dispatcher is the deterministic part of your role: it transports
+every captured change without choosing what deserves your attention, and it enforces receipts,
+budgets, leases, and blocks because a script cannot be talked past.
+
+### The check-in loop
+
+On a fixed cadence that cannot be disabled, you check in on the Validator, the Coder, and the
+Tester and answer the founder's check-in questions (`prompts/orchestrate.md`): is this what the
+user asked for, will it address the issue, what else might happen, what is forgotten or out of
+order, is segregation holding, is anything dangerous, what is done, is Kindex in use, what do Sim
+and Advocate say, is there an easier way, are specs and docs current, any compliance issue, is
+the status current, is the code sound, is monitoring sufficient, is everything committed, merged,
+and green, and is the Validator sharing vision rather than implementation details. You hold the
+plan and the task list in `orchestrator/OUTSTANDING-WORK.md`. It is printed into the Validator's
+own output at every checkpoint, which is how your reminders reach it.
+
+### Why this role exists
+
+Models make things up and substitute their own design for what the human said, most of all when
+nothing is watching. An orchestrator that only answers when asked cannot know whether the work
+is right. Your operating procedure is `prompts/orchestrate.md`.
+
+---
+
 ## Directive — Coder
 
 ### Purpose
@@ -2172,10 +2218,11 @@ satisfy it.
 | Role | Talks to | Reads | Writes | Runs |
 |---|---|---|---|---|
 | **Validator** | Human, Coder, Tester | Everything | The spec (with the human) | The tests |
+| **Orchestrator** | Human, Validator | Every lane's activity, the run record, Kindex | Assessments, blocks, the outstanding-work ledger | Nothing it judges |
 | **Coder** | Validator only | Ratified build input + derived construction IR | The implementation | Nothing it is judged by |
 | **Tester** | Validator only | Ratified build input only | The tests | Nothing |
 
-### The correction flow uses the same three roles and the same three phases
+### The correction flow uses the same four roles and the same three phases
 
 Phase 1 becomes diagnosis — symptom traced to cause until the cause is specific enough to
 repair against. Phase 2 becomes confirmation that the repair fits the settled architecture, or
@@ -2394,7 +2441,7 @@ Defined question and specification-defect paths to the Validator remain open.
 
 ### Inferences in this revision, marked for refutation
 
-Three things follow from the three-role structure but were not stated explicitly. They are
+Three things follow from the role structure but were not stated explicitly. They are
 written into the document and flagged here so they can be refuted rather than inherited.
 
 1. **Diagnosis is phase 1 of the correction flow.** Symptom-to-cause is a human proposing and

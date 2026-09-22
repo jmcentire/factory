@@ -29,6 +29,8 @@ _DISPATCHER_CLASSES = frozenset(
         "target_state_diverged",
         "target_state_verifier_unavailable",
         "orchestrator_transport_failed",
+        "orchestrator_not_resident",
+        "orchestrator_unresponsive",
         "invalid_legacy_abandonment",
         "legacy_harness",
     }

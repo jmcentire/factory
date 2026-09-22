@@ -21,14 +21,15 @@
   Orchestrator reconstructs the user's ultimate goal, classifies recent input, tests whether the current direction
   advances that goal, and projects implications and side effects. It also audits the
   *Validator's* failure modes: announced
-  work with no receipt; forgetting the triumvirate and doing lane work itself;
+  work with no receipt; forgetting the role separation and doing lane work itself;
   misattributing authority (claims that resolve to no ledger entry); doing the
   opposite of the recorded ask; hyper-focus on what the founder doesn't care
   about; waiting on input it doesn't need; and cleanup debt accruing (the
   100-items-of-lingering-work state is almost never wanted). Judgment is the
   resident agent's; deterministic checks remain independent fail-safes. It never sends free-form
   prose into a pane it judges; its only lane message is a generated typed status probe. It never
-  acquires verdict authority. Its closed effect is `block|no-op`, and a block gates the next
+  acquires verdict authority. Its closed effect is `block|halt|no-op`; a halt sets HALT and kills the Validator's window
+  (only a human clears it), and a block gates the next
   dispatch until the Validator records an evidence-bound `stop`, `narrow`, `escalate`, `refute`,
   or `resolve` disposition.
 

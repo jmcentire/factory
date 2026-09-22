@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Append a strategic checkpoint, notify the resident Orchestrator, and wait for
 # a schema-checked assessment that covers it. The checkpoint transport makes no
-# semantic judgment; the Orchestrator alone returns block or no-op.
+# semantic judgment; the Orchestrator alone returns block, halt, or no-op.
 set -euo pipefail
 
 RUN="${1:?usage: orchestrator_checkpoint.sh <run> <kind> <detail> [--runs <path>]}"
@@ -33,7 +33,7 @@ try:
 except (OSError, ValueError):
     print("invalid")
 else:
-    print(doc.get("orchestrator_mode", "headless-projection"))
+    print(doc.get("orchestrator_mode", "missing"))
 PY
 )
 if [ "$MODE" != "resident-monitoring" ]; then
@@ -41,12 +41,15 @@ if [ "$MODE" != "resident-monitoring" ]; then
     echo "orchestrator-checkpoint: harness metadata is unreadable" >&2
     exit 70
   }
-  exit 0
+  # Every run has a resident Orchestrator; a checkpoint without one is refused,
+  # never passed (founder ruling 2026-09-21).
+  echo "orchestrator-checkpoint: run has no resident Orchestrator (mode=$MODE); refused" >&2
+  exit 70
 fi
 
 CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
   --kind "$KIND" --source validator --detail "$DETAIL") || exit $?
-MESSAGE="FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3, and submit it with orchestrator/bin/orchestrator_channel.py. Decide only block or no-op; never grant or close."
+MESSAGE="FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3, and submit it with orchestrator/bin/orchestrator_channel.py. Decide block, halt, or no-op; never grant or close."
 if ! INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" INJECT_SUBMIT_DELAY=0.1 \
   "$D/inject.sh" "$RUN" orchestrator "$MESSAGE" >/dev/null; then
   echo "orchestrator-checkpoint: resident Orchestrator notification failed" >&2
@@ -64,6 +67,20 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
     --cursor "$CURSOR" >/dev/null 2>&1 && \
     python3 "$D/orchestrator_channel.py" require-current --root "$ROOT" \
       >/dev/null 2>&1; then
+      # Deliver the Orchestrator's plan and reminders into the Validator's own tool
+      # output. This is how the state-keeper reaches the Validator without typing
+      # into its pane (Gate F); stderr keeps the caller's stdout contract intact.
+      LEDGER="$ROOT/orchestrator/OUTSTANDING-WORK.md"
+      if [ -f "$LEDGER" ] && [ ! -L "$LEDGER" ]; then
+        {
+          echo "=== ORCHESTRATOR — outstanding work and reminders (orchestrator/OUTSTANDING-WORK.md) ==="
+          head -c 8192 "$LEDGER"
+          echo
+          echo "=== end of Orchestrator reminders ==="
+        } >&2
+      else
+        echo "orchestrator-checkpoint: the Orchestrator has not written OUTSTANDING-WORK.md" >&2
+      fi
       exit 0
   fi
   sleep 1

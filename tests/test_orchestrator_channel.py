@@ -583,3 +583,110 @@ def test_noncompliant_guidance_assessment_must_block(tmp_path: Path) -> None:
 
     report = record_assessment(root, guidance_assessment(root, 1, decision="block"))
     assert report["assessment"]["guidance_findings"] == ["guidance-evidence-invalid"]
+
+
+def _halt_root(tmp_path: Path) -> Path:
+    root = tmp_path / ".factory" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_orchestrator_halt_stops_the_validator_and_only_a_human_clears_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Founder ruling 2026-09-21: the Orchestrator has strong authority over the
+    Validator, including the power to shut it down."""
+    root = _halt_root(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        orchestrator_channel.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(list(command)),
+    )
+    append_activity(
+        root,
+        kind="pane_delta",
+        source="validator",
+        detail="Validator overrode an adherence call",
+        snapshot="I own this run; I will write the fix myself and skip the Tester.",
+    )
+
+    record_assessment(
+        root,
+        assessment(
+            1,
+            direction_correct=False,
+            advances_goal=False,
+            aligned=False,
+            adherence_findings=["The Validator ignored a block and picked up the Coder's pen."],
+            decision="halt",
+            summary="Validator is acting as if it owns the run; halting.",
+        ),
+    )
+
+    halt = (tmp_path / ".factory" / "HALT").read_text()
+    assert halt.startswith("ORCHESTRATOR HALT: Validator is acting as if it owns the run")
+    assert ["tmux", "kill-window", "-t", "r1:validator"] in calls
+    blocking = (root / "lanes" / "validator.blocking").read_text()
+    assert "orchestrator_response" in blocking
+
+
+def test_orchestrator_halt_requires_findings_and_preserves_an_existing_halt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _halt_root(tmp_path)
+    monkeypatch.setattr(orchestrator_channel.subprocess, "run", lambda *_a, **_k: None)
+    append_activity(root, kind="cadence", source="dispatcher", detail="cadence")
+    with pytest.raises(OrchestratorChannelError, match="halt must carry"):
+        record_assessment(root, assessment(1, decision="halt"))
+    assert not (tmp_path / ".factory" / "HALT").exists()
+
+    (tmp_path / ".factory" / "HALT").write_text("TRIPWIRE: secret in transcript\n")
+    record_assessment(
+        root,
+        assessment(
+            1,
+            aligned=False,
+            adherence_findings=["Validator negotiated past a gate."],
+            decision="halt",
+            summary="halting",
+        ),
+    )
+    assert (tmp_path / ".factory" / "HALT").read_text() == "TRIPWIRE: secret in transcript\n"
+
+
+def test_orchestrator_halt_works_with_the_relative_root_the_runtime_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher tells the Orchestrator to run `report --root .`. A halt must
+    still land HALT where lane_env and the dispatcher look, and kill the right
+    session's Validator window."""
+    root = _halt_root(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        orchestrator_channel.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(list(command)),
+    )
+    monkeypatch.chdir(root)
+    append_activity(Path("."), kind="cadence", source="dispatcher", detail="cadence")
+    record_assessment(
+        Path("."),
+        assessment(
+            1,
+            aligned=False,
+            adherence_findings=["Validator wrote implementation code."],
+            decision="halt",
+            summary="halting the Validator",
+        ),
+    )
+    assert (tmp_path / ".factory" / "HALT").read_text().startswith("ORCHESTRATOR HALT")
+    assert not (root / "HALT").exists()
+    assert ["tmux", "kill-window", "-t", "r1:validator"] in calls
