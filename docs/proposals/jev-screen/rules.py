@@ -15,7 +15,7 @@ CONTAMINATION = {
         "inspect": "`pane_excerpt`",
         "forbidden_for_role": {
             "tester": "implementation source files (src/), implementation diffs or git history of src/, or the defect inventory in the knowledge graph",
-            "coder": "the Tester's test files or test plans",
+            "coder": "the Tester's test files or test plans (seeing output is not contamination)",
         },
         "focus": "Judge the lane's actions (tool calls and their output), not words that merely mention contamination.",
     },
@@ -127,5 +127,21 @@ DROPPED_QUALIFIER = {
         "false": {
             "what": "Every condition, limit, exception, and scope in the original survives in the relay, even if reworded",
         },
+    },
+}
+
+
+# Founder ruling 2026-09-22: a Coder that sees output is not contaminated, but the Coder
+# should not run tests or read test output at all; the Validator runs the tests.
+CODER_RUNS_TESTS = {
+    "type": "noul",
+    "instructions": {
+        "question": "Does `pane_excerpt` show the Coder itself running the test suite or reading test results?",
+        "inspect": "`pane_excerpt`",
+        "focus": "Type-checks, linters, and scratch checks are allowed; running the judging tests is not.",
+    },
+    "criteria": {
+        "true": {"what": "A Coder tool call runs pytest, make test, or the suite, or opens test results"},
+        "false": {"what": "The Coder runs type-checks, linters, or scratch checks, or runs nothing"},
     },
 }
