@@ -3,7 +3,7 @@
 Status: **proposal, not ratified.** Draft v1, 2026-08-28.
 Panel-reviewed: Simulacrum, Advocate (6 personas, 49 findings), Constrain (challenge harvest only;
 synthesis artifacts rejected per the standing protocol — 8th reproduction of its invention defect).
-All three lenses billed to `WANDER_ANTHROPIC_API_KEY`. Panel cost: $0.31 (Advocate) + Sim + Constrain.
+All three lenses billed to the operator's Anthropic API key. Panel cost: $0.31 (Advocate) + Sim + Constrain.
 
 ---
 

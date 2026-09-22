@@ -3,7 +3,7 @@
 Status: **proposal, pending operator ratification.**
 Provenance: drafted 2026-08-27 from the run-1 post-mortem (operator-authored, kindex
 `f759632fc504`), then stress-tested through three independent lenses billed to the
-Wander key: **Sim** (five claim-level rulings), **Constrain** (bounded clean-room
+operator key: **Sim** (five claim-level rulings), **Constrain** (bounded clean-room
 interview; challenge findings harvested, synthesis artifacts rejected per standing
 rule), and **Advocate** (six personas, 55 findings). Lens rulings are captured as
 kindex decisions linked to `da13cbaca4f3`. Kindex is context, not authority — only the
