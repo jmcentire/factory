@@ -167,7 +167,8 @@ digests. `routing-verified` means only that the obligation reached its intended 
 a compliance claim. Pre-dispatch requires routing, pre-verdict requires evidence completion, and
 any noncompliant state or inherited open finding forces the same monotone block as other process
 drift.
-Its closed machine effect remains only `block|no-op`; `no-op` grants nothing. The deterministic
+Its closed machine effect is only `block|halt|no-op`; `halt` stops the Validator (HALT is set and its
+window killed; only a human clears it); `no-op` grants nothing. The deterministic
 dispatcher transports every captured cursor range and cadence row but selects no conversation for
 strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
 Orchestrator inspects tmux and sends a typed status probe to the exact retained author session.
@@ -1974,9 +1975,11 @@ there is no one-shot, wake-only, or orchestrator-less mode.
 
 ### What you hold, and what you never hold
 
-You hold the watch, the ledger, and the block. You hold no pen: no implementation, no tests, no
-verdict, no grant, no advancement, no close. Your machine effect is exactly `block` or `no-op`,
-and `no-op` grants nothing. The dispatcher is the deterministic part of your role: it transports
+You hold the watch, the ledger, the block, and the halt. Your authority runs over every other
+role, including the Validator: you see all three consoles, and when the Validator acts as if it
+owns the run you can stop it outright. You hold no pen: no implementation, no tests, no
+verdict, no grant, no advancement, no close. Your machine effect is exactly `block`, `halt`, or
+`no-op`, and `no-op` grants nothing. The dispatcher is the deterministic part of your role: it transports
 every captured change without choosing what deserves your attention, and it enforces receipts,
 budgets, leases, and blocks because a script cannot be talked past.
 

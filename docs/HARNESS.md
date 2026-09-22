@@ -140,8 +140,9 @@ discriminators for competing causal hypotheses, and recommends the least expensi
 model for each concrete chunk. Kindex-backed notes inform planning and narrow dispatch context,
 not authority: `phase_compiler.py` and `run_guidance.py` never select guidance from Kindex. Only
 the exact external-resume checkpoint can select a standard, loop, or recipe for compilation into
-the three ratified authorities. Its effect set is exactly `{block, no-op}`: a block forces an exact-subject
-human/Validator disposition; no-op grants nothing and can satisfy no gate. Pre-dispatch and
+the three ratified authorities. Its effect set is exactly `{block, halt, no-op}`: a block forces an exact-subject
+human/Validator disposition; a halt sets HALT and kills the Validator's window, and only a human
+clears it; no-op grants nothing and can satisfy no gate. Pre-dispatch and
 pre-verdict checkpoints refuse until a retained assessment covers their activity cursor. The
 assessment's observed harness status must match `harness.json`; it cannot call an open run closed.
 For runs carrying `factory-run-guidance/1`, assessment/3 additionally binds the exact current
@@ -562,7 +563,7 @@ dependency-free (bash + python3 + git):
   bounded observed activity snapshot under a monotonic cursor; validate the closed strategic
   assessment (goal, input class, trajectory, side effects, adherence, requirement-pressure
   analysis, planning mode, Kindex-backed chunks, causal discriminators, and exact harness
-  lifecycle state plus exact selected-guidance state); and admit only `block|no-op`. Dispatch and
+  lifecycle state plus exact selected-guidance state); and admit only `block|halt|no-op`. Dispatch and
   verdict wait for the checkpoint cursor and the required routing/evidence state.
 - `harness/semantic_union.py` + `phase1_gate.sh` — discover the closed retained source tree,
   require two separately recorded source-digest-bound extraction manifests, preserve every

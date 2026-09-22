@@ -94,11 +94,11 @@ contract_fields = {
     "guidance_selection_digest", "guidance_source_digests",
 }
 close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
+# Every run has a resident Orchestrator (founder ruling 2026-09-21), so a
+# harness without the resident fields is not a closable run.
 allowed_shapes = {
-    frozenset(base_fields),
     frozenset(base_fields | resident_fields),
     frozenset(base_fields | resident_fields | contract_fields),
-    frozenset(base_fields | close_fields),
     frozenset(base_fields | resident_fields | close_fields),
     frozenset(base_fields | resident_fields | contract_fields | close_fields),
 }
@@ -106,6 +106,8 @@ if frozenset(doc) not in allowed_shapes:
     raise SystemExit("promote: harness metadata has unknown or missing fields")
 if doc.get("status") not in {"open", "closed"}:
     raise SystemExit("promote: harness status is invalid")
+if doc.get("orchestrator_mode") != "resident-monitoring":
+    raise SystemExit("promote: run has no resident Orchestrator; every run requires one")
 if contract_fields <= set(doc):
     digest = re.compile(r"^sha256:[0-9a-f]{64}$")
     if doc["agreement_contract_version"] != "factory-agreement-contract/1":

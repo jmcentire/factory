@@ -350,6 +350,16 @@ class Dispatcher:
             self.halted = True
             head = halt.read_text().splitlines()[0] if halt.read_text() else "HALT"
             self.event("halt", head, wake=False)  # deterministic path, no agent in loop
+            if head.startswith("ORCHESTRATOR HALT"):
+                # The Orchestrator stopped the Validator. Enforce it here too, so a
+                # failed immediate kill in the channel is never an escape.
+                sh(["tmux", "kill-window", "-t", f"{self.run}:validator"])
+                self.event(
+                    "orchestrator_halt_enforced",
+                    "validator window killed; HALT stands until a human clears it "
+                    "and re-seats the Validator",
+                    wake=False,
+                )
             self._banner(
                 "INCIDENT — HALT is set; lanes will not start new work until a human clears it"
             )
@@ -519,7 +529,7 @@ class Dispatcher:
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
             f"assessment/3 to {report}, then submit: python3 "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
-            "Decide only block or no-op; never grant or close."
+            "Decide block, halt, or no-op; never grant or close."
         )
         environment = dict(os.environ)
         environment.update(

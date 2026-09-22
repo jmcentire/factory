@@ -19,6 +19,7 @@ import os
 import pathlib
 import re
 import stat
+import subprocess
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -652,8 +653,8 @@ def _validate_assessment(
                 "an open harness cannot be described as a closed or complete run"
             )
     decision = value.get("decision")
-    if decision not in {"block", "no-op"}:
-        raise OrchestratorChannelError("assessment decision must be block or no-op")
+    if decision not in {"block", "halt", "no-op"}:
+        raise OrchestratorChannelError("assessment decision must be block, halt, or no-op")
     should_block = (
         not value["direction_correct"]
         or not value["desirable_outcome"]
@@ -665,8 +666,13 @@ def _validate_assessment(
         or bool(checked_guidance and checked_guidance["state"] == "noncompliant")
         or bool(checked_guidance and checked_guidance["findings"])
     )
-    if should_block and decision != "block":
+    if should_block and decision not in {"block", "halt"}:
         raise OrchestratorChannelError("a divergent or non-adherent assessment must block")
+    if decision == "halt" and not should_block:
+        # Halt is the strongest effect the Orchestrator has: it stops the Validator.
+        # It must carry the same evidence a block does, never be issued on an
+        # aligned, finding-free assessment.
+        raise OrchestratorChannelError("a halt must carry divergence or adherence findings")
     status = value.get("kindex_status")
     context = value.get("kindex_context")
     if status not in {"consulted", "unavailable"} or not isinstance(context, list):
@@ -780,7 +786,7 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
                 "assessment_digest": digest,
                 "assessment": assessment,
             }
-            if assessment["decision"] == "block":
+            if assessment["decision"] in {"block", "halt"}:
                 # Publish the monotone effect before the report that can make the
                 # cursor current. A crash may leave a conservative orphaned block,
                 # but can never leave a current BLOCK report with no gate effect.
@@ -802,6 +808,8 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
                     raise OrchestratorChannelError(
                         f"orchestrator block effect could not become durable: {exc}"
                     ) from exc
+            if assessment["decision"] == "halt":
+                halt_validator(root, assessment["summary"])
             _append(report_path, report)
     return report
 
@@ -812,6 +820,46 @@ def resident_mode(root: pathlib.Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(metadata, dict) and metadata.get("orchestrator_mode") == "resident-monitoring"
+
+
+def halt_path(root: pathlib.Path) -> pathlib.Path:
+    """The run-wide HALT marker that lane_env and the dispatcher already honor."""
+
+    return pathlib.Path(root).parent.parent / "HALT"
+
+
+def halt_validator(root: pathlib.Path, summary: str) -> None:
+    """Stop the Validator: set HALT, then kill its window.
+
+    The Orchestrator has strong authority over every role, including the
+    Validator (founder ruling 2026-09-21). HALT is written before the kill so
+    a crash between the two still leaves the run stopped; lane_env refuses to
+    start any lane while HALT exists, and only a human clears it and re-seats
+    the Validator. An existing HALT (for example a tripwire hit) is preserved,
+    never overwritten. The dispatcher enforces the same kill on its next tick,
+    so a failed immediate kill is not an escape.
+    """
+
+    path = halt_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = "ORCHESTRATOR HALT: " + " ".join(str(summary).split())[:400] + "\n"
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(line)
+            stream.flush()
+            os.fsync(stream.fileno())
+    try:
+        subprocess.run(
+            ["tmux", "kill-window", "-t", f"{pathlib.Path(root).name}:validator"],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def require_resident(root: pathlib.Path) -> None:
