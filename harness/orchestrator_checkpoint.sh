@@ -63,10 +63,13 @@ TIMEOUT="${FACTORY_ORCHESTRATOR_CHECKPOINT_TIMEOUT:-300}"
 }
 DEADLINE=$((SECONDS + TIMEOUT))
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
+  # Founder ruling 2026-09-22: a checkpoint passes once the Orchestrator has assessed
+  # the checkpoint itself (and everything before it). Activity that arrives after it,
+  # such as lanes still wrapping up or reporting done, does not hold the checkpoint
+  # hostage. Lane "done" claims are provisional; the verdict re-evaluates success
+  # criteria at final delivery.
   if python3 "$D/orchestrator_channel.py" require-through --root "$ROOT" \
-    --cursor "$CURSOR" >/dev/null 2>&1 && \
-    python3 "$D/orchestrator_channel.py" require-current --root "$ROOT" \
-      >/dev/null 2>&1; then
+    --cursor "$CURSOR" >/dev/null 2>&1; then
       # Deliver the Orchestrator's plan and reminders into the Validator's own tool
       # output. This is how the state-keeper reaches the Validator without typing
       # into its pane (Gate F); stderr keeps the caller's stdout contract intact.

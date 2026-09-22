@@ -305,6 +305,9 @@ journal shows since the last tick, and cite it.
 4. Are we forgetting anything? Is it the right order of execution?
 5. Is the agent following the rules of the factory in keeping things segregated and clean and not
    peeking over the fences or sharing implementation details?
+   (Founder ruling 2026-09-22: a Coder that sees something in output is not contaminated, but
+   the Coder should not be running tests or reading test output at all. The Validator runs the
+   tests, reads the output, and updates its strategy. A Coder running tests is a finding.)
 6. Is it doing anything dangerous that needs to be stopped?
 7. Have we completed any tasks to check off the list?
 8. Are we working on something out of order without just cause or user-guidance?

@@ -46,9 +46,9 @@ support is pre-wired; ratifying adds this block to acceptance_baseline.json:
 
 ## 4. Greenfield acceptance target (Phase 6's graduation exercise)
 
-You ruled: a new service for the Wander system, named when the factory updates are
+You ruled: a new service for the consuming target, named when the factory updates are
 ready. Phase 6 needs: the service named, a bounded closed spec, an executable oracle,
-and a data-only target pack (which will also become the home of the two Wander
+and a data-only target pack (which will also become the home of the two target-specific
 operational lines currently held in the ~/.claude/commands/validate.md loader).
 
 - Service name: ______________________
@@ -77,7 +77,7 @@ cost nothing yet and can wait for real run data.
 
 ## 7. Baseline citation sources
 
-The 11 primary-artifact citations (paths + sha256 under ~/WanderRepos/repos, verified
+The 11 primary-artifact citations (paths + sha256 under the operator's retained runs, verified
 live before commit) with the pre-instrumentation honesty caveat on every row.
 
 - [ ] ratified as the acceptance baseline's reference corpus

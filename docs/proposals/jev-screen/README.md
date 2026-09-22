@@ -42,7 +42,9 @@ author's examples leak little of the answer key. 165 calls cost $0.004 in total.
    otherwise see.
 3. **It reads rules literally.** That is useful, because codifying a rule for jev exposes gaps
    in the doctrine. Example: does a Coder seeing a failing test's assertion text in its own
-   pytest output count as seeing the tests? That needs a founder ruling.
+   pytest output count as seeing the tests? Founder ruling 2026-09-22: no, seeing output is not
+   contamination, but the Coder should not run tests or read test output at all (new rule
+   `CODER_RUNS_TESTS`).
 4. **Structure beats jev where structure exists.** File access, timers, receipt counts, and
    ledger lookups stay in code. jev is for lane prose that has no structure behind it.
 

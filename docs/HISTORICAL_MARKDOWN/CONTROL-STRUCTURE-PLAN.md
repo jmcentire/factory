@@ -275,9 +275,9 @@ rule and starts *naming the gate* that enforces it. Specifics:
   requirement (from §B) become the review's pass/fail criteria. A guard with no denial probe
   is a finding of the highest order, not a style note.
 
-### D. `~/WanderRepos/repos/agent-skills/.../adapt/` — the shipped team skills
+### D. The consuming organization's shared `adapt` team skill
 
-The `adapt` skill (`wander-skills/skills/adapt/adapt-pr-review-skills/`) adapts PR-review
+The `adapt` skill (`adapt-pr-review-skills/`) adapts PR-review
 skills. It must carry the same standard it enforces on the skills it adapts:
 
 - Add to the adapt skill's **adaptation criteria**: a review skill that ships a guard with no
@@ -286,7 +286,7 @@ skills. It must carry the same standard it enforces on the skills it adapts:
   the prohibited action is blocked.
 - Add the **deterministic-gating principle** to the adapt skill's reference material: the
   two-layer split, the receipt schema, cage-not-replace. The adapted skills
-  (`code-review`, `wander-software-engineering`, etc.) inherit the standard.
+  (`code-review`, the organization's software-engineering skill, etc.) inherit the standard.
 - The `kindex-repo-memory` sub-skill already exists in adapt; wire it to the
   correction-aware-read rule (a read receipt carries the node's tail digest; acting without
   tail acknowledgment is a defect class) so the shipped skill matches the factory's Gate

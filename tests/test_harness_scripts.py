@@ -1577,7 +1577,7 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert rows[-1]["boundary"] == "regular-files-only-no-git"
 
 
-def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread(
+def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_blocked(
     tmp_path: Path,
 ) -> None:
     from harness.lane_dialogue import record_question
@@ -1612,6 +1612,22 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread(
     question, _ = record_question(root, "tester", "Are unknown stay types rejected?")
     answer = tmp_path / "answer.txt"
     answer.write_text("Yes. Return the typed unknown-stay error.\n", encoding="utf-8")
+    # Founder ruling 2026-09-22: the Validator can and should answer a lane question when
+    # that is what a pending block requires. A pending Orchestrator block must not stop it.
+    from harness.attention_gate import append_blocking_event
+
+    append_blocking_event(
+        root,
+        "validator",
+        {
+            "ts": "2026-09-22T00:00:00+00:00",
+            "class": "orchestrator_response",
+            "response": "A lane question is pending; the Validator must answer it.",
+            "wake": "activity-cursor:1",
+            "trust_class": "untrusted-advisory",
+            "effect_route": "validator-blocking-only",
+        },
+    )
 
     blocked_freeze = run(
         [

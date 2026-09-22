@@ -6,7 +6,7 @@
 > **Second revision, against the 2026-08-05 answers on [issue #4](https://github.com/jmcentire/factory/issues/4).**
 > Nine items moved from open to decided and are folded in below: the seam count is a design point
 > (so the channel-port proposal is un-withdrawn and argued on its merits); slice 5 is next and its
-> enforcement point is specified; deliverable 7 comes back into the core; Wander is the target of
+> enforcement point is specified; deliverable 7 comes back into the core; a live consuming organization is the target of
 > record with reeve and MEA as further consumers; Tessera means real Tessera at pin `83883e62`;
 > the three-principal SoD floor is ratified for `enforcing` with n=1 legitimate as the bootstrap
 > state; design-in-the-loop is a chosen gap and is now stated as one. Two architectures — **Chess**
@@ -118,14 +118,14 @@ outside a test's bookkeeping.
 | **4. Build lanes** | isolation delivered; Pact wiring not started | Separate Coder, Tester, and Validator containers/workspaces; **per-lane cryptogram sections** so the Coder structurally cannot receive test material; **determinism as a lane requirement**; Pact planning wired, implementation lane selected by criticality | Coder cannot read tests *because it holds no key that decrypts them*; Tester cannot read implementation; Validator alone combines and executes; a lane that cannot reproduce a run is refused, not warned; the chosen lane is recorded as evidence |
 | **5. Live gate** | **next**; its three states exist but are unenforced — see *The unenforced tail* | Evidence collection, mutation checks, a **real staging surface** a human reviews in, approve / request-changes / abandon **before** merge, a required check plus branch protection as the enforcement point, CI/CD running *after* approval and able to fail independently, promotion of the exact artifact digest, receipt verification in the core (migrated from reeve `2344645`), and the phase-ratification receipt requirement moved down from `workflow.py` to `RunStore.transition` | The artifact shown to the human is byte-for-byte the artifact promoted; a merge is actually blocked, not merely advised against; CI failing after an approval blocks promotion rather than being outvoted by it |
 | **6. Signet** | not started (scope reduced — see below) | Qualified receipt issuance and verification, key custody, revocation, capability evaluation | Tampered signature, wrong issuer, wrong subject digest, missing capability, expiry, revocation, and replay all deny |
-| **7. First live target** | not started; **this ordering is superseded — see below** | A **Wander** target, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything, *and* the onboarding path is cheap enough that the second Wander target does not repeat the first one's cost |
+| **7. First live target** | not started; **this ordering is superseded — see below** | A live consuming target, advisory before blocking; target pack, onboarding path, conformance level | The gate runs green on real traffic for a measured period with an acceptable false-block rate before it blocks anything, *and* the onboarding path is cheap enough that the second consuming target does not repeat the first one's cost |
 
-**Wander is the target of record**, by direction. Reeve and MEA also consume the factory; Wander is
-primary. That makes the ordering above wrong rather than merely debatable: as written, every slice
+**A live consuming organization is the target of record**, by direction. Reeve and MEA also consume
+the factory; the consuming organization is primary. That makes the ordering above wrong rather than merely debatable: as written, every slice
 before 7 delivers value only inside this repository, so the actual target is the last thing that
 happens. Reeve stays valuable as prior art and as a proving surface, and it is not the destination.
 The advisory conformance tier proposed below is how the primary target starts receiving value before
-the gate can refuse anything; naming the specific first Wander team is not settled here.
+the gate can refuse anything; naming the specific first team is not settled here.
 
 ### What slices 0–2 already are
 
@@ -441,7 +441,7 @@ Two ratified conditions:
 - **An SPL expression is an approval rule.** Under I8, no agent may author one into force. An
   expression carried inside a token gets the same human-signature treatment as any other doctrine
   mutation — an agent may draft one and may never put one into effect.
-- **Every reference is fully qualified.** `wandercom/agent-safe` is an unrelated Wander repo about
+- **Every reference is fully qualified.** An unrelated external `agent-safe` repository covers
   Pact agent runtime budgets and target-repo adapters. A bare "agent-safe" anywhere in Factory is a
   defect, because someone will wire up the wrong one.
 
@@ -522,9 +522,9 @@ brings the result in as phase-1 input.
    by the ordinary route instead. Two honest options: retire this proof, or replace it with a
    *new* small change chosen to be the first thing through the intake. The second is worth more,
    because a proof that reprocesses already-merged content cannot fail in the way that matters.
-3. **First live target** — a Wander target, extracting lessons from reeve's existing intake,
+3. **First live target** — a live consuming target, extracting lessons from reeve's existing intake,
    architecture loop, oracle, gate, and demo surfaces without importing reeve code into
-   `factory_core`. **Wander is the target of record**; reeve and MEA also consume the factory.
+   `factory_core`. **A live consuming organization is the target of record**; reeve and MEA also consume the factory.
    Reeve's role in this proof is prior art and proving surface — it is the reference implementation
    whose disciplines were generalized into this core — and it is not the destination.
 
@@ -556,7 +556,7 @@ a plan that lists only what is still blocked loses the answers.
 | Which slice is next | Slice 5, not slice 3 | Build order, slice 5 marked **next** |
 | What the enforcement point is | A required check plus branch protection and a real staging surface; human approves / requests changes / abandons **before** merge; CI/CD runs after and can fail independently. CI promotion is not a gate | Slice 5 deliverable and proof columns |
 | Deliverable 7's side of the boundary | Core. Target-side means every target reimplements a control | Slice 5; migration from reeve `2344645` |
-| Target of record | Wander, primary. Reeve and MEA also consume; reeve is prior art and a proving surface | Slice 7 note; proof 3 |
+| Target of record | A live consuming organization, primary. Reeve and MEA also consume; reeve is prior art and a proving surface | Slice 7 note; proof 3 |
 | Tessera | Real `jmcentire/tessera`, the Rust workspace. Pin `83883e62` is the trust boundary and bumping it is a ratification act. `TesseraSeal` stays banned; the guard stays | *The bootstrap* |
 | The three-human floor | Ratified for `enforcing`; n=1 is the legitimate bootstrap state and is where we are | *The bootstrap*, with the I2 collision stated |
 | Design in the loop | A chosen gap, to be stated rather than discovered | *Design in the loop* |
@@ -609,7 +609,7 @@ verification anywhere in `factory_core/*.py`.
    `signet-sdk::check_authority` is import-guarded off every Critical path; the consumption ledger
    that unblocks one-time capabilities is ours to build.
 5. Surfaces are renderers over one API at capability parity, behind a declared channel port.
-6. **Wander is the target of record**; reeve and MEA also consume the factory, and the gate blocks
+6. **A live consuming organization is the target of record**; reeve and MEA also consume the factory, and the gate blocks
    nothing until its false-block rate is measured. The slice-7 ordering is superseded: it put the
    primary target last. See *An advisory conformance tier below slice 7* in the proposed table for
    how the primary target starts receiving value earlier.
@@ -636,7 +636,7 @@ Settled per your direction:
 | The seam count is a design point; the guard enforces the declared set | Your 2026-08-05 answer. Both sixth-seam claimants are argued on merit against that set |
 | Slice 5 is next, and its enforcement point is a required check plus branch protection plus a real staging surface, with approval before merge and CI after | Your 2026-08-05 answer. "CI promotion" standing in for a gate is explicitly rejected |
 | Deliverable 7 — receipt verification — comes back into the core, migrated from reeve `2344645` | Your 2026-08-05 answer: target-side means every target reimplements a control |
-| Wander is the target of record; reeve and MEA also consume | Your 2026-08-05 answer. The build order had the primary target last |
+| A live consuming organization is the target of record; reeve and MEA also consume | Your 2026-08-05 answer. The build order had the primary target last |
 | Real Tessera (`jmcentire/tessera`), pin `83883e62` as a ratification act | Your 2026-08-05 answer, ratified as stated. A lighter substitute was an artifact of drafting, not a decision |
 | Three distinct enrolled principals at `enforcing`; n=1 legitimate as the bootstrap state | Your 2026-08-05 answer. The arithmetic was right; the floor is not a minimum on legitimacy |
 | SPL adopted, as a Signet spin-off, under two conditions (I8 authorship, fully-qualified references) | Your 2026-08-05 answer |
@@ -660,7 +660,7 @@ proposals:
 | The layer that enforces `*-ratified` receipts named, and the store's weaker guarantee stated | The document said receipts are required and "this is enforced," then cited `_PHASE_STATE_KEYS` — which enforces a digest, not a receipt. Receipt verification is `workflow.py:233`; `RunStore.transition` will reach a ratified state on `artifact_digests` alone, as `tests/test_runtime_state.py:30` does. Conflating the two repeats the error this revision exists to fix, and it hides that the ratified states have the same workflow-only-enforcement weakness the anchor states were just fixed for. Raised by Copilot on PR #8. |
 | Proof 1 recorded as attempted with a result, not pending | It has been run as far as the code allows. Leaving it listed as future work would have lost its finding, which is the whole reason the proof exists. |
 | Proof 2's premise expired | `factory_core/registry.py` is on `main` at `cba4f7f`; `glue/adapter-registry-readonly-git` is a stale duplicate. The plan asked to rebuild through the intake a change that had already landed by the ordinary route. |
-| Reeve repositioned from target of record to prior art and proving surface; Wander named as the target of record | Confirmed by the founder on 2026-08-05. The build order had encoded the opposite, which pushed the primary target behind all seven slices. The previous revision over-corrected by calling reeve "explicitly not what this factory is being built to serve" — reeve and MEA are consumers too; Wander is primary. |
+| Reeve repositioned from target of record to prior art and proving surface; a live consuming organization named as the target of record | Confirmed by the founder on 2026-08-05. The build order had encoded the opposite, which pushed the primary target behind all seven slices. The previous revision over-corrected by calling reeve "explicitly not what this factory is being built to serve" — reeve and MEA are consumers too; the consuming organization is primary. |
 | The channel-port withdrawal itself reversed | Withdrawing it was right while the slot looked contested and wrong once the count turned out to be a design point. Recorded rather than silently un-withdrawn, because the reasoning for the withdrawal is what changed, not the proposal. |
 | Interpreter detected and floor enforced in the `Makefile` (applied, not proposed) | `make ship` resolved `PY` to bare `python3` and `lint`/`typecheck` bypassed `PY` entirely. `PY` now prefers `python3.12` and falls back to `python3`, `check-python` gates every target, and the tools run through `$(PY) -m`. Verified across five paths: preferred version found; activated venv preferred over system; fallback to a conforming `python3`; refusal of 3.9.20 with a "not on PATH" hint; and explicit `PY=` still overriding detection. |
 
@@ -674,9 +674,9 @@ Proposed for your ratification — reject individually:
 | Local environment is a repo-managed venv, and the sandbox derives its interpreter grant (applied, not proposed) | Slice 1's proof is that a contributor can predict acceptance *locally*, and `make ship` had never been green on a developer machine: the interpreter floor was unenforced, and the one gate that did run refused any venv. Both are now fixed, and `make ship` is green locally end to end (330 passed, 3 skipped) as well as under a simulated CI interpreter. The sandbox change is the one to review deliberately — it widens a `deny default` profile — but it restores a precondition the hardcoded allowlist was already trying to express, and the denial probes still pass. |
 | Key custody tiers in the bootstrap | A signature is worth its custody. Root offline, anchor keys human-held, no agent holds a key at any tier. |
 | Channel port declared before slice 3 — **un-withdrawn** | The three phases are inherently conversational and CLI + Slack + portal are one seam with N renderers, better decided before three renderers exist. It was withdrawn on the grounds that the slot was not free; the seam count is a design point, so that reasoning is gone. It is back as an ordinary proposal, argued against the declared set on its own merits, and it does not answer BQ4's enrollment reach by landing. |
-| An advisory conformance tier below slice 7 | **The ordering change itself is directed, not proposed** — the primary target cannot be the last thing that happens. This is the cheapest mechanism for it. Several `factory_core` modules — `contract.py`, `completeness.py`, `comprehensiveness.py`, and `criticality.py`'s classification model — are pure functions over data arriving through read-only seams and produce *documents*, not enforcement. They need no genesis, enrollment, Signet, promotion, isolation, or Pact. A read-only advisory tier lets a Wander team get findings long before the gate can refuse anything, and tests the disciplines against a real team before machinery is built to enforce them. Not free: the target-side extraction that feeds `caller_edges` and `provider_operations` is real work the core deliberately does not own. Explicitly *not* proposed for `monitors.py` or `promotion.py`, which require phase artifacts and oracle adequacy respectively. |
+| An advisory conformance tier below slice 7 | **The ordering change itself is directed, not proposed** — the primary target cannot be the last thing that happens. This is the cheapest mechanism for it. Several `factory_core` modules — `contract.py`, `completeness.py`, `comprehensiveness.py`, and `criticality.py`'s classification model — are pure functions over data arriving through read-only seams and produce *documents*, not enforcement. They need no genesis, enrollment, Signet, promotion, isolation, or Pact. A read-only advisory tier lets a consuming team get findings long before the gate can refuse anything, and tests the disciplines against a real team before machinery is built to enforce them. Not free: the target-side extraction that feeds `caller_edges` and `provider_operations` is real work the core deliberately does not own. Explicitly *not* proposed for `monitors.py` or `promotion.py`, which require phase artifacts and oracle adequacy respectively. |
 | Replace proof 2 with a new small change rather than retiring it | The adapter-registry content already landed on `main` at `cba4f7f`, so reprocessing it cannot fail in the way that matters. A first-authorized-change proof needs a change that has not already been merged. |
-| Slice 7 names a specific first Wander team | Wander as target of record is settled; *which* team goes first is not, and this document should not decide it. Naming a first-of-many puts the weight on the onboarding path either way, since a per-target cost that does not amortize fails at target three regardless of how well target one goes. |
+| Slice 7 names a specific first team | A live consuming organization as target of record is settled; *which* team goes first is not, and this document should not decide it. Naming a first-of-many puts the weight on the onboarding path either way, since a per-target cost that does not amortize fails at target three regardless of how well target one goes. |
 | False-block rate as the slice-7 gate | A governance gate that wrongly blocks even a few percent of changes gets switched off by the organization, permanently. |
 | Pact test output firewalled from the Coder | `decompose` emits contracts and tests together; contracts are shared, tests must not be. A five-line policy now, an expensive silent failure later. |
 | Three named reeve lessons in proof 3 | "Extract lessons" is unactionable; these three are specific, cited, and preserve the import boundary. |

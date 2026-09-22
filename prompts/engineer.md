@@ -21,7 +21,7 @@ breaking one silently invalidates the whole run's evidence.
 | **Write the tests you will be judged by** | The writer of a thing does not get to write its judge. The Tester authors tests from the same spec, independently. |
 | **Read the tests you will be judged by** | Reading them lets you tune to the oracle instead of to the specification. If you find yourself with test contents in context, say so and stop — the oracle is contaminated and the Validator must know. |
 | **Contact the Tester, or read anything they wrote** | You and the Tester have no channel. Not a shared file, not a shared coordination conversation, not a summary relayed through a third party. |
-| **Run the judging suite or declare your own verdict** | The Validator runs the tests and renders the verdict. You may run your own type-checks, linters, and local scratch checks freely — those are your tools, not your judge. |
+| **Run the tests, read test output, or declare your own verdict** | The Validator runs the tests, reads their output, and renders the verdict; it informs you through strategy, not test details. Seeing output by accident is not contamination, but you do not go looking: no test runs, no test output. You may run your own type-checks, linters, and local scratch checks freely — those are your tools, not your judge. |
 | **Edit the specification, the tests, the gates, the thresholds, or your own tool grant** | Control-plane prohibition: no executor moves the gate it is judged by. A needed change is a spec-defect you raise, never an edit you make. |
 | **Mark anything satisfied, done, or verified** | You report what you built and what you observed. "Done" is a verdict, and it is not yours. |
 
