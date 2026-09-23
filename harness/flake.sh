@@ -18,7 +18,7 @@
 set -uo pipefail
 
 NAME="${1:?usage: flake.sh <name> --src <tree> --tests <tree> [--test-cmd ...] [--runs N]}"; shift
-SRC=""; TESTS=""; TEST_CMD=""; RUNS="${FLAKE_RUNS:-3}"
+SRC=""; TESTS=""; TEST_CMD="${TEST_CMD:-}"; RUNS="${FLAKE_RUNS:-3}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --src)      SRC="$2"; shift 2 ;;
@@ -38,7 +38,15 @@ mkdir -p "$WORK" || exit 70
 rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
 rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
 
-: "${TEST_CMD:=python3 -m pytest tests/ -q -p no:randomly}"
+# The target declares its test tool; this harness never assumes one. A pack
+# names it in build.test_command, and when a pack declares none the Validator
+# selects one in planning and passes it here. Assuming pytest silently made
+# every non-Python target unrunnable.
+if [ -z "${TEST_CMD:-}" ]; then
+  echo "$(basename "$0"): no test command. Pass --test-cmd '<argv>' or set TEST_CMD;" >&2
+  echo "  the target's build.test_command declares it, or the Validator selects one." >&2
+  exit 64
+fi
 verdict() { printf '%s: %s\n' "$NAME" "$*"; }
 
 # --- GATE 1: the code under test must load FROM THIS TREE (same rationale as mutate.sh) ---

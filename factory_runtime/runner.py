@@ -214,10 +214,22 @@ class RunnerManifest:
         if document["billing_key_name"] not in document["secret_names"]:
             raise RunnerError("runner billing key must be one of the named secrets")
         children = tuple(document["child_executables"])
-        if document["adapter"] == "codex" and children:
-            raise RunnerError("direct Codex runner may not declare child executables")
-        if document["adapter"] == "ollama-codex" and len(children) != 1:
-            raise RunnerError("Ollama-to-Codex runner requires exactly one Codex child")
+        # Which agent runs a role is the operator's choice, so the factory holds no
+        # list of permitted adapters. What it does require is that an adapter
+        # DECLARE its shape: the two original names carried that shape implicitly,
+        # and anything else has to say it.
+        model = document.get("child_process_model") or _LEGACY_PROCESS_MODEL.get(
+            str(document["adapter"])
+        )
+        if model is None:
+            raise RunnerError(
+                f"adapter {document['adapter']!r} must declare child_process_model "
+                "(none or single-child)"
+            )
+        if model == "none" and children:
+            raise RunnerError(f"adapter {document['adapter']!r} may not declare child executables")
+        if model == "single-child" and len(children) != 1:
+            raise RunnerError(f"adapter {document['adapter']!r} requires exactly one child")
         if document["state_profile_digest"] != profile_digest("lane-dispatch"):
             raise RunnerError("runner manifest binds a stale state-admission profile")
         return cls(dict(document))
@@ -292,6 +304,11 @@ class NamedSecretStore:
         return values
 
 
+# The shapes the original two adapter names meant. New adapters declare their own
+# in the manifest; these exist so packs written before that keep working.
+_LEGACY_PROCESS_MODEL = {"codex": "none", "ollama-codex": "single-child"}
+
+
 class CodexRunnerAdapter:
     """Construct fixed Codex or `ollama launch codex` argv without a shell."""
 
@@ -308,6 +325,27 @@ class CodexRunnerAdapter:
 
     def command(self, *, output: Path, session_id: str = "") -> tuple[str, ...]:
         document = self.manifest.document
+        declared = document.get("invocation")
+        if declared:
+            # The adapter's argv is data. Substitution is by exact token, never a
+            # shell, and an unknown token is refused rather than passed through as
+            # a literal that would reach the agent as a filename.
+            template = declared["resume" if session_id else "start"]
+            substitutions = {
+                "{output_schema}": str(self.output_schema),
+                "{output}": str(output),
+                "{session_id}": session_id,
+                "{model}": str(document["model"]),
+            }
+            argv: list[str] = [str(self.executable)]
+            for token in template:
+                if token.startswith("{") and token.endswith("}"):
+                    if token not in substitutions:
+                        raise RunnerError(f"adapter invocation uses an unknown token {token}")
+                    argv.append(substitutions[token])
+                else:
+                    argv.append(token)
+            return tuple(argv)
         common = (
             "--json",
             "--model",

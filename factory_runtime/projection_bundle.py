@@ -14,9 +14,13 @@ from factory_core.manifest import digest_bytes, digest_obj
 from factory_runtime.durability import CHAIN_ROOT_KEY_FILENAME
 from factory_runtime.schema import DocumentValidationError, validate_document
 
-_MAX_FILES = 4_096
-_MAX_FILE_BYTES = 524_288
-_MAX_TOTAL_BYTES = 1_200_000
+# Defaults, not laws. A projection has to be bounded — an unbounded one is a
+# denial-of-service on the lane — but the bound belongs to the target, which
+# knows its own size. A pack raises these through build.projection_limits; a
+# repository with 6,000 source files is not a factory defect.
+DEFAULT_MAX_FILES = 4_096
+DEFAULT_MAX_FILE_BYTES = 524_288
+DEFAULT_MAX_TOTAL_BYTES = 1_200_000
 
 
 class ProjectionBundleError(ValueError):
@@ -47,6 +51,9 @@ def bundle_runner_projection(
     target_state_digest: str,
     resolved_commit: str,
     resolved_tree: str,
+    max_files: int = DEFAULT_MAX_FILES,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> dict[str, Any]:
     """Re-derive a projection receipt and encode only bounded file data, never host paths."""
 
@@ -85,10 +92,10 @@ def bundle_runner_projection(
                     f"runner projection permits regular files only: {relative}"
                 )
             raw = path.read_bytes()
-            if len(raw) > _MAX_FILE_BYTES:
+            if len(raw) > max_file_bytes:
                 raise ProjectionBundleError(f"runner projection file is too large: {relative}")
             total_bytes += len(raw)
-            if total_bytes > _MAX_TOTAL_BYTES:
+            if total_bytes > max_total_bytes:
                 raise ProjectionBundleError("runner projection exceeds its total byte ceiling")
             permissions = stat.S_IMODE(mode)
             projection_hash.update(
@@ -103,7 +110,7 @@ def bundle_runner_projection(
                     "content_base64": base64.b64encode(raw).decode("ascii"),
                 }
             )
-            if len(files) > _MAX_FILES:
+            if len(files) > max_files:
                 raise ProjectionBundleError("runner projection exceeds its file-count ceiling")
     manifest_digest = "sha256:" + projection_hash.hexdigest()
     if projection_receipt.get("manifest_digest") != manifest_digest:
