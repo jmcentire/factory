@@ -1,0 +1,24 @@
+name: factory
+
+audience: team
+description: >
+  factory_core — a founder-owned, portable software-factory core. Generic by
+  construction: it imports nothing target-specific, and it carries no consuming
+  organization's data. Durable team-audience knowledge belongs to THIS
+  repository and ships with it through .kin/knowledge.jsonl; it is never
+  company-scoped memory.
+
+domains:
+  - software-factory
+  - orchestrator
+  - validator
+  - coder
+  - tester
+  - harness
+  - gates
+  - denial-probes
+  - doctrine
+
+connects_to:
+  - kindex
+  - tools
