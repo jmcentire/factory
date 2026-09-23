@@ -2544,7 +2544,10 @@ def test_mutate_reports_patch_failure_not_survival(tmp_path: Path) -> None:
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "PATCH-FAILED" in r.stdout and "SURVIVED" not in r.stdout
@@ -2571,7 +2574,10 @@ def test_mutate_kills_a_real_mutation(tmp_path: Path) -> None:
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout
@@ -3458,7 +3464,10 @@ def test_mutate_reports_no_op_patch_not_survival(tmp_path: Path) -> None:
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "NO-OP PATCH" in r.stdout
@@ -3501,7 +3510,10 @@ def test_mutate_writes_oracle_receipt_adequate_when_named_oracle_kills(tmp_path:
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout
@@ -3537,7 +3549,10 @@ def test_mutate_writes_oracle_receipt_inadequate_when_survived(tmp_path: Path) -
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 1, r.stdout + r.stderr
     assert "SURVIVED" in r.stdout
@@ -3581,7 +3596,10 @@ def test_mutate_writes_oracle_receipt_inadequate_when_killed_outside(tmp_path: P
             "tests/test_g.py::test_other",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "KILLED-OUTSIDE-ORACLE" in r.stdout
@@ -3644,7 +3662,10 @@ def test_flake_receipts_deterministic_when_all_runs_agree(tmp_path: Path) -> Non
             "3",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "DETERMINISTIC" in r.stdout
@@ -3672,7 +3693,10 @@ def test_flake_receipts_flaky_when_runs_disagree(tmp_path: Path) -> None:
             "3",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 1, r.stdout + r.stderr
     assert "FLAKY" in r.stdout
@@ -3710,7 +3734,10 @@ def test_flake_refuses_red_baseline(tmp_path: Path) -> None:
             "3",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "INVALID" in r.stdout and "baseline is not green" in r.stdout
@@ -3944,7 +3971,10 @@ def test_mutate_named_test_rejects_symptom_kill(tmp_path: Path) -> None:
             "tests/test_o.py::test_o",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "KILLED-OUTSIDE-ORACLE" in r.stdout
@@ -3969,7 +3999,10 @@ def test_mutate_named_test_accepts_kill_on_named_oracle(tmp_path: Path) -> None:
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout and "OUTSIDE-ORACLE" not in r.stdout
@@ -6482,7 +6515,10 @@ def test_mutate_named_test_rejects_prefix_collision(tmp_path: Path) -> None:
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "KILLED-OUTSIDE-ORACLE" in r.stdout
@@ -6509,7 +6545,10 @@ def test_mutate_rejects_empty_named_test(tmp_path: Path) -> None:
             "",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 64 and "non-empty" in r.stderr
 
@@ -6687,7 +6726,10 @@ def test_mutate_named_test_attributes_file_level_collection_error(tmp_path: Path
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
@@ -6731,7 +6773,10 @@ def test_mutate_named_test_preserves_spaces_in_nodeid(tmp_path: Path) -> None:
             "tests/test_g.py::test_g[with space]",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
@@ -6765,7 +6810,10 @@ def test_mutate_named_test_finds_beyond_head_cap(tmp_path: Path) -> None:
             "tests/test_g.py::test_g6",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
@@ -6796,7 +6844,11 @@ def test_mutate_named_test_works_when_pytest_emits_color(tmp_path: Path) -> None
             "tests/test_g.py::test_g",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w"), "PYTEST_ADDOPTS": "--color=yes"},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+            "PYTEST_ADDOPTS": "--color=yes",
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
@@ -6865,7 +6917,10 @@ def test_mutate_named_test_preserves_dash_space_in_nodeid(tmp_path: Path) -> Non
             "tests/test_g.py::test_g[a - b]",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by:" in r.stdout, r.stdout
@@ -6901,7 +6956,10 @@ def test_mutate_conftest_syntax_error_does_not_survive(tmp_path: Path) -> None:
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout, r.stdout
@@ -7064,7 +7122,10 @@ def test_mutate_named_test_preserves_space_in_file_path(tmp_path: Path) -> None:
             "tests/test_thing bar.py::test_oracle",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED by: tests/test_thing bar.py::test_oracle" in r.stdout, r.stdout
@@ -7100,7 +7161,10 @@ def test_mutate_gate2_rejects_broken_clean_baseline(tmp_path: Path) -> None:
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "INVALID" in r.stdout and "baseline is not green" in r.stdout, r.stdout
@@ -7147,7 +7211,10 @@ def test_mutate_named_test_conftest_crash_is_unattributed(tmp_path: Path) -> Non
             "tests/test_add.py::test_add_basic",
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 3, r.stdout + r.stderr
     assert "KILLED-UNATTRIBUTED" in r.stdout, r.stdout
@@ -7298,7 +7365,10 @@ def test_mutate_gate2_not_fooled_by_terminal_summary_hook(tmp_path: Path) -> Non
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout, r.stdout
@@ -7344,6 +7414,7 @@ def test_mutate_named_test_open_bracket_in_param_id(tmp_path: Path) -> None:
         ],
         cwd=tmp_path,
         env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
             "MUTATE_WORKDIR": str(tmp_path / "w"),
             "PYTEST_ADDOPTS": "--color=yes",
             "TERM": "xterm-256color",
@@ -7394,6 +7465,7 @@ def test_mutate_named_test_close_bracket_and_dash_in_param_id(tmp_path: Path) ->
         ],
         cwd=tmp_path,
         env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
             "MUTATE_WORKDIR": str(tmp_path / "w"),
             "PYTEST_ADDOPTS": "--color=yes",
             "TERM": "xterm-256color",
@@ -7521,7 +7593,10 @@ def test_mutate_gate2_not_fooled_by_error_in_configuration_hook(tmp_path: Path) 
             str(tree),
         ],
         cwd=tmp_path,
-        env_extra={"MUTATE_WORKDIR": str(tmp_path / "w")},
+        env_extra={
+            "TEST_CMD": "python3 -m pytest tests/ -q -p no:randomly",
+            "MUTATE_WORKDIR": str(tmp_path / "w"),
+        },
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "KILLED" in r.stdout, r.stdout
