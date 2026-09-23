@@ -509,12 +509,21 @@ def _verify_obligation(
         # 4.1b single-seat: the artifact and the HUMAN receipt are required; the
         # validator receipt is optional attribution — but when present it must be
         # a distinct real digest (dual-ratified history keeps passing).
+        #
+        # Engagement (2026-09-23): a human co-signature per phase is required at
+        # interactive engagement only. Below it the human decided once, at
+        # ignition, and demanding a certification per phase afterwards is the
+        # ceremony that made the factory unusable. The entry says which it was,
+        # and a ratification without a human receipt still needs the Validator's
+        # — a phase never ratifies on the artifact digest alone.
         phase = _PHASE_BY_DESTINATION.get(destination, "")
+        human_ratified = payload.get("human_ratified", True)
+        ratifier_key = "human-receipt" if human_ratified else "validator-receipt"
         values = [
             supplied.get(phase, ""),
-            supplied.get(f"{phase}:human-receipt", ""),
+            supplied.get(f"{phase}:{ratifier_key}", ""),
         ]
-        attribution = supplied.get(f"{phase}:validator-receipt", "")
+        attribution = supplied.get(f"{phase}:validator-receipt", "") if human_ratified else ""
         if attribution:
             values.append(attribution)
         passed = (

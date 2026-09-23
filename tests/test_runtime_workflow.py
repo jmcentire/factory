@@ -730,6 +730,57 @@ def test_three_phases_require_human_and_validator_receipts_and_reach_build_ready
     assert len(workflow.store.consumed_authority_nonces("run-1")) == 5
 
 
+def test_below_interactive_engagement_a_phase_ratifies_without_a_human_signature(
+    tmp_path: Path,
+) -> None:
+    tessera = _Tessera()
+    workflow = _authorize(tmp_path, tessera)
+    # The human decided once, at ignition, by declaring the engagement.
+    metadata = tmp_path / "runs" / "run-1" / "harness.json"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text(json.dumps({"engagement": "autonomous"}), encoding="utf-8")
+
+    for sequence, (phase, action) in enumerate(
+        (
+            ("product-specification", "ratify-product-specification"),
+            ("architecture", "ratify-architecture"),
+            ("operational-maturity", "ratify-operational-maturity"),
+        ),
+        start=1,
+    ):
+        document = _phase(phase, sequence)
+        artifact = PhaseArtifact.from_dict(document)
+        artifact_path = tmp_path / f"{phase}.json"
+        artifact_path.write_text(json.dumps(document), encoding="utf-8")
+        validator_receipt = tessera.add(
+            tmp_path / f"{phase}.validator.tessera.json",
+            _receipt(
+                receipt_id=f"{phase}-validator",
+                action=action,
+                subject_digest=artifact.content_digest,
+                signer="agent:validator",
+                nonce=f"{phase}-validator-nonce",
+            ),
+            key=VALIDATOR_KEY,
+            kind="factory-authority-receipt",
+        )
+
+        result = workflow.ratify_phase(
+            "run-1",
+            artifact_path=artifact_path,
+            validator_receipt_path=validator_receipt,
+        )
+        assert (result.directory / "artifact.json").is_file()
+        payload = result.projection.to_dict()
+        assert payload is not None
+
+    assert workflow.store.load("run-1").state == RunState.OPERATIONAL_MATURITY_RATIFIED
+    # 4.1b single-seat authority: only HUMAN receipt nonces are consumed (three
+    # phases + intake + resolution); Validator attribution carries no replay
+    # ceremony, so its nonces never enter the consumed set.
+    # No phase consumed a human nonce: only intake and resolution did.
+    assert len(workflow.store.consumed_authority_nonces("run-1")) == 2
+
 def test_phase_ratification_refuses_a_different_authority_genesis(
     tmp_path: Path,
 ) -> None:

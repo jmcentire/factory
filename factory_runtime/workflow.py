@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory_core.engagement import INTERACTIVE, EngagementError
+from factory_core.engagement import normalize as normalize_engagement
 from factory_core.manifest import (
     SegregationPolicy,
     digest_bytes,
@@ -76,7 +78,9 @@ class StoredRatification:
 
     artifact: PhaseArtifact
     artifact_digest: str
-    human_receipt: VerifiedReceipt
+    #: ``None`` below the interactive engagement: the phase was ratified by the
+    #: Validator alone because the human declared they would not be present.
+    human_receipt: VerifiedReceipt | None
     validator_receipt: VerifiedReceipt
     directory: Path
     projection: RunProjection
@@ -1006,16 +1010,44 @@ class FactoryWorkflow:
             expected_attempt_id=expected_attempt_id,
         )
 
+    def run_engagement(self, run_id: str) -> str:
+        """How much of the human this run gets, as declared at ignition.
+
+        A run record that declares nothing is treated as interactive: silence
+        is never consent to proceed without the human.
+        """
+
+        metadata = self.root / run_id / "harness.json"
+        try:
+            declared = json.loads(metadata.read_text(encoding="utf-8")).get("engagement")
+        except (OSError, ValueError, AttributeError):
+            return INTERACTIVE
+        try:
+            return normalize_engagement(str(declared))
+        except EngagementError:
+            return INTERACTIVE
+
     def ratify_phase(
         self,
         run_id: str,
         *,
         artifact_path: str | Path,
-        human_receipt_path: str | Path,
+        human_receipt_path: str | Path | None = None,
         validator_receipt_path: str | Path,
         actor: str = "validator",
     ) -> StoredRatification:
-        """Ratify one invariant document with independent exact-subject receipts."""
+        """Ratify one invariant document with independent exact-subject receipts.
+
+        The human co-signature is required at ``interactive`` engagement and at
+        no other, because below it the human already made their decision — once,
+        at ignition, by declaring the engagement. Demanding a signature per
+        phase after that is the ceremony the founder named on 2026-09-23: an
+        operator clicking through three certifications per run is not exercising
+        authority, and a signature nobody reads is theatre. What replaces it is
+        a record: the ratification says plainly that no human co-signed and
+        which engagement allowed it, so the report shows what was decided for
+        them.
+        """
 
         raw_artifact, _ = _read_json_object(artifact_path)
         try:
@@ -1035,7 +1067,17 @@ class FactoryWorkflow:
         action_and_state = _PHASE_ACTIONS.get(artifact.phase)
         if action_and_state is None:
             raise WorkflowError(f"unsupported phase artifact: {artifact.phase!r}")
-        if artifact.human_ratifier == artifact.validator_ratifier:
+        engagement = self.run_engagement(run_id)
+        human_required = engagement == INTERACTIVE
+        if human_required and human_receipt_path is None:
+            raise WorkflowError(
+                "interactive engagement ratifies a phase with a human receipt; "
+                "declare a lower engagement at ignition to ratify without one"
+            )
+        if (
+            human_receipt_path is not None
+            and artifact.human_ratifier == artifact.validator_ratifier
+        ):
             raise WorkflowError("human and Validator ratifiers must be distinct identities")
         item_ids = [item.item_id for item in artifact.items]
         if len(item_ids) != len(set(item_ids)):
@@ -1044,20 +1086,22 @@ class FactoryWorkflow:
         action, destination = action_and_state
         artifact_digest = artifact.content_digest
         consumed = self.store.consumed_authority_nonces(run_id)
-        human_receipt = verify_receipt(
-            human_receipt_path,
-            policy=self.policy,
-            expected_action=action,
-            expected_subject_digest=artifact_digest,
-            expected_run_id=run_id,
-            expected_signer_identity=artifact.human_ratifier,
-            tessera=self.tessera,
-            clock=self._clock,
-            consumed_nonces=tuple(consumed),
-        )
-        human = self.policy.principal(human_receipt.signer_identity)
-        if human is None or human.kind != "human":
-            raise AuthorityVerificationError("phase human ratifier is not an enrolled human")
+        human_receipt = None
+        if human_receipt_path is not None:
+            human_receipt = verify_receipt(
+                human_receipt_path,
+                policy=self.policy,
+                expected_action=action,
+                expected_subject_digest=artifact_digest,
+                expected_run_id=run_id,
+                expected_signer_identity=artifact.human_ratifier,
+                tessera=self.tessera,
+                clock=self._clock,
+                consumed_nonces=tuple(consumed),
+            )
+            human = self.policy.principal(human_receipt.signer_identity)
+            if human is None or human.kind != "human":
+                raise AuthorityVerificationError("phase human ratifier is not an enrolled human")
         # 4.1b: the Validator receipt is ATTRIBUTION, not authority — verified for
         # signature, principal, and exact subject so the provenance is meaningful,
         # but its nonce is dropped (no replay ceremony for a non-authority) and no
@@ -1071,7 +1115,11 @@ class FactoryWorkflow:
             expected_signer_identity=artifact.validator_ratifier,
             tessera=self.tessera,
             clock=self._clock,
-            consumed_nonces=tuple((*consumed, human_receipt.nonce)),
+            consumed_nonces=tuple(
+                (*consumed, human_receipt.nonce)
+                if human_receipt is not None
+                else consumed
+            ),
         )
         validator = self.policy.principal(validator_receipt.signer_identity)
         if validator is None or validator.kind != "agent":
@@ -1091,11 +1139,12 @@ class FactoryWorkflow:
             _canonical_bytes(raw_artifact),
             durable_root=self.root,
         )
-        _write_once(
-            directory / "human-receipt.tessera.json",
-            _verified_envelope_bytes(human_receipt),
-            durable_root=self.root,
-        )
+        if human_receipt is not None:
+            _write_once(
+                directory / "human-receipt.tessera.json",
+                _verified_envelope_bytes(human_receipt),
+                durable_root=self.root,
+            )
         _write_once(
             directory / "validator-receipt.tessera.json",
             _verified_envelope_bytes(validator_receipt),
@@ -1108,19 +1157,39 @@ class FactoryWorkflow:
             actor=actor,
             artifact_digests={
                 artifact.phase: artifact_digest,
-                f"{artifact.phase}:human-receipt": human_receipt.envelope.envelope_digest,
+                **(
+                    {f"{artifact.phase}:human-receipt": human_receipt.envelope.envelope_digest}
+                    if human_receipt is not None
+                    else {}
+                ),
                 f"{artifact.phase}:validator-receipt": (validator_receipt.envelope.envelope_digest),
             },
             payload={
                 "artifact_id": artifact.artifact_id,
-                "human_receipt_id": human_receipt.receipt_id,
+                "human_receipt_id": (
+                    human_receipt.receipt_id if human_receipt is not None else None
+                ),
                 "validator_receipt_id": validator_receipt.receipt_id,
                 # 4.1b: only the AUTHORITY receipt's nonce is consumed — the
                 # attribution receipt carries no replay ceremony.
-                "authority_receipt_nonces": [human_receipt.nonce],
+                "authority_receipt_nonces": (
+                    [human_receipt.nonce] if human_receipt is not None else []
+                ),
+                # Said plainly rather than left to be inferred from an absence:
+                # this phase carries no human co-signature, and the engagement
+                # the human declared at ignition is why.
+                "engagement": engagement,
+                "human_ratified": human_receipt is not None,
             },
+            human_ratification_required=human_required,
             verifier_identity=validator_receipt.signer_identity,
-            approver_identity=human_receipt.signer_identity,
+            # No human approved this phase, and the Validator cannot approve its
+            # own ratification: segregation between two machine identities is
+            # ceremony (founder, 2026-08-30). The record says there was no
+            # approver rather than naming a fictional one.
+            approver_identity=(
+                human_receipt.signer_identity if human_receipt is not None else ""
+            ),
             policy=_segregation_policy(self.policy),
         )
         return StoredRatification(
