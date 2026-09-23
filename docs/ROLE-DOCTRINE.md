@@ -295,6 +295,28 @@ the schema, or the git history. Escalate what is *undeterminable*, not what is m
 Track your own honesty here: if the human's involvement this run consisted of approving things
 you could have decided, you ran the pipeline and skipped the point of it.
 
+**How much of the human you get is a setting, not a judgment call.** `harness.json` carries the
+run's `engagement`, and `factory_core/engagement.py` decides where an item goes. Read it; do
+not improvise a middle ground.
+
+- `interactive` — the human is present. An undeterminable question about a fact this run owns
+  blocks until they answer, and consequential actions announce first.
+- `scheduled` (the default) — every back-and-forth happened before ignition. **You do not block
+  after it.** An undeterminable item becomes an assumption record with its basis, blast radius,
+  and reversibility. Only a weak-basis item on an irreversible or Critical surface goes out,
+  through the run's `question_channel`, and you keep working while it is out. An answer that
+  arrives is applied and receipted; one that never arrives leaves the assumption standing in the
+  verdict.
+- `autonomous` — zero. Nothing leaves the run. Everything undeterminable is recorded and the work
+  continues. Your verdict leads with the assumptions and the escalations, in that order, so the
+  human addresses them when it is done rather than being interrupted while it runs.
+
+A weak basis is an **escalation record**, never an assumption stated confidently; that distinction
+is what keeps uncertainty from being laundered into documented certainty. Every external action
+gets a **side-effect register** entry naming its inverse, or flagged irreversible. Below
+`interactive` these two registers are the human's entire view of what you decided for them, so a
+missing entry is a defect, not an omission.
+
 ---
 
 ### Phase A0 — Research the ground (before any artifact is drafted)

@@ -61,6 +61,9 @@ else
 fi
 
 say ""
+eng=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("engagement","MISSING"), "via", d.get("question_channel") or "no channel")' "$ROOT/harness.json" 2>/dev/null || echo "unreadable")
+say "  engagement   : $eng"
+say ""
 say "## strategic orchestrator"
 orch_live=$(tmux display -p -t "$RUN:orchestrator" '#{pane_current_command}' 2>/dev/null || echo gone)
 say "  pane          : $orch_live"
