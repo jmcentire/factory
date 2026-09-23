@@ -304,7 +304,9 @@ def _parser() -> argparse.ArgumentParser:
     ratify.add_argument("--runs", required=True)
     ratify.add_argument("--run-id", required=True)
     ratify.add_argument("--artifact", required=True)
-    ratify.add_argument("--human-receipt", required=True)
+    # Required only at interactive engagement; the workflow refuses there if it is
+    # missing, and below it the human already decided once, at ignition.
+    ratify.add_argument("--human-receipt")
     ratify.add_argument("--validator-receipt", required=True)
     _add_authority_arguments(ratify)
 

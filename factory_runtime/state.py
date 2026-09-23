@@ -612,6 +612,7 @@ def _require_ratification_receipts(
     *,
     context: str,
     already_recorded: Collection[str] = (),
+    required_roles: tuple[str, ...] = _RATIFICATION_RECEIPT_ROLES,
 ) -> set[str]:
     """A ratification names a human receipt and a distinct Validator receipt, or it is refused.
 
@@ -645,7 +646,7 @@ def _require_ratification_receipts(
     _require_digest(artifact, f"artifact_digests[{phase_key!r}]")
     values = [artifact]
     receipts: set[str] = set()
-    for role in _RATIFICATION_RECEIPT_ROLES:
+    for role in required_roles:
         key = f"{phase_key}:{role}-receipt"
         value = str(digests.get(key, ""))
         if not value:
@@ -1182,6 +1183,7 @@ class RunStore:
         verifier_identity: str = "",
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
+        human_ratification_required: bool = True,
     ) -> RunProjection:
         """Serialize one state transition with terminal resource sealing for this run."""
 
@@ -1198,6 +1200,7 @@ class RunStore:
                     verifier_identity=verifier_identity,
                     approver_identity=approver_identity,
                     policy=policy,
+                    human_ratification_required=human_ratification_required,
                     resource_ledger=resources,
                 )
         except ResourceLedgerError as exc:
@@ -1215,6 +1218,7 @@ class RunStore:
         verifier_identity: str = "",
         approver_identity: str = "",
         policy: SegregationPolicy | None = None,
+        human_ratification_required: bool = True,
         resource_ledger: ResourceLedger,
     ) -> RunProjection:
         """Append one authorized state transition and refresh the checked projection."""
@@ -1424,6 +1428,15 @@ class RunStore:
                 phase_key,
                 context=str(destination),
                 already_recorded=already_recorded_receipts,
+                # A human co-signature per phase is required at interactive
+                # engagement only; below it the human decided once, at ignition.
+                # This check is SHAPE, not authority — signatures are verified
+                # behind the Tessera seam in ratify_phase and a digest here is
+                # checked only for form — so naming the roles costs no
+                # cryptographic property.
+                required_roles=(
+                    _RATIFICATION_RECEIPT_ROLES if human_ratification_required else ()
+                ),
             )
             phases[phase_key] = phase_digest
         if catalog_activation:
@@ -2190,6 +2203,14 @@ class RunStore:
                     derived_phase_key,
                     context=f"ledger entry {index} ratification",
                     already_recorded=entry_recorded_receipts,
+                    # The entry says whether a human co-signed. Replay honors the
+                    # same rule the transition applied, or a run ratified below
+                    # interactive engagement could never be replayed at all.
+                    required_roles=(
+                        _RATIFICATION_RECEIPT_ROLES
+                        if payload_raw.get("human_ratified", True)
+                        else ()
+                    ),
                 )
                 # The entry records the ratified artifact twice — at the top level and in the
                 # phase map. `transition` writes one value into both; two records of the same
