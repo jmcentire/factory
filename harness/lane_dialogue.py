@@ -23,6 +23,13 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
+from factory_core.engagement import (  # noqa: E402 - core decision, imported by path below
+    INTERACTIVE,
+    EngagementError,
+    blocks_on_questions,
+    normalize,
+)
+
 
 class LaneDialogueError(RuntimeError):
     """A dialogue operation could not prove its closed contract."""
@@ -420,6 +427,26 @@ def record_delivery(
         return row
 
 
+def run_engagement(root: pathlib.Path) -> str:
+    """The engagement this run was ignited with.
+
+    A run record without one is not configured, so the strictest level applies:
+    an unconfigured run behaves interactively rather than quietly running dark.
+    """
+
+    try:
+        metadata = json.loads((pathlib.Path(root) / "harness.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return INTERACTIVE
+    declared = metadata.get("engagement") if isinstance(metadata, dict) else None
+    if not isinstance(declared, str):
+        return INTERACTIVE
+    try:
+        return normalize(declared)
+    except EngagementError:
+        return INTERACTIVE
+
+
 def pending_questions(root: pathlib.Path, lane: str | None = None) -> list[dict[str, Any]]:
     if lane is not None and lane not in _LANES:
         raise LaneDialogueError("pending-question lane must be coder or tester")
@@ -513,12 +540,28 @@ def main() -> int:
             )
         else:
             outstanding = pending_questions(arguments.root, arguments.lane)
-            if outstanding:
+            if outstanding and blocks_on_questions(run_engagement(arguments.root)):
                 identifiers = ",".join(str(row["question_id"]) for row in outstanding)
                 raise LaneDialogueError(
                     f"unanswered lane questions block this transition: {identifiers}"
                 )
-            print(json.dumps({"clear": True}, sort_keys=True, separators=(",", ":")))
+            if outstanding:
+                # Below interactive engagement a question never stops the run:
+                # it is carried into the record the human reads afterwards, and
+                # named here so the transition is not silently unaware of it.
+                identifiers = ",".join(str(row["question_id"]) for row in outstanding)
+                print(
+                    "lane-dialogue: carrying unanswered lane questions into the record "
+                    f"({identifiers}); engagement does not block",
+                    file=sys.stderr,
+                )
+            print(
+                json.dumps(
+                    {"clear": True, "carried": [row["question_id"] for row in outstanding]},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
     except (LaneDialogueError, OSError) as exc:
         print(f"lane-dialogue refused: {exc}", file=sys.stderr)
         return 70

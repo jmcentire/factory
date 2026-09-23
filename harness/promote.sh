@@ -79,7 +79,8 @@ if any(doc.get(key) != value for key, value in expected.items()):
 base_fields = {
     "schema_version", "run_id", "status", "task_digest", "target_state_digest",
     "target_manifest_digest", "resolved_commit", "checkout_id", "budget_usd",
-    "budget_enforcement", "audit_interval_min", "promise_window_min",
+    "budget_enforcement", "audit_interval_min", "engagement", "question_channel",
+    "promise_window_min",
     "launcher_qualification", "lane_isolation", "interactive_validator_boundary",
     "validator_agent", "orchestrator_agent", "validator_contract", "created_at",
 }

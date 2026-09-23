@@ -403,11 +403,44 @@ has demonstrably lost threads mid-run:
 | `EVIDENCE_UNAVAILABLE` | Blocks on Critical surfaces; disclosed gap elsewhere. |
 | Same class, repeated | Route upward. You do not buy a third version of the same guess. |
 
-## The human surface
+## The human surface — and how much of the human this run gets
+
+`harness.json` carries the run's **engagement**, set once by the human at ignition and
+never negotiated by a lane: `interactive`, `scheduled` (the default), or `autonomous`.
+`factory_core/engagement.py` is the decision; read it rather than improvising.
+
+Two rules bind every engagement, so no level can resurrect a question that was never
+one:
+
+1. **Determinable is never a question.** A lane that reaches a defensible answer and
+   hands it back as a question is offloading dressed as diligence. Escalate what is
+   *undeterminable*, never what is merely unknown.
+2. **Ask whose fact it is.** A fact owned by another service, the caller, or a criterion
+   the human already stated is not this run's question. One authority per fact is also
+   the escalation filter.
+
+What is left after those two filters goes by engagement:
+
+- **`interactive`** — the human is present. Announce/Default/Require below apply as
+  written, and an undeterminable owned question blocks.
+- **`scheduled`** — every back-and-forth happened up front. **Nothing blocks after
+  ignition.** An undeterminable item becomes an assumption record; a weak-basis item on
+  an irreversible or Critical surface is the only thing sent out, through the run's
+  configured `question_channel`, and the run keeps going while it is out. With no
+  channel configured it is recorded and reported, and status says so.
+- **`autonomous`** — zero. Nothing leaves the run and nothing waits. Every undeterminable
+  item is recorded; the work continues; the report leads with what was assumed and what
+  could not be assumed safely. If it is wrong, it is addressed when the run is done.
+
+A weak basis is never an assumption dressed as certainty: it is an **escalation record**,
+so high uncertainty is not laundered into a confident blast-radius estimate. Every
+external action carries a **side-effect register** entry with its inverse, or a flag that
+it is irreversible — that register is what makes an autonomous run reviewable afterwards.
 
 Announce consequential actions **before** execution as verb → object → environment,
 with the action's class — and the class comes from criticality and reversibility, never
-from the agent whose action it is:
+from the agent whose action it is. **These three apply at `interactive`; below it there
+is no one to veto, so the action is taken and recorded instead:**
 
 - **Announce** (reversible, pre-authorized): state it, brief veto window, proceed.
 - **Default** (recommendation exists): state it with the default; window elapses → the

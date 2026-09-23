@@ -3,12 +3,14 @@
 # exclusively to factory_runtime; this script may consume target-state, never invent it.
 set -euo pipefail
 
-RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>]}"
+RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>]}"
 TASK_IN="${2:?verbatim task text or file}"
 shift 2
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 BUDGET=""
 AUDIT_MIN="15"
+ENGAGEMENT="scheduled"
+QUESTION_CHANNEL=""
 VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
 ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
 while [ "$#" -gt 0 ]; do
@@ -16,6 +18,8 @@ while [ "$#" -gt 0 ]; do
     --runs) RUNS_ARG="$2"; shift 2 ;;
     --budget) BUDGET="$2"; shift 2 ;;
     --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
+    --engagement) ENGAGEMENT="$2"; shift 2 ;;
+    --question-channel) QUESTION_CHANNEL="$2"; shift 2 ;;
     --repo|--target-manifest|--sha)
       echo "factory: $1 is forbidden; authorize and resolve the exact target through Stage R/E" >&2
       exit 64 ;;
@@ -130,13 +134,13 @@ case "$ORCHESTRATOR_AGENT" in
 esac
 
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
-  "$BUDGET" "$AUDIT_MIN" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
+  "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
   "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
-    task_source, task_dest, metadata_path, run, budget, audit, task_digest,
+    task_source, task_dest, metadata_path, run, budget, audit, engagement, question_channel, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
     generation_text, guidance_admission_raw,
@@ -144,6 +148,20 @@ import datetime, json, os, pathlib, sys, tempfile
 audit_value = int(audit)
 if audit_value < 1:
     raise SystemExit("factory: audit interval must be positive")
+# How much of the human this run gets. Refused, never guessed.
+if engagement not in {"interactive", "scheduled", "autonomous"}:
+    raise SystemExit(
+        "factory: engagement must be interactive, scheduled, or autonomous"
+    )
+if engagement == "scheduled" and not question_channel:
+    # Scheduled sends only the exceptional question. With no channel there is
+    # nowhere to send it, so it is recorded and reported instead — said out
+    # loud here, because a silent downgrade to autonomous is the failure.
+    print(
+        "factory: engagement scheduled with no --question-channel: exceptional "
+        "questions will be recorded in the run and reported, never sent",
+        file=sys.stderr,
+    )
 budget_value = None if budget == "" else float(budget)
 if budget_value is not None and budget_value <= 0:
     raise SystemExit("factory: budget must be positive")
@@ -185,6 +203,8 @@ metadata = {
         "reserved-runner-ceilings" if budget_value is not None else "not-requested"
     ),
     "audit_interval_min": audit_value,
+    "engagement": engagement,
+    "question_channel": question_channel or None,
     "promise_window_min": 10,
     "launcher_qualification": "QUALIFIED_PR2",
     "lane_isolation": "QUALIFIED_PR2",

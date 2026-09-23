@@ -1194,6 +1194,8 @@ def execution_truth_fixture(
                     "budget_usd": None,
                     "budget_enforcement": "UNQUALIFIED_PR2",
                     "audit_interval_min": 45,
+                    "engagement": "interactive",
+                    "question_channel": None,
                     "promise_window_min": 10,
                     "validator_agent": "codex",
                     "orchestrator_agent": "agy",
@@ -4142,6 +4144,78 @@ def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
     assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
     kinds = [json.loads(line)["kind"] for line in (root / "events.jsonl").read_text().splitlines()]
     assert kinds.count("orchestrator_unresponsive") == 1
+
+
+def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
+    """How much of the human a run gets is set once, at ignition, and retained.
+    The default is scheduled: all back-and-forth up front, nothing blocking
+    after it, and only an exceptional question sent to the configured channel."""
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "factory.sh"),
+            "r1",
+            task,
+            "--runs",
+            str(root.parent),
+            "--engagement",
+            "autonomous",
+        ],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["engagement"] == "autonomous"
+    assert harness["question_channel"] is None
+
+
+def test_ignition_refuses_an_engagement_the_factory_does_not_define(tmp_path: Path) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "factory.sh"),
+            "r1",
+            task,
+            "--runs",
+            str(root.parent),
+            "--engagement",
+            "semi",
+        ],
+        operator,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert "engagement must be interactive, scheduled, or autonomous" in result.stderr
+
+
+def test_scheduled_without_a_channel_says_so_instead_of_going_quiet(tmp_path: Path) -> None:
+    """A silent downgrade to autonomous is the failure: scheduled with no
+    channel records and reports its exceptional questions, and says so."""
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["engagement"] == "scheduled"
+    assert "never sent" in result.stderr
 
 
 def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
