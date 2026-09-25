@@ -642,8 +642,9 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "JSON array of the transcript slice the request came from: "
             "[{utterance_id, speaker, position, line_digest, surfaced, references}]. "
-            "Required with --deliverables; the authority tier is DERIVED from it, "
-            "never asserted."
+            "Required with --deliverables. The tier is DERIVED from the declared speaker "
+            "rather than chosen by the lane, but the digest is NOT yet checked against "
+            "any transcript: no extractor exists, so this records a claim, not proof."
         ),
     )
     verdict.add_argument(
@@ -686,6 +687,13 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--candidate", required=True, help="candidate digest (sha256:<hex>)")
     audit.add_argument("--evaluated-position", required=True, type=int)
     audit.add_argument("--validator", required=True, help="the validator seat identity")
+    # The audit describes a verdict, so it must be able to compute the same one.
+    # Without these it always saw fidelity=None, which pinned every audited
+    # verdict to INCOMPLETE and emptied the audit vocabulary.
+    audit.add_argument("--deliverables", default="", help="enumerated request JSON array")
+    audit.add_argument("--assessments", default="", help="per-deliverable self-assessment array")
+    audit.add_argument("--attributions", default="", help="artifact-to-deliverable array")
+    audit.add_argument("--utterances", default="", help="transcript slice behind the request")
 
     # The read side. No minimum-N gate: every count carries its denominator instead, because
     # withholding a signal until it is "significant" starves the runs that would make it so.
@@ -2388,28 +2396,14 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "verdict":
         from factory_core.directive_authority import (
-            ENGAGED,
             STATED,
-            DirectiveAuthorityError,
-            Utterance,
-            tier_rank,
-        )
-        from factory_core.directive_authority import (
-            derive as derive_authority,
         )
         from factory_core.directive_authority import (
             receipts as authority_receipts,
         )
         from factory_core.fidelity import (
-            Assessment,
-            Attribution,
-            Deliverable,
-            FidelityError,
             risk_acceptance_available,
             risk_acceptance_is_systematic,
-        )
-        from factory_core.fidelity import (
-            render as render_fidelity,
         )
         from factory_core.handover import Handover, compose_done, done_attestation_subject
         from factory_core.verdict import (
@@ -2437,78 +2431,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         assumptions = tuple(
             AssumptionRecord.from_dict(item) for item in _read_array(arguments.assumptions)
         )
-        # Fidelity: did we build what was asked, and does the lane admit it when we
-        # didn't (founder, 2026-09-24). The enumeration is the request; attributions
-        # say which deliverable each artifact served; assessments are the lanes' own
-        # typed judgment. Absent all three the verdict cannot PASS — it caps at
-        # INCOMPLETE with "fidelity-missing", because silence is not delivery. A
-        # malformed self-report is a refused control (exit 2), never a soft pass.
-        fidelity = None
-        authorities: tuple[Any, ...] = ()
-        if arguments.deliverables:
-            # An enumerated request must say where it came from. Without the
-            # transcript slice, directive_ref would be a string the caller
-            # asserts rather than a citation the factory can check — which is
-            # exactly the gap that let a lane present its own ideas as the
-            # human's request. Fail closed at the boundary.
-            if not arguments.utterances:
-                raise ValueError(
-                    "--deliverables requires --utterances: a citation the factory cannot "
-                    "check against the transcript is a claim, not authority"
-                )
-            try:
-                utterances = tuple(
-                    Utterance(
-                        utterance_id=str(item["utterance_id"]),
-                        speaker=str(item["speaker"]),
-                        position=int(item["position"]),
-                        line_digest=str(item["line_digest"]),
-                        surfaced=bool(item.get("surfaced", True)),
-                        references=tuple(str(r) for r in item.get("references", ())),
-                    )
-                    for item in _read_array(arguments.utterances)
-                )
-                authorities = tuple(derive_authority(u, utterances) for u in utterances)
-                # Only what the human stated, or demonstrably engaged with, may
-                # stand behind a deliverable. Disclosed and unilateral cannot:
-                # being told and never answering is not asking for something.
-                authorized_refs = frozenset(
-                    a.utterance_id
-                    for a in authorities
-                    if tier_rank(a.tier) >= tier_rank(ENGAGED)
-                )
-            except (DirectiveAuthorityError, KeyError, TypeError, ValueError) as exc:
-                raise ValueError(f"directive authority input refused: {exc}") from exc
-            try:
-                deliverables = tuple(
-                    Deliverable(
-                        deliverable_id=str(item["deliverable_id"]),
-                        directive_ref=str(item["directive_ref"]),
-                        summary=str(item.get("summary", "")),
-                    )
-                    for item in _read_array(arguments.deliverables)
-                )
-                assessments = tuple(
-                    Assessment(
-                        deliverable_id=str(item["deliverable_id"]),
-                        disposition=str(item["disposition"]),
-                        divergence=str(item.get("divergence", "")),
-                        fix_scope=str(item.get("fix_scope", "")),
-                    )
-                    for item in _read_array(arguments.assessments)
-                )
-                attributions = tuple(
-                    Attribution(
-                        artifact_ref=str(item["artifact_ref"]),
-                        deliverable_id=str(item.get("deliverable_id", "")),
-                    )
-                    for item in _read_array(arguments.attributions)
-                )
-                fidelity = render_fidelity(
-                    deliverables, assessments, attributions, authorized_refs
-                )
-            except (FidelityError, KeyError, TypeError) as exc:
-                raise ValueError(f"fidelity input refused: {exc}") from exc
+        # Fidelity: did we build what was asked, and does the lane admit it when
+        # we didn't (founder, 2026-09-24). Computed by the shared channel so the
+        # audit path cannot diverge from this one by omission.
+        fidelity, authorities, assessments = _fidelity_channel(arguments)
         computed = compute_verdict(
             coverage,
             promotion,
@@ -2588,12 +2514,16 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             if arguments.frame_check
             else None
         )
+        audit_fidelity, _audit_authorities, _audit_assessments = _fidelity_channel(
+            arguments
+        )
         computed = compute_verdict(
             coverage,
             promotion,
             frame_check,
             candidate_digest=arguments.candidate,
             evaluated_position=arguments.evaluated_position,
+            fidelity=audit_fidelity,
             receipts=tuple(
                 CharacterizationReceipt.from_dict(item)
                 for item in _read_array(arguments.receipts)
@@ -2795,6 +2725,99 @@ def _execute(arguments: argparse.Namespace) -> None:
                 raise
         return
     _execute_unleased(arguments)
+
+
+
+def _fidelity_channel(arguments: Any) -> tuple[Any, tuple[Any, ...], Any]:
+    """The fidelity channel for a verdict, plus the authorities behind it.
+
+    Shared by `verdict` and `audit` deliberately. `audit` previously called
+    compute_verdict with no fidelity argument, which pinned every audited verdict
+    to INCOMPLETE and returned an empty code set — silencing the entire audit
+    vocabulary. One helper, two callers, so that cannot recur by omission.
+
+    Returns ``(fidelity, authorities, assessments)``; ``(None, (), ())`` when the
+    caller supplied no enumeration.
+    """
+
+    from factory_core.directive_authority import (
+        ENGAGED,
+        DirectiveAuthorityError,
+        Utterance,
+        tier_rank,
+    )
+    from factory_core.directive_authority import (
+        derive as derive_authority,
+    )
+    from factory_core.fidelity import (
+        Assessment,
+        Attribution,
+        Deliverable,
+        FidelityError,
+    )
+    from factory_core.fidelity import (
+        render as render_fidelity,
+    )
+
+    if not getattr(arguments, "deliverables", ""):
+        return None, (), ()
+    if not getattr(arguments, "utterances", ""):
+        raise ValueError(
+            "--deliverables requires --utterances: a citation the factory cannot "
+            "check against the transcript is a claim, not authority"
+        )
+    try:
+        utterances = tuple(
+            Utterance(
+                utterance_id=str(item["utterance_id"]),
+                speaker=str(item["speaker"]),
+                position=int(item["position"]),
+                line_digest=str(item["line_digest"]),
+                surfaced=bool(item.get("surfaced", True)),
+                references=tuple(str(r) for r in item.get("references", ())),
+            )
+            for item in _read_array(arguments.utterances)
+        )
+        seen_ids = [u.utterance_id for u in utterances]
+        if len(set(seen_ids)) != len(seen_ids):
+            # A duplicate id lets one human row authorize every agent row sharing
+            # it, and lets a self-reference manufacture ENGAGED.
+            raise ValueError("duplicate utterance_id: a citation must address one line")
+        authorities = tuple(derive_authority(u, utterances) for u in utterances)
+        authorized_refs = frozenset(
+            a.utterance_id for a in authorities if tier_rank(a.tier) >= tier_rank(ENGAGED)
+        )
+    except (DirectiveAuthorityError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"directive authority input refused: {exc}") from exc
+    try:
+        deliverables = tuple(
+            Deliverable(
+                deliverable_id=str(item["deliverable_id"]),
+                directive_ref=str(item["directive_ref"]),
+                summary=str(item.get("summary", "")),
+            )
+            for item in _read_array(arguments.deliverables)
+        )
+        assessments = tuple(
+            Assessment(
+                deliverable_id=str(item["deliverable_id"]),
+                disposition=str(item["disposition"]),
+                divergence=str(item.get("divergence", "")),
+                fix_scope=str(item.get("fix_scope", "")),
+            )
+            for item in _read_array(arguments.assessments)
+        )
+        attributions = tuple(
+            Attribution(
+                artifact_ref=str(item["artifact_ref"]),
+                deliverable_id=str(item.get("deliverable_id", "")),
+            )
+            for item in _read_array(arguments.attributions)
+        )
+        fidelity = render_fidelity(deliverables, assessments, attributions, authorized_refs)
+    except (FidelityError, KeyError, TypeError) as exc:
+        raise ValueError(f"fidelity input refused: {exc}") from exc
+    return fidelity, authorities, assessments
 
 
 def main(argv: list[str] | None = None) -> int:

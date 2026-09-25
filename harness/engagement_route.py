@@ -125,10 +125,21 @@ def _cited_authority(root: pathlib.Path, ref: str) -> DirectiveAuthority | None:
     from a lane's assertion, which is the whole failure this addresses.
     """
 
-    parts = ref.split(":", 3)
-    if len(parts) != 4:
+    # The digest itself carries a colon (`sha256:<hex>`), so a plain split(":", 3)
+    # sliced it in half: the digest became "sha256" and `surfaced` became the hex
+    # plus the real flag, which is truthy — turning an intended UNILATERAL into
+    # DISCLOSED and an intended escalation into a silent proceed. Parse the two
+    # fixed fields off the front and the flag off the back; the digest is whatever
+    # is between, colons and all.
+    head = ref.split(":", 2)
+    if len(head) != 3:
         return None
-    speaker, position, digest, surfaced = parts
+    speaker, position, rest = head
+    if ":" not in rest:
+        return None
+    digest, surfaced = rest.rsplit(":", 1)
+    if not digest:
+        return None
     try:
         utterance = Utterance(
             utterance_id=ref,

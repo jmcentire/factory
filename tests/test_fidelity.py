@@ -10,6 +10,11 @@ import pytest
 
 from factory_core import fidelity as fid
 
+#: Every deliverable in these probes cites `directive:1`, so the authorized set is
+#: that one ref. Supplied explicitly because an unchecked citation is a claim and
+#: `render` now refuses to treat "no citations checked" as faithful.
+_AUTHORIZED = frozenset({"directive:1"})
+
 
 def deliverable(i: str = "d1", ref: str = "directive:1") -> fid.Deliverable:
     return fid.Deliverable(
@@ -37,6 +42,7 @@ def test_a_deliverable_nobody_built_is_not_cleared_by_adjacent_work() -> None:
             fid.Assessment("adapt-for-channel", fid.DELIVERED),
         ],
         built,
+        _AUTHORIZED,
     )
     assert result.disposition == fid.FIDELITY_SCOPE_DRIFT
     assert result.unserved == ("adapt-for-channel",)
@@ -52,7 +58,9 @@ def test_work_nobody_asked_for_is_named_rather_than_counted_as_progress() -> Non
         fid.Attribution("new_internal_api.py"),  # attributed to nothing
         fid.Attribution("pricing_rework.py", "some-idea-of-my-own"),
     ]
-    result = fid.render(asked, [fid.Assessment("send-to-channel", fid.DELIVERED)], built)
+    result = fid.render(
+        asked, [fid.Assessment("send-to-channel", fid.DELIVERED)], built, _AUTHORIZED
+    )
     assert result.disposition == fid.FIDELITY_SCOPE_DRIFT
     assert result.unasked == ("new_internal_api.py", "pricing_rework.py")
 
@@ -74,6 +82,7 @@ def test_a_bounded_fix_is_rework_not_a_risk_to_accept() -> None:
             )
         ],
         built,
+        _AUTHORIZED,
     )
     assert result.disposition == fid.FIDELITY_REWORK
     assert not result.may_reach_done
@@ -94,6 +103,7 @@ def test_one_bounded_shortfall_removes_risk_acceptance_for_the_whole_run() -> No
         [deliverable("d1"), deliverable("d2")],
         assessments,
         [fid.Attribution("a.py", "d1"), fid.Attribution("b.py", "d2")],
+        _AUTHORIZED,
     )
     assert result.disposition == fid.FIDELITY_REWORK
 
@@ -111,6 +121,7 @@ def test_risk_acceptance_is_offered_only_when_every_shortfall_is_structural() ->
             )
         ],
         [fid.Attribution("a.py", "d1")],
+        _AUTHORIZED,
     )
     assert result.disposition == fid.FIDELITY_RISK_ACCEPTANCE_ELIGIBLE
     # Eligibility is a ticket to the human, never a self-issued permission to ship.
@@ -133,7 +144,7 @@ def test_an_unassessed_deliverable_fails_closed() -> None:
 
     asked = [deliverable("d1"), deliverable("d2")]
     built = [fid.Attribution("a.py", "d1"), fid.Attribution("b.py", "d2")]
-    result = fid.render(asked, [fid.Assessment("d1", fid.DELIVERED)], built)
+    result = fid.render(asked, [fid.Assessment("d1", fid.DELIVERED)], built, _AUTHORIZED)
     assert result.disposition == fid.FIDELITY_UNASSESSED
     assert "d2" in result.reason
     assert not result.may_reach_done
@@ -141,7 +152,9 @@ def test_an_unassessed_deliverable_fails_closed() -> None:
 
 def test_only_a_clean_delivery_may_reach_done() -> None:
     asked = [deliverable("d1")]
-    ok = fid.render(asked, [fid.Assessment("d1", fid.DELIVERED)], [fid.Attribution("a.py", "d1")])
+    ok = fid.render(
+        asked, [fid.Assessment("d1", fid.DELIVERED)], [fid.Attribution("a.py", "d1")], _AUTHORIZED
+    )
     assert ok.disposition == fid.FIDELITY_DELIVERS
     assert ok.may_reach_done
     for other in (
@@ -199,9 +212,53 @@ def test_prose_is_not_an_input() -> None:
             asked,
             [fid.Assessment("d1", fid.PARTIAL, divergence=divergence, fix_scope=scope)],
             built,
+            _AUTHORIZED,
         ).disposition
 
     assert run("trivial nit, ship it", fid.BOUNDED) == run(
         "catastrophic, will destroy production", fid.BOUNDED
     )
     assert run("same words", fid.BOUNDED) != run("same words", fid.STRUCTURAL)
+
+
+def test_a_second_assessment_cannot_overwrite_a_shortfall() -> None:
+    """Appending one row used to turn "nothing built" into PASS-eligible.
+
+    Found in pre-release review of this very module: `by_id` was a dict
+    comprehension, so last-wins. That is the module's own failure mode — "it knows
+    it's shit and delivers it anyway" — reintroduced inside the fix for it.
+    """
+
+    asked = [deliverable("d1")]
+    built = [fid.Attribution("a.py", "d1")]
+    with pytest.raises(fid.FidelityError) as raised:
+        fid.render(
+            asked,
+            [
+                fid.Assessment(
+                    "d1", fid.NOT_ATTEMPTED, divergence="nothing built", fix_scope=fid.BOUNDED
+                ),
+                fid.Assessment("d1", fid.DELIVERED),
+            ],
+            built,
+            _AUTHORIZED,
+        )
+    assert "more than one assessment" in str(raised.value)
+
+
+def test_unchecked_citations_are_not_reported_as_faithful() -> None:
+    """Every other absence in this layer fails closed; this one used to fail open.
+
+    `authorized_refs=None` skipped the citation check entirely and still returned
+    `delivers`, so a caller that supplied no transcript got a clean bill.
+    """
+
+    result = fid.render(
+        [deliverable("d1")],
+        [fid.Assessment("d1", fid.DELIVERED)],
+        [fid.Attribution("a.py", "d1")],
+        None,
+    )
+    assert result.disposition == fid.FIDELITY_UNASSESSED
+    assert not result.may_reach_done
+    assert "unchecked citation is a claim" in result.reason

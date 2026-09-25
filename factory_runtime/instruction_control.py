@@ -179,14 +179,23 @@ def _validate_provisional(entries: Sequence[dict[str, Any]]) -> dict[str, dict[s
         "text",
         "qualifiers",
         "cite",
+        # WHO spoke the cited line. The citation recorded WHICH line and never who
+        # said it, so a provisional borrowing the founder's own words and one
+        # carrying the lane's own decision were indistinguishable — and every
+        # authority tier collapsed into that one shape.
+        "cite_speaker",
         "expires",
         "prev_hash",
         "hash",
     }
+    #: Entries written before cite_speaker existed. Their speaker is UNKNOWN, not
+    #: human: a legacy entry must not inherit founder authority by omission, so the
+    #: reader defaults it to the lane (see harness/directive.py cmd_active).
+    legacy = allowed - {"cite_speaker"}
     result: dict[str, dict[str, Any]] = {}
     for entry in entries:
         identifier = str(entry.get("id", ""))
-        if set(entry) != allowed:
+        if set(entry) not in (allowed, legacy):
             raise InstructionControlError(
                 "INVALID_PROVISIONAL", f"{identifier or 'provisional entry'} has unknown fields"
             )
@@ -203,6 +212,11 @@ def _validate_provisional(entries: Sequence[dict[str, Any]]) -> dict[str, dict[s
             raise InstructionControlError("INVALID_SCOPE", str(exc)) from exc
         _bounded_text(entry["text"], label=f"{identifier} text")
         _bounded_text(entry["cite"], label=f"{identifier} citation")
+        if entry.get("cite_speaker", "agent") not in ("human", "agent"):
+            raise InstructionControlError(
+                "INVALID_PROVISIONAL",
+                f"{identifier} names an undefined cite_speaker; use human or agent",
+            )
         _qualifiers(entry["qualifiers"], label=identifier)
         result[identifier] = entry
     return result

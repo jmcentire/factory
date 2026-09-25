@@ -34,8 +34,16 @@ worst of the three and the cheapest to catch. ``verdict.py`` already forces the
 first line — *does it do the thing it was built to do?* — but "the thing" was
 never bound to the request, so a lane could answer YES about whatever it chose to
 build. Here the request is **enumerated**, every artifact **names the deliverable
-it serves**, and a deliverable with no artifact is ``NOT_ATTEMPTED``. That fires
-on day one, not on day three.
+it serves**, and a deliverable with no attributed artifact is scope drift.
+
+**Scope of the guarantee, stated because the difference matters.** Nothing here
+checks that ``artifact_ref`` names a file that exists, nor digests it. The lane
+still writes its own attributions and its own dispositions. So this converts an
+unexamined silence into a *recorded, falsifiable, auditable claim* — a lane that
+builds nothing must now assert in a typed field that it did, against a named
+deliverable, where before it needed only to stay quiet. That is a real change and
+it is not the same as prevention. Attributing a nonexistent file to a deliverable
+and declaring it delivered still passes; digesting attributions is the next step.
 
 Posture, matching ``verdict.py``: stdlib only, pure, no clock, no disk. Summary
 prose, confidence language and rationale are not inputs here and cannot move the
@@ -299,11 +307,34 @@ def render(
         )
 
     attributed = list(attributions)
-    by_id: Mapping[str, Assessment] = {a.deliverable_id: a for a in assessments}
+    reported = list(assessments)
+    # Last-wins on a duplicate id would let one appended row launder a shortfall:
+    # ["not-attempted", "delivered"] for the same deliverable read as delivered.
+    # That is exactly "it knows it is shit and delivers it anyway", reintroduced
+    # inside the module built to stop it, so duplicates are refused outright.
+    seen = [a.deliverable_id for a in reported]
+    duplicated = sorted({i for i in seen if seen.count(i) > 1})
+    if duplicated:
+        raise FidelityError(
+            "more than one assessment for: "
+            + ", ".join(duplicated)
+            + "; one deliverable carries one judgment, or a shortfall can be "
+            "overwritten by appending a row"
+        )
+    by_id: Mapping[str, Assessment] = {a.deliverable_id: a for a in reported}
 
     unserved = _unserved_deliverables(enumerated, attributed)
     unasked = _unasked_artifacts(enumerated, attributed)
     uncited: tuple[str, ...] = ()
+    if authorized_refs is None:
+        # Not silent: a run whose citations were never checked is reported as
+        # unassessed rather than as faithful. Every other absence across this
+        # layer fails closed; this one used to fail open.
+        return Fidelity(
+            FIDELITY_UNASSESSED,
+            "no authorized citations were supplied, so no deliverable's directive_ref "
+            "was checked; an unchecked citation is a claim",
+        )
     if authorized_refs is not None:
         uncited = tuple(
             d.deliverable_id for d in enumerated if d.directive_ref not in authorized_refs
