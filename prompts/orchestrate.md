@@ -154,6 +154,30 @@ to launch duplicate attempts or send repeated task prompts. A lane with a pendin
 is already in the known `waiting-on-validator` state; answer or escalate that question instead of
 probing it for being quiet.
 
+### Without the dispatcher, you are the one who looks
+
+In an unqualified tmux run (no genesis, no Tessera, so no `harness/dispatcher.py`), nothing samples
+the lane panes for you. The watch above does not disappear; it becomes yours to perform directly.
+Run `dist-r1` (2026-09-23) shows the failure: the seat was briefed to "reply at checkpoints", put
+itself on a loop re-reading the Validator's log, and never looked at a lane terminal during the
+whole build turn. The founder asked the only question that matters: *how can it ensure everyone is
+following the rules if it doesn't look at their terminals?*
+
+- **Launch the seat able to see.** Your runtime must reach the run's tmux socket. `agy --sandbox`
+  denies it (`error connecting to /private/tmp/tmux-501/default (Operation not permitted)`), so
+  launch without `--sandbox`. Never give this seat less reach than the Validator has. Its authority
+  runs *over* the Validator on process, and the no-pen rule binds both seats equally, by
+  discipline and by Gate F, not by crippling the supervisor's eyes. File mirrors or log-only views
+  are a downgrade, not an equivalent.
+- **Watch on your own schedule, from the moment lanes launch.** Every few minutes while any lane
+  runs, `tmux capture-pane -p -S -200 -t <run>:<lane>` for every lane and the Validator's control
+  pane, plus the lane transcripts. Check what you see against the rules, and write a CALL the moment
+  you see a violation. A poll of the Validator's log is not a watch of the run.
+- **Speak without being asked.** The Validator must wire a timer-driven tick whose reply
+  interrupts it (reply `NONE`, or `ORCH:` followed by what must be acted on). A check the supervised party must choose to
+  consult is not a check (res-r1, kindex `2c99a94ec1f2`). The Validator's brief to you must name
+  the lane windows to watch, not only the files to read. If it does not, raise it as your first call.
+
 Then ask, before judging the next action:
 
 1. What is the user's **ultimate goal** across their inputs? Is the latest input an `override`,

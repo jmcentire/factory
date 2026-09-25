@@ -17,6 +17,22 @@ from factory_core.manifest import digest_obj
 from factory_runtime.cli import main
 
 CANDIDATE = digest_obj({"artifact": "verdict-cli-candidate"})
+
+#: A faithful run, expressed the way a lane actually reports it: the request
+#: enumerated with a citation, one artifact attributed to each deliverable, and the
+#: lane's own typed judgment on each.
+_DELIVERABLES = [
+    {
+        "deliverable_id": "send-to-channel",
+        "directive_ref": "directive:distribution-1",
+        "summary": "take our data, adapt it for the channel, push it out",
+    }
+]
+_ASSESSMENTS = [{"deliverable_id": "send-to-channel", "disposition": "delivered"}]
+_ATTRIBUTIONS = [
+    {"artifact_ref": "channel_push.py", "deliverable_id": "send-to-channel"}
+]
+
 VALIDATOR = "validator-seat"
 
 
@@ -90,6 +106,7 @@ def _run_verdict(
     promotion: dict[str, Any],
     frame_check: dict[str, Any] | None,
     handovers: list[dict[str, Any]] | None = None,
+    fidelity: bool = True,
 ) -> tuple[int, dict[str, Any]]:
     argv = [
         "verdict",
@@ -108,6 +125,17 @@ def _run_verdict(
         argv += ["--frame-check", _write(tmp_path, "frame.json", frame_check)]
     if handovers is not None:
         argv += ["--handovers", _write(tmp_path, "handovers.json", handovers)]
+    if fidelity:
+        # The fidelity channel is exercised through argv, not bypassed: a verdict
+        # with no enumerated request cannot PASS, so the CLI must carry it.
+        argv += [
+            "--deliverables",
+            _write(tmp_path, "deliverables.json", _DELIVERABLES),
+            "--assessments",
+            _write(tmp_path, "assessments.json", _ASSESSMENTS),
+            "--attributions",
+            _write(tmp_path, "attributions.json", _ATTRIBUTIONS),
+        ]
     code = main(argv)
     captured = capsys.readouterr()
     return code, (json.loads(captured.out) if captured.out.strip() else {})
@@ -206,3 +234,83 @@ def test_malformed_inputs_are_refused_controls(
         ]
     )
     assert code == 2
+
+
+def test_the_cli_refuses_to_pass_a_run_with_no_enumerated_request(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """Founder, 2026-09-24: silence is not delivery.
+
+    Everything else green, no fidelity flags: the verdict must not PASS, and it
+    must say which channel is missing rather than going quiet.
+    """
+
+    code, payload = _run_verdict(
+        tmp_path,
+        capsys,
+        promotion={"allowed": True, "disposition": "promote"},
+        frame_check=_frame_check_dict(),
+        fidelity=False,
+    )
+    assert code == 0
+    assert payload["verdict"]["disposition"] != "pass"
+    assert payload["verdict"]["allowed"] is False
+    assert "fidelity-missing" in payload["verdict"]["reasons"]
+    assert "fidelity" not in payload
+
+
+def test_the_cli_blocks_a_run_that_built_something_else(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The distribution-service failure, driven end to end through argv.
+
+    The request enumerates two deliverables; work is attributed only to the first.
+    Two and a half days of adjacent output must not clear the second.
+    """
+
+    argv_extra = {
+        "deliverables.json": [
+            *_DELIVERABLES,
+            {
+                "deliverable_id": "adapt-for-channel",
+                "directive_ref": "directive:distribution-2",
+                "summary": "adapt our data to the channel's shape",
+            },
+        ],
+        "assessments.json": [
+            *_ASSESSMENTS,
+            {"deliverable_id": "adapt-for-channel", "disposition": "delivered"},
+        ],
+        "attributions.json": [
+            {"artifact_ref": "pricing.py", "deliverable_id": "send-to-channel"},
+            {"artifact_ref": "availability.py", "deliverable_id": "send-to-channel"},
+        ],
+    }
+    argv = [
+        "verdict",
+        "--coverage",
+        _write(tmp_path, "coverage.json", _coverage_dict()),
+        "--promotion",
+        _write(tmp_path, "promotion.json", {"allowed": True, "disposition": "promote"}),
+        "--candidate",
+        CANDIDATE,
+        "--evaluated-position",
+        "1000",
+        "--validator",
+        VALIDATOR,
+        "--frame-check",
+        _write(tmp_path, "frame.json", _frame_check_dict()),
+        "--deliverables",
+        _write(tmp_path, "deliverables.json", argv_extra["deliverables.json"]),
+        "--assessments",
+        _write(tmp_path, "assessments.json", argv_extra["assessments.json"]),
+        "--attributions",
+        _write(tmp_path, "attributions.json", argv_extra["attributions.json"]),
+    ]
+    code = main(argv)
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["verdict"]["disposition"] == "block"
+    assert "asked-for-and-not-built:adapt-for-channel" in payload["verdict"]["reasons"]
+    assert payload["fidelity"]["unserved"] == ["adapt-for-channel"]
+    assert payload["fidelity"]["risk_acceptance_available"] is False

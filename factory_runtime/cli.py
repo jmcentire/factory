@@ -611,6 +611,36 @@ def _parser() -> argparse.ArgumentParser:
         help="frame-check result JSON; absent means the first line is not demonstrated",
     )
     verdict.add_argument("--receipts", default="", help="characterization-receipt JSON array")
+    verdict.add_argument(
+        "--deliverables",
+        default="",
+        help=(
+            "JSON array enumerating what the request asked for: "
+            "[{deliverable_id, directive_ref, summary}]. Supplying it enables the "
+            "fidelity channel; omitting it caps the verdict at INCOMPLETE."
+        ),
+    )
+    verdict.add_argument(
+        "--assessments",
+        default="",
+        help=(
+            "JSON array of the lanes' own typed judgment per deliverable: "
+            "[{deliverable_id, disposition, divergence, fix_scope}]"
+        ),
+    )
+    verdict.add_argument(
+        "--attributions",
+        default="",
+        help=(
+            "JSON array binding built work to what it served: "
+            "[{artifact_ref, deliverable_id}]. Work attributed to nothing is scope drift."
+        ),
+    )
+    verdict.add_argument(
+        "--fidelity-history",
+        default="",
+        help="JSON array of prior fidelity dispositions, for the risk-acceptance rate signal",
+    )
     verdict.add_argument("--assumptions", default="", help="assumption-record JSON array")
     verdict.add_argument(
         "--handovers",
@@ -2347,6 +2377,17 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         _emit(decision)
         return
     if arguments.command == "verdict":
+        from factory_core.fidelity import (
+            Assessment,
+            Attribution,
+            Deliverable,
+            FidelityError,
+            risk_acceptance_available,
+            risk_acceptance_is_systematic,
+        )
+        from factory_core.fidelity import (
+            render as render_fidelity,
+        )
         from factory_core.handover import Handover, compose_done, done_attestation_subject
         from factory_core.verdict import (
             AssumptionRecord,
@@ -2373,6 +2414,42 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         assumptions = tuple(
             AssumptionRecord.from_dict(item) for item in _read_array(arguments.assumptions)
         )
+        # Fidelity: did we build what was asked, and does the lane admit it when we
+        # didn't (founder, 2026-09-24). The enumeration is the request; attributions
+        # say which deliverable each artifact served; assessments are the lanes' own
+        # typed judgment. Absent all three the verdict cannot PASS — it caps at
+        # INCOMPLETE with "fidelity-missing", because silence is not delivery. A
+        # malformed self-report is a refused control (exit 2), never a soft pass.
+        fidelity = None
+        if arguments.deliverables:
+            try:
+                deliverables = tuple(
+                    Deliverable(
+                        deliverable_id=str(item["deliverable_id"]),
+                        directive_ref=str(item["directive_ref"]),
+                        summary=str(item.get("summary", "")),
+                    )
+                    for item in _read_array(arguments.deliverables)
+                )
+                assessments = tuple(
+                    Assessment(
+                        deliverable_id=str(item["deliverable_id"]),
+                        disposition=str(item["disposition"]),
+                        divergence=str(item.get("divergence", "")),
+                        fix_scope=str(item.get("fix_scope", "")),
+                    )
+                    for item in _read_array(arguments.assessments)
+                )
+                attributions = tuple(
+                    Attribution(
+                        artifact_ref=str(item["artifact_ref"]),
+                        deliverable_id=str(item.get("deliverable_id", "")),
+                    )
+                    for item in _read_array(arguments.attributions)
+                )
+                fidelity = render_fidelity(deliverables, assessments, attributions)
+            except (FidelityError, KeyError, TypeError) as exc:
+                raise ValueError(f"fidelity input refused: {exc}") from exc
         computed = compute_verdict(
             coverage,
             promotion,
@@ -2382,6 +2459,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             receipts=receipts,
             assumptions=assumptions,
             validator=arguments.validator,
+            fidelity=fidelity,
         )
         payload: dict[str, Any] = {
             "verdict": computed.to_dict(),
@@ -2390,6 +2468,25 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 verdict_attestation_subject(computed, coverage)
             ),
         }
+        if fidelity is not None:
+            payload["fidelity"] = {
+                "disposition": fidelity.disposition,
+                "reason": fidelity.reason,
+                "unserved": list(fidelity.unserved),
+                "unasked": list(fidelity.unasked),
+                "shortfalls": list(fidelity.shortfalls),
+                # Stated rather than left to be inferred from the disposition: risk
+                # acceptance is only on the table when every shortfall is structural.
+                "risk_acceptance_available": risk_acceptance_available(assessments),
+            }
+            history = [str(item) for item in _read_array(arguments.fidelity_history)]
+            if history:
+                # The rate is its own signal. Nine-of-ten accepted risk is the
+                # normalized baseline rounding real failure down to ordinary, and no
+                # individual run need be invalid for the pattern to be.
+                payload["fidelity"]["risk_acceptance_is_systematic"] = (
+                    risk_acceptance_is_systematic([*history, fidelity.disposition])
+                )
         handover_items = _read_array(arguments.handovers)
         if handover_items:
             handovers = tuple(Handover.from_dict(item) for item in handover_items)

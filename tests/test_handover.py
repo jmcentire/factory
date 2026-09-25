@@ -39,7 +39,7 @@ from tests.test_promotion_gate import (
     _risk,
     _roster,
 )
-from tests.test_verdict import EVALUATED_POSITION, _frame_check, _map
+from tests.test_verdict import _DELIVERS, EVALUATED_POSITION, _frame_check, _map
 
 VERBS = ("ingest-observation", "detect-drift", "surface-finding")
 
@@ -54,6 +54,7 @@ def _pass_verdict(coverage):
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert verdict.disposition == VERDICT_PASS
     return verdict
