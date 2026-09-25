@@ -40,6 +40,11 @@ from typing import Any, Protocol
 
 from factory_core.criticality import normalize_label
 from factory_core.evidence import EvidenceIntegrity
+from factory_core.fidelity import (
+    FIDELITY_SCOPE_DRIFT,
+    FIDELITY_UNASSESSED,
+    Fidelity,
+)
 from factory_core.manifest import digest_obj
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -642,12 +647,24 @@ def compute_verdict(
     receipts: tuple[CharacterizationReceipt, ...] = (),
     assumptions: tuple[AssumptionRecord, ...] = (),
     validator: str = "",
+    fidelity: Fidelity | None = None,
 ) -> Verdict:
     """Compute the global verdict. Pure, and deliberately unpersuadable.
 
     The only inputs are the ratified coverage map, the promotion decision beneath it,
-    the frame-check binary, receipts, and assumption records — all typed. Free-text
-    fields on any of them are carried into the report untouched and read by nothing.
+    the frame-check binary, receipts, assumption records, and the fidelity
+    disposition — all typed. Free-text fields on any of them are carried into the
+    report untouched and read by nothing.
+
+    ``fidelity`` is the founder's 2026-09-24 corrective. The forced first line
+    already asked *does it do the thing it was built to do?*, but nothing bound
+    "the thing" to the request, so a lane could answer YES about whatever it chose
+    to build — two and a half days of availability, pricing and API work on a
+    ticket that asked for a distribution channel. Fidelity binds it: the request
+    is enumerated, work is attributed to it, and a lane's own judgment about its
+    own output is a typed field rather than prose in a summary. Like every other
+    channel here it is monotone — it can only remove PASS-eligibility — and its
+    absence is a reason, never a pass, because silence is not delivery.
     """
 
     hard_reasons: list[str] = []
@@ -717,9 +734,34 @@ def compute_verdict(
     if first_line != FIRST_LINE_YES:
         reasons.append(f"first-line-not-yes:{first_line}")
 
+    # Fidelity narrows and never widens. Scope drift and an unassessed deliverable
+    # are hard: the first means the lanes and the human are discussing different
+    # projects, and the second is the silence this exists to stop. Rework and
+    # risk-acceptance are honest shortfalls, so they cap the verdict rather than
+    # blocking it — the human still decides the structural case.
+    if fidelity is None:
+        reasons.append("fidelity-missing")
+    elif fidelity.disposition in (FIDELITY_SCOPE_DRIFT, FIDELITY_UNASSESSED):
+        hard_reasons.append(f"fidelity:{fidelity.disposition}")
+        for deliverable_id in fidelity.unserved:
+            hard_reasons.append(f"asked-for-and-not-built:{deliverable_id}")
+        for artifact_ref in fidelity.unasked:
+            hard_reasons.append(f"built-and-not-asked-for:{artifact_ref}")
+    elif not fidelity.may_reach_done:
+        reasons.append(f"fidelity:{fidelity.disposition}")
+        reasons.extend(f"shortfall:{item}" for item in fidelity.shortfalls)
+
+    # A reason alone never moved the disposition, which is why the fidelity
+    # channel has to appear in this ladder rather than only in the reason list:
+    # a verdict that PASSes while carrying "fidelity-missing" in its reasons is
+    # the same theatre as prose that nothing reads.
+    fidelity_withholds_pass = fidelity is None or not fidelity.may_reach_done
+
     if hard_reasons:
         disposition = VERDICT_BLOCK
     elif first_line != FIRST_LINE_YES:
+        disposition = VERDICT_INCOMPLETE
+    elif fidelity_withholds_pass:
         disposition = VERDICT_INCOMPLETE
     elif unknown:
         disposition = VERDICT_PASS_ON_COVERED

@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from factory_core.evidence import EvidenceIntegrity
+from factory_core.fidelity import FIDELITY_DELIVERS, Fidelity
 from factory_core.manifest import digest_obj
 from factory_core.promotion import DISPOSITION_RISK_ACCEPTED, decide_promotion
 from factory_core.verdict import (
@@ -50,6 +51,12 @@ from tests.test_promotion_gate import (
 )
 
 EVALUATED_POSITION = 1_000
+
+#: These tests predate the fidelity channel and each exercises a different one.
+#: They supply a delivering fidelity so the thing under test stays the variable;
+#: the fidelity channel has its own forcing probes at the end of this file.
+_DELIVERS = Fidelity(FIDELITY_DELIVERS, "every enumerated deliverable is delivered")
+
 
 
 def _accepted_promotion_decision():
@@ -178,6 +185,7 @@ def test_run1_risk_accepted_configuration_cannot_reach_any_pass() -> None:
         None,
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert without_demo.disposition == VERDICT_INCOMPLETE
     assert without_demo.allowed is False
@@ -190,6 +198,7 @@ def test_run1_risk_accepted_configuration_cannot_reach_any_pass() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert with_demo.disposition == VERDICT_PASS_ON_COVERED
     assert with_demo.allowed is False
@@ -209,6 +218,7 @@ def test_characterization_receipt_restores_pass_eligibility() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         receipts=(_receipt(coverage),),
         validator="validator-agent",
     )
@@ -231,6 +241,7 @@ def test_forced_first_line_caps_the_verdict() -> None:
             _frame_check(first_line),
             candidate_digest=CANDIDATE,
             evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         )
         assert verdict.disposition == VERDICT_INCOMPLETE
         assert verdict.allowed is False
@@ -242,6 +253,7 @@ def test_forced_first_line_caps_the_verdict() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert yes.disposition == VERDICT_PASS
     assert yes.allowed is True
@@ -268,6 +280,7 @@ def test_confident_prose_cannot_move_the_verdict() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         assumptions=(
             AssumptionRecord(
                 assumption_id="a-1",
@@ -282,6 +295,7 @@ def test_confident_prose_cannot_move_the_verdict() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         receipts=(
             # An invalid receipt (no ratified probes fired) whose observed_shape
             # carries the overclaim: the prose channel run 1 listened to.
@@ -314,6 +328,7 @@ def test_monotone_composition_no_channel_raises_the_rank() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert base.disposition == VERDICT_PASS
 
@@ -323,6 +338,7 @@ def test_monotone_composition_no_channel_raises_the_rank() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         assumptions=(
             AssumptionRecord(
                 assumption_id="a-1",
@@ -345,6 +361,7 @@ def test_monotone_composition_no_channel_raises_the_rank() -> None:
         None,
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert verdict_rank(without_demo.disposition) < verdict_rank(base.disposition)
 
@@ -360,6 +377,7 @@ def test_receipt_validity_is_mechanical_not_judged() -> None:
             _frame_check(FIRST_LINE_YES),
             candidate_digest=CANDIDATE,
             evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
             receipts=(receipt,),
             validator="validator-agent",
         )
@@ -389,6 +407,7 @@ def test_receipt_validity_is_mechanical_not_judged() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         receipts=(_receipt(unratified),),
     )
     assert verdict.disposition == VERDICT_PASS_ON_COVERED
@@ -408,6 +427,7 @@ def test_assumption_outside_frame_is_unknown_and_flagged() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
         assumptions=(
             AssumptionRecord(
                 assumption_id="a-2",
@@ -430,6 +450,7 @@ def test_frame_check_artifact_mismatch_blocks_as_staging() -> None:
         _frame_check(FIRST_LINE_YES, artifact_digest=digest_obj({"artifact": "demo-build"})),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert verdict.disposition == VERDICT_BLOCK
     assert "frame-check-artifact-mismatch" in verdict.reasons
@@ -445,6 +466,7 @@ def test_promotion_block_is_a_verdict_block() -> None:
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     assert verdict.disposition == VERDICT_BLOCK
     assert f"promotion-not-allowed:{gated.disposition}" in verdict.reasons
@@ -459,6 +481,7 @@ def test_headline_opens_with_the_forced_question_and_never_bare_passes() -> None
         _frame_check(FIRST_LINE_YES),
         candidate_digest=CANDIDATE,
         evaluated_position=EVALUATED_POSITION,
+        fidelity=_DELIVERS,
     )
     headline = render_headline(verdict)
     lines = headline.splitlines()
@@ -496,3 +519,75 @@ def test_from_dict_refuses_to_guess() -> None:
                 ),
             )
         )
+
+
+def test_fidelity_narrows_the_verdict_and_its_absence_is_not_a_pass() -> None:
+    """The wire that was missing (founder, 2026-09-24).
+
+    A lane's judgment about its own work used to be prose in a summary, so a
+    verdict could PASS while the lane knew the work was wrong. These drive the
+    real compute_verdict, so the channel is proven to move the outcome rather
+    than merely to exist — a control nobody calls is a claim.
+    """
+
+    from factory_core.fidelity import (
+        FIDELITY_REWORK,
+        FIDELITY_RISK_ACCEPTANCE_ELIGIBLE,
+        FIDELITY_SCOPE_DRIFT,
+        FIDELITY_UNASSESSED,
+    )
+
+    # Everything else green: a fully covered map, a promotable decision and a YES
+    # first line. Fidelity is then the only variable.
+    decision = _accepted_promotion_decision()
+    coverage = _map(status="covered")
+
+    def verdict_for(fidelity):
+        return compute_verdict(
+            coverage,
+            decision,
+            _frame_check(FIRST_LINE_YES),
+            candidate_digest=CANDIDATE,
+            evaluated_position=EVALUATED_POSITION,
+            fidelity=fidelity,
+        )
+
+    # Baseline: everything else green plus a delivering fidelity is the only PASS.
+    assert verdict_for(_DELIVERS).disposition == VERDICT_PASS
+
+    # Absence is not consent. Silence is not delivery.
+    missing = verdict_for(None)
+    assert missing.disposition == VERDICT_INCOMPLETE
+    assert missing.allowed is False
+    assert "fidelity-missing" in missing.reasons
+
+    # The distribution-service failure: two and a half days of adjacent work and
+    # nothing built for the thing that was asked. It BLOCKS, and it names the item.
+    drift = verdict_for(
+        Fidelity(FIDELITY_SCOPE_DRIFT, "not built", unserved=("send-to-channel",))
+    )
+    assert drift.disposition == VERDICT_BLOCK
+    assert "asked-for-and-not-built:send-to-channel" in drift.reasons
+
+    unasked = verdict_for(
+        Fidelity(FIDELITY_SCOPE_DRIFT, "unasked", unasked=("new_internal_api.py",))
+    )
+    assert unasked.disposition == VERDICT_BLOCK
+    assert "built-and-not-asked-for:new_internal_api.py" in unasked.reasons
+
+    # An unassessed deliverable blocks rather than passing quietly.
+    assert verdict_for(Fidelity(FIDELITY_UNASSESSED, "no assessment")).disposition == (
+        VERDICT_BLOCK
+    )
+
+    # An honest bounded shortfall caps the verdict; it is work, not a risk.
+    rework = verdict_for(Fidelity(FIDELITY_REWORK, "bounded", shortfalls=("d1",)))
+    assert rework.disposition == VERDICT_INCOMPLETE
+    assert "shortfall:d1" in rework.reasons
+
+    # Risk acceptance never self-issues a pass; it is a decision for the human.
+    accepted = verdict_for(
+        Fidelity(FIDELITY_RISK_ACCEPTANCE_ELIGIBLE, "structural", shortfalls=("d1",))
+    )
+    assert accepted.allowed is False
+    assert verdict_rank(accepted.disposition) <= verdict_rank(VERDICT_PASS)
