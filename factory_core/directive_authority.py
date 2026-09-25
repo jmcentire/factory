@@ -37,13 +37,21 @@ the *weaker* tier is returned — never the stronger. An unobservable engagement
 DISCLOSED; an unsurfaced statement is UNILATERAL. Ambiguity may not be resolved
 in the direction of consent.
 
-**The human's own words need no signature because they are already
-authenticated.** ``harness/directive.py``'s provisional citation carries
-``file:line:uuid:line-sha256``, so a claim that the human said something is
-checkable against the transcript bytes. That is what lets STATED be
-self-certifying without weakening anything: the agent still cannot sign the
-founder's ledger, and it still cannot *forge* a citation — it can only point at
-a line whose digest either matches or does not.
+**The human's own words are meant to need no signature, because they are
+already authenticatABLE.** ``harness/directive.py``'s provisional citation
+carries ``file:line:uuid:line-sha256``, so a claim that the human said something
+*can* be checked against the transcript bytes.
+
+**That check does not exist yet, and this module does not perform it.** No
+transcript extractor is in the tree: ``speaker`` and ``line_digest`` arrive as
+data from the caller, ``line_digest`` is required to be non-empty and is
+otherwise uninterpreted, and nothing compares it to any file. So the tier is
+derived from a *declared* speaker, not a proven one. What this module buys today
+is that the declaration is explicit, typed, ranked, and consequential — and that
+a citation which fails to parse is refused rather than assumed. What it does not
+buy is proof. Until an extractor lands, treat ``receipts()`` as *the claims a run
+made about its own authority*, not as verified provenance; a lane that types
+``speaker: human`` gets STATED.
 
 And one rule follows from *"you must prioritize what I SAID"*: a lane-originated
 directive may never supersede a human-stated one. Precedence is by tier, not by
@@ -326,10 +334,11 @@ def strongest(authorities: Iterable[DirectiveAuthority]) -> DirectiveAuthority |
 def receipts(authorities: Sequence[DirectiveAuthority]) -> tuple[dict[str, str], ...]:
     """The answer to *"show me the receipts"*, as data rather than prose.
 
-    Each row names the utterance, who spoke it, the tier it earned, why it earned
-    it, and the transcript digest that proves the line. This is what the founder
-    asked for when they said a lane should be able to produce receipts on demand:
-    not a narrative reconstruction, a list that can be checked.
+    Each row names the utterance, the DECLARED speaker, the tier that declaration
+    earned, why, and the digest the caller supplied. A list that *can* be checked
+    against a transcript — not one that has been. Nothing here verifies the
+    digest, so a row is the run's own claim about its authority; the field is
+    named ``line_digest`` rather than anything implying proof for that reason.
     """
 
     return tuple(

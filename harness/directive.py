@@ -226,6 +226,10 @@ def cmd_provisional(args):
             "scope": valid_scope(args.scope), "text": args.text,
             "qualifiers": args.qualifier or [],
             "cite": args.cite,   # transcript file:line:uuid:line-sha256
+            # WHO spoke the cited line. The citation always recorded WHICH line and
+            # never who said it, so "the founder told me this" and "I decided this"
+            # were the same shape and every authority tier collapsed into one.
+            "cite_speaker": args.cite_speaker,
             "expires": (now + datetime.timedelta(hours=args.ttl_hours)).isoformat(timespec="seconds"),
             "prev_hash": entries[-1]["hash"] if entries else GENESIS}
     body["hash"] = ehash(body)
@@ -253,6 +257,25 @@ def cmd_ratify(args):
         print(f"refused after action — artifacts citing {prov['id']} are [AGENT]-originated:")
         print("freeze them and route each for an explicit keep/revert disposition")
 
+
+def _scopes_overlap(signed_scope, provisional_scope):
+    """Whether a signed scope speaks to the same territory as a provisional one.
+
+    String equality missed the case this check exists for: a founder directive
+    scoped `global` carries no selectors and therefore applies everywhere, so it
+    never matched a provisional scoped `run=r1;role=coder`. Subsumption is the
+    right relation — every selector the broader scope names must be present and
+    equal in the narrower one. A conflict on a shared selector means the two
+    address different territory and neither subsumes the other.
+    """
+    try:
+        broad = dict(parse_directive_scope(signed_scope))
+        narrow = dict(parse_directive_scope(provisional_scope))
+    except DirectiveScopeError:
+        return False
+    return all(narrow.get(k) == v for k, v in broad.items())
+
+
 def cmd_active(args):
     verify(emit=False, required=True)
     entries = load(required=True)
@@ -266,37 +289,46 @@ def cmd_active(args):
     for e in entries:
         for k in ("ratifies", "refuses"):
             if e.get(k): settled.add(e[k]["id"])
-    signed_scopes = {
-        e["scope"] for e in entries if e["id"] not in dead and "refuses" not in e
-    }
+    # A refusal is the founder speaking to that scope, so it counts. Excluding
+    # refusals meant a scope the founder had addressed only by refusing a
+    # provisional registered as unspoken.
+    signed_scopes = {e["scope"] for e in entries if e["id"] not in dead}
     now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     for p in loadp(required=True):
         if p["id"] in settled or p["expires"] < now: continue
         if args.since and p["ts"] < args.since: continue
-        # "You must prioritize what I SAID." A provisional entry borrows its
-        # authority from the transcript; a signed entry IS the founder. Where both
-        # speak to one scope, the signed one binds and the provisional is shown as
-        # subordinate rather than as a peer — precedence by tier, not recency.
+        # "You must prioritize what I SAID." A provisional borrows authority from
+        # the transcript; a signed entry IS the founder. Where both speak to one
+        # scope, precedence is by tier — so a provisional citing the FOUNDER is not
+        # subordinate to a signed directive, while one citing the agent is. That
+        # distinction is why the citation now records its speaker: without it both
+        # sides of this comparison were literals and the branch was decoration.
         subordinate = ""
-        if p["scope"] in signed_scopes:
-            lane = derive(
+        overlapping = sorted(s for s in signed_scopes if _scopes_overlap(s, p["scope"]))
+        if overlapping:
+            cited = derive(
                 Utterance(
                     utterance_id=p["id"],
-                    speaker=SPEAKER_AGENT,
-                    position=0,
+                    speaker=(
+                        SPEAKER_HUMAN if p.get("cite_speaker") == "human" else SPEAKER_AGENT
+                    ),
+                    position=len(entries) + 1,
                     line_digest=p["hash"],
                 )
             )
             founder = derive(
                 Utterance(
-                    utterance_id="signed",
+                    utterance_id=overlapping[0],
                     speaker=SPEAKER_HUMAN,
-                    position=1,
-                    line_digest=GENESIS,
+                    position=0,
+                    line_digest=p["prev_hash"],
                 )
             )
-            if not may_supersede(lane, founder):
-                subordinate = "  [SUBORDINATE to the signed directive in this scope]"
+            if not may_supersede(cited, founder):
+                subordinate = (
+                    f'  [SUBORDINATE to the signed directive scoped {overlapping[0]}'
+                    f' — cited speaker: {cited.speaker}, tier: {cited.tier}]'
+                )
         print(f'{p["id"]} [PROVISIONAL until {p["expires"]}] [{p["scope"]}] {p["text"]}'
               f'  <- {p["cite"]}{subordinate}')
         for q in p.get("qualifiers", []): print(f"      ↳ {q}")
@@ -320,6 +352,8 @@ if __name__ == "__main__":
     v.set_defaults(f=lambda a: verify(a.sigs or os.environ.get("DIRECTIVE_REQUIRE_SIGS") == "1"))
     pr = sub.add_parser("provisional"); pr.add_argument("--scope", required=True)
     pr.add_argument("--text", required=True); pr.add_argument("--cite", required=True)
+    pr.add_argument("--cite-speaker", choices=("human", "agent"), default="agent",
+                    help="who spoke the cited line; agent is the fail-closed default")
     pr.add_argument("--qualifier", action="append"); pr.add_argument("--ttl-hours", type=int, default=72)
     pr.set_defaults(f=cmd_provisional)
     ra = sub.add_parser("ratify"); ra.add_argument("pid")

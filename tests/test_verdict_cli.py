@@ -40,9 +40,7 @@ _UTTERANCES = [
 ]
 
 _ASSESSMENTS = [{"deliverable_id": "send-to-channel", "disposition": "delivered"}]
-_ATTRIBUTIONS = [
-    {"artifact_ref": "channel_push.py", "deliverable_id": "send-to-channel"}
-]
+_ATTRIBUTIONS = [{"artifact_ref": "channel_push.py", "deliverable_id": "send-to-channel"}]
 
 VALIDATOR = "validator-seat"
 
@@ -166,9 +164,7 @@ def test_pass_verdict_composes_the_reserved_token(
     )
     assert code == 0
     assert payload["verdict"]["disposition"] == "pass"
-    assert payload["headline"].splitlines()[0] == (
-        "Does it do the thing it was built to do? YES"
-    )
+    assert payload["headline"].splitlines()[0] == ("Does it do the thing it was built to do? YES")
     assert payload["composition"]["reachable"] is True
     assert payload["composition"]["token"] == "__DONE__"
     assert payload["done_attestation_subject_digest"].startswith("sha256:")
@@ -205,9 +201,7 @@ def test_blocked_promotion_floor_blocks_the_verdict(
     assert "promotion-not-allowed:block" in payload["verdict"]["reasons"]
 
 
-def test_malformed_inputs_are_refused_controls(
-    tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
+def test_malformed_inputs_are_refused_controls(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
     coverage = _write(tmp_path, "coverage.json", {"territories": []})
     promotion = _write(tmp_path, "promotion.json", {"allowed": True, "disposition": "promote"})
     code = main(
@@ -450,3 +444,52 @@ def test_a_deliverable_the_lane_invented_for_itself_blocks(
     assert rows[0]["tier"] == "unilateral"
     assert rows[0]["speaker"] == "agent"
     assert payload["fidelity"]["stated_refs"] == []
+
+
+def test_the_audit_subcommand_still_speaks_its_vocabulary(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The gap that let 1501 green tests hide a silenced monitor.
+
+    No test invoked the `audit` subcommand at all — tests/test_audit.py builds
+    Verdict objects by hand. So when the fidelity channel started capping an
+    un-supplied verdict at INCOMPLETE, audit's entire vocabulary went empty
+    through the CLI and nothing noticed. This drives argv end to end and asserts
+    the audit still emits a code, which is the only thing that would have caught it.
+    """
+
+    argv = [
+        "audit",
+        "--run-id",
+        "run-1",
+        "--coverage",
+        _write(tmp_path, "coverage.json", _coverage_dict()),
+        "--promotion",
+        # audit_run ranks the promotion disposition in the VERDICT vocabulary.
+        _write(tmp_path, "promotion.json", {"allowed": True, "disposition": "pass"}),
+        "--candidate",
+        CANDIDATE,
+        "--evaluated-position",
+        "1000",
+        "--validator",
+        VALIDATOR,
+        "--frame-check",
+        _write(tmp_path, "frame.json", _frame_check_dict()),
+        "--deliverables",
+        _write(tmp_path, "deliverables.json", _DELIVERABLES),
+        "--assessments",
+        _write(tmp_path, "assessments.json", _ASSESSMENTS),
+        "--attributions",
+        _write(tmp_path, "attributions.json", _ATTRIBUTIONS),
+        "--utterances",
+        _write(tmp_path, "utterances.json", _UTTERANCES),
+    ]
+    code = main(argv)
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    # A fully green run is a PASS, so the audit must classify it rather than
+    # returning an empty set because the verdict silently fell to INCOMPLETE.
+    # Before the fix this was {"codes": [], "rows": []} on this exact input.
+    assert payload["codes"], "the audit vocabulary went silent"
+    assert "uncoded-pass" in payload["codes"]
+    assert payload["rows"] and payload["rows"][0]["run_id"] == "run-1"

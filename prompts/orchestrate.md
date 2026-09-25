@@ -164,7 +164,7 @@ whole build turn. The founder asked the only question that matters: *how can it 
 following the rules if it doesn't look at their terminals?*
 
 - **Launch the seat able to see.** Your runtime must reach the run's tmux socket. `agy --sandbox`
-  denies it (`error connecting to /private/tmp/tmux-501/default (Operation not permitted)`), so
+  denies it (`error connecting to $TMUX_TMPDIR/default (Operation not permitted)`), so
   launch without `--sandbox`. Never give this seat less reach than the Validator has. Its authority
   runs *over* the Validator on process, and the no-pen rule binds both seats equally, by
   discipline and by Gate F, not by crippling the supervisor's eyes. File mirrors or log-only views

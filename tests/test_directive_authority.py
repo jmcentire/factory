@@ -202,3 +202,66 @@ def test_tier_order_is_weakest_first_and_load_bearing() -> None:
     assert da.TIERS == (da.UNILATERAL, da.DISCLOSED, da.ENGAGED, da.STATED)
     ranks = [da.tier_rank(t) for t in da.TIERS]
     assert ranks == sorted(ranks)
+
+
+def test_scope_subsumption_catches_the_global_case() -> None:
+    """Pre-release review finding: string equality missed the case it was for.
+
+    A founder directive scoped `global` carries no selectors and so applies
+    everywhere, but it never string-matched a narrower provisional scope — exactly
+    the pairing the precedence check exists to mark subordinate.
+    """
+
+    import importlib.util
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_d", root / "harness" / "directive.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # `global` subsumes everything.
+    assert module._scopes_overlap("global", "run=r1;role=coder")
+    # A shared selector must agree; disagreement is different territory.
+    assert module._scopes_overlap("role=coder", "run=r1;role=coder")
+    assert not module._scopes_overlap("role=tester", "run=r1;role=coder")
+    # The narrower scope does not subsume the broader one.
+    assert not module._scopes_overlap("run=r1;role=coder", "global")
+    # An unparseable scope is not treated as overlapping.
+    assert not module._scopes_overlap("!!not a scope!!", "global")
+
+
+def test_a_provisional_citing_the_founder_is_not_subordinate() -> None:
+    """The distinction that made the precedence check real rather than constant.
+
+    Before the citation recorded its speaker, both sides of the comparison were
+    fabricated literals and may_supersede() was a compile-time False — the branch
+    was decoration. Deriving from the recorded speaker makes it vary.
+    """
+
+    founder = da.derive(
+        da.Utterance(
+            utterance_id="signed",
+            speaker=da.SPEAKER_HUMAN,
+            position=0,
+            line_digest="sha256:" + "0" * 64,
+        )
+    )
+    cited_human = da.derive(
+        da.Utterance(
+            utterance_id="P-0001",
+            speaker=da.SPEAKER_HUMAN,
+            position=1,
+            line_digest="sha256:" + "1" * 64,
+        )
+    )
+    cited_agent = da.derive(
+        da.Utterance(
+            utterance_id="P-0002",
+            speaker=da.SPEAKER_AGENT,
+            position=2,
+            line_digest="sha256:" + "2" * 64,
+        )
+    )
+    assert da.may_supersede(cited_human, founder)  # the founder's own words
+    assert not da.may_supersede(cited_agent, founder)  # the lane's
