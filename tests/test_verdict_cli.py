@@ -28,6 +28,17 @@ _DELIVERABLES = [
         "summary": "take our data, adapt it for the channel, push it out",
     }
 ]
+#: The transcript slice the request came from. The human asked for the
+#: distribution work, so its deliverable cites a STATED authority.
+_UTTERANCES = [
+    {
+        "utterance_id": "directive:distribution-1",
+        "speaker": "human",
+        "position": 1,
+        "line_digest": "sha256:" + "d" * 64,
+    }
+]
+
 _ASSESSMENTS = [{"deliverable_id": "send-to-channel", "disposition": "delivered"}]
 _ATTRIBUTIONS = [
     {"artifact_ref": "channel_push.py", "deliverable_id": "send-to-channel"}
@@ -135,6 +146,8 @@ def _run_verdict(
             _write(tmp_path, "assessments.json", _ASSESSMENTS),
             "--attributions",
             _write(tmp_path, "attributions.json", _ATTRIBUTIONS),
+            "--utterances",
+            _write(tmp_path, "utterances.json", _UTTERANCES),
         ]
     code = main(argv)
     captured = capsys.readouterr()
@@ -306,6 +319,20 @@ def test_the_cli_blocks_a_run_that_built_something_else(
         _write(tmp_path, "assessments.json", argv_extra["assessments.json"]),
         "--attributions",
         _write(tmp_path, "attributions.json", argv_extra["attributions.json"]),
+        "--utterances",
+        _write(
+            tmp_path,
+            "utterances.json",
+            [
+                *_UTTERANCES,
+                {
+                    "utterance_id": "directive:distribution-2",
+                    "speaker": "human",
+                    "position": 2,
+                    "line_digest": "sha256:" + "e" * 64,
+                },
+            ],
+        ),
     ]
     code = main(argv)
     payload = json.loads(capsys.readouterr().out)
@@ -314,3 +341,112 @@ def test_the_cli_blocks_a_run_that_built_something_else(
     assert "asked-for-and-not-built:adapt-for-channel" in payload["verdict"]["reasons"]
     assert payload["fidelity"]["unserved"] == ["adapt-for-channel"]
     assert payload["fidelity"]["risk_acceptance_available"] is False
+
+
+def test_an_enumerated_request_must_say_where_it_came_from(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """A citation the factory cannot check is a claim, not authority.
+
+    Founder, 2026-09-24: "You know who said what." So the transcript slice is
+    mandatory whenever a request is enumerated — otherwise directive_ref is a
+    string the caller asserts.
+    """
+
+    argv = [
+        "verdict",
+        "--coverage",
+        _write(tmp_path, "coverage.json", _coverage_dict()),
+        "--promotion",
+        _write(tmp_path, "promotion.json", {"allowed": True, "disposition": "promote"}),
+        "--candidate",
+        CANDIDATE,
+        "--evaluated-position",
+        "1000",
+        "--validator",
+        VALIDATOR,
+        "--frame-check",
+        _write(tmp_path, "frame.json", _frame_check_dict()),
+        "--deliverables",
+        _write(tmp_path, "deliverables.json", _DELIVERABLES),
+        "--assessments",
+        _write(tmp_path, "assessments.json", _ASSESSMENTS),
+        "--attributions",
+        _write(tmp_path, "attributions.json", _ATTRIBUTIONS),
+    ]
+    code = main(argv)
+    assert code == 2  # a refused control, never a soft pass
+    assert "requires --utterances" in capsys.readouterr().err
+
+
+def test_a_deliverable_the_lane_invented_for_itself_blocks(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The 2.5-day failure at its root.
+
+    The lane's own unsurfaced decision is dressed as a request. Disclosure and
+    unilateral decisions cannot stand behind a deliverable: being told, or never
+    being told, is not asking for something.
+    """
+
+    invented = [
+        {
+            "deliverable_id": "rework-pricing",
+            "directive_ref": "lane:my-own-idea",
+            "summary": "pricing work nobody asked for",
+        }
+    ]
+    argv = [
+        "verdict",
+        "--coverage",
+        _write(tmp_path, "coverage.json", _coverage_dict()),
+        "--promotion",
+        _write(tmp_path, "promotion.json", {"allowed": True, "disposition": "promote"}),
+        "--candidate",
+        CANDIDATE,
+        "--evaluated-position",
+        "1000",
+        "--validator",
+        VALIDATOR,
+        "--frame-check",
+        _write(tmp_path, "frame.json", _frame_check_dict()),
+        "--deliverables",
+        _write(tmp_path, "deliverables.json", invented),
+        "--assessments",
+        _write(
+            tmp_path,
+            "assessments.json",
+            [{"deliverable_id": "rework-pricing", "disposition": "delivered"}],
+        ),
+        "--attributions",
+        _write(
+            tmp_path,
+            "attributions.json",
+            [{"artifact_ref": "pricing.py", "deliverable_id": "rework-pricing"}],
+        ),
+        "--utterances",
+        _write(
+            tmp_path,
+            "utterances.json",
+            [
+                {
+                    "utterance_id": "lane:my-own-idea",
+                    "speaker": "agent",
+                    "position": 1,
+                    "line_digest": "sha256:" + "f" * 64,
+                    "surfaced": False,
+                }
+            ],
+        ),
+    ]
+    code = main(argv)
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["verdict"]["disposition"] == "block"
+    assert "no-human-authority-asked-for:rework-pricing" in payload["verdict"]["reasons"]
+    assert payload["fidelity"]["uncited"] == ["rework-pricing"]
+    # The receipts say plainly whose idea it was.
+    rows = payload["directive_receipts"]
+    assert rows[0]["tier"] == "unilateral"
+    assert rows[0]["speaker"] == "agent"
+    assert payload["fidelity"]["stated_refs"] == []

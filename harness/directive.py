@@ -27,6 +27,13 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from factory_core.directive_authority import (
+    SPEAKER_AGENT,
+    SPEAKER_HUMAN,
+    Utterance,
+    derive,
+    may_supersede,
+)
 from factory_runtime.directive_scope import DirectiveScopeError, parse_directive_scope
 from factory_runtime.durability import fsync_directory
 from factory_runtime.instruction_control import (
@@ -177,7 +184,7 @@ def write(body):
 
 def new_body(entries, args, supersedes=None, dispositions=None, quals=None):
     return {"id": f"D-{len(entries)+1:04d}",
-            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
             "scope": valid_scope(args.scope), "text": args.text,
             "qualifiers": quals if quals is not None else (args.qualifier or []),
             "supersedes": supersedes, "dispositions": dispositions,
@@ -213,7 +220,7 @@ def cmd_provisional(args):
     # Agent-appendable side chain — NOT the signed ledger. Authority is borrowed
     # from the live transcript, cited precisely, and expires unless ratified.
     entries = loadp()
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     body = {"id": f"P-{len(entries)+1:04d}",
             "ts": now.isoformat(timespec="seconds"),
             "scope": valid_scope(args.scope), "text": args.text,
@@ -234,7 +241,7 @@ def cmd_ratify(args):
     entries = load()
     verdict = "refuses" if args.refuse else "ratifies"
     body = {"id": f"D-{len(entries)+1:04d}",
-            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
             "scope": prov["scope"],
             "text": args.text if args.text else prov["text"],
             "qualifiers": prov["qualifiers"],
@@ -259,11 +266,39 @@ def cmd_active(args):
     for e in entries:
         for k in ("ratifies", "refuses"):
             if e.get(k): settled.add(e[k]["id"])
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    signed_scopes = {
+        e["scope"] for e in entries if e["id"] not in dead and "refuses" not in e
+    }
+    now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     for p in loadp(required=True):
         if p["id"] in settled or p["expires"] < now: continue
         if args.since and p["ts"] < args.since: continue
-        print(f'{p["id"]} [PROVISIONAL until {p["expires"]}] [{p["scope"]}] {p["text"]}  <- {p["cite"]}')
+        # "You must prioritize what I SAID." A provisional entry borrows its
+        # authority from the transcript; a signed entry IS the founder. Where both
+        # speak to one scope, the signed one binds and the provisional is shown as
+        # subordinate rather than as a peer — precedence by tier, not recency.
+        subordinate = ""
+        if p["scope"] in signed_scopes:
+            lane = derive(
+                Utterance(
+                    utterance_id=p["id"],
+                    speaker=SPEAKER_AGENT,
+                    position=0,
+                    line_digest=p["hash"],
+                )
+            )
+            founder = derive(
+                Utterance(
+                    utterance_id="signed",
+                    speaker=SPEAKER_HUMAN,
+                    position=1,
+                    line_digest=GENESIS,
+                )
+            )
+            if not may_supersede(lane, founder):
+                subordinate = "  [SUBORDINATE to the signed directive in this scope]"
+        print(f'{p["id"]} [PROVISIONAL until {p["expires"]}] [{p["scope"]}] {p["text"]}'
+              f'  <- {p["cite"]}{subordinate}')
         for q in p.get("qualifiers", []): print(f"      ↳ {q}")
 
 def cmd_show(args):

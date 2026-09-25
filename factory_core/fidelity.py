@@ -204,6 +204,10 @@ class Fidelity:
     unserved: tuple[str, ...] = ()
     unasked: tuple[str, ...] = ()
     shortfalls: tuple[str, ...] = ()
+    #: Deliverables whose ``directive_ref`` no human authority backs. The lane's
+    #: own idea presented as a request — the failure mode that let two and a half
+    #: days of unrequested work look like a faithful run.
+    uncited: tuple[str, ...] = ()
 
     @property
     def may_reach_done(self) -> bool:
@@ -266,15 +270,19 @@ def render(
     deliverables: Sequence[Deliverable],
     assessments: Iterable[Assessment],
     attributions: Iterable[Attribution] = (),
+    authorized_refs: frozenset[str] | None = None,
 ) -> Fidelity:
     """What the run may do next, from the enumeration and the self-reports alone.
 
     Order of the checks is the doctrine, strongest objection first:
 
-    1. **Nothing asked for is missing, and nothing unasked-for was built.** A
+    1. **Nothing asked for is missing, nothing unasked-for was built, and every
+       deliverable traces to something the human actually asked for.** A
        structural mismatch between request and work outranks any judgment about
        quality, because it means the lanes and the human are discussing
-       different projects.
+       different projects. ``authorized_refs`` is the set of citations a human
+       authority backs — supply it and a deliverable the lane invented for itself
+       is caught here rather than discovered on day three.
     2. **Every deliverable carries an assessment.** Absence fails closed; a lane
        that says nothing has not said yes.
     3. **A deliverable a lane claims to have delivered has work behind it.** No
@@ -295,17 +303,27 @@ def render(
 
     unserved = _unserved_deliverables(enumerated, attributed)
     unasked = _unasked_artifacts(enumerated, attributed)
-    if unserved or unasked:
+    uncited: tuple[str, ...] = ()
+    if authorized_refs is not None:
+        uncited = tuple(
+            d.deliverable_id for d in enumerated if d.directive_ref not in authorized_refs
+        )
+    if unserved or unasked or uncited:
         parts = []
         if unserved:
             parts.append(f"asked for and not built: {', '.join(unserved)}")
         if unasked:
             parts.append(f"built and not asked for: {', '.join(unasked)}")
+        if uncited:
+            parts.append(
+                f"no human authority asked for: {', '.join(uncited)}"
+            )
         return Fidelity(
             FIDELITY_SCOPE_DRIFT,
             "; ".join(parts),
             unserved=unserved,
             unasked=unasked,
+            uncited=uncited,
         )
 
     missing = tuple(d.deliverable_id for d in enumerated if d.deliverable_id not in by_id)

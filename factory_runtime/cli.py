@@ -637,6 +637,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     verdict.add_argument(
+        "--utterances",
+        default="",
+        help=(
+            "JSON array of the transcript slice the request came from: "
+            "[{utterance_id, speaker, position, line_digest, surfaced, references}]. "
+            "Required with --deliverables; the authority tier is DERIVED from it, "
+            "never asserted."
+        ),
+    )
+    verdict.add_argument(
         "--fidelity-history",
         default="",
         help="JSON array of prior fidelity dispositions, for the risk-acceptance rate signal",
@@ -2377,6 +2387,19 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         _emit(decision)
         return
     if arguments.command == "verdict":
+        from factory_core.directive_authority import (
+            ENGAGED,
+            STATED,
+            DirectiveAuthorityError,
+            Utterance,
+            tier_rank,
+        )
+        from factory_core.directive_authority import (
+            derive as derive_authority,
+        )
+        from factory_core.directive_authority import (
+            receipts as authority_receipts,
+        )
         from factory_core.fidelity import (
             Assessment,
             Attribution,
@@ -2421,7 +2444,41 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         # INCOMPLETE with "fidelity-missing", because silence is not delivery. A
         # malformed self-report is a refused control (exit 2), never a soft pass.
         fidelity = None
+        authorities: tuple[Any, ...] = ()
         if arguments.deliverables:
+            # An enumerated request must say where it came from. Without the
+            # transcript slice, directive_ref would be a string the caller
+            # asserts rather than a citation the factory can check — which is
+            # exactly the gap that let a lane present its own ideas as the
+            # human's request. Fail closed at the boundary.
+            if not arguments.utterances:
+                raise ValueError(
+                    "--deliverables requires --utterances: a citation the factory cannot "
+                    "check against the transcript is a claim, not authority"
+                )
+            try:
+                utterances = tuple(
+                    Utterance(
+                        utterance_id=str(item["utterance_id"]),
+                        speaker=str(item["speaker"]),
+                        position=int(item["position"]),
+                        line_digest=str(item["line_digest"]),
+                        surfaced=bool(item.get("surfaced", True)),
+                        references=tuple(str(r) for r in item.get("references", ())),
+                    )
+                    for item in _read_array(arguments.utterances)
+                )
+                authorities = tuple(derive_authority(u, utterances) for u in utterances)
+                # Only what the human stated, or demonstrably engaged with, may
+                # stand behind a deliverable. Disclosed and unilateral cannot:
+                # being told and never answering is not asking for something.
+                authorized_refs = frozenset(
+                    a.utterance_id
+                    for a in authorities
+                    if tier_rank(a.tier) >= tier_rank(ENGAGED)
+                )
+            except (DirectiveAuthorityError, KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"directive authority input refused: {exc}") from exc
             try:
                 deliverables = tuple(
                     Deliverable(
@@ -2447,7 +2504,9 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                     )
                     for item in _read_array(arguments.attributions)
                 )
-                fidelity = render_fidelity(deliverables, assessments, attributions)
+                fidelity = render_fidelity(
+                    deliverables, assessments, attributions, authorized_refs
+                )
             except (FidelityError, KeyError, TypeError) as exc:
                 raise ValueError(f"fidelity input refused: {exc}") from exc
         computed = compute_verdict(
@@ -2475,10 +2534,20 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "unserved": list(fidelity.unserved),
                 "unasked": list(fidelity.unasked),
                 "shortfalls": list(fidelity.shortfalls),
+                "uncited": list(fidelity.uncited),
                 # Stated rather than left to be inferred from the disposition: risk
                 # acceptance is only on the table when every shortfall is structural.
                 "risk_acceptance_available": risk_acceptance_available(assessments),
             }
+            # "When I bitch and ask for receipts, you can provide them": who said
+            # what, which tier it earned, why, and the transcript digest that proves
+            # the line. Data that can be checked, not a narrative reconstruction.
+            payload["directive_receipts"] = [
+                dict(row) for row in authority_receipts(authorities)
+            ]
+            payload["fidelity"]["stated_refs"] = sorted(
+                a.utterance_id for a in authorities if a.tier == STATED
+            )
             history = [str(item) for item in _read_array(arguments.fidelity_history)]
             if history:
                 # The rate is its own signal. Nine-of-ten accepted risk is the

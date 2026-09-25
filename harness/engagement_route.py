@@ -30,6 +30,17 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
+from lane_dialogue import run_engagement  # noqa: E402 - adjacent harness module
+
+from factory_core.directive_authority import (  # noqa: E402 - repository package
+    Authorization,
+    DirectiveAuthority,
+    DirectiveAuthorityError,
+    Utterance,
+    authorizes,
+    derive,
+    strongest,
+)
 from factory_core.engagement import (  # noqa: E402 - repository package, resolved above
     BLOCK_FOR_HUMAN,
     INTERACTIVE,
@@ -44,7 +55,6 @@ from factory_core.engagement import (  # noqa: E402 - repository package, resolv
     normalize,
     route,
 )
-from lane_dialogue import run_engagement  # noqa: E402 - adjacent harness module
 
 REGISTERS = {
     RECORD_ASSUMPTION: "assumptions.jsonl",
@@ -106,6 +116,35 @@ def _send(root: pathlib.Path, subject: str) -> dict[str, object]:
     return {"sent": True, "reason": "delivered to the configured channel"}
 
 
+
+def _cited_authority(root: pathlib.Path, ref: str) -> DirectiveAuthority | None:
+    """One cited authority, or None when the citation cannot be checked.
+
+    The format is deliberately explicit rather than a bare id: a citation that
+    does not carry its speaker and its transcript digest cannot be told apart
+    from a lane's assertion, which is the whole failure this addresses.
+    """
+
+    parts = ref.split(":", 3)
+    if len(parts) != 4:
+        return None
+    speaker, position, digest, surfaced = parts
+    try:
+        utterance = Utterance(
+            utterance_id=ref,
+            speaker=speaker,
+            position=int(position),
+            line_digest=digest,
+            surfaced=surfaced.strip().lower() not in {"0", "false", "no"},
+        )
+    except (DirectiveAuthorityError, ValueError):
+        return None
+    # No transcript is threaded here, so engagement is not observable and the
+    # derivation degrades to DISCLOSED for a surfaced lane statement. That is the
+    # fail-closed direction: a lane cannot earn ENGAGED by asserting it.
+    return derive(utterance)
+
+
 def _item(arguments: argparse.Namespace) -> int:
     root = pathlib.Path(arguments.root).resolve()
     engagement = run_engagement(root)
@@ -121,6 +160,46 @@ def _item(arguments: argparse.Namespace) -> int:
         critical=arguments.critical,
     )
     routing: Routing = route(engagement, item)
+
+    # Who asked for this decides whether the run may take it without asking.
+    # `route()` answers "should this be a question?" from determinability,
+    # ownership and engagement; it never asked "does the human already know?".
+    # A cited authority answers that, and it can only NARROW — a weak authority
+    # turns a proceed into an escalation, never the reverse.
+    authority_row: dict[str, object] | None = None
+    cited = tuple(ref for ref in (arguments.authority or ()) if ref.strip())
+    if cited:
+        authorities = tuple(
+            _cited_authority(root, ref) for ref in cited
+        )
+        binding = strongest(a for a in authorities if a is not None)
+        if binding is None:
+            print(
+                "engagement-route refused: every cited authority is unresolvable; an "
+                "uncheckable citation is a claim, not permission",
+                file=sys.stderr,
+            )
+            return 64
+        warrant: Authorization = authorizes(
+            binding,
+            reversibility=item.reversibility,
+            critical=item.critical,
+            determinable=item.determinable,
+        )
+        authority_row = {
+            "utterance_id": binding.utterance_id,
+            "speaker": binding.speaker,
+            "tier": binding.tier,
+            "basis": binding.basis,
+            "line_digest": binding.line_digest,
+            "outcome": warrant.outcome,
+            "reason": warrant.reason,
+        }
+        if not warrant.allowed and routing.action not in (BLOCK_FOR_HUMAN, NOTIFY_CHANNEL):
+            # Monotone: the authority is too weak for this action, so what would
+            # have proceeded silently becomes an escalation instead.
+            routing = Routing(RECORD_ESCALATION, warrant.reason)
+
     record: dict[str, object] = {
         "ts": _now(),
         "engagement": engagement,
@@ -131,6 +210,8 @@ def _item(arguments: argparse.Namespace) -> int:
         "reversibility": item.reversibility,
         "critical": item.critical,
     }
+    if authority_row is not None:
+        record["authority"] = authority_row
     if routing.action == NOTIFY_CHANNEL:
         record["delivery"] = _send(root, subject)
     filename = REGISTERS.get(routing.action)
@@ -171,6 +252,16 @@ def main() -> int:
     item.add_argument("--basis", default="strong")
     item.add_argument("--reversibility", default="reversible")
     item.add_argument("--critical", action="store_true")
+    item.add_argument(
+        "--authority",
+        action="append",
+        default=[],
+        help=(
+            "utterance id(s) cited as authority for proceeding, as "
+            "<speaker>:<position>:<line-digest>:<surfaced>. The tier is DERIVED; "
+            "the strongest cited authority binds and can only narrow the routing."
+        ),
+    )
 
     announce = sub.add_parser("announce", help="record a consequential action")
     announce.add_argument("--root", required=True)

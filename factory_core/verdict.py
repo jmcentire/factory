@@ -747,6 +747,10 @@ def compute_verdict(
             hard_reasons.append(f"asked-for-and-not-built:{deliverable_id}")
         for artifact_ref in fidelity.unasked:
             hard_reasons.append(f"built-and-not-asked-for:{artifact_ref}")
+        for deliverable_id in fidelity.uncited:
+            # The lane's own idea presented as a request. Worse than unrequested
+            # work, because it arrives already dressed as the human's instruction.
+            hard_reasons.append(f"no-human-authority-asked-for:{deliverable_id}")
     elif not fidelity.may_reach_done:
         reasons.append(f"fidelity:{fidelity.disposition}")
         reasons.extend(f"shortfall:{item}" for item in fidelity.shortfalls)
