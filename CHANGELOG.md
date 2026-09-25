@@ -3,6 +3,90 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.7.0] - 2026-09-25
+
+This release is about the gap between what a run knows and what it reports. Three
+founder-reported failures drove it, all the same shape: the judgment existed, and
+nothing read it.
+
+### Added
+
+- **Gate FID — built what was asked.** `factory_core/fidelity.py` makes a lane's own
+  verdict on its own work a typed field a gate reads rather than prose in a summary.
+  The request is enumerated with a citation per deliverable, every artifact names the
+  deliverable it served, and a deliverable with no attributed work is scope drift that
+  BLOCKS however much adjacent output exists. Motivated by two and a half days of
+  availability, pricing and API work on a ticket that asked for a distribution channel.
+- **A non-terminal honest exit.** `PASS_WITH_RISK_ACCEPTANCE` had become universal
+  because it was the only door that was honest, terminal *and* read as success. `REWORK`
+  is the missing exit: a shortfall whose fix is bounded is work, not a risk to accept,
+  and risk acceptance is refused outright unless every shortfall is structural — abandon
+  the ticket or move a boundary. One bounded fix removes the option for the whole run, so
+  a structural item cannot launder the bounded ones beside it. Risk acceptance never
+  self-issues a pass; it is eligibility to put the decision to the human.
+- **The rate as its own signal.** `risk_acceptance_is_systematic()` applies the O-ring
+  rail to the factory's own verdicts: a baseline learned while chronically broken rounds
+  a real failure down to ordinary, and no individual run need be invalid for the pattern
+  to be.
+- **Gate DIR — authority is derived from who spoke.** `factory_core/directive_authority.py`
+  distinguishes four states that had collapsed into one: STATED (the human said it,
+  self-certifying), ENGAGED (the lane said it and the human demonstrably referenced it),
+  DISCLOSED (said and unanswered — not consent), UNILATERAL (decided and never surfaced).
+  Derivation is fail-closed toward consent: engagement requires an observable reference,
+  so mere opportunity, a lane citing its own statement, and a reference predating the
+  statement all degrade to DISCLOSED. Precedence is by tier, not recency, so a
+  lane-originated directive can never supersede a human-stated one.
+- A provisional directive citation records `cite_speaker`. The citation always recorded
+  which line and never who said it, which is why the tiers collapsed.
+- `engagement_route` consults the cited authority and can only narrow: a weak authority
+  turns a silent proceed into an escalation. The routing decision previously asked whether
+  something was determinable and whose fact it was, and never whether the human already knew.
+
+### Changed
+
+- **Ratification follows engagement.** Interactive keeps the human co-signature on every
+  phase; scheduled and autonomous ratify on the Validator receipt alone, with `engagement`
+  and `human_ratified` recorded so the ledger states the absence rather than leaving it
+  inferred. Segregation of duties holds: `approver_identity` is empty rather than naming
+  the Validator as its own approver.
+- **Engagement levels** (`interactive` / `scheduled` / `autonomous`) decide how much of the
+  human a run gets. A determinable answer is never a question at any level, and another
+  authority's fact is never this run's question.
+- **Capabilities are configuration, not constants.** No list of permitted agents, no assumed
+  test tool or language, no projection bound a caller cannot raise. An adapter declares its
+  shape instead of being recognised by name; a target declares its own test and build
+  commands and its own size.
+- The Orchestrator is always resident, has halt authority over the Validator, and runs a
+  check-in loop across all three lanes. Exactly four roles.
+- `compute_verdict` gains the fidelity channel as a monotone input in the disposition
+  ladder — not the reason list, because a reason never moved the outcome.
+
+### Fixed
+
+- **The audit vocabulary had been silenced.** The `audit` subcommand computed a verdict
+  without the fidelity channel, so it always landed on INCOMPLETE and returned an empty
+  code set: every audit code stopped firing through the CLI, and no test invoked the
+  subcommand. Found by the review gating this release. `verdict` and `audit` now share one
+  channel so they cannot diverge by omission.
+- A second assessment for one deliverable silently overwrote the first, so appending a row
+  turned "nothing was built" into PASS-eligible. Refused.
+- `authorized_refs=None` skipped the citation check and still returned a clean result.
+- `engagement_route`'s citation parse mis-split a `sha256:` digest, deriving DISCLOSED where
+  UNILATERAL was intended and proceeding where it should have escalated.
+- Directive scope overlap used string equality where the repo has a scope grammar, so a
+  signed directive scoped `global` never matched a narrower provisional.
+- Lifecycle evidence is required before acceptance passes; setup failures no longer reach
+  the Coder as repair work.
+- Consuming-organization data removed: the core is generic by construction.
+
+### Known limits, stated rather than implied
+
+- No transcript extractor exists. `speaker` and `line_digest` arrive as caller data and the
+  digest is not compared to any transcript, so DIR derives a tier from a *declared* speaker.
+  `receipts()` records the claims a run made about its own authority, not verified provenance.
+- `artifact_ref` is never checked for existence or digested, so FID makes a lane's claim
+  recorded and falsifiable rather than impossible.
+
 ## [0.6.0] - 2026-09-02
 
 ### Added
