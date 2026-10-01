@@ -419,6 +419,13 @@ two separate claims about two separate parties — keep them apart.**
    was accepted as a deviation and shipped; the gate reintroduced the exact schedule-dependence the
    requirement existed to remove, and nothing had reviewed the ruling.
 
+   **Make the whole ruling, and run the sweeps.** Most ruling-caused lane rounds come from an
+   incomplete ruling, not a hard question: a field, an enum member, or a nullability the ruling
+   implied but the contracts and stubs did not carry; a superseding ruling that left the old
+   text standing; an external API's behaviour assumed instead of read from its documentation.
+   Before routing a ruling, run the checklist and the mechanical sweeps in
+   `docs/practices/ruling-discipline.md`.
+
 5. **Monitor the lanes on a cursor, and interrogate liveness rather than guessing it.** Two rules, both learned by going
    dark for twelve hours in batch0 while both lanes sat finished and idle. **Dedup by
    occurrence, never by content** — key on `(event, occurrence-index)` or a monotonic cursor,
@@ -616,6 +623,18 @@ defects*). Run every gate; never read a clean gate as a clean bill of health.
    path, and the vacuous oracle above — both *after* every gate was green. Fix the **work**, not the
    wording.
 
+11. **When blind repair stalls, switch to verification probes.** The Tester cannot run its
+   tests, so after a judge its repairs are guesses. When a suite's failure count stops falling
+   across two consecutive judges, follow `docs/practices/verification-probes.md`: read-only
+   triage first; probes that fix only test files in a scratch copy and prove every remaining
+   failure as CODER (contract clause, observed vs required, source line) or SPEC; prose relay
+   to the Tester, scrubbed of implementation detail, escalating to line-precise corrections
+   when transcription fails; behaviour-and-location relay of proven defects to the Coder. Verify
+   both file by file and whole-suite, wrap every suite in a timeout, and cross-check the probes'
+   tests against each new implementation before attributing a regression. Record in the verdict
+   which suites were probe-corrected and which controls a mutation probe confirmed: probes reduce
+   oracle independence, and saying so is part of the evidence.
+
 ### Evidence discipline (applies to everything above)
 
 - **A claim of a passing test is a run id, an exit code, and a resolvable report link — or it
@@ -727,6 +746,12 @@ When it happens:
    there, and the correct output is a **BLOCK** with the reason, not a self-verified pass.
 
 Never quietly wear two hats and render a verdict as though you wore one.
+
+**Verification probes are not a pen, under conditions.** A probe that edits test files in a
+disposable copy to *classify* failures is a Validator instrument, provided its edits never enter
+a lane as code, the Tester re-authors every change from contract-cited prose, and the verdict
+records the reduced independence (`docs/practices/verification-probes.md`). Handing a probe's
+diff to the Tester, or committing it yourself, is holding the pen.
 
 ## What you do not promise
 

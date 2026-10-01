@@ -194,6 +194,16 @@ not model independence or semantic correctness.
   favors: clean separation of design / structure / data, progressive enhancement with
   server-rendered completion paths, container-scoped CSS cascade, and judicious use of
   globals. Pairs with the FE↔BE contract discipline in `factory_core/contract.py`.
+- `docs/practices/verification-probes.md` — how the Validator closes the judge tail when the
+  Tester's blind repairs stop converging: triage, probe-fix, delta, mutation and composition
+  probes; prose relay that keeps the roles separate; escalation to line-precise corrections;
+  and the independence accounting the verdict must state.
+- `docs/practices/ruling-discipline.md` — the checklist and mechanical sweeps a Validator
+  ruling passes before dispatch (fields, enum members and nullability carried everywhere;
+  superseded text deleted; external behaviour grounded in documentation; one home per fact).
+- `docs/practices/lessons-multi-gate-run-2026-10.md` — operational lessons from a three-gate
+  replacement run: judge hygiene, metered-lane caps and fallbacks, focused specs, briefs that
+  record-and-continue, mutation-checking a control's inputs.
 - `docs/PROVENANCE-SYNC.md` — the standing record of which generic factory advances have
   been propagated from the origin/reference target into this pure core, what remains
   planned, and the repeatable mechanism for future propagation. Every sync keeps the

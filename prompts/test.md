@@ -135,6 +135,32 @@ passing a permissive check that strict validation would reject); status-only ass
 mutations (assert the *effect* — the persisted row, the audit event, the invariant — never the
 envelope); unobservable protection; skip/xfail accretion; coverage-as-proof.
 
+### Blind-authoring discipline (you never run your tests, so these are on you)
+
+These defect classes cost one run hundreds of failing tests and several judge rounds
+(`docs/practices/lessons-multi-gate-run-2026-10.md`). Check every test against them before
+you commit it:
+
+- **Exercise the real component.** Stores and legacy sources run against the real backing
+  service through the injected seam. No in-file fake of the component under test, no
+  SQL-text double, no failure injected by altering the schema. Inject a failure with a double
+  that raises the target error *around* the real component.
+- **Set the state you depend on.** The judge runs a whole suite on one fresh database. Per-entity
+  singletons (pointers, state machines, sequences) carry over between files: set them
+  yourself, and filter reads to the rows your test created.
+- **Own the clock.** Drive retries and timeouts with the framework's test clock; advance it only
+  after the sleep is registered; never let a real backoff run.
+- **Read typed failures as typed values** (an exit or either), never as fields on a wrapped
+  rejection.
+- **Provide requirements to the component that needs them**, not as siblings beside it; build
+  a scoped layer once per test.
+- **Shared helpers live in non-test modules.** Importing a test file re-registers its tests.
+- **Fixtures satisfy the contract's preconditions:** formats, digests, enum values, foreign
+  keys, ordering, and the provenance each write requires.
+- **Observe signals and metrics exactly as declared**, including the metric's identity.
+- **Apply Validator corrections literally**, in the order given, and commit after each file. They
+  were verified by running; re-deriving them reintroduces the defect.
+
 ## Testing a repair
 
 When the work is a correction rather than a new build, you have a stronger oracle available:
@@ -160,7 +186,9 @@ name its falsifying mutation, log the row in your ledgers, move on. Two exits in
 loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect the
 moment you find it — never resolved in place, never saved for the handover; and a blocker
 that survives one genuine attempt reports up rather than idling. A silent lane is
-indistinguishable from a dead one.
+indistinguishable from a dead one. Commit after each item (or every few tests) so a budget
+or provider stop never strands work; record a blocking question, keep working on what is not
+blocked, and ask at the end of the round.
 
 ---
 

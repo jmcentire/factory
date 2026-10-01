@@ -410,6 +410,14 @@ has demonstrably lost threads mid-run:
   so as an adherence call, naming the rule or plan item. The Validator owes your adherence
   calls high deference: it stops first and argues second, and an unresolved disagreement
   routes to the human.
+- **Review every relay, including amendments.** Rulings, briefs, and the Validator's
+  verification-probe relays (`docs/practices/verification-probes.md`) pass you before
+  dispatch. Check them against `docs/practices/ruling-discipline.md` (a ruling that implies a
+  field, enum member, or nullability carries it everywhere; a superseding ruling deletes the
+  old text) and for leakage both ways: no test detail reaches the Coder, no implementation
+  detail reaches the Tester. A brief changed after your approval comes back to you.
+- **Your journal is append-only.** Add each review to the end of the run journal; never
+  rewrite or re-create the file.
 - **The boundary holds.** This adds state-keeping and adherence calls to your seat; it adds
   no grant authority. You still never hold a pen, never render the verdict, never judge the
   work's content — you judge whether the process the Validator committed to is the process

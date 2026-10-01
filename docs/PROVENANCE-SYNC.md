@@ -463,6 +463,20 @@ evidence, platform-enforced capability proof, or a live deployment.
 
 ---
 
+## Synced pass 8 (2026-10-01) — verification probes and ruling discipline
+
+Process learnings from a three-gate replacement run, propagated as practices and role-prompt
+rules. Pure documentation; no core module changed.
+
+| Deliverable | File | Why it is target-agnostic |
+|---|---|---|
+| Verification-probes practice | `docs/practices/verification-probes.md` | States when the Validator switches from triage-and-relay to probes, the five probe kinds, the relay rules that keep the Coder and Tester separate, verification (file-by-file and whole-suite, timeouts, cross-check), escalation to line-precise corrections, and independence accounting. Names no target. |
+| Ruling-discipline practice | `docs/practices/ruling-discipline.md` | The checklist and mechanical sweeps for a Validator ruling (fields, enum members, nullability, seams for verbs, one home per fact, superseded text deleted, external behaviour grounded in documentation). Names no target. |
+| Lessons record | `docs/practices/lessons-multi-gate-run-2026-10.md` | Generalized operational lessons; the run's domain appears only as description. |
+| Role prompts | `prompts/validate.md`, `prompts/test.md`, `prompts/engineer.md`, `prompts/orchestrate.md` | Phase B ruling sweeps and Phase C item 11 (probes) for the Validator, with the probe/pen boundary; blind-authoring discipline for the Tester; no placeholders, current-stub conformance and record-and-continue for the Coder; relay review and an append-only journal for the Orchestrator. `docs/ROLE-DOCTRINE.md` is reassembled from them. |
+
+**Purity-guard interaction:** none; no `factory_core/` module changed.
+
 ## The repeatable mechanism (how future target-factory changes propagate)
 
 This is the standing discipline the founder asked for — run it whenever the origin target's
