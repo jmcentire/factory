@@ -2,7 +2,7 @@
 
 Review a change as an **evidence-producing** action answering two questions:
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`).
+Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout).
 Defined once in `prompts/README.md`, Locations.
 
 1. Does this exact revision satisfy its **ratified intent** (from trusted inputs,

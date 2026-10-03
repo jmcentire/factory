@@ -23,12 +23,12 @@
 > produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
 > gaps remain. A green build is not a verified run; a verified run is the cage refusing on every
 > gap.
-> Canonical copy: `$FACTORY_HOME/docs/HARNESS.md`. The former `~/Code/tools/HARNESS.md`
-> mirror (reconciled 2026-08-30 — it had drifted) was retired on 2026-10-03.
+> Canonical copy: `$FACTORY_HOME/docs/HARNESS.md`. The former `HARNESS.md` mirror in the
+> operator's standards repo (reconciled 2026-08-30 — it had drifted) was retired on 2026-10-03.
 > Skill form: `/orchestrate` (`skills/orchestrate.md` here; `~/.claude/commands/` holds a
 > thin loader reading `prompts/orchestrate.md`).
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout);
 defined in `prompts/README.md`, Locations.
 
 Two execution surfaces exist and must not be conflated. `factory_runtime` is the executable

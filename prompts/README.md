@@ -13,12 +13,12 @@ external copy can drift.
 ## Locations
 
 Every prompt refers to this repository by name so the same prompt bytes work on
-any machine. It resolves to the historical layout when unset, so an existing
-installation changes nothing:
+any machine. When unset it resolves to the root of the checkout the prompt was
+read from, so an existing installation changes nothing:
 
 | Name | Meaning | Default |
 |---|---|---|
-| `$FACTORY_HOME` | This repository's checkout | `~/Code/factory` |
+| `$FACTORY_HOME` | This repository's checkout | The root of this checkout |
 
 The names are documented locations, not shell expansion: a prompt file is read
 by an agent, not by a shell, so the operator (or the thin loader that dispatches

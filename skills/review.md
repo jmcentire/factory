@@ -7,7 +7,7 @@ Validator, Coder, and Tester produced. In post-run mode you are not any of those
 inherit none of their conclusions, and produce evidence the orchestrator and founder weigh — not a
 second verdict from inside the run. Never supplement a bound subject from mutable ambient state.
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout);
 defined in `prompts/README.md`, Locations.
 
 In executable Factory mode the host—not the reviewer—freezes inputs, verifies SHA-256 addresses and
