@@ -155,7 +155,7 @@ declared by the agent — is the whole game.
 
 ## Part 3 — The fix plan, per target area
 
-### A. `~/Code/factory` — the deterministic substrate (the core of the work)
+### A. `$FACTORY_HOME` — the deterministic substrate (the core of the work)
 
 The workflow's verified design specifies fourteen gates (A–N). The six that the verification
 *proved insufficient* in the first draft are amended here; the other eight stand as verified.
@@ -185,7 +185,7 @@ this plan is the strategy and the per-area build order.
 `check_core_purity.py` must stay green. The promotion gate (`promotion.py`) is already built
 but has **zero call sites** — the first slice wires it in.
 
-**Placement (founder refinement).** `~/Code/factory/` is the generic, codebase-agnostic core
+**Placement (founder refinement).** `$FACTORY_HOME/` is the generic, codebase-agnostic core
 plus its doctrine (`docs/`, `factory_core/`, `factory_runtime/`, the `harness/` scripts
 themselves). It must not accumulate per-codebase state. Durable files *related to a target
 codebase* — the target manifest, surface declarations, criticality profile, the directive
@@ -226,12 +226,12 @@ Net: the orchestrator has teeth (it can stop, route, and kill) through the deter
 substrate, and zero channel into the validator's reasoning window. Attention is enforced by the
 machine; shepherding is gone.
 
-### B. `~/Code/tools` — the standards and the playbook
+### B. `<workspace>/tools` — the standards and the playbook
 
-- **`HARNESS.md` mirror** — ~~keep in sync with the canonical `~/Code/factory/docs/HARNESS.md`.
+- **`HARNESS.md` mirror** — ~~keep in sync with the canonical `$FACTORY_HOME/docs/HARNESS.md`.
   When the factory copy is ratified (status moves from "unratified proposal" to wired into
   `lane_env` + `make ship`), the mirror ratifies in the same act.~~
-  *(Retired 2026-08-30, mirror reconciliation: the `~/Code/tools` copies are thin pointers
+  *(Retired 2026-08-30, mirror reconciliation: the `<workspace>/tools` copies are thin pointers
   now — there is no mirror to sync. Historical text struck, not rewritten.)*
 - **`CODE-REVIEW-STANDARD.md`** — add two rules as first-class review standards:
   1. *Guard the action, not the artifact* (the review skill's dominant failure: the check

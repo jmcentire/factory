@@ -2237,7 +2237,7 @@ against the trusted baseline; the Validator verifies both before trusting anythi
 
 Source: the batch0 run — a Validator/Coder/Tester run of this factory against a reliability batch
 in the kindex repository, which shipped two releases and whose record is at
-`~/Code/kindex/.factory/runs/batch0/`. Every item below rests on a finding of that run rather
+`<workspace>/kindex/.factory/runs/batch0/`. Every item below rests on a finding of that run rather
 than on an argument from structure, and where the run's evidence stops short of a claim the
 document makes, the item says where the line falls.
 
