@@ -48,7 +48,7 @@ refusal, a sandbox limit, a missing credential — stop and ask. Do not find ano
 the blocked action. The block was placed deliberately by someone who is not in this
 conversation, and a workaround that succeeds is not evidence that it was permitted.
 
-**The control-plane prohibition is now enforced by a machine, not just your discipline.**
+**The control-plane prohibition is enforced by a machine as well as by your discipline.**
 **Gate L** (sole-harness-close-authority) makes `promote.sh` the sole writer of a run's
 `harness.json` `closed` status; your process is not the writer, so you cannot close your own work.
 That harness close is not itself a RunStore `PROMOTED` ledger transition. **The provenance gate**

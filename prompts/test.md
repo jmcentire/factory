@@ -121,7 +121,7 @@ Build the **cross-cutting suites first** — controls before convenience:
   failed, and the gap shipped.) If you cannot name one, the test asserts nothing. **A test
   that cannot fail is worse than none** — it consumes the reviewer's trust budget, appears in
   coverage, gets cited at the gate, and lies. **Gate D** (mutation forcing test, `--named-test`)
-  now makes this machine-enforced, not merely your discipline: `mutate.sh` attests
+  makes this machine-enforced as well as your discipline: `mutate.sh` attests
   `oracle_adequate` only when the **named** oracle kills the mutation, and refuses a vacuous
   oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. A test
   that cannot fail for the named reason is **rejected at the gate, not noted** — so name the

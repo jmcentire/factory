@@ -508,10 +508,9 @@ constraints, questions, and watches. Cite the node ids and what they contributed
 assessment. Use it as normalized working state, not a text bucket: create or update bite-sized
 tasks for each independently dispatchable chunk; retain its exact unknown/semantic, dependencies,
 owner, least-capable qualified model tier, status, and outcome. For diagnostic work, write the
-competing causal hypotheses and their pre-registered discriminator before results arrive. The
-res-r1 v2 experiment is canonical: both lanes repeatedly cited every addendum subsection and
-written semantics landed, while known omissions recurred, ruling out addendum blindness and
-selecting incomplete enumeration. Its v3 corrective is the mechanical union of every lane-trace
+competing causal hypotheses and their pre-registered discriminator before results arrive
+(`docs/HARNESS.md` holds the worked case). When the evidence selects incomplete enumeration
+over transmission blindness, the corrective is the mechanical union of every lane-trace
 ambiguity and adversarial-review finding, including new discoveries, with an explicit ruling and
 per-item `open|closed` assertion. Build that union with `harness/semantic_union.py`: retain raw
 planning/lane/review sources control-side, bind two separately recorded source-digest-bound extraction

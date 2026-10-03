@@ -70,18 +70,18 @@ verdict without waiting.
 That last clause is the honest one and it is not optional. This mode buys speed by spending the
 only check that reaches a framing error, and the record should say so plainly.
 
-**This mode's divergence — who signs — was once bounded only by your self-discipline.** The
-control-structure substrate now bounds it too: a run advances on machine-derived receipts a
-gate checks, not on your verdict, so a verdict you render in this mode cannot *by itself* write
-`closed` (Gate L). The divergence is narrowed by the substrate, not removed — and the gate map
-below names exactly which of this skill's binding requirements are now enforced by a machine the
-Validator cannot talk its way past, and which remain a judgment the agent performs.
+**This mode's divergence — who signs — is bounded by the control-structure substrate as well
+as by your self-discipline:** a run advances on machine-derived receipts a gate checks, not on
+your verdict, so a verdict you render in this mode cannot *by itself* write `closed` (Gate L).
+The divergence is narrowed by the substrate, not removed — and the gate map below names exactly
+which of this skill's binding requirements are enforced by a machine the Validator cannot talk
+its way past, and which remain a judgment the agent performs.
 
 ---
 
 ## The substrate that enforces this skill (gate map)
 
-The harness now registers a gate for several of the binding requirements below. Where a gate
+The harness registers a gate for several of the binding requirements below. Where a gate
 exists, **the rule is a receipt the harness checks, not a judgment you perform** — name the
 gate, cite its probe, and stop re-asserting the rule as though it lived only in your discipline.
 The gate registry is `harness/gates.tsv`; every row carries an end-to-end denial probe and a
@@ -217,14 +217,12 @@ re-deriving it, and the next run starts where this one ended.
    result or a long node dump into the prompt. Respect the projection boundary: never route a
    research node carrying implementation detail to the Tester.
 7. **Pre-register diagnostic branches.** Before observing results, record competing causal
-   hypotheses and what each outcome would mean. res-r1 v2 separated two: “18 amended semantics
-   stay fixed while known omissions recur” meant incomplete enumeration; recurrence among the
-   amended 18 meant transmission/addendum blindness. The interim result selected the first branch:
-   both lanes repeatedly cited every addendum subsection and written semantics landed, while three
-   predicted omissions and a new live-UBR hold ambiguity surfaced. Therefore v3 is a mechanical
-   union of every lane-trace ambiguity and adversarial-review finding, with an explicit ruling and
-   per-item `open|closed` assertion. A grep/token mention is not a ruling. Do not collapse different
-   diseases into “more spec.”
+   hypotheses and what each outcome would mean. Amended semantics that hold while known omissions
+   recur mean incomplete enumeration; recurrence among the amended semantics means
+   transmission/addendum blindness (`docs/HARNESS.md` holds the worked case). Incomplete
+   enumeration is cured by a mechanical union of every lane-trace ambiguity and adversarial-review
+   finding, with an explicit ruling and per-item `open|closed` assertion (step 8). A grep/token
+   mention is not a ruling. Do not collapse different diseases into “more spec.”
 8. **Materialize the union before ratification.** Put each retained planning pass, lane trace, and
    adversarial review under `artifacts/semantic-evidence/sources/<kind>/`. Require two separately
    recorded extraction manifests per source, each binding the source digest, retaining claimed

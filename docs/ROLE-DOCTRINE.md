@@ -209,18 +209,18 @@ verdict without waiting.
 That last clause is the honest one and it is not optional. This mode buys speed by spending the
 only check that reaches a framing error, and the record should say so plainly.
 
-**This mode's divergence — who signs — was once bounded only by your self-discipline.** The
-control-structure substrate now bounds it too: a run advances on machine-derived receipts a
-gate checks, not on your verdict, so a verdict you render in this mode cannot *by itself* write
-`closed` (Gate L). The divergence is narrowed by the substrate, not removed — and the gate map
-below names exactly which of this skill's binding requirements are now enforced by a machine the
-Validator cannot talk its way past, and which remain a judgment the agent performs.
+**This mode's divergence — who signs — is bounded by the control-structure substrate as well
+as by your self-discipline:** a run advances on machine-derived receipts a gate checks, not on
+your verdict, so a verdict you render in this mode cannot *by itself* write `closed` (Gate L).
+The divergence is narrowed by the substrate, not removed — and the gate map below names exactly
+which of this skill's binding requirements are enforced by a machine the Validator cannot talk
+its way past, and which remain a judgment the agent performs.
 
 ---
 
 ### The substrate that enforces this skill (gate map)
 
-The harness now registers a gate for several of the binding requirements below. Where a gate
+The harness registers a gate for several of the binding requirements below. Where a gate
 exists, **the rule is a receipt the harness checks, not a judgment you perform** — name the
 gate, cite its probe, and stop re-asserting the rule as though it lived only in your discipline.
 The gate registry is `harness/gates.tsv`; every row carries an end-to-end denial probe and a
@@ -356,14 +356,12 @@ re-deriving it, and the next run starts where this one ended.
    result or a long node dump into the prompt. Respect the projection boundary: never route a
    research node carrying implementation detail to the Tester.
 7. **Pre-register diagnostic branches.** Before observing results, record competing causal
-   hypotheses and what each outcome would mean. res-r1 v2 separated two: “18 amended semantics
-   stay fixed while known omissions recur” meant incomplete enumeration; recurrence among the
-   amended 18 meant transmission/addendum blindness. The interim result selected the first branch:
-   both lanes repeatedly cited every addendum subsection and written semantics landed, while three
-   predicted omissions and a new live-UBR hold ambiguity surfaced. Therefore v3 is a mechanical
-   union of every lane-trace ambiguity and adversarial-review finding, with an explicit ruling and
-   per-item `open|closed` assertion. A grep/token mention is not a ruling. Do not collapse different
-   diseases into “more spec.”
+   hypotheses and what each outcome would mean. Amended semantics that hold while known omissions
+   recur mean incomplete enumeration; recurrence among the amended semantics means
+   transmission/addendum blindness (`docs/HARNESS.md` holds the worked case). Incomplete
+   enumeration is cured by a mechanical union of every lane-trace ambiguity and adversarial-review
+   finding, with an explicit ruling and per-item `open|closed` assertion (step 8). A grep/token
+   mention is not a ruling. Do not collapse different diseases into “more spec.”
 8. **Materialize the union before ratification.** Put each retained planning pass, lane trace, and
    adversarial review under `artifacts/semantic-evidence/sources/<kind>/`. Require two separately
    recorded extraction manifests per source, each binding the source digest, retaining claimed
@@ -966,7 +964,7 @@ refusal, a sandbox limit, a missing credential — stop and ask. Do not find ano
 the blocked action. The block was placed deliberately by someone who is not in this
 conversation, and a workaround that succeeds is not evidence that it was permitted.
 
-**The control-plane prohibition is now enforced by a machine, not just your discipline.**
+**The control-plane prohibition is enforced by a machine as well as by your discipline.**
 **Gate L** (sole-harness-close-authority) makes `promote.sh` the sole writer of a run's
 `harness.json` `closed` status; your process is not the writer, so you cannot close your own work.
 That harness close is not itself a RunStore `PROMOTED` ledger transition. **The provenance gate**
@@ -1315,7 +1313,7 @@ Build the **cross-cutting suites first** — controls before convenience:
   failed, and the gap shipped.) If you cannot name one, the test asserts nothing. **A test
   that cannot fail is worse than none** — it consumes the reviewer's trust budget, appears in
   coverage, gets cited at the gate, and lies. **Gate D** (mutation forcing test, `--named-test`)
-  now makes this machine-enforced, not merely your discipline: `mutate.sh` attests
+  makes this machine-enforced as well as your discipline: `mutate.sh` attests
   `oracle_adequate` only when the **named** oracle kills the mutation, and refuses a vacuous
   oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. A test
   that cannot fail for the named reason is **rejected at the gate, not noted** — so name the
