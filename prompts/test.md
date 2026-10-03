@@ -40,7 +40,8 @@ undetermined, end the tmux Codex turn with one exact, standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
 the tests. The host retains an occurrence-specific question ID from the completed assistant-message
 event and blocks progress until the Validator binds a human answer or ratified-spec answer back
 into this same Codex thread. Ordinary prose is not the typed question channel.
@@ -113,15 +114,17 @@ Build the **cross-cutting suites first** — controls before convenience:
   Instrument it — assert the handler was entered or the query was constructed. *A 403 from an
   unrelated earlier gate is not a passing security test.* Authenticate as an **authorized**
   principal when the protection under test is not authorization.
-- **Falsifiability.** Name, for every test, the specific mutation of production code that
-  would turn **that** test red — not merely *some* test in the suite. A mutation that reddens
+- **Falsifiability.** Name, for every test, the specific mutation of the specified behavior —
+  stated at the contract you were given, since you never read the implementation — that would
+  turn **that** test red, not merely *some* test in the suite. Gate D applies it to the
+  production code. A mutation that reddens
   a neighbor while the test carrying the requirement stays green has proven nothing about the
   requirement. (batch0: the spot-check mutated the decay fold and watched the **closed-form**
   test go red; the **cadence** test — the one the headline requirement rode on — never
   failed, and the gap shipped.) If you cannot name one, the test asserts nothing. **A test
   that cannot fail is worse than none** — it consumes the reviewer's trust budget, appears in
   coverage, gets cited at the gate, and lies. **Gate D** (mutation forcing test, `--named-test`)
-  now makes this machine-enforced, not merely your discipline: `mutate.sh` attests
+  makes this machine-enforced as well as your discipline: `mutate.sh` attests
   `oracle_adequate` only when the **named** oracle kills the mutation, and refuses a vacuous
   oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. A test
   that cannot fail for the named reason is **rejected at the gate, not noted** — so name the
@@ -183,8 +186,8 @@ Your cadence is a bounded authoring loop, not a monitoring loop — you set no r
 watch no lanes; that is the Validator's and orchestrator's seat. Per Strategy row: derive
 the expected behavior from the signed artifacts, author the test with its backreference,
 name its falsifying mutation, log the row in your ledgers, move on. Two exits interrupt the
-loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect the
-moment you find it — never resolved in place, never saved for the handover; and a blocker
+loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect in the
+round you find it — never resolved in place, never saved for the handover; and a blocker
 that survives one genuine attempt reports up rather than idling. A silent lane is
 indistinguishable from a dead one. Commit after each item (or every few tests) so a budget
 or provider stop never strands work; record a blocking question, keep working on what is not

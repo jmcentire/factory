@@ -24,8 +24,7 @@ The module map lives with the code: every `factory_core/` and `factory_runtime/`
 module opens with a docstring stating the invariant it upholds, and
 [`docs/GLOSSARY.md`](docs/GLOSSARY.md) anchors the load-bearing terms to exact
 symbols at recorded digests (stale definitions fail `make check-glossary`).
-The former per-module listing here was a restatement that drifted from the
-tree; the tree is the authority (remediation 5.2).
+The tree, not a listing here, is the authority.
 
 ## Commands
 
@@ -35,7 +34,7 @@ make check-doctrine # structural doctrine parity (four roles / three phases / ei
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
-make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typecheck -> test)
+make ship           # every gate, fail-closed (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 make test-isolation # macOS kernel isolation proof
 make test-tessera   # real signing + runtime-through-preview proof
 ```
@@ -46,9 +45,8 @@ The canonical rulebook is [`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)
 Part I; the enforcement lives in the ship chain (`make ship`: purity, doctrine,
 wiring, authority, harness, denial-probes, acceptance, glossary, lint,
 typecheck, tests) and every gate in `harness/gates.tsv` carries a collecting
-denial probe with a named red_now. The former ~70-line restatement here was
-prose that could drift from the checks; the checks are the authority
-(remediation 5.2). Two working rules stay stated because they bind YOU rather
+denial probe with a named red_now. The checks, not prose here, are the
+authority. Two working rules stay stated because they bind YOU rather
 than the code: never weaken, delete, or silence a monitor or gate you are being
 evaluated by, and never mark partial work done.
 

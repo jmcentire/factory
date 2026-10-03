@@ -202,26 +202,28 @@ verdict without waiting.
 
 **State the mode in every verdict**, so the evidence record never overstates itself:
 
-> `VERDICT: <PASS | PASS_WITH_RISK_ACCEPTANCE | BLOCK>` — *rendered by AI validator, no human
+> `VERDICT: <decision state>` — *rendered by AI validator, no human
 > signature; induced-behavior ledger ratified by AI, diverging from the doctrine's assignment of
 > that ratification to a human (Ch. 0; Ch. 1 Step 1d). Independence of Coder/Tester lanes:
 > `<rung used>`. Framing unrefuted by a human.*
 
-That last clause is the honest one and it is not optional. This mode buys speed by spending the
+The decision state is one of those defined in `docs/VALIDATION-DIRECTIVE.md` (Decision states):
+`PASS`, `PASS_WITH_RISK_ACCEPTANCE`, `PASS_WITH_REPORTS`, `BLOCKED:<dimension>`, or
+`UNKNOWN:<source>`. That last clause is the honest one and it is not optional. This mode buys speed by spending the
 only check that reaches a framing error, and the record should say so plainly.
 
-**This mode's divergence — who signs — was once bounded only by your self-discipline.** The
-control-structure substrate now bounds it too: a run advances on machine-derived receipts a
-gate checks, not on your verdict, so a verdict you render in this mode cannot *by itself* write
-`closed` (Gate L). The divergence is narrowed by the substrate, not removed — and the gate map
-below names exactly which of this skill's binding requirements are now enforced by a machine the
-Validator cannot talk its way past, and which remain a judgment the agent performs.
+**This mode's divergence — who signs — is bounded by the control-structure substrate as well
+as by your self-discipline:** a run advances on machine-derived receipts a gate checks, not on
+your verdict, so a verdict you render in this mode cannot *by itself* write `closed` (Gate L).
+The divergence is narrowed by the substrate, not removed — and the gate map below names exactly
+which of this skill's binding requirements are enforced by a machine the Validator cannot talk
+its way past, and which remain a judgment the agent performs.
 
 ---
 
 ### The substrate that enforces this skill (gate map)
 
-The harness now registers a gate for several of the binding requirements below. Where a gate
+The harness registers a gate for several of the binding requirements below. Where a gate
 exists, **the rule is a receipt the harness checks, not a judgment you perform** — name the
 gate, cite its probe, and stop re-asserting the rule as though it lived only in your discipline.
 The gate registry is `harness/gates.tsv`; every row carries an end-to-end denial probe and a
@@ -357,14 +359,12 @@ re-deriving it, and the next run starts where this one ended.
    result or a long node dump into the prompt. Respect the projection boundary: never route a
    research node carrying implementation detail to the Tester.
 7. **Pre-register diagnostic branches.** Before observing results, record competing causal
-   hypotheses and what each outcome would mean. res-r1 v2 separated two: “18 amended semantics
-   stay fixed while known omissions recur” meant incomplete enumeration; recurrence among the
-   amended 18 meant transmission/addendum blindness. The interim result selected the first branch:
-   both lanes repeatedly cited every addendum subsection and written semantics landed, while three
-   predicted omissions and a new live-UBR hold ambiguity surfaced. Therefore v3 is a mechanical
-   union of every lane-trace ambiguity and adversarial-review finding, with an explicit ruling and
-   per-item `open|closed` assertion. A grep/token mention is not a ruling. Do not collapse different
-   diseases into “more spec.”
+   hypotheses and what each outcome would mean. Amended semantics that hold while known omissions
+   recur mean incomplete enumeration; recurrence among the amended semantics means
+   transmission/addendum blindness (`docs/HARNESS.md` holds the worked case). Incomplete
+   enumeration is cured by a mechanical union of every lane-trace ambiguity and adversarial-review
+   finding, with an explicit ruling and per-item `open|closed` assertion (step 8). A grep/token
+   mention is not a ruling. Do not collapse different diseases into “more spec.”
 8. **Materialize the union before ratification.** Put each retained planning pass, lane trace, and
    adversarial review under `artifacts/semantic-evidence/sources/<kind>/`. Require two separately
    recorded extraction manifests per source, each binding the source digest, retaining claimed
@@ -525,7 +525,8 @@ two separate claims about two separate parties — keep them apart.**
 
    - Separate invocations, separate contexts, separate tool grants, no shared scratch space.
    - **If you use a coordination channel, use a hub-and-spoke topology** — one conversation
-     per spoke, you the only member of both. Do **not** simulate separation with targeted
+     per spoke, and only the hub a member of both. Under the Factory harness the dispatcher is
+     that hub, acting for you (`orchestrate.md`, The tmux layout); without it, you are. Do **not** simulate separation with targeted
      posts in one shared conversation: a "to this agent" field governs notification, not read
      access, and membership typically does not gate reads at all.
    - **Enforce it with a capability, not an identity.** Acting identity is usually a
@@ -957,7 +958,8 @@ standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
 an occurrence-specific question ID from the completed assistant-message event and blocks progress
 until the Validator binds a human answer or ratified-spec answer back into this same Codex thread.
 Ordinary prose is not the typed question channel.
@@ -967,7 +969,7 @@ refusal, a sandbox limit, a missing credential — stop and ask. Do not find ano
 the blocked action. The block was placed deliberately by someone who is not in this
 conversation, and a workaround that succeeds is not evidence that it was permitted.
 
-**The control-plane prohibition is now enforced by a machine, not just your discipline.**
+**The control-plane prohibition is enforced by a machine as well as by your discipline.**
 **Gate L** (sole-harness-close-authority) makes `promote.sh` the sole writer of a run's
 `harness.json` `closed` status; your process is not the writer, so you cannot close your own work.
 That harness close is not itself a RunStore `PROMOTED` ledger transition. **The provenance gate**
@@ -1117,8 +1119,11 @@ Your handover is an artifact set, not a narration. Produce:
    Refs: <task id>
    Spec: <product digest#item, architecture digest#item>
 
-   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+   Co-Authored-By: <the model you are running as, with its version> <that vendor's noreply address>
    ```
+
+   Name the model actually running this lane. The trailer is authorship provenance that the
+   Diff-Intent Gate and the verdict's model record read, so a copied model name is a false record.
 
 2. **A Coder report** with, per component: what was built, the authorizing spec digest+item,
    the files touched, the disposition declared at each error site, and every intentional
@@ -1235,7 +1240,8 @@ undetermined, end the tmux Codex turn with one exact, standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
 the tests. The host retains an occurrence-specific question ID from the completed assistant-message
 event and blocks progress until the Validator binds a human answer or ratified-spec answer back
 into this same Codex thread. Ordinary prose is not the typed question channel.
@@ -1308,15 +1314,17 @@ Build the **cross-cutting suites first** — controls before convenience:
   Instrument it — assert the handler was entered or the query was constructed. *A 403 from an
   unrelated earlier gate is not a passing security test.* Authenticate as an **authorized**
   principal when the protection under test is not authorization.
-- **Falsifiability.** Name, for every test, the specific mutation of production code that
-  would turn **that** test red — not merely *some* test in the suite. A mutation that reddens
+- **Falsifiability.** Name, for every test, the specific mutation of the specified behavior —
+  stated at the contract you were given, since you never read the implementation — that would
+  turn **that** test red, not merely *some* test in the suite. Gate D applies it to the
+  production code. A mutation that reddens
   a neighbor while the test carrying the requirement stays green has proven nothing about the
   requirement. (batch0: the spot-check mutated the decay fold and watched the **closed-form**
   test go red; the **cadence** test — the one the headline requirement rode on — never
   failed, and the gap shipped.) If you cannot name one, the test asserts nothing. **A test
   that cannot fail is worse than none** — it consumes the reviewer's trust budget, appears in
   coverage, gets cited at the gate, and lies. **Gate D** (mutation forcing test, `--named-test`)
-  now makes this machine-enforced, not merely your discipline: `mutate.sh` attests
+  makes this machine-enforced as well as your discipline: `mutate.sh` attests
   `oracle_adequate` only when the **named** oracle kills the mutation, and refuses a vacuous
   oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. A test
   that cannot fail for the named reason is **rejected at the gate, not noted** — so name the
@@ -1378,8 +1386,8 @@ Your cadence is a bounded authoring loop, not a monitoring loop — you set no r
 watch no lanes; that is the Validator's and orchestrator's seat. Per Strategy row: derive
 the expected behavior from the signed artifacts, author the test with its backreference,
 name its falsifying mutation, log the row in your ledgers, move on. Two exits interrupt the
-loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect the
-moment you find it — never resolved in place, never saved for the handover; and a blocker
+loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect in the
+round you find it — never resolved in place, never saved for the handover; and a blocker
 that survives one genuine attempt reports up rather than idling. A silent lane is
 indistinguishable from a dead one. Commit after each item (or every few tests) so a budget
 or provider stop never strands work; record a blocking question, keep working on what is not

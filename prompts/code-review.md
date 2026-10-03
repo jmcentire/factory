@@ -78,10 +78,13 @@ review method and the rule IDs (A#, W#, T#) every finding cites.
 - **Challenge the clean claim**: an independent completeness check that tries to
   DISPROVE the absence of defects (lens states, SKIPPED reasons, fidelity gaps,
   untested failure modes, stale artifacts). A clean result requires it COMPLETED.
-- **Verdict** (first match): `STALE` → `BLOCK` (reproduced regression) →
-  `CHANGES_REQUESTED` → `INCOMPLETE` (any required step didn't complete) →
-  **`HUMAN_REVIEW_REQUIRED`** (risk HIGH/UNCLASSIFIED, no blocking finding) →
-  `CLEAN_QUALIFIED` (risk STANDARD/COSMETIC, all complete, nothing survived).
+- **Verdict** (first match): `STALE` → `INCOMPLETE` (any required step didn't
+  complete: an incomplete review cannot show what it missed) → `DISPUTED`
+  (unresolved refutation conflict) → `BLOCK` (reproduced regression) →
+  `CHANGES_REQUESTED` → **`HUMAN_REVIEW_REQUIRED`** (risk HIGH/UNCLASSIFIED, no
+  blocking finding) → `CLEAN_QUALIFIED` (risk STANDARD/COSMETIC, all complete,
+  nothing survived). This is the order `skills/review.md` and the executable
+  review check (`adversarial_review._expected_verdict`) apply.
 - **Never** emit APPROVE / PASS / green / merge-authorization for HIGH or
   UNCLASSIFIED risk. Require a **named human** with authority over the affected
   capability, even when every automated check passes.

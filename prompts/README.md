@@ -66,8 +66,8 @@ them before dispatch; either is conforming.
   `docs/practices/`. The external Production-Grade Build Playbook these prompts previously
   cited was retired on 2026-10-03; its load-bearing content now lives in those documents.
 - `skills/orchestrate.md` and `skills/review.md` in this repo predate this directory and
-  remain where the harness already reads them; `/review` (the orchestrator's independent
-  alignment check) lives there.
+  are loaded by each agent's own skill loader, not by the harness;
+  `/review` (the orchestrator's independent alignment check) lives there.
 - The interactive `/code-review` skill shipped inside Claude Code is embedded in the
   binary; `code-review.md` here is the standard that governs how its findings — and any
   reviewing agent — are judged.

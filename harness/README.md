@@ -253,17 +253,16 @@ Forced-negative drills for all of it: `tests/test_harness_scripts.py`, wired int
 1. **"Clean clone of the same HEAD"** (workflow text) vs asymmetric projections
    (doctrine I3, built here). Sim-endorsed reading: clean clone meant isolation,
    not symmetry. Ratify or overrule.
-2. **Hub ownership**: `validate.md` and `orchestrate.md` both claim the identical
-   hub-and-spoke seat. This build gives lanes to the Validator and makes the
+2. **Hub ownership**: the prompts agree that under the harness the dispatcher is the
+   hub (`validate.md` defers to `orchestrate.md`); who owns that seat is still to ratify. This build gives lanes to the Validator and makes the
    Orchestrator an independent resident monitor (dispatcher → Orchestrator pane;
    Orchestrator report → monotone blocking channel). It cannot inject into the
    Validator or an author lane. `/orchestrate`'s direct relay-to-lanes behavior is
    intentionally not implemented.
-3. **Tester falsifiability under interface-only projection**: `test.md:102-104`
-   (name the production-code mutation that turns each test red) is unsatisfiable
-   without seeing production code. Options: accept contract-level mutation naming,
-   or grant a post-freeze mutation pass to the Validator. Undecided = the gate is
-   honored at contract level and flagged in each run.
+3. **Tester falsifiability under interface-only projection**: `test.md`
+   (Falsifiability) now asks for the mutation named at the contract, which is how
+   the gate is honored today; Gate D applies it to production code. Ratify that, or
+   grant a post-freeze mutation pass to the Validator.
 4. **"Real ingestion paths unless optimal"**: doctrine's criterion is the §9
    dependency table, and "real" never means prod. The endgame runs real paths in
    disposable checkouts/previews only.
