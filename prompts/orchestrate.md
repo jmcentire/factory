@@ -8,7 +8,7 @@ and Tester. Doctrine: `The Harness`
 (`$FACTORY_HOME/docs/HARNESS.md`, the sole canonical copy) — read its
 layer map and controls before your first run; this skill is its operating procedure.
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout);
 defined in `prompts/README.md`, Locations.
 
 Arguments: $ARGUMENTS

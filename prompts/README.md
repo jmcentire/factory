@@ -5,26 +5,25 @@ instruction document, usable as a dispatch prompt (`claude "/validate …"`-styl
 the text a runner injects into a lane.
 
 **These files are the canonical source.** The operator's live agent surfaces
-(`~/.claude/commands/`, `~/.codex/prompts/`, `~/.gemini/config/skills/`) and the
-cross-project pointers in `~/Code/tools/` are thin loaders that read the files here —
+(`~/.claude/commands/`, `~/.codex/prompts/`, `~/.gemini/config/skills/`) are thin
+loaders that read the files here —
 reconciled 2026-08-30 so a canonical edit propagates everywhere without fan-out and no
 external copy can drift.
 
 ## Locations
 
-Every prompt refers to two directories by name so the same prompt bytes work on
-any machine. Both resolve to the historical layout when unset, so an existing
-installation changes nothing:
+Every prompt refers to this repository by name so the same prompt bytes work on
+any machine. When unset it resolves to the root of the checkout the prompt was
+read from, so an existing installation changes nothing:
 
 | Name | Meaning | Default |
 |---|---|---|
-| `$FACTORY_HOME` | This repository's checkout | `~/Code/factory` |
-| `$FACTORY_PLAYBOOK` | The Production-Grade Build Playbook checkout | `~/Code/tools/production-build-playbook` |
+| `$FACTORY_HOME` | This repository's checkout | The root of this checkout |
 
 The names are documented locations, not shell expansion: a prompt file is read
 by an agent, not by a shell, so the operator (or the thin loader that dispatches
 the prompt) states the actual paths once and the prompt cites them by name.
-Loaders may export the variables into the agent's environment or substitute
+Loaders may export the variable into the agent's environment or substitute
 them before dispatch; either is conforming.
 
 | File | Role |
@@ -54,12 +53,20 @@ them before dispatch; either is conforming.
 
 ## What is referenced, not copied
 
-- **The Production-Grade Build Playbook** (`$FACTORY_PLAYBOOK/`) —
-  the governing doctrine all four lane prompts cite (Chapter 0 first). It is a ~10k-line
-  book with its own repo and assembly script; it stays at its source rather than being
-  vendored here.
+- **The doctrine and the standards live in this repo, not here.** The lane prompts cite
+  [`docs/SOFTWARE-FACTORY.md`](../docs/SOFTWARE-FACTORY.md) (§3, the four roles, first) and
+  the engineering standards in [`docs/standards/`](../docs/standards/):
+  [ARCHITECTURE](../docs/standards/ARCHITECTURE.md) (A-rules),
+  [HOW-WE-WRITE-CODE](../docs/standards/HOW-WE-WRITE-CODE.md) (W-rules),
+  [TESTING](../docs/standards/TESTING.md) (T-rules),
+  [REVIEW](../docs/standards/REVIEW.md) (design and code passes), and
+  [RESPONSE-STANDARD](../docs/standards/RESPONSE-STANDARD.md) (how any lane talks to a
+  human). Operate-phase practices — [Reliability as Signal](../docs/practices/reliability-as-signal.md)
+  and [Graduated Incident Response](../docs/practices/incident-response.md) — sit under
+  `docs/practices/`. The external Production-Grade Build Playbook these prompts previously
+  cited was retired on 2026-10-03; its load-bearing content now lives in those documents.
 - `skills/orchestrate.md` and `skills/review.md` in this repo predate this directory and
-  are loaded by the agents' skill loaders (Locations, above), not by the harness;
+  are loaded by each agent's own skill loader, not by the harness;
   `/review` (the orchestrator's independent alignment check) lives there.
 - The interactive `/code-review` skill shipped inside Claude Code is embedded in the
   binary; `code-review.md` here is the standard that governs how its findings — and any

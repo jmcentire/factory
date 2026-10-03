@@ -5,7 +5,7 @@ complete instructions. That file is the single canonical source, and the harness
 into each run as `orchestrator/ROLE.md`. This file is a thin pointer so that no second copy
 can drift.
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
+Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout);
 defined in `prompts/README.md`, Locations.
 
 The Factory has exactly four roles: Validator, Orchestrator, Coder, Tester. The Orchestrator
