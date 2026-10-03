@@ -10,11 +10,11 @@ bug.
 **Status:** operate-phase doctrine of the factory process. Target-agnostic: it names no
 target and depends on no target code.
 
-**Provenance:** the full, exhaustive treatment is the Production-Grade Build Playbook,
-**Phase 7.6 — "Reliability as Signal: A Living, Closed-Loop Control System"**
-(`production-build-playbook/src/07c-reliability-as-signal.md`). This doc states the
-load-bearing rules and how they ride the factory's flows; the playbook chapter is the
-reference and carries the two-tier gate.
+**Provenance:** generalized from the retired Production-Grade Build Playbook, Phase 7.6
+(*Reliability as Signal: A Living, Closed-Loop Control System*). This doc is now the
+canonical statement, including the two-tier gate below. Its sibling,
+[Graduated Incident Response](incident-response.md), governs what happens once a signal
+fires.
 
 ## The stance
 
@@ -65,7 +65,7 @@ perfect formula when the alternative is ignoring the outage.
 - **Correction flow.** The captured failure window is the **hidden test**: it reproduces
   the incident and fails before the repair, passes after. The repair agent writes the
   fix; the judge validates; **no auto-authored patch merges without its reproducing
-  test.** This is the playbook's "prove it, don't assert it," made the merge gate.
+  test.** This is the doctrine's "prove it, don't assert it," made the merge gate.
 - **Authority separation.** The diagnostic agent may observe, hypothesize, and run
   allowlisted read-only diagnostics or pre-approved reversible mitigations — it never
   becomes the authority that ships an unbounded cure, and no agent alters the
@@ -76,7 +76,7 @@ perfect formula when the alternative is ignoring the outage.
 
 ## Gate linkage
 
-The playbook chapter carries a **two-tier gate**. Adopt **Tier A** (the settled doctrine
+The gate has **two tiers**. Adopt **Tier A** (the settled doctrine
 above) into the operate-phase gate, each item checked with cited evidence. Treat **Tier
 B** as funded spikes, never gates — structural (shape-of-cascade) detection, whole-system
 deterministic simulation, mutual-information-governed posture-input selection, and the

@@ -2,9 +2,8 @@
 
 Review a change as an **evidence-producing** action answering two questions:
 
-Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`);
-`$FACTORY_PLAYBOOK` is the Production-Grade Build Playbook checkout (default
-`~/Code/tools/production-build-playbook`). Defined once in `prompts/README.md`, Locations.
+Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factory`).
+Defined once in `prompts/README.md`, Locations.
 
 1. Does this exact revision satisfy its **ratified intent** (from trusted inputs,
    not the PR/diff text) without introducing a **change-caused** defect?
@@ -14,7 +13,8 @@ Locations: `$FACTORY_HOME` is this repository's checkout (default `~/Code/factor
 lowers a high-impact change into an agent-approvable class.
 
 Related governance: `diff-intent-gate.md` (ratified-intent / policy /
-protected-boundary changes), `$FACTORY_PLAYBOOK/`.
+protected-boundary changes), and `$FACTORY_HOME/docs/standards/REVIEW.md` — the narrow-pass
+review method and the rule IDs (A#, W#, T#) every finding cites.
 
 ## The rules that bind an agent reviewer
 
