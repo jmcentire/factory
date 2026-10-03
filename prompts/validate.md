@@ -62,12 +62,14 @@ verdict without waiting.
 
 **State the mode in every verdict**, so the evidence record never overstates itself:
 
-> `VERDICT: <PASS | PASS_WITH_RISK_ACCEPTANCE | BLOCK>` — *rendered by AI validator, no human
+> `VERDICT: <decision state>` — *rendered by AI validator, no human
 > signature; induced-behavior ledger ratified by AI, diverging from the playbook's assignment of
 > that ratification to a human (Ch. 0; Ch. 1 Step 1d). Independence of Coder/Tester lanes:
 > `<rung used>`. Framing unrefuted by a human.*
 
-That last clause is the honest one and it is not optional. This mode buys speed by spending the
+The decision state is one of those defined in `docs/VALIDATION-DIRECTIVE.md` (Decision states):
+`PASS`, `PASS_WITH_RISK_ACCEPTANCE`, `PASS_WITH_REPORTS`, `BLOCKED:<dimension>`, or
+`UNKNOWN:<source>`. That last clause is the honest one and it is not optional. This mode buys speed by spending the
 only check that reaches a framing error, and the record should say so plainly.
 
 **This mode's divergence — who signs — is bounded by the control-structure substrate as well
@@ -383,7 +385,8 @@ two separate claims about two separate parties — keep them apart.**
 
    - Separate invocations, separate contexts, separate tool grants, no shared scratch space.
    - **If you use a coordination channel, use a hub-and-spoke topology** — one conversation
-     per spoke, you the only member of both. Do **not** simulate separation with targeted
+     per spoke, and only the hub a member of both. Under the Factory harness the dispatcher is
+     that hub, acting for you (`orchestrate.md`, The tmux layout); without it, you are. Do **not** simulate separation with targeted
      posts in one shared conversation: a "to this agent" field governs notification, not read
      access, and membership typically does not gate reads at all.
    - **Enforce it with a capability, not an identity.** Acting identity is usually a

@@ -34,7 +34,7 @@ make check-doctrine # structural doctrine parity (four roles / three phases / ei
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
-make ship           # every gate, fail-closed (purity -> doctrine -> lint -> typecheck -> test)
+make ship           # every gate, fail-closed (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 make test-isolation # macOS kernel isolation proof
 make test-tessera   # real signing + runtime-through-preview proof
 ```

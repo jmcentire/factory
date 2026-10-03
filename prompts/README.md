@@ -59,8 +59,8 @@ them before dispatch; either is conforming.
   book with its own repo and assembly script; it stays at its source rather than being
   vendored here.
 - `skills/orchestrate.md` and `skills/review.md` in this repo predate this directory and
-  remain where the harness already reads them; `/review` (the orchestrator's independent
-  alignment check) lives there.
+  are loaded by the agents' skill loaders (Locations, above), not by the harness;
+  `/review` (the orchestrator's independent alignment check) lives there.
 - The interactive `/code-review` skill shipped inside Claude Code is embedded in the
   binary; `code-review.md` here is the standard that governs how its findings — and any
   reviewing agent — are judged.

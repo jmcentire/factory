@@ -201,12 +201,14 @@ verdict without waiting.
 
 **State the mode in every verdict**, so the evidence record never overstates itself:
 
-> `VERDICT: <PASS | PASS_WITH_RISK_ACCEPTANCE | BLOCK>` — *rendered by AI validator, no human
+> `VERDICT: <decision state>` — *rendered by AI validator, no human
 > signature; induced-behavior ledger ratified by AI, diverging from the playbook's assignment of
 > that ratification to a human (Ch. 0; Ch. 1 Step 1d). Independence of Coder/Tester lanes:
 > `<rung used>`. Framing unrefuted by a human.*
 
-That last clause is the honest one and it is not optional. This mode buys speed by spending the
+The decision state is one of those defined in `docs/VALIDATION-DIRECTIVE.md` (Decision states):
+`PASS`, `PASS_WITH_RISK_ACCEPTANCE`, `PASS_WITH_REPORTS`, `BLOCKED:<dimension>`, or
+`UNKNOWN:<source>`. That last clause is the honest one and it is not optional. This mode buys speed by spending the
 only check that reaches a framing error, and the record should say so plainly.
 
 **This mode's divergence — who signs — is bounded by the control-structure substrate as well
@@ -522,7 +524,8 @@ two separate claims about two separate parties — keep them apart.**
 
    - Separate invocations, separate contexts, separate tool grants, no shared scratch space.
    - **If you use a coordination channel, use a hub-and-spoke topology** — one conversation
-     per spoke, you the only member of both. Do **not** simulate separation with targeted
+     per spoke, and only the hub a member of both. Under the Factory harness the dispatcher is
+     that hub, acting for you (`orchestrate.md`, The tmux layout); without it, you are. Do **not** simulate separation with targeted
      posts in one shared conversation: a "to this agent" field governs notification, not read
      access, and membership typically does not gate reads at all.
    - **Enforce it with a capability, not an identity.** Acting identity is usually a
@@ -954,7 +957,8 @@ standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
 an occurrence-specific question ID from the completed assistant-message event and blocks progress
 until the Validator binds a human answer or ratified-spec answer back into this same Codex thread.
 Ordinary prose is not the typed question channel.
@@ -1114,8 +1118,11 @@ Your handover is an artifact set, not a narration. Produce:
    Refs: <task id>
    Spec: <product digest#item, architecture digest#item>
 
-   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+   Co-Authored-By: <the model you are running as, with its version> <that vendor's noreply address>
    ```
+
+   Name the model actually running this lane. The trailer is authorship provenance that the
+   Diff-Intent Gate and the verdict's model record read, so a copied model name is a false record.
 
 2. **A Coder report** with, per component: what was built, the authorizing spec digest+item,
    the files touched, the disposition declared at each error site, and every intentional
@@ -1232,7 +1239,8 @@ undetermined, end the tmux Codex turn with one exact, standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
 the tests. The host retains an occurrence-specific question ID from the completed assistant-message
 event and blocks progress until the Validator binds a human answer or ratified-spec answer back
 into this same Codex thread. Ordinary prose is not the typed question channel.
@@ -1305,8 +1313,10 @@ Build the **cross-cutting suites first** — controls before convenience:
   Instrument it — assert the handler was entered or the query was constructed. *A 403 from an
   unrelated earlier gate is not a passing security test.* Authenticate as an **authorized**
   principal when the protection under test is not authorization.
-- **Falsifiability.** Name, for every test, the specific mutation of production code that
-  would turn **that** test red — not merely *some* test in the suite. A mutation that reddens
+- **Falsifiability.** Name, for every test, the specific mutation of the specified behavior —
+  stated at the contract you were given, since you never read the implementation — that would
+  turn **that** test red, not merely *some* test in the suite. Gate D applies it to the
+  production code. A mutation that reddens
   a neighbor while the test carrying the requirement stays green has proven nothing about the
   requirement. (batch0: the spot-check mutated the decay fold and watched the **closed-form**
   test go red; the **cadence** test — the one the headline requirement rode on — never
@@ -1375,8 +1385,8 @@ Your cadence is a bounded authoring loop, not a monitoring loop — you set no r
 watch no lanes; that is the Validator's and orchestrator's seat. Per Strategy row: derive
 the expected behavior from the signed artifacts, author the test with its backreference,
 name its falsifying mutation, log the row in your ledgers, move on. Two exits interrupt the
-loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect the
-moment you find it — never resolved in place, never saved for the handover; and a blocker
+loop: a contradiction, ambiguity, or testability defect goes **up** as a spec-defect in the
+round you find it — never resolved in place, never saved for the handover; and a blocker
 that survives one genuine attempt reports up rather than idling. A silent lane is
 indistinguishable from a dead one. Commit after each item (or every few tests) so a budget
 or provider stop never strands work; record a blocking question, keep working on what is not

@@ -71,7 +71,7 @@ across runs so a mode crosses by accumulation rather than by spiking once.
 
 **G1 — Not wired.** Nothing invokes `postmortem.py`; only `harness/README.md:43` documents the
 invocation. `endgame.sh` terminates at `verdict.json`. Feedback collection is a prose instruction
-at `prompts/validate.md:571` addressed to the Coder and Tester only, though four sections are
+at `prompts/validate.md` ("Collect the lanes' feedback before the endgame") addressed to the Coder and Tester only, though four sections are
 reserved. In batch0 the question was asked after the endgame; both lanes hit their spend limit
 mid-answer and that data is permanently unrecoverable.
 

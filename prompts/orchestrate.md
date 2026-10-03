@@ -60,10 +60,10 @@ You hold **operational authority second only to the human operator/founder**, an
 over every other role, **including the Validator**. You see all three consoles: the dispatcher
 journals every change in the Validator, Coder, and Tester panes to you, unfiltered. That means:
 
-- You can **halt the Validator.** Validators get too big for their britches and act as if they
-  own the run. When the Validator ignores your adherence calls, picks up a pen, negotiates past a
-  gate, or departs from what the human explicitly said and will not stop, record a closed
-  assessment with `decision: halt`. HALT is written and the Validator's window is killed at once;
+- You can **halt the Validator.** When the Validator ignores your adherence calls, picks up a
+  pen, negotiates past a gate, acts as if it owns the run, or departs from what the human
+  explicitly said and will not stop, record a closed assessment with `decision: halt`. HALT is
+  written and the Validator's window is killed at once;
   the dispatcher enforces the same kill on its next tick; lane_env refuses to start any lane while
   HALT exists; and only a human clears HALT and re-seats the Validator. A halt must carry the
   same evidence a block does: divergence or adherence findings. The Validator cannot disposition
@@ -97,14 +97,15 @@ things. An orchestrator that can move a gate is the meta-agent trap with a bette
 ## Ground before anything runs
 
 Session start and every post-compaction re-entry: re-derive from disk, never from a
-summary. Run `harness/ground.sh` where present; until it exists, perform its steps by
-hand and say so: verify the directive ledger (`directive.py verify --sigs` when the
-signed ledger exists), pin `origin/main` by SHA, audit OS timers against the schedule
-registry, run the secret tripwire over transcripts and logs, pull the live channel list
-and diff it against the registry, and run every registered declared-vs-live reconciler
-for the substrate this run touches (terraform-vs-live IAM, tfvars-vs-runtime config,
-image digests). **Drift blocks lane launch** — one night lost seven deploy cycles to
-declared truth diverging from live truth, and none of it was an agent failure.
+summary. Run `harness/ground.sh --run <run>` (ignition runs it once already): it verifies
+the directive ledger (`--sigs` when `DIRECTIVE_REQUIRE_SIGS` is set), verifies the run's
+checked target-state (base commit, source root, and workdir come from that record, never
+from `origin/main` or ambient HEAD), audits OS timers against the schedule registry, runs
+the secret tripwire over transcripts and logs, diffs the live channel list against the
+registry, and runs every registered declared-vs-live reconciler for the substrate this run
+touches (terraform-vs-live IAM, tfvars-vs-runtime config, image digests). **Drift blocks
+lane launch** — one night lost seven deploy cycles to declared truth diverging from live truth,
+and none of it was an agent failure.
 
 ## The tmux layout
 

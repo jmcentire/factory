@@ -192,7 +192,7 @@ check-glossary: check-python ## glossary referent-integrity + single-definition-
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

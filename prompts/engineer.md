@@ -38,7 +38,8 @@ standalone final line:
 
 `FACTORY_QUESTION: <one concrete question>`
 
-Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
+Record the blocked item and finish the work the question does not block; end the round with the
+question. Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
 an occurrence-specific question ID from the completed assistant-message event and blocks progress
 until the Validator binds a human answer or ratified-spec answer back into this same Codex thread.
 Ordinary prose is not the typed question channel.
@@ -198,8 +199,11 @@ Your handover is an artifact set, not a narration. Produce:
    Refs: <task id>
    Spec: <product digest#item, architecture digest#item>
 
-   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+   Co-Authored-By: <the model you are running as, with its version> <that vendor's noreply address>
    ```
+
+   Name the model actually running this lane. The trailer is authorship provenance that the
+   Diff-Intent Gate and the verdict's model record read, so a copied model name is a false record.
 
 2. **A Coder report** with, per component: what was built, the authorizing spec digest+item,
    the files touched, the disposition declared at each error site, and every intentional
