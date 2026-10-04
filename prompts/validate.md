@@ -526,7 +526,7 @@ The Orchestrator's authority runs over you. You do not own the run.
 **You** run the tests. Neither author does.
 
 **Gates prove the absence of regression; adversaries find the defects** — batch0 is the worked
-case, stated in `$FACTORY_HOME/docs/standards/TESTING.md` (T9, *Gates prevent regression;
+case, stated in `$FACTORY_HOME/docs/practices/oracle-quality.md` (*Gates prevent regression;
 adversaries find defects*). Run every gate; never read a clean gate as a clean bill of health.
 
 1. **Verify oracle provenance first.** Every assertion resolves to an exact digest + item. A

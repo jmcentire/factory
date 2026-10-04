@@ -97,7 +97,7 @@ Only then write it. Never cut validation, security, observability, rollback or a
 
 ## Tests
 
-W19 and W20 are the shape a test takes. [How We Test](TESTING.md) is the integrity discipline that makes a suite evidence (T1–T9); where the two meet, TESTING.md governs.
+W19 and W20 are the shape a test takes. [How We Test](TESTING.md) is the integrity discipline that makes a suite evidence (T1–T40); where the two meet, TESTING.md governs.
 
 **W19. Tests come from the spec, not the code.** A test written by reading the implementation proves only that the implementation does what it does.
 

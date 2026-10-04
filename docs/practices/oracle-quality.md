@@ -89,3 +89,21 @@ certify a broken build. v8's acceptance suite went fully green while
 implementation lane's source overlaid with the test lane's tests — re-run after
 *every* late change, with import resolution verified each time. A tree validated
 before additional changes is not a validated tree.
+
+## Gates prevent regression; adversaries find defects
+
+These are different jobs, and only one of them finds what nobody thought to ask
+about. In field use (the batch0 run), a run whose every gate was green — a
+red-now/green-now pair, a 1,659-test rail, the ship target, an isolation proof,
+five live probes and changeset hygiene — shipped a release that was wrong twice
+over, and every defect that mattered was found by an adversary. The gates were
+not worthless: they proved the absence of regression, which is why the fixes
+could be made quickly. But a gate can only re-ask a question someone already
+wrote down, so a process assembled only from gates ships its defects with a
+clean bill of health.
+
+Run every gate; then point adversaries at the suite itself — finders enumerate
+tests that could not fail, independent refuters try to name the mutation that
+turns each red (TESTING.md T31), and whatever survives blocks. Read a green board
+as "nothing known broke," never as "nothing is broken." (Formerly TESTING.md T9;
+moved here on 2026-10-03 when How We Test was rewritten as T1–T40.)
