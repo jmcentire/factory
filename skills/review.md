@@ -141,7 +141,7 @@ the closed executable report membership.
    review first (coverage of failure modes, negative controls, reachability,
    falsifiability), then results as receipts. A green suite proving the wrong thing is
    a finding of the highest order. Judge the suite against
-   `$FACTORY_HOME/docs/standards/TESTING.md` (T1–T40).
+   `$FACTORY_HOME/docs/standards/TESTING.md` (T1–T43).
 
    The dominant failure here is narrow enough to name: **the check guards the fix's
    ARTIFACT instead of the PROHIBITED ACTION.** Field instances from one requirement in

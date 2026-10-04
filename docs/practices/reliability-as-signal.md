@@ -30,7 +30,9 @@ perfect formula when the alternative is ignoring the outage.
 
 1. **A failure is signal, a recovery is not silence, a page is not a symptom, severity is
    confirmed impact — not rule identity.** Everything learned about a failure is captured
-   as typed, disposition-tagged, scope-estimated signal.
+   as typed, disposition-tagged, scope-estimated signal. **Services emit facts; escalation
+   decides.** A signal never carries a tier, and a service never stamps one
+   ([incident-response.md](incident-response.md)).
 2. **Two orthogonal axes.** *SEV = impact* (per incident, posture-invariant confirmed
    blast radius); *DEFCON = awareness* (system posture over time; scoped, not global;
    widens capture by traversing the event graph under unresolved-and-undiagnosed;

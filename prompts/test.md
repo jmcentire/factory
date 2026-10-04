@@ -7,7 +7,7 @@ Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of t
 Defined once in `prompts/README.md`, Locations.
 
 Doctrine: `$FACTORY_HOME/docs/SOFTWARE-FACTORY.md` (§3 — the four roles) and
-`$FACTORY_HOME/docs/standards/TESTING.md` (How We Test). Read TESTING.md T1–T4 (Evidence) and its
+`$FACTORY_HOME/docs/standards/TESTING.md` (How We Test). Read TESTING.md T1–T4 and T41 (Evidence) and its
 *Before you commit a test* checklist before you write an assertion; report per invariant as T40
 states.
 

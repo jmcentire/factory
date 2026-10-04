@@ -80,3 +80,5 @@ The tag is the source (H2), the firmness for a stated item, the date, and where 
 ## What this replaces
 
 The standards used to speak of *signed* items and *ratified* artifacts, which presumed a signing ceremony around every requirement. That ceremony controlled nothing an agent could not route around, and it made the work slower. The authority was always the human's word. Recording that word, how firmly it was said, its date and whether it still stands is what makes it usable, so that is the mechanism. Where the runtime still signs, it signs records of the human's words with keys it minted itself (`factory init`), for integrity between workers. The human signs nothing.
+
+Where the doctrine still says a *signed* item or artifact, read it as authoritative and deliberate: the human's word, given on purpose and recorded ([SOFTWARE-FACTORY.md §4.5](../SOFTWARE-FACTORY.md#45-invariant-documents)). It never means a cryptographic signature by the human.
