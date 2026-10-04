@@ -29,7 +29,7 @@ A reader learns what happens in six lines, and trusts each name to keep its prom
 
 **W3. One level of abstraction per composition.** A composition never mixes a delegation call with a raw query, a loop or an assignment. A name that braids two decisions — one check over both the headers and the body — is a design smell. Resolve it rather than implement it.
 
-**W4. Names are promises. Use the ratified vocabulary.** The words in the code match the words in the spec and the tickets. A Booking is not a Reservation. A Listing is not a Property. If you need a new word, ratify it. Don't coin it in a variable name.
+**W4. Names are promises. Use the agreed vocabulary.** The words in the code match the words in the spec and the tickets. A Booking is not a Reservation. A Listing is not a Property. If you need a new word, agree it with the human who owns the spec ([AUTHORITY.md](AUTHORITY.md) H1). Don't coin it in a variable name.
 
 ---
 

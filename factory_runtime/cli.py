@@ -16,7 +16,7 @@ from typing import Any
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_core.target import load_target_manifest_bytes
-from factory_runtime.authority import load_genesis
+from factory_runtime.authority import ACTION_CAPABILITY, load_genesis
 from factory_runtime.broker import TypedOperationBroker, load_broker_registry
 from factory_runtime.instruction_control import (
     canonical_document_bytes,
@@ -182,22 +182,22 @@ def _parser() -> argparse.ArgumentParser:
 
     chain_repair = commands.add_parser(
         "chain-repair",
-        help="apply an operator-SIGNED chain-repair adjudication (4.2): quarantine "
-        "the named offending suffix under its installed signed license — the only "
-        "exit from the R5 wedge, one bounded operator action",
+        help="apply the human's chain-repair ruling (4.2, from `factory record-ruling`): "
+        "quarantine the named offending suffix under its installed record — the only "
+        "exit from the R5 wedge, one bounded action",
     )
     chain_repair.add_argument("--harness-root", required=True)
     chain_repair.add_argument("--repair-record", required=True,
-                              help="pre-signed adjudication envelope (signed out-of-band; "
-                              "the host verifies, never mints)")
+                              help="ruling envelope written by `factory record-ruling` "
+                              "from the human's own words")
     chain_repair.add_argument("--genesis", required=True)
     chain_repair.add_argument("--root-public-key", required=True)
     chain_repair.add_argument("--tessera-bin", default="tessera")
 
     ledger_unlock = commands.add_parser(
         "ledger-unlock",
-        help="apply an operator-SIGNED unlock adjudication for a sentinel guard "
-        "(4.2): liveness-checked, retained as a signed fact — never a bare removal",
+        help="apply the human's unlock ruling for a sentinel guard (4.2, from "
+        "`factory record-ruling`): liveness-checked, retained — never a bare removal",
     )
     ledger_unlock.add_argument("--runs", required=True)
     ledger_unlock.add_argument("--run-id", required=True)
@@ -257,6 +257,50 @@ def _parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--runs", required=True)
     rebuild.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(rebuild)
+
+    init_project = commands.add_parser(
+        "init",
+        help="start a project: mint every worker key and sign the genesis; the human signs nothing",
+    )
+    init_project.add_argument("--keys-dir", default=".factory/keys")
+    init_project.add_argument("--repository-id", required=True)
+    init_project.add_argument(
+        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+    )
+
+    record_statement = commands.add_parser(
+        "record-statement",
+        help="record the human's own words as the authority receipt for one action",
+    )
+    record_statement.add_argument("--keys-dir", default=".factory/keys")
+    record_statement.add_argument("--run-id", required=True)
+    record_statement.add_argument("--action", required=True, choices=sorted(ACTION_CAPABILITY))
+    record_statement.add_argument("--subject-digest", required=True)
+    record_statement.add_argument("--said", required=True, help="the human's message, verbatim")
+    record_statement.add_argument("--said-at", required=True, help="when they said it")
+    record_statement.add_argument("--output", required=True)
+    record_statement.add_argument(
+        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+    )
+
+    record_ruling = commands.add_parser(
+        "record-ruling",
+        help="record the human's ruling on a stuck chain or locked ledger, in their words",
+    )
+    record_ruling.add_argument("--keys-dir", default=".factory/keys")
+    record_ruling.add_argument(
+        "--kind", required=True, choices=["factory-chain-repair", "factory-ledger-unlock"]
+    )
+    record_ruling.add_argument(
+        "--field", action="append", default=[], metavar="NAME=VALUE",
+        help="a binding the ceremony checks (offending_entry_hash, run_id, guard, reason)",
+    )
+    record_ruling.add_argument("--said", required=True, help="the human's message, verbatim")
+    record_ruling.add_argument("--said-at", required=True, help="when they said it")
+    record_ruling.add_argument("--output", required=True)
+    record_ruling.add_argument(
+        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+    )
 
     verify_genesis = commands.add_parser(
         "verify-genesis",
@@ -1397,6 +1441,70 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "task_digest": digest_bytes(task_bytes),
             }
         )
+        return
+    if arguments.command == "init":
+        from factory_runtime.project_init import WORKERS, ProjectKeys
+        from factory_runtime.project_init import init_project as mint_project
+
+        project: ProjectKeys = mint_project(
+            arguments.keys_dir,
+            repository_id=arguments.repository_id,
+            tessera=_tessera(arguments.tessera_bin),
+        )
+        _emit(
+            {
+                "keys_dir": str(project.keys_dir),
+                "genesis": str(project.genesis_path),
+                "root_public_key": project.root_public_key,
+                "workers": {
+                    role: project.worker_env(role, tessera_bin=arguments.tessera_bin)
+                    for role, _, _ in WORKERS
+                    if role != "human"
+                },
+            }
+        )
+        return
+    if arguments.command == "record-statement":
+        from factory_runtime.project_init import load_project, record_human_statement
+
+        tessera = _tessera(arguments.tessera_bin)
+        project = load_project(arguments.keys_dir, tessera=tessera)
+        envelope = record_human_statement(
+            project,
+            run_id=arguments.run_id,
+            action=arguments.action,
+            subject_digest=arguments.subject_digest,
+            said=arguments.said,
+            said_at=arguments.said_at,
+            output_path=arguments.output,
+            tessera=tessera,
+        )
+        _emit({"receipt": str(envelope.path), "payload_digest": envelope.payload_digest})
+        return
+    if arguments.command == "record-ruling":
+        from factory_runtime.project_init import (
+            ProjectInitError,
+            load_project,
+            record_human_ruling,
+        )
+
+        fields: dict[str, str] = {}
+        for item in arguments.field:
+            name, separator, value = item.partition("=")
+            if not separator:
+                raise ProjectInitError(f"--field must be NAME=VALUE: {item!r}")
+            fields[name.strip()] = value
+        tessera = _tessera(arguments.tessera_bin)
+        envelope = record_human_ruling(
+            load_project(arguments.keys_dir, tessera=tessera),
+            kind=arguments.kind,
+            fields=fields,
+            said=arguments.said,
+            said_at=arguments.said_at,
+            output_path=arguments.output,
+            tessera=tessera,
+        )
+        _emit({"ruling": str(envelope.path), "payload_digest": envelope.payload_digest})
         return
     if arguments.command == "verify-genesis":
         tessera = _tessera(arguments.tessera_bin)

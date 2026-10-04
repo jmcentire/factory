@@ -6,7 +6,7 @@ Broad reviews fail in a predictable way. Attention spreads across everything, th
 
 Rules are cited by ID: A# from [How We Architect Systems](ARCHITECTURE.md), W# from [How We Write Code](HOW-WE-WRITE-CODE.md), T# from [How We Test](TESTING.md).
 
-This is the review method. The binding rules for an *agent* reviewer — ratified intent from trusted inputs, risk class separate from test outcome, what an agent may and may not approve — are [`prompts/code-review.md`](../../prompts/code-review.md). A change to intent, policy or a protected boundary also goes through the [Diff-Intent Gate](../../prompts/diff-intent-gate.md).
+This is the review method. The binding rules for an *agent* reviewer — stated intent from trusted inputs ([AUTHORITY.md](AUTHORITY.md)), risk class separate from test outcome, what an agent may and may not approve — are [`prompts/code-review.md`](../../prompts/code-review.md). A change to intent, policy or a protected boundary also goes through the [Diff-Intent Gate](../../prompts/diff-intent-gate.md).
 
 ---
 
@@ -158,7 +158,7 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 **Look for:**
 - Behavior not in the ticket or spec; required behavior missing.
 - Unrelated refactors riding along.
-- Names outside the ratified vocabulary; one concept under two names.
+- Names outside the agreed vocabulary (W4); one concept under two names.
 
 **Ignore:** how well the code does it.
 
@@ -262,13 +262,13 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 
 **Look for:**
 - Tests that mirror the implementation instead of the spec; an expected value with no outside oracle (T1).
-- A test edited in a change set that cites no superseding signed item (T3).
+- A test edited in a change set that cites no later stated item that changed what it asserts (T3, H3).
 - A unit without contract tests: nominal, each provokable error, the catch-all.
 - A composition without an order test; a seam without a test through real units.
 - A disposition or signal never forced by a test.
 - Mocks of the thing under test; patching instead of a declared seam (T16); fixtures where real payloads exist.
 - A test with no named falsifier, or a Critical invariant with no semantic falsifier (T31).
-- A blanket mask or a regex in a test body where a normalizer belongs (T29); a golden file nobody ratified (T30).
+- A blanket mask or a regex in a test body where a normalizer belongs (T29); a golden file no human confirmed against the specification (T30).
 - A retry, sleep or tolerance window holding a test green (T33).
 - Assertions that cannot fail.
 

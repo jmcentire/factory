@@ -4,7 +4,7 @@ Read this before you design a service, a boundary, an integration or a migration
 
 Say it in a room as: **"Helland-style: authoritative about our own transaction, everything upstream is an input, reconcile the economics in settlement."** That sentence gives a senior engineer the whole shape.
 
-Companions: [How We Write Code](HOW-WE-WRITE-CODE.md) for code, [How We Test](TESTING.md) for evidence, [How We Review](REVIEW.md) for design and code review. Principle IDs (A1, W1, T1) are stable. Reviews cite them.
+Companions: [How We Write Code](HOW-WE-WRITE-CODE.md) for code, [How We Test](TESTING.md) for evidence, [How We Review](REVIEW.md) for design and code review, [Whose Word Counts](AUTHORITY.md) for where a requirement's authority comes from. Principle IDs (A1, W1, T1) are stable. Reviews cite them.
 
 The worked examples use one illustrative domain throughout: a lodging marketplace that sells its own inventory and inventory held in partners' property-management systems (PMS), through its own checkout and through external channels. The domain is chosen because it has every hard part at once: money, partner systems we do not control, and a guest waiting at checkout. The rules do not depend on it.
 
@@ -28,7 +28,7 @@ Know its limit. The rule is a forcing function, not a generator. It decides who 
 - *Life Beyond Distributed Transactions.* Entities and activities. No distributed transactions. An activity across owners takes tentative actions at each, then confirms. Nothing is undone.
 - *Building on Quicksand.* Reconciliation is first-class design, not cleanup.
 
-**Eric Evans, *Domain-Driven Design* — the method.** Bounded contexts with one authority per fact. A ubiquitous language: ratified vocabulary that code, tickets and docs use, and nothing else. An anti-corruption layer at every external boundary. The rare part is enforcing the authority rather than stopping at the vocabulary.
+**Eric Evans, *Domain-Driven Design* — the method.** Bounded contexts with one authority per fact. A ubiquitous language: agreed vocabulary that code, tickets and docs use, and nothing else. An anti-corruption layer at every external boundary. The rare part is enforcing the authority rather than stopping at the vocabulary.
 
 **Rich Hickey, *Simple Made Easy* — the philosophy.** Simple is objective: one thing, unbraided. Easy is subjective: familiar. Complecting is braiding concerns together. Complexity is tangle, not part count. A model with more named concepts and fewer entangled ones is the simpler model.
 
@@ -61,7 +61,7 @@ Know its limit. The rule is a forcing function, not a generator. It decides who 
 
 ### Boundaries and deployables
 
-**A8. Map boundaries first,** against the owning services' specs, before any design. The accountable human signs scope. Never self-ratify it.
+**A8. Map boundaries first,** against the owning services' specs, before any design. The accountable human states scope ([AUTHORITY.md](AUTHORITY.md) H1). Never set it yourself.
 
 **A9. Domain decomposition is not deployment decomposition.** Naming a bounded context is free. Running a service costs an on-call rotation, a database, a contract and a release train. Build bounded contexts as modules. Extract a deployable only for measured scale, a distinct team, an isolation requirement or proven contention — "never because it felt like a separate thing." *Example:* disbursement, tax, compliance and a trust ledger can ship inside one payment deployable: one domain, one reconciliation surface, one team. Their separation is a schema and a write path, not a deployable.
 

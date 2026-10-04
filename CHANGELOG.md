@@ -3,6 +3,64 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.0] - 2026-10-04
+
+This release is about who holds authority and how it is recorded. The human signs nothing. Their
+chat messages are the authority, and the factory records them. Signing documents by hand made
+the factory onerous enough to be net less productive, and a signature never stopped an agent
+that chose not to honor it.
+
+### Added
+
+- **`factory init`** (`factory_runtime/project_init.py`) starts a project. It mints one Ed25519
+  key per worker (Validator, Orchestrator, Coder, Tester), a host-held key for the human
+  principal, the ledger chain root and the genesis committing to it, into `.factory/keys/`
+  (owner-only). Each worker gets a grant holding only its own key
+  (`.factory/keys/grants/<role>`, consumed by `harness/lane_env.sh`;
+  `factory_worker_env <role>` in `harness/run_context.sh`), and `dispatch_lane.sh` hands each
+  lane its own key. Re-running it only verifies.
+- **`factory record-statement`** records the human's verbatim words as the authority receipt
+  for an intake, a phase agreement or a changed test expectation. **`factory record-ruling`**
+  does the same for a repair (chain repair, ledger unlock). Receipts carry an optional `basis`
+  field quoting what was said and when. The existing verifiers accept them unchanged.
+- **`docs/standards/AUTHORITY.md`** ("Whose Word Counts", H1-H8): only what the human said is
+  intent; every item is tagged by source, by how firmly it was said (decided, preferred,
+  tentative) and by standing (current, questioned, superseded). Authority is not correctness:
+  evidence against an agreed item, the agent's or the human's, marks it questioned and takes it
+  back to the human.
+- **`docs/standards/TESTING.md` rewritten as How We Test (T1-T40)**: the oracle from outside
+  the code, tests that hold intent still, one strategy row per invariant, class policies with
+  canaries, deliberate masking, named falsifiers and a per-invariant evidence statement. The
+  former T9 (gates prevent regression; adversaries find defects) moved to
+  `docs/practices/oracle-quality.md`.
+- **`prompts/build.md`**, the canonical `/build`, generic: no accounts, key names, tracker
+  prefixes or local paths.
+- **`docs/proposals/factory-plugin.md`**: the plan for the Claude Code plugins (`factory`,
+  `factory-review`, `factory-standards`), amended after a comparison with a public skill set.
+- **`make tessera`** fetches and builds the pinned Tessera into the ignored `.tools/`.
+- Validator directive *Starting a project*: run `factory init` without asking, never ask the
+  human to sign, record their words verbatim, annotate every item's authority.
+
+### Changed
+
+- The standards no longer speak of signed or ratified items; they cite stated items under
+  AUTHORITY.md. Doctrine defines *Signed* as agreed in the human's own words and recorded by the
+  host (SOFTWARE-FACTORY.md, kernel S3 and S4).
+- `skills/review.md` merged with the drifted live `/review`: line-by-line execution, guarding
+  the prohibited action rather than the fix's artifact, denial probes for gates, and Delivery as
+  a post-run lens. The eight executable lenses are unchanged.
+- CI takes Tessera's repository from the `TESSERA_REPOSITORY` variable; the pin is unchanged.
+- `factory init` keeps keys, the chain root, run ledgers and every signed `*.tessera.json`
+  record out of git. Committed project knowledge is the artifacts and the human's words.
+
+### Known limits, stated rather than implied
+
+- Every key is a file readable by the operator's account. Per-worker keys give attribution and
+  tamper evidence between workers; they do not stop an agent that will not follow the rules,
+  and nothing claims they do.
+- The human-principal key signs only records of the human's words; worker evidence signed with
+  it is still refused. That is an attribution rule, not custody.
+
 ## [0.7.0] - 2026-09-25
 
 This release is about the gap between what a run knows and what it reports. Three

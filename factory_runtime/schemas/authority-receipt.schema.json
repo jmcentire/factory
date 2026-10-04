@@ -73,6 +73,29 @@
     "nonce": {
       "type": "string",
       "minLength": 16
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "said",
+        "said_at"
+      ],
+      "description": "What the human said that this receipt records (docs/standards/AUTHORITY.md H1). The host signs it on the human's behalf; the human signs nothing.",
+      "properties": {
+        "source": {
+          "const": "user-message"
+        },
+        "said": {
+          "type": "string",
+          "minLength": 1
+        },
+        "said_at": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   },
   "$defs": {

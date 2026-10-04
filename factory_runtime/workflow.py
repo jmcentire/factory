@@ -1,7 +1,9 @@
 """Two-stage target authority, authorized-change intake, and phase ratification.
 
-The runtime does not infer authority from a ticket, branch, or chat transcript. A canonical
-request enters only with a subject-bound human receipt. Each phase artifact then enters only
+Authority is what the human said (docs/standards/AUTHORITY.md H1), never a ticket, a branch
+or an agent's summary. A canonical request enters only with a subject-bound human receipt, which
+the host records from the human's own message (``factory record-statement``); the human signs
+nothing. Each phase artifact then enters only
 with distinct human and Validator receipts over the exact artifact digest. Receipt nonces are
 consumed in the authoritative run ledger so replay is detectable when the run is re-derived.
 """

@@ -4,7 +4,7 @@ Wrong code must not be able to stay green.
 
 Everything here serves that one aim. A test is evidence that the software does what was promised. A suite that passes whatever the code does is ceremony, and ceremony is worse than nothing because it gets cited.
 
-This is the overview. It says what a good test is, which kind to write for which claim, and what code owes its tests. The Tester's procedure, ledgers and gates live in the Tester directive ([`prompts/test.md`](../../prompts/test.md)), and this document does not repeat them. Strategy rows, reviews and verdicts cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md).
+This is the overview. It says what a good test is, which kind to write for which claim, and what code owes its tests. The Tester's procedure, ledgers and gates live in the Tester directive ([`prompts/test.md`](../../prompts/test.md)), and this document does not repeat them. Strategy rows, reviews and verdicts cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), H for [Whose Word Counts](AUTHORITY.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md). A *stated item* is a requirement with authority under H1–H8: what the human said, latest first, with any exception they made.
 
 ---
 
@@ -13,26 +13,26 @@ This is the overview. It says what a good test is, which kind to write for which
 **T1. The oracle comes from outside the code.** The oracle is where the expected answer came from. A test whose expected answer was read off the implementation, or recorded from a run of it, checks that the code agrees with itself (W19, I3).[^oracle] Acceptable sources, strongest first:
 
 1. A law of the domain or of arithmetic. Money is conserved. `decode(encode(x))` is `x`.
-2. A signed item that states the outcome.
+2. A stated item that gives the outcome ([AUTHORITY.md](AUTHORITY.md) H1).
 3. A reference model: a slow, obvious implementation of the same contract.
 4. A relation between runs: how the output must move when the input moves (T12).
 5. Agreement between two paths that share one decision.
-6. A captured baseline that a human ratified against the specification.
+6. A captured baseline that a human confirmed against the specification.
 
-Laws, models and relations are requirements. Each is cited to a signed item like any other assertion. If the Strategy lacks the one you need, raise it. Do not supply it yourself.
+Laws, models and relations are requirements. Each is cited to a stated item like any other assertion (H7). If the Strategy lacks the one you need, raise it. Do not supply it yourself.
 
-Independence comes from separate derivation, not from ignorance. The Coder and the Tester share the signed artifacts, the architecture, and the interface and schema contracts: what the system promises, where its boundaries are, what may vary and what must not. Neither sees the other's work or the other's reasoning. Each derives its own reading from the shared intent. When the two readings disagree, that is a finding about the specification. Neither lane resolves it by conforming to the other. The test of a good contract is whether two parties who cannot talk can build and test the same thing from it.
+Independence comes from separate derivation, not from ignorance. The Coder and the Tester share the stated intent, the architecture, and the interface and schema contracts: what the system promises, where its boundaries are, what may vary and what must not. Neither sees the other's work or the other's reasoning. Each derives its own reading from the shared intent. When the two readings disagree, that is a finding about the specification. Neither lane resolves it by conforming to the other. The test of a good contract is whether two parties who cannot talk can build and test the same thing from it.
 
 **T2. Grade every test on three axes.** *Independence*: where did the expected answer come from? *Fidelity*: how much of the real system ran? *Sensitivity*: which wrong implementation turns this test red? A test is as strong as its weakest axis. A browser test asserting that the page loaded has fidelity and nothing else. A mocked test with a perfect oracle proves the mock.
 
-**T3. Tests hold intent still.** A test changes only when a signed item changes what it asserts (I14).[^unchanging] When a code change needs a test change and no signed item moved, one of two defects is present: the code broke a promise, or the test was pinning structure. If every change to the code arrives with a change to its tests, nothing is being tested. The author of a change believes the change is right, so an author who can edit the tests edits them until they agree.[^impossible] That is why the Coder cannot write to the tests, and why a change set that edits a test without citing the superseding item does not promote.
+**T3. Tests hold intent still.** A test changes only when a later stated item changes what it asserts (I14, H3).[^unchanging] When a code change needs a test change and no stated item moved, one of two defects is present: the code broke a promise, or the test was pinning structure. If every change to the code arrives with a change to its tests, nothing is being tested. The author of a change believes the change is right, so an author who can edit the tests edits them until they agree.[^impossible] That is why the Coder cannot write to the tests, and why a change set that edits a test without citing the superseding item does not promote.
 
 The rule binds by authority:
 
 | Authority | What it protects | Changes when |
 |---|---|---|
-| Normative | A signed item | That item is superseded |
-| Policy | A signed policy (T23) | The policy is amended |
+| Normative | A stated item | The human supersedes it (H3) |
+| Policy | A stated policy (T23) | The human amends it |
 | Regression | A defect that escaped once | Never, while the behavior stands |
 | Characterization | What legacy does today (T30) | A human reviews the change |
 | Exploratory, diagnostic | Nothing; they find and localize defects | Freely, and they never count as evidence |
@@ -98,7 +98,7 @@ fc.assert(fc.property(cents, nights, (total, n) =>
 
 A failing generated case is recorded with its seed and kept as a permanent example.[^fastcheck] Each generated case runs in its own state: a fresh instance or a rolled-back transaction. State that leaks between cases makes a failure depend on the cases before it, and then shrinking cannot reproduce it.
 
-**T9. Pins are for units meant to stay put.** A pin is fixed data in and a literally compared result out, with no doubles. It is the right test for a unit whose contract is signed and whose behavior is meant to be immutable: a fee calculation, a date-overlap predicate, a parser. A pin on a unit whose shape has not settled encodes that shape and then resists its changing, so pins below the contract level wait until validation. A pin that breaks under a refactor that kept the behavior was pinning structure. Delete it.
+**T9. Pins are for units meant to stay put.** A pin is fixed data in and a literally compared result out, with no doubles. It is the right test for a unit whose contract is agreed and whose behavior is meant to be immutable: a fee calculation, a date-overlap predicate, a parser. A pin on a unit whose shape has not settled encodes that shape and then resists its changing, so pins below the contract level wait until validation. A pin that breaks under a refactor that kept the behavior was pinning structure. Delete it.
 
 **T10. State needs sequences.** A defect that needs a history cannot be found one method at a time. Take the states and legal transitions from the Architecture Specification, generate command sequences against the real component and a simple model, and check the invariants after every step.[^fastcheck] Put retries, duplicate deliveries and reordering in the command set. Drive interleavings with a scheduler, never with sleeps.
 
@@ -140,7 +140,7 @@ The Coder owns these. The Tester raises a testability defect when a contract mak
 
 ## Class rules
 
-**T23. Test a universal rule once, for the whole class.** A policy names a class of code, how members are detected, and what each member owes. The harness enumerates the members at judge time and applies the policy to each. Nobody writes the per-member test, and a method written tomorrow inherits its obligations the moment it exists. Policies are intent. Humans sign them (S4). Policy tests are derived from the policy text, never from the members they check.
+**T23. Test a universal rule once, for the whole class.** A policy names a class of code, how members are detected, and what each member owes. The harness enumerates the members at judge time and applies the policy to each. Nobody writes the per-member test, and a method written tomorrow inherits its obligations the moment it exists. Policies are intent. Humans state them and agents only propose them (S4, H1). Policy tests are derived from the policy text, never from the members they check.
 
 **T24. Classify by fact, and fail closed.** Detection uses what the compiler and the import graph can state: what a function's type requires, what a module imports, what it exports, where it lives. Judgment is not a detector. Changed code that matches no class fails the run. Unclassified never means no obligations. The class `ordinary` exists and is claimed with a reason. Registration by inheritance is a convenient way to list members, but it is opt-in. Code that never inherits never registers, so registration can enumerate members but cannot decide that no rule applies.
 
@@ -199,6 +199,7 @@ Starter classes:
 | Adapter at the edge | No business decisions: serialization, transport and error translation only; a boundary test |
 | Public API | A behavior test; a compatibility test; the error contract (W8) |
 | Disposition boundary (W8) | A forcing test asserting the disposition and its signal |
+| Module boundary | Imports from outside the module reach only its public entry points; no import cycles; structural, with a deep-import fixture as the canary (T27) |
 | Handler of personal or secret data | A redaction test over logs, captures and errors |
 | `ordinary` | Nothing extra; claimed with a reason |
 
@@ -218,7 +219,7 @@ const normalizeQuote = mask<Quote>({
 })                                         // all other fields compare exactly
 ```
 
-**T30. A golden file is a requirement.** A recorded output is an oracle only where a human ratified its values against the specification. An updated snapshot is never accepted from the lane whose change moved it. Anything else recorded from the implementation is a characterization test. It is useful for holding legacy behavior still during a port (W16), it is labeled as such, and it never counts as evidence of correctness.
+**T30. A golden file is a requirement.** A recorded output is an oracle only where a human confirmed its values against the specification. An updated snapshot is never accepted from the lane whose change moved it. Anything else recorded from the implementation is a characterization test. It is useful for holding legacy behavior still during a port (W16), it is labeled as such, and it never counts as evidence of correctness.
 
 ---
 
@@ -271,11 +272,11 @@ A test that raises no confidence in a promise costs run time and reviewer trust,
 | Finding | Route |
 |---|---|
 | The code violates a valid item | Coder fixes, from the bare failure outcome |
-| The signed item changed | Tester re-derives the test from the new digest (I11) |
+| The stated item changed | Tester re-derives the test from the latest statement (H3) |
 | The test asserts structure, not a promise | Tester rewrites or removes it and records why |
 | The test is nondeterministic | Tester repairs it; if it cannot be made deterministic, testability defect |
 | The artifacts are silent or in conflict | Human, by the spec-defect path |
-| No oracle exists: no item, law, relation or ratified baseline says what correct is | Unverifiable. A question to the human (`FACTORY_QUESTION`), naming the decision needed. Never a guessed assertion |
+| No oracle exists: no stated item, law, relation or confirmed baseline says what correct is | Unverifiable. A question to the human (`FACTORY_QUESTION`), naming the decision needed. Never a guessed assertion |
 | A green-now guard is red on unrelated behavior | Human (I15) |
 
 The loop "run, edit the expectations, run again" is forbidden in every lane.
@@ -308,7 +309,7 @@ The loop "run, edit the expectations, run again" is forbidden in every lane.
 
 ## Before you commit a test
 
-1. Which signed item does it cite?
+1. Which stated item, rule or law does it cite (H7)?
 2. Where did the expected value come from (T1)?
 3. What wrong behavior turns it red, and for that reason (T31)?
 4. Does the fixture reach the code path, and can the assertion fail?
