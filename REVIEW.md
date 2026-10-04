@@ -26,8 +26,9 @@ Method and rule IDs: [`docs/standards/REVIEW.md`](docs/standards/REVIEW.md). Cit
 - Prefer stdlib; the only runtime third-party dependency is `jsonschema`.
 - Code follows [`docs/standards/HOW-WE-WRITE-CODE.md`](docs/standards/HOW-WE-WRITE-CODE.md); tests
   follow [`docs/standards/TESTING.md`](docs/standards/TESTING.md).
-- Prose follows [`docs/standards/RESPONSE-STANDARD.md`](docs/standards/RESPONSE-STANDARD.md): short
-  declarative sentences, no hedging filler, evidence named.
+- Reports to the human follow [`docs/standards/RESPONSE-STANDARD.md`](docs/standards/RESPONSE-STANDARD.md):
+  status first, decisions and questions called out, every recommendation with its reason, no
+  unexplained identifiers, what's next and what's blocking.
 
 ## Skip
 
