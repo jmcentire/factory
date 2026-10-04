@@ -1,8 +1,14 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
+.PHONY: help dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
 
 .DEFAULT_GOAL := help
 
-FACTORY_TESSERA_BIN ?= ../tessera/target/release/tessera
+# Tessera is fetched at its pinned commit into an ignored, repo-local tools directory, so no
+# checkout layout outside this repository is assumed. The pin is the trust boundary; moving it
+# is a deliberate change. CI sets TESSERA_REPOSITORY from a repository variable.
+TESSERA_REPOSITORY ?= jmcentire/tessera
+TESSERA_PIN ?= 83883e62a4aafe828092ecf7c3b20ff10342fa7e
+TESSERA_DIR ?= .tools/tessera
+FACTORY_TESSERA_BIN ?= $(TESSERA_DIR)/target/release/tessera
 
 # The interpreter floor. `pyproject.toml` (requires-python) is the authority; this mirrors it so
 # the gates can refuse a wrong interpreter *before* the failure surfaces as a confusing
@@ -126,6 +132,13 @@ test-isolation: check-python ## prove enforced Coder/Tester separation on macOS
 		(echo "enforced isolation proof requires macOS Seatbelt" >&2; exit 1)
 	$(PY) -m pytest -m isolation_integration tests/test_isolated_build_loop.py
 
+tessera: ## fetch and build the pinned Tessera into .tools/ (needs git and cargo)
+	@[ -d "$(TESSERA_DIR)/.git" ] || git clone --quiet "https://github.com/$(TESSERA_REPOSITORY).git" "$(TESSERA_DIR)"
+	@git -C "$(TESSERA_DIR)" cat-file -e "$(TESSERA_PIN)^{commit}" 2>/dev/null || git -C "$(TESSERA_DIR)" fetch --quiet origin
+	@git -C "$(TESSERA_DIR)" -c advice.detachedHead=false checkout --quiet "$(TESSERA_PIN)"
+	cargo build --release --quiet --manifest-path "$(TESSERA_DIR)/Cargo.toml" -p tessera
+	@echo "tessera: built $(TESSERA_PIN) at $(FACTORY_TESSERA_BIN)"
+
 test-tessera: check-python ## run every real-Tessera integration and denial proof
 	@test -x "$(FACTORY_TESSERA_BIN)" || \
 		(echo "Tessera binary missing or not executable: $(FACTORY_TESSERA_BIN)" >&2; exit 1)
@@ -134,7 +147,8 @@ test-tessera: check-python ## run every real-Tessera integration and denial proo
 			tests/test_tessera_cli_integration.py \
 			tests/test_build_and_validate_cli.py \
 			tests/test_repair_ceremony.py \
-			tests/test_trust_root.py
+			tests/test_trust_root.py \
+			tests/test_project_init.py
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \

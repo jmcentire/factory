@@ -2,6 +2,34 @@
 # Shared checked projection loader. This is sourced by harness entry points; it never selects a
 # repository, ref, SHA, or working directory from cwd, an operator checkout, or harness metadata.
 
+# Project keys minted by `factory init` (default .factory/keys). When FACTORY_KEYS_DIR names a
+# minted project, its genesis and root key are the trust anchors unless the operator set them
+# explicitly. Nobody signs anything by hand; see factory_runtime/project_init.py.
+if [ -n "${FACTORY_KEYS_DIR:-}" ] && [ -f "$FACTORY_KEYS_DIR/genesis.tessera.json" ]; then
+  : "${FACTORY_GENESIS:=$FACTORY_KEYS_DIR/genesis.tessera.json}"
+  if [ -z "${FACTORY_ROOT_PUBLIC_KEY:-}" ] && [ -f "$FACTORY_KEYS_DIR/root.pub" ]; then
+    FACTORY_ROOT_PUBLIC_KEY="$(tr -d '[:space:]' < "$FACTORY_KEYS_DIR/root.pub")"
+  fi
+  export FACTORY_GENESIS FACTORY_ROOT_PUBLIC_KEY
+fi
+
+# Print the environment for one worker: the shared trust anchors and that worker's own key.
+# Usage: eval "$(factory_worker_env tester)"
+factory_worker_env() {
+  local role="$1"
+  local dir="${FACTORY_KEYS_DIR:-.factory/keys}"
+  local identity
+  case "$role" in
+    validator|orchestrator|coder|tester) identity="agent:$role" ;;
+    *) echo "factory_worker_env: unknown worker role: $role" >&2; return 64 ;;
+  esac
+  [ -f "$dir/$role.key" ] || { echo "factory_worker_env: no key for $role in $dir; run factory init" >&2; return 66; }
+  printf 'export FACTORY_GENESIS=%q\n' "$dir/genesis.tessera.json"
+  printf 'export FACTORY_ROOT_PUBLIC_KEY=%q\n' "$(tr -d '[:space:]' < "$dir/root.pub")"
+  printf 'export FACTORY_SIGNER_IDENTITY=%q\n' "$identity"
+  printf 'export FACTORY_SIGNING_KEY=%q\n' "$dir/$role.key"
+}
+
 factory_verify_resume_anchor() {
   local run="${1:?run id required}"
   local runs="${2:?runs root required}"

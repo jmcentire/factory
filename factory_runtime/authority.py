@@ -115,7 +115,11 @@ def require_operator_owned_trust_root(
 
 
 def human_public_keys(policy: AuthorityPolicy) -> frozenset[str]:
-    """The enrolled-human signing keys the HOST may never mint with (4.1)."""
+    """The human-principal keys, which sign only records of what the human said.
+
+    The host holds them (``factory init`` mints them), so this is an attribution rail, not a
+    custody one: worker evidence must never carry a human-principal signature.
+    """
     return frozenset(
         principal.public_key
         for principal in policy.principals.values()

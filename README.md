@@ -108,10 +108,16 @@ authorized run rather than being accepted as benign drift inside the old one.
 This is the running, file-and-CLI intake path. It is the bootstrap answer to “how does a change
 become authorized?”; it is not the future collaborative UI.
 
-1. A founder creates a Tessera key, writes a `genesis` document that enrolls each human and
-   agent identity under a unique public key and minimum capability set, signs it as
-   `factory-genesis`, and distributes the root public key through an external trusted channel.
-   `factory verify-genesis` refuses a document that does not validate under that pinned key.
+1. Start the project. `make tessera` builds the pinned Tessera; `factory init` mints one key per
+   worker (Validator, Orchestrator, Coder, Tester), a host-held key for the human principal, the
+   ledger chain root and the genesis enrolling them, into `.factory/keys/` (owner-only, and it
+   ignores itself in git). Nobody signs anything by hand. Each worker is granted only its own key
+   (`.factory/keys/grants/<role>`). `factory verify-genesis` checks the result:
+
+   ```bash
+   make tessera
+   factory init --repository-id my-repo --tessera-bin .tools/tessera/target/release/tessera
+   ```
 2. A contributor writes an `authorization-request` before implementation. The closed schema
    requires the exact `run_id`, repository, target digest, preserved verbatim request and its
    digest, proposed outcome, and disturbed surfaces. Validate and address it:
@@ -121,13 +127,14 @@ become authorized?”; it is not the future collaborative UI.
    factory digest-json --input request.json
    ```
 
-3. An enrolled human decides. For an authorization, they write an `authority-receipt` whose
-   action is `authorize-change` and whose subject is the request digest, then sign it without
-   exposing key material to Factory:
+3. The human decides, in words. Their message is the authority
+   ([AUTHORITY.md](docs/standards/AUTHORITY.md) H1); the host records it verbatim as the receipt
+   for the request digest and signs it for them:
 
    ```bash
-   factory tessera-wrap --payload receipt.json --kind factory-authority-receipt \
-     --key human.key --output receipt.tessera.json --tessera-bin /path/to/tessera
+   factory record-statement --run-id RUN --action authorize-change \
+     --subject-digest sha256:... --said "Yes, build that." --said-at 2026-10-04T09:00Z \
+     --output receipt.tessera.json
    factory authorize-change --runs ./runs --run-id RUN --target-digest sha256:... \
      --request request.json --receipt receipt.tessera.json \
      --genesis genesis.tessera.json --root-public-key PUBLIC_KEY \
@@ -136,7 +143,8 @@ become authorized?”; it is not the future collaborative UI.
 
 4. The human and Validator co-author each invariant document in order: Product Specification,
    Architecture Specification, then Testing and Monitoring Strategy. Each document retains the
-   authorized verbatim-source digest. Both parties independently sign exact-subject receipts;
+   authorized verbatim-source digest. The human's agreement is recorded from their words with
+   `factory record-statement`, and the Validator signs its own receipt with its own key;
    `factory ratify-phase` accepts the document only when the two enrolled identities, keys,
    capabilities, run, action, subject, expiry, and nonces verify.
 5. After all three ratifications, a target-bound recipe book and human+Validator-ratified

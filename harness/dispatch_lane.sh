@@ -38,6 +38,10 @@ fail() {
 }
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
+# Hand this lane its own key and nothing else, when the project was minted by `factory init`.
+if [ -n "${FACTORY_KEYS_DIR:-}" ] && [ -f "$FACTORY_KEYS_DIR/$ROLE.key" ]; then
+  eval "$(factory_worker_env "$ROLE")"
+fi
 factory_load_context "$RUN" "$RUNS_ARG" || fail "run is not a checked Stage-E-authorized v5 run"
 ROOT="$FACTORY_CONTROL_ROOT"
 ART="$ROOT/artifacts"

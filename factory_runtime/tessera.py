@@ -152,10 +152,10 @@ class TesseraCli:
     ) -> VerifiedEnvelope:
         """Create a new signed JSON envelope without exposing key material to Factory.
 
-        ``forbidden_signer_public_keys`` is the 4.1 trust-root rail: enrolled-human
-        keys are minted and used only OUTSIDE the host process, so a host signing
-        seam handed a human's key file must refuse rather than mint — the check runs
-        against the post-sign verified signer and removes the envelope on refusal.
+        ``forbidden_signer_public_keys`` keeps attribution honest: the human-principal key
+        (minted and held by the host at ``factory init``) records only what the human said,
+        so a seam that signs a worker's evidence must refuse it rather than mint — the check
+        runs against the post-sign verified signer and removes the envelope on refusal.
         """
 
         if not kind.strip():
@@ -345,6 +345,25 @@ class TesseraCli:
             envelope_digest=digest_bytes(raw_bytes),
             path=path,
         )
+
+    def keygen(self, key_path: str | Path) -> str:
+        """Mint one Ed25519 key file, owner-only, and return its public key.
+
+        Refuses to overwrite: a project's keys are minted once, and replacing one silently
+        would orphan everything it signed.
+        """
+
+        path = Path(key_path)
+        if path.is_symlink() or path.exists():
+            raise TesseraVerificationError(f"refusing to overwrite key: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._run(["keygen", "--output", str(path)])
+        os.chmod(path, 0o600)
+        encoded = path.read_text(encoding="utf-8").strip()
+        public_key = encoded[64:]
+        if len(encoded) != 128 or not _PUBLIC_KEY.fullmatch(public_key):
+            raise TesseraVerificationError(f"Tessera wrote a non-canonical key file: {path}")
+        return public_key
 
     def _run(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
         try:

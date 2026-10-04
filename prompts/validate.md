@@ -183,6 +183,36 @@ missing entry is a defect, not an omission.
 
 ---
 
+## Starting a project — keys are minted for the workers, never asked of the human
+
+Whenever work begins on a project that has no `.factory/keys/genesis.tessera.json` — through
+`/factory:start`, `/validate` on a new target, `/build`, or a plain request to start — do this
+first, without asking:
+
+1. Build the pinned Tessera if it is not on hand (`make tessera` in `$FACTORY_HOME`).
+2. Run `factory init --repository-id <repo> --keys-dir <target>/.factory/keys`. It mints one key
+   per worker (Validator, Orchestrator, Coder, Tester), a host-held key for the human principal,
+   the ledger chain root and the genesis. Re-running it on a minted project only verifies.
+3. Hand each worker only its own grant: `<keys>/grants/<role>` with `lane_env.sh`, or
+   `eval "$(factory_worker_env <role>)"` from `harness/run_context.sh`. Never pass one worker's
+   key, or the human-principal key, to another.
+4. Tell the human, in one line, that the project's keys are minted and they will never be
+   asked to sign anything.
+
+**The human signs nothing, ever.** Their chat messages are the authority
+(`$FACTORY_HOME/docs/standards/AUTHORITY.md`, H1–H8). When they agree to something a receipt is
+needed for (an intake, a phase artifact at interactive engagement, a changed test expectation,
+a repair), record their words verbatim with `factory record-statement` (or
+`factory record-ruling` for a repair), quoting exactly what they said and when. Never paraphrase
+them into a receipt, never record agreement they did not give, and never ask them to run
+Tessera, hold a key or "certify". Honoring this is the control; the signature only keeps the
+record intact, and signed records stay out of git.
+
+Annotate every item in the artifacts with its authority, in the format AUTHORITY.md gives
+(*Annotating an item*): source, how firmly the human said it, date, where their words are
+recorded, and standing. Agreement is not truth. When evidence contradicts an agreed item, yours
+or the human's, mark it *questioned*, attach the evidence and take it back to them (H8).
+
 ## Phase A0 — Research the ground (before any artifact is drafted)
 
 Every run begins with a research phase, and the research lives in **kindex** — fetched,
@@ -252,7 +282,7 @@ what is *true about the world*; the artifacts decide what is *required of the bu
 
 ---
 
-## Phase A — The frame (nothing is built until this is signed)
+## Phase A — The frame (nothing is built until the human has agreed it)
 
 Produce exactly **three intent authorities**. Nothing else authorizes a requirement: not the
 ask, not a ticket, not a thread, not a PR comment, not an ADR, not a knowledge-graph node.
@@ -264,8 +294,8 @@ Those are preserved mutable inputs, ratified *against* — never cited as author
 | **Architecture Specification** | **You propose, human debates and decides** | Component and state ownership, dependency direction, transaction and trust boundaries, data topology and schema contracts, deployment shape, **surface criticality** |
 | **Testing & Monitoring Strategy** | **You propose, human decides** | Acceptance tests, edge cases, failure dispositions, observability, alerts and owners, recovery posture, oracle/evidence applicability matrix |
 
-Each is **signed by a named human, content-addressed, immutable for the run**, and amendable
-only by raising a defect that produces a new signed version. **An amendment invalidates every
+Each is **agreed by a named human in their own words, content-addressed, immutable for the
+run**, and amendable only by raising a defect that produces a new agreed version. **An amendment invalidates every
 plan, test, control, and evidence record derived from the old digest** — even where a
 particular item's wording did not change. Re-derive; do not patch.
 
@@ -306,7 +336,7 @@ restatement.**
    forty ratifications. A refusal amends the *artifact*, never the row's wording, and
    re-derives every row the amendment touches.
 
-6. **Attack the artifact before the human signs.** Run the refute-framed panel and the
+6. **Attack the artifact before the human agrees it.** Run the refute-framed panel and the
    self-deception skeptic *against the design*, which is the cheapest place to kill a
    god-service, an inverted boundary, or a spec written against the substrate you are
    replacing:

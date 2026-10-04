@@ -15,7 +15,7 @@ This is the prose analog of the invariant kernel: the declared inventory of what
 load-bearing statement *is*, so the Diff-Intent Gate does tier lookup instead of
 judgment. Four tiers:
 
-- **S — Sacrosanct.** Founder axioms. Change requires an explicit founder signature;
+- **S — Sacrosanct.** Founder axioms. Change requires the founder's explicit statement, recorded verbatim;
   there is no evidence that revises them from below.
 - **I — Invariant by design.** Engineered invariants. Changeable only by explicit
   redesign through the human gate, with the redesign named as such.
@@ -30,8 +30,8 @@ judgment. Four tiers:
 |---|---|
 | S1 | Humans own product intent, architectural decisions, authority, and acceptable risk. The Validator drafts and the human decides; the factory implements, proves conformance, and produces evidence. |
 | S2 | **Exactly four roles: Validator, Orchestrator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** The Orchestrator is resident and always running for every run; a run without one is refused. Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
-| S3 | Intent authority exists only in the Product Specification, Architecture Specification, and Testing and Monitoring Strategy, each signed, content-addressed, immutable for the run, and compared with the preserved verbatim input — never memory, a mutable ticket, a comment, or an agent's summary. The manifest records evidence; it does not originate intent. |
-| S4 | Agents escalate; humans ratify. No agent ratifies a material change to declared intent; genesis and mutation of doctrine require a human signature. |
+| S3 | Intent authority exists only in the Product Specification, Architecture Specification, and Testing and Monitoring Strategy, each agreed by the human in their own words, content-addressed, immutable for the run, and compared with the preserved verbatim input — never memory, a mutable ticket, a comment, or an agent's summary. The manifest records evidence; it does not originate intent. |
+| S4 | Agents escalate; humans ratify. No agent ratifies a material change to declared intent; mutation of doctrine requires the human's explicit, recorded statement. The host mints the genesis and every key at project start (`factory init`); the human signs nothing. |
 | S5 | Honesty in self-reports: nothing marked done, implemented, or satisfied that is partial or absent. |
 
 ## Tier I — Invariant by design

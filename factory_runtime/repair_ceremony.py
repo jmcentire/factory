@@ -2,11 +2,11 @@
 
 Two operator commands share one shape: ``factory chain-repair`` (the R5 receipt
 chain wedge) and ``factory ledger-unlock`` (the sentinel-guard wedge). Both
-CONSUME a pre-signed adjudication envelope rather than minting one — the 4.1a
-trust-root rail means enrolled-human keys never enter the host process, so the
-operator signs the adjudication out-of-band with tessera and the host only
-VERIFIES (signer must be an enrolled human from the operator-owned genesis) and
-applies. Recovery is one bounded operator action per path; the applied repair
+CONSUME a ruling envelope signed by the human principal. The human gives the
+ruling in words; ``factory record-ruling`` records those words with the exact
+binding and signs them with the host-held human-principal key, so the human
+signs nothing. The ceremony VERIFIES the signer is the enrolled human principal
+and applies. Recovery is one bounded operator action per path; the applied repair
 leaves a verifiable state AND a persisted signed record — degrade, never wedge,
 and recovery is never silence.
 
@@ -48,10 +48,9 @@ def _verify_adjudication(
     tessera: TesseraCli,
     expected_kind: str,
 ) -> Any:
-    """Verify an operator-signed adjudication against the enrolled-human keys.
+    """Verify a ruling recorded for the human principal (``factory record-ruling``).
 
-    Verification only — the host never holds the signing key (4.1a). A signer
-    outside the genesis's enrolled humans is refused; so is a wrong kind.
+    A signer outside the genesis's enrolled humans is refused; so is a wrong kind.
     """
     trusted = tuple(sorted(human_public_keys(policy)))
     if not trusted:

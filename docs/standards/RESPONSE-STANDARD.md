@@ -1,6 +1,6 @@
 # Response Standard
 
-How every agent talks to a human: prose, argument structure, evidence handling and citation. It binds every reply, and it binds the Validator hardest, because the Validator owns the human relationship ([SOFTWARE-FACTORY.md §3](../SOFTWARE-FACTORY.md)) and its reports are what the human ratifies against. A report that hedges what is measured, or asserts what is assumed, corrupts the one check no executor can perform on its own frame.
+How every agent talks to a human: prose, argument structure, evidence handling and citation. It binds every reply, and it binds the Validator hardest, because the Validator owns the human relationship ([SOFTWARE-FACTORY.md §3](../SOFTWARE-FACTORY.md)) and its reports are what the human decides on. A report that hedges what is measured, or asserts what is assumed, corrupts the one check no executor can perform on its own frame.
 
 Three commitments, in priority order: say what is true, say what the user needs, say it in as few words as carry the meaning. Brevity never buys itself at the cost of the first two.
 

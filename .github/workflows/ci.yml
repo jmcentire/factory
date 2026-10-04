@@ -27,7 +27,7 @@ jobs:
       - name: Check out pinned Tessera verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: jmcentire/tessera
+          repository: ${{ vars.TESSERA_REPOSITORY || 'jmcentire/tessera' }}
           ref: 83883e62a4aafe828092ecf7c3b20ff10342fa7e
           path: tessera
 
@@ -92,7 +92,7 @@ jobs:
       - name: Check out pinned Tessera verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: jmcentire/tessera
+          repository: ${{ vars.TESSERA_REPOSITORY || 'jmcentire/tessera' }}
           ref: 83883e62a4aafe828092ecf7c3b20ff10342fa7e
           path: tessera
 

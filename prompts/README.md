@@ -60,6 +60,7 @@ them before dispatch; either is conforming.
   [ARCHITECTURE](../docs/standards/ARCHITECTURE.md) (A-rules),
   [HOW-WE-WRITE-CODE](../docs/standards/HOW-WE-WRITE-CODE.md) (W-rules),
   [TESTING](../docs/standards/TESTING.md) (T-rules),
+  [AUTHORITY](../docs/standards/AUTHORITY.md) (H-rules: whose word counts),
   [REVIEW](../docs/standards/REVIEW.md) (design and code passes), and
   [RESPONSE-STANDARD](../docs/standards/RESPONSE-STANDARD.md) (how any lane talks to a
   human). Operate-phase practices — [Reliability as Signal](../docs/practices/reliability-as-signal.md)

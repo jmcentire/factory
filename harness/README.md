@@ -201,8 +201,10 @@ names a consuming project:
   Directive ledger, provisional chain, and role doctrine paths are not ambient seams: the external
   resume configuration must name them exactly as `factory-directive-ledger`,
   `factory-directive-provisional`, and `factory-role-doctrine`.
-- The founder's hardware signing key is per-**founder**, not per-project: one key
-  signs many project ledgers; each project's ledger root is its own chain.
+- Keys are per-**project** and the human holds none: `factory init` mints one key per worker,
+  a host-held human-principal key that records only what the human said, the genesis and the
+  ledger chain root, into `.factory/keys/`. Each worker is granted only its own key
+  (`.factory/keys/grants/<role>`, consumed by `lane_env.sh`).
 - This repo's own `.factory/` and `DIRECTIVES/` exist because the factory
   dogfoods itself as a target — they govern factory runs against factory.
 

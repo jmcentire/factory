@@ -8,6 +8,9 @@ dist/
 .venv/
 venv/
 
+# Pinned external tools built by `make tessera`
+.tools/
+
 # Tooling caches
 .pytest_cache/
 .ruff_cache/

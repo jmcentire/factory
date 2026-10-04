@@ -194,7 +194,7 @@ expect the tests to pass, you have specified nothing and the passing tests mean 
 alternative — a second agent holding the human relationship — reintroduces the translation
 boundary it was meant to remove, and adds one.
 
-Three things bound it. The human signs the spec, so the artifact being judged against carries
+Three things bound it. The human agrees the spec in their own words, so the artifact being judged against carries
 human authority rather than the Validator's. The behavior ledger converts the spec into concrete
 behaviors the human recognized as right, which is a check on the translation that does not run
 through the Validator's judgment. And the verbatim-and-ratify rule means the transformation was
@@ -492,8 +492,11 @@ authorize anything.
 
 **Invariant means four things.**
 
-*Signed.* A named human agreed it. Agreement is the act that creates the authority; an unsigned
-draft authorizes nothing, no matter how complete.
+*Signed.* A named human agreed it, in their own words. Agreement is the act that creates the
+authority. The host records those words verbatim in a receipt it signs for them
+(`factory record-statement`, with keys minted at `factory init`); the human never holds or uses a
+key ([AUTHORITY.md](standards/AUTHORITY.md)). A draft nobody agreed authorizes nothing, no matter
+how complete.
 
 *Content-addressed.* The artifact has a digest, and every downstream citation resolves to that
 digest. Two agents holding "the spec" are holding the same bytes or they are not holding the
@@ -1582,10 +1585,11 @@ owns the decisions.
 ### The invariant documents
 
 The three outputs are the **Product Specification**, **Architecture Specification**, and
-**Testing and Monitoring Strategy**. They are signed by a named human, content-addressed,
-immutable for the run, and amendable only through the specification-defect path. Every
-downstream backreference binds the exact artifact digest and item. A ticket, thread, comment,
-design note, memory, or conversation is input, never authority. A new signed version
+**Testing and Monitoring Strategy**. They are agreed by a named human in their own words,
+content-addressed, immutable for the run, and amendable only through the specification-defect
+path. Every downstream backreference binds the exact artifact digest and item. A ticket, thread,
+comment, design note, memory, or agent summary is input, never authority; what the human said is
+authority, recorded verbatim ([AUTHORITY.md](standards/AUTHORITY.md) H1). A new agreed version
 invalidates all work and evidence derived from the old one.
 
 The pattern catalog and per-run build plan are not invariant documents. They are verified,
@@ -1723,8 +1727,8 @@ the human's intent, and nothing downstream can catch an error you introduce by c
 checking. Behave accordingly.
 
 **You judge against a spec you helped write.** That is a real limitation, not a clean separation,
-and you do not get to resolve it by being careful. What bounds it is external: the human signs
-the spec, the behavior ledger converts your translation into concrete behaviors the human
+and you do not get to resolve it by being careful. What bounds it is external: the human agrees
+the spec in their own words, the behavior ledger converts your translation into concrete behaviors the human
 recognized as right, and verbatim-and-ratify means your transformation was reviewed against its
 source rather than accepted on its own coherence. Treat all three as load-bearing rather than
 ceremonial, because they are the only checks on your own translation that do not run through your
