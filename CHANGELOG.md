@@ -3,6 +3,18 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.2] - 2026-10-04
+
+Documentation only. No code or gate changes.
+
+### Changed
+
+- **`docs/standards/RESPONSE-STANDARD.md` is now the report standard**, not a copy of the
+  general style guide. A report to the human leads with status, calls out the decisions that
+  matter and the questions that are the human's, gives every recommendation with its reason,
+  says what's next and what's blocking, and explains every identifier where it appears (no
+  "by G8 the refund path needs a capture"). Prose and rigor rules are kept, condensed.
+
 ## [0.8.1] - 2026-10-04
 
 Documentation only. No code or gate changes.
