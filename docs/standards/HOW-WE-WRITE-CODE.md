@@ -48,7 +48,7 @@ A reader learns what happens in six lines, and trusts each name to keep its prom
 **W8. Units raise. Intermediaries pass. Boundaries catch.**
 - A unit that can't keep its contract raises a typed error saying what failed, whether a retry is safe and what is affected. Not a string, not a boolean, not a sentinel.
 - A composition doesn't catch. It has no basis to handle an error it didn't cause.
-- Each request, job or process boundary catches exactly once, translates to the external error contract, and records a disposition — Recovered, Degraded or Failed — with a signal.
+- Each request, job or process boundary catches exactly once, translates to the external error contract, and records a disposition — Recovered, Degraded or Failed — with a signal. The signal states facts; it never chooses ticket or page.
 
 An empty catch is never acceptable.
 
@@ -97,7 +97,7 @@ Only then write it. Never cut validation, security, observability, rollback or a
 
 ## Tests
 
-W19 and W20 are the shape a test takes. [How We Test](TESTING.md) is the integrity discipline that makes a suite evidence (T1–T40); where the two meet, TESTING.md governs.
+W19 and W20 are the shape a test takes. [How We Test](TESTING.md) is the integrity discipline that makes a suite evidence (T1–T43); where the two meet, TESTING.md governs.
 
 **W19. Tests come from the spec, not the code.** A test written by reading the implementation proves only that the implementation does what it does.
 

@@ -492,8 +492,9 @@ authorize anything.
 
 **Invariant means four things.**
 
-*Signed.* A named human agreed it, in their own words. Agreement is the act that creates the
-authority. The host records those words verbatim in a receipt it signs for them
+*Signed.* Authoritative and deliberate: a named human agreed it, in their own words, on
+purpose. Throughout this doctrine *signed* means exactly that, the human's deliberate word, and
+never a signature ceremony. Agreement is the act that creates the authority. The host records those words verbatim in a receipt it signs for them
 (`factory record-statement`, with keys minted at `factory init`); the human never holds or uses a
 key ([AUTHORITY.md](standards/AUTHORITY.md)). A draft nobody agreed authorizes nothing, no matter
 how complete.

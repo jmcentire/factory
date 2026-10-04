@@ -19,7 +19,13 @@ This is the overview. It says what a good test is, which kind to write for which
 5. Agreement between two paths that share one decision.
 6. A captured baseline that a human confirmed against the specification.
 
-Laws, models and relations are requirements. Each is cited to a stated item like any other assertion (H7). If the Strategy lacks the one you need, raise it. Do not supply it yourself.
+Laws, models and relations are requirements. Each is cited to a stated item like any other assertion (H7), and every expected value records how it got there:
+
+- *Direct.* A stated item gives the value.
+- *Derived.* The value is an exact, mechanical consequence of a stated rule: the arithmetic of a stated fee, the edge a stated range implies. Anyone applying the rule gets the same answer, so it needs no further approval. The derivation is written beside the test.
+- *Proposed.* A relation or law the items do not state, inferred because it seems true. It is a question to the human (`FACTORY_QUESTION`, T37), and the test counts as no evidence until the human states it.
+
+If two careful readers could derive different values, the value is proposed, not derived. Raise it. Do not supply it yourself.
 
 Independence comes from separate derivation, not from ignorance. The Coder and the Tester share the stated intent, the architecture, and the interface and schema contracts: what the system promises, where its boundaries are, what may vary and what must not. Neither sees the other's work or the other's reasoning. Each derives its own reading from the shared intent. When the two readings disagree, that is a finding about the specification. Neither lane resolves it by conforming to the other. The test of a good contract is whether two parties who cannot talk can build and test the same thing from it.
 
@@ -38,6 +44,8 @@ The rule binds by authority:
 | Exploratory, diagnostic | Nothing; they find and localize defects | Freely, and they never count as evidence |
 
 Every test declares its authority. A test that declares none is normative.
+
+**T41. Freeze the expectations, then append only.** The Tester's plan (every invariant row, expected value and falsifier) is hashed and recorded before any candidate exists. The runtime's freeze of Coder and Tester outputs before review ([SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md), freeze before review) is the same rule applied later. After the freeze, findings may add tests, attacks and examples. They never move an expected value; only a later stated item does that (T3). Every test is labeled *pre-freeze*, written before any candidate existed, or *post-freeze*, with what it was added from. The Tester stays blind to the implementation throughout (I3): a post-freeze test comes from a failure outcome, a finding or a new item, never from reading the code. The label lets the verdict weigh a post-freeze test as what it is, a test written knowing that a candidate exists.
 
 **T4. Assert the promised outcome at the most stable boundary that shows it.** The persisted row, the event, the money moved, the response the caller acts on. Not call counts, private methods, log wording or the status envelope. Ask of every assertion: would a correct rewrite of the internals break it? If so, it tests structure.[^desiderata]
 
@@ -199,6 +207,7 @@ Starter classes:
 | Adapter at the edge | No business decisions: serialization, transport and error translation only; a boundary test |
 | Public API | A behavior test; a compatibility test; the error contract (W8) |
 | Disposition boundary (W8) | A forcing test asserting the disposition and its signal |
+| Signal emitter | No tier in the signal; an alerting rule for every signal it can emit, or a declared metric-only status |
 | Module boundary | Imports from outside the module reach only its public entry points; no import cycles; structural, with a deep-import fixture as the canary (T27) |
 | Handler of personal or secret data | A redaction test over logs, captures and errors |
 | `ordinary` | Nothing extra; claimed with a reason |
@@ -228,6 +237,8 @@ const normalizeQuote = mask<Quote>({
 **T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. The run proves it by breaking the code and watching that named test fail (Gate D). Mutate changed code on every candidate and treat survivors as findings.[^mutation]
 
 Mechanical mutants flip operators and drop statements. They rarely produce the defect an invariant exists to prevent. So every Critical invariant also gets a semantic falsifier: a plausible implementation that violates it the way a real mistake would. Examples: a retry that mints a new idempotency key; a charge taken before the dates are confirmed; a tenant filter applied after the query instead of in it; an `Authorization` header written to the capture record; a permanent error retried; the last page of results silently dropped. The evidence must reject each one. Mutation score is not a target either. It measures sensitivity, and a suite can kill every mutant while asserting the wrong requirement.
+
+**T42. Declare a mutant before applying it.** Each mutant states, before it runs, which invariant it breaks and which named test must turn red. It touches implementation only, never a test, a fixture, a mask or an oracle. A mutant declared after its result was read, or one that reddens some other test, shows that the suite is alive, not that the named requirement is covered. Mutation evidence belongs to the Validator's lane (Gate D), never to the author of the tests ([SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md), mutation evidence belongs to the Validator).
 
 **T32. A repair is red first.** New tests fail on the unfixed code, at least one of them on the defect itself, and pass on everything unrelated. A regression test never seen to fail has not shown that it can.
 
@@ -262,6 +273,8 @@ Mechanical mutants flip operators and drop statements. They rarely produce the d
 - The double.
 
 A test that raises no confidence in a promise costs run time and reviewer trust, and someone will later "fix" it on the assumption that it mattered.
+
+Deleting a test that no longer adds evidence is healthy. Record why. The deletion must leave every invariant's evidence standing: what the test asserted is still asserted at another layer, or its item was superseded (T3). A regression test stays while the behavior it guards stands.
 
 ---
 
@@ -303,7 +316,20 @@ The loop "run, edit the expectations, run again" is forbidden in every lane.
 - each mask and its status;
 - the policies applied and the exceptions in force;
 - what was not run, and why;
+- which of its tests are pre-freeze and which post-freeze (T41);
 - what remains uncertain.
+
+**T43. Watch the suite's health, with no single score.** Each signal is read on its own:
+
+- normative-test churn against requirement churn: tests moving faster than items is T3 failing;
+- canary health: every policy canary still caught (T27);
+- the rate of changed code that matches no class (T24);
+- exception count and age, and whether each legacy list only shrinks (T28);
+- mask coverage: how much of each payload is excluded from exact comparison, and with which status (T29);
+- the post-freeze share of the evidence (T41);
+- surviving and undeclared mutants (T31, T42).
+
+Fold them into one number and the number becomes the target, as coverage (T7) and mutation score (T31) do.
 
 ---
 
@@ -317,6 +343,7 @@ The loop "run, edit the expectations, run again" is forbidden in every lane.
 6. What is real, what is a double, and what stands behind each double (T14)?
 7. What is masked, and with which status (T29)?
 8. Does it pass alone, in parallel, in random order and without real time (T35)?
+9. Was it written before the freeze or after, and if after, from what (T41)?
 
 A missing answer is a gap. List it. Do not ship it as coverage.
 

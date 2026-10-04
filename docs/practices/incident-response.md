@@ -35,6 +35,22 @@ action on regulated data.
   routing target, an acknowledgement clock and an update cadence, in a version-controlled
   table. When unsure between two tiers, round up; SEV2+ is a major incident. Keep severity
   (business impact) separate from priority (urgency).
+- **Services emit facts; escalation decides.** A signal carries what happened and never what
+  to do about it: its kind, its disposition (Recovered, Degraded or Failed), its slice
+  (tenant, class, channel, connection), its cause, its quantities (count, age, streak, rates,
+  time pending) and a dedupe key. It carries no tier. A service that stamps ticket or page
+  has taken a decision that belongs to escalation, and every later change to routing becomes
+  a change to that service. So every threshold whose only job is to choose between a ticket
+  and a page lives in the alerting rules, as a declared default, not in service config.
+  Product behaviour stays in the service: notices to an account, holds, suppression, a
+  report of what has no working endpoint. Two checks hold the line: every signal a service
+  can emit has an alerting rule or is declared metric-only, and no contract text decides a
+  tier.
+- **An overdue required effect signals at once.** When something that must happen (a
+  required message, a key delivery) passes its target time, emit a stuck signal with its
+  age immediately; re-emit it on every sweep while it stays stuck; emit a distinct expired
+  signal if it expires. The alerting rule, not the service, decides from how many are stuck
+  and for how long whether that is a ticket or a page.
 - **Reconcile the two scales.** Map the operational page/ticket scale onto the security
   incident scale (P1–P4) explicitly. A confirmed compromise of regulated data pages the
   security path at the top tier regardless of burn rate, with any required external

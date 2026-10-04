@@ -24,7 +24,7 @@ Know its limit. The rule is a forcing function, not a generator. It decides who 
 
 **Pat Helland — the individual to name.**
 - *Data on the Outside vs. Data on the Inside.* Data inside a service is authoritative and mutable. Data outside is immutable, versioned, and refers to a point in time. A copy you hold is a memory of someone else's answer, never a replacement for it.
-- *Memories, Guesses, and Apologies.* Record immutable facts. Act on partial knowledge. Build business mechanisms for the guess that was wrong. Capturing a price delta as a signed fact for settlement is an apology mechanism.
+- *Memories, Guesses, and Apologies.* Record immutable facts. Act on partial knowledge. Build business mechanisms for the guess that was wrong. Capturing a price delta as a fact for settlement, with its sign saying who owes whom, is an apology mechanism.
 - *Life Beyond Distributed Transactions.* Entities and activities. No distributed transactions. An activity across owners takes tentative actions at each, then confirms. Nothing is undone.
 - *Building on Quicksand.* Reconciliation is first-class design, not cleanup.
 
@@ -139,7 +139,7 @@ An abstraction is the most leveraged decision in a design. Get it right and vari
 
 **A40. External feeds are inputs, never history.** A feed that revises itself does not rewrite a booking or a payment.
 
-**A41. Never demand perfect agreement between systems you do not both control.** "Two systems cannot reliably be in 100% alignment 100% of the time." The demand is the defect. Agree a tolerance. Record the delta as a signed fact. Reconcile in settlement. A nickel per booking is not worth rigidity.
+**A41. Never demand perfect agreement between systems you do not both control.** "Two systems cannot reliably be in 100% alignment 100% of the time." The demand is the defect. Agree a tolerance. Record the delta as a fact, with its sign saying who owes whom. Reconcile in settlement. A nickel per booking is not worth rigidity.
 
 **A42. Price is computed in exactly one place.**
 
@@ -151,7 +151,7 @@ An abstraction is the most leveraged decision in a design. Get it right and vari
 
 **A45. Our side broken: delist. The partner's side broken: retry.** Retry with backoff inside the partner's quota. When the whole partner is down, keep the records and retry. Each partner fails independently.
 
-**A46. Recovery is not silence.** Every error site declares a disposition — Recovered, Degraded or Failed — and every disposition emits a signal. An outage is one signal per partner, not one per retry. The operate-phase form of this rule is [Reliability as Signal](../practices/reliability-as-signal.md); what happens once a signal fires is [Graduated Incident Response](../practices/incident-response.md).
+**A46. Recovery is not silence.** Every error site declares a disposition — Recovered, Degraded or Failed — and every disposition emits a signal. An outage is one signal per partner, not one per retry. A signal states facts and never a tier: the emitting service does not decide ticket or page, escalation does (A1: severity is escalation's fact, not the service's). The operate-phase form of this rule is [Reliability as Signal](../practices/reliability-as-signal.md); what happens once a signal fires is [Graduated Incident Response](../practices/incident-response.md).
 
 ### Replacing a system
 

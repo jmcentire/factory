@@ -3,6 +3,39 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.1] - 2026-10-04
+
+Documentation only. No code or gate changes.
+
+### Changed
+
+- **"Signed" means authoritative and deliberate.** `docs/SOFTWARE-FACTORY.md` §4.5 now defines
+  *signed* as the human's word, given on purpose, never a signature ceremony, and
+  `docs/standards/AUTHORITY.md` says to read any remaining "signed item" or "signed artifact"
+  that way. `ARCHITECTURE.md`'s "signed fact" meant an arithmetic sign; it now says "with its
+  sign saying who owes whom".
+- **Services emit facts; escalation decides.** A signal carries kind, disposition, slice, cause,
+  quantities and a dedupe key, never a ticket-or-page tier. Thresholds whose only job is to
+  choose between a ticket and a page live in the alerting rules as declared defaults, not in
+  service config, and every signal a service can emit has an alerting rule or is declared
+  metric-only. An overdue required effect emits a stuck signal with its age at once, re-emits
+  on every sweep, and emits an expired signal on expiry. Stated in
+  `docs/practices/incident-response.md`, with matching lines in `reliability-as-signal.md`
+  (rule 1), `ARCHITECTURE.md` (A46), `HOW-WE-WRITE-CODE.md`, and a new "Signal emitter" class
+  in `TESTING.md`.
+- **How We Test, T1–T43.** T1 records how every expected value got there: *direct* (a stated
+  item gives it), *derived* (an exact mechanical consequence of a stated rule, needing no
+  further approval) or *proposed* (inferred, a question to the human, no evidence until
+  stated). **T41**: the Tester's plan is hashed before any candidate exists; after that, findings
+  only append, never move an expected value, and every test is labeled pre- or post-freeze. The
+  Tester stays blind to the implementation throughout (I3 unchanged). **T42**: a mutant declares
+  the invariant it breaks and the test that must redden before it runs, and touches
+  implementation only. **T43**: suite-health signals (normative churn against requirement churn,
+  canary health, unclassified-change rate, exception age, mask coverage, post-freeze share,
+  surviving mutants), never folded into one score. T36: deleting a test that no longer adds
+  evidence is healthy. `REVIEW.md` C9 and the Tester prompt cite the new rules. The plan-freeze
+  hash in T41 is stated, not yet enforced by a gate.
+
 ## [0.8.0] - 2026-10-04
 
 This release is about who holds authority and how it is recorded. The human signs nothing. Their
