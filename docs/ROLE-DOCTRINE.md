@@ -665,7 +665,7 @@ The Orchestrator's authority runs over you. You do not own the run.
 **You** run the tests. Neither author does.
 
 **Gates prove the absence of regression; adversaries find the defects** — batch0 is the worked
-case, stated in `$FACTORY_HOME/docs/standards/TESTING.md` (T9, *Gates prevent regression;
+case, stated in `$FACTORY_HOME/docs/practices/oracle-quality.md` (*Gates prevent regression;
 adversaries find defects*). Run every gate; never read a clean gate as a clean bill of health.
 
 1. **Verify oracle provenance first.** Every assertion resolves to an exact digest + item. A
@@ -1207,8 +1207,9 @@ Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of t
 Defined once in `prompts/README.md`, Locations.
 
 Doctrine: `$FACTORY_HOME/docs/SOFTWARE-FACTORY.md` (§3 — the four roles) and
-`$FACTORY_HOME/docs/standards/TESTING.md` (How We Test). Read TESTING.md T1–T4 before you write an
-assertion.
+`$FACTORY_HOME/docs/standards/TESTING.md` (How We Test). Read TESTING.md T1–T4 (Evidence) and its
+*Before you commit a test* checklist before you write an assertion; report per invariant as T40
+states.
 
 Arguments: $ARGUMENTS
 

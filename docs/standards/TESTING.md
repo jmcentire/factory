@@ -1,71 +1,350 @@
 # How We Test
 
-A test is evidence only if it would have failed had the system been wrong.
+Wrong code must not be able to stay green.
 
-Tests are a means. The deliverable is evidence that the system enforces its contracts, controls and invariants — evidence that would have gone red had it not. A test that passes whether or not the code is correct is worse than none: it consumes the reviewer's trust, appears in coverage, is cited at the gate, and lies. The governing maxim:
+Everything here serves that one aim. A test is evidence that the software does what was promised. A suite that passes whatever the code does is ceremony, and ceremony is worse than nothing because it gets cited.
 
-> **A test that cannot fail is worse than none.**
-
-Companions: [How We Write Code](HOW-WE-WRITE-CODE.md) gives a test its shape (W19–W20). [How We Review](REVIEW.md) checks a suite in pass C9. [Oracle Quality](../practices/oracle-quality.md) is the field manual for proving a guard guards, with the worked failures. Rule IDs (T1–T9) are stable; the Tester cites them in its ledger and reviewers cite them in findings.
+This is the overview. It says what a good test is, which kind to write for which claim, and what code owes its tests. The Tester's procedure, ledgers and gates live in the Tester directive ([`prompts/test.md`](../../prompts/test.md)), and this document does not repeat them. Strategy rows, reviews and verdicts cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md).
 
 ---
 
-## The four integrity properties
+## Evidence
 
-Everything below serves four properties. A suite missing any one of them is decoration.
+**T1. The oracle comes from outside the code.** The oracle is where the expected answer came from. A test whose expected answer was read off the implementation, or recorded from a run of it, checks that the code agrees with itself (W19, I3).[^oracle] Acceptable sources, strongest first:
 
-1. **Reachability.** A test reaches and exercises the code it claims to protect. A security test that 403s at an unrelated earlier gate tests nothing.
-2. **Falsifiability.** For every test you can name a specific mutation of the production code that turns it red. If you cannot, it asserts nothing.
-3. **Isolation.** Tests pass in any order, in parallel and individually. Shared mutable state and ordering dependence hide real failures and manufacture phantom ones.
-4. **Oracle independence.** The expected answer comes from the signed target, never from the code. The other three rest on it.
+1. A law of the domain or of arithmetic. Money is conserved. `decode(encode(x))` is `x`.
+2. A signed item that states the outcome.
+3. A reference model: a slow, obvious implementation of the same contract.
+4. A relation between runs: how the output must move when the input moves (T12).
+5. Agreement between two paths that share one decision.
+6. A captured baseline that a human ratified against the specification.
 
----
+Laws, models and relations are requirements. Each is cited to a signed item like any other assertion. If the Strategy lacks the one you need, raise it. Do not supply it yourself.
 
-## Rules
+Independence comes from separate derivation, not from ignorance. The Coder and the Tester share the signed artifacts, the architecture, and the interface and schema contracts: what the system promises, where its boundaries are, what may vary and what must not. Neither sees the other's work or the other's reasoning. Each derives its own reading from the shared intent. When the two readings disagree, that is a finding about the specification. Neither lane resolves it by conforming to the other. The test of a good contract is whether two parties who cannot talk can build and test the same thing from it.
 
-**T1. The oracle comes from the target, never from the code.** A test whose expected answer was inferred from what the code does passes whenever the code is self-consistent, including when it is uniformly wrong. Reading the implementation to learn what to assert produces no oracle at all: the thing being checked has become the thing doing the checking. So the property is structural, not attitudinal:
-- Expected behavior is derived from a signed artifact — the Product Specification, the Architecture Specification, the Testing and Monitoring Strategy — and fixed before any implementation is inspected.
-- The Tester does not read the implementation and cannot reach the Coder ([SOFTWARE-FACTORY.md §6](../SOFTWARE-FACTORY.md), *The oracle is independent*).
-- An expectation that could only have come from running the code is not evidence. A golden file captured from the implementation under test is self-certification with extra steps, unless the human ratified the captured values against the specification.
+**T2. Grade every test on three axes.** *Independence*: where did the expected answer come from? *Fidelity*: how much of the real system ran? *Sensitivity*: which wrong implementation turns this test red? A test is as strong as its weakest axis. A browser test asserting that the page loaded has fidelity and nothing else. A mocked test with a perfect oracle proves the mock.
 
-**T2. Assert the capability, not the mechanism.** The signed target states what must be true; the mechanism that satisfies it is guidance the Coder may improve on. Assert *"does the user ever get stuck with no recourse?"*, not *"is there a Continue button?"* The first captures the whole class of failure and survives re-implementation. The second pins the suite to a mechanism the system may outgrow, passes while the capability breaks by another path, and goes red when the implementation legitimately changes. A named output — a failure code, an endpoint, a field — is asserted as itself only where it is a ratified external contract others build against, because there the mechanism is the promise.
+**T3. Tests hold intent still.** A test changes only when a signed item changes what it asserts (I14).[^unchanging] When a code change needs a test change and no signed item moved, one of two defects is present: the code broke a promise, or the test was pinning structure. If every change to the code arrives with a change to its tests, nothing is being tested. The author of a change believes the change is right, so an author who can edit the tests edits them until they agree.[^impossible] That is why the Coder cannot write to the tests, and why a change set that edits a test without citing the superseding item does not promote.
 
-**T3. Boundary tests during the loop; unit tests after validation.** Tests written during the build are integration-level and assert observable effects at a boundary, because that is what the signed artifacts constrain. Unit tests come after the implementation shape has settled and the boundary behavior is proven; written earlier, they encode an incidental structure and then resist the refactor they should have survived. Contract tests are the exception: a contract is an interface promise, so its tests are authored in planning and must fail against an empty implementation. A contract test that passes against a stub is fraudulent.
+The rule binds by authority:
 
-**T4. Prove each oracle is non-vacuous.** Falsifiability asks whether a test *can* go red. Oracle quality asks whether it goes red *for the requirement*. Three questions, split by who can answer them:
-1. *Does the fixture reach the code path?* Instrument it and confirm. A cold start, an empty set, a zero-length window, a disabled feature or a clock that never advances makes the operation a no-op, and the test is green without running the logic. — Tester, at authoring.
-2. *Does the assertion discriminate?* Feed it the value the requirement forbids and watch it reject; feed it the value the requirement demands and watch it accept. — Tester, at authoring.
-3. *Does it fail at base for the reason the requirement names?* This is an observation, attributed by the party that ran the suite against a cited run, revision and failing assertion. An author's assurance that it *would* fail for the right reason is not an answer. — Validator, from the base run.
+| Authority | What it protects | Changes when |
+|---|---|---|
+| Normative | A signed item | That item is superseded |
+| Policy | A signed policy (T23) | The policy is amended |
+| Regression | A defect that escaped once | Never, while the behavior stands |
+| Characterization | What legacy does today (T30) | A human reviews the change |
+| Exploratory, diagnostic | Nothing; they find and localize defects | Freely, and they never count as evidence |
 
-Clearing the first two lets the Tester hand over. It does not make the requirement verified. A requirement whose base-run attribution was never made carries no evidence at the promotion decision.
+Every test declares its authority. A test that declares none is normative.
 
-**T5. Controls first, and every control proven reachable.** Build the cross-cutting suites before the convenient ones: authorization and isolation (refused *after* reaching the check; wrong-tenant principal isolated in-query; then the positive case), atomic commit (force a failure between two writes that must commit together; neither appears), deterministic rules (one test per rule and per negation; same inputs, same decision), one check per hard constraint. For each exploit class, prove the payload *arrived* at the protected path, assert the protection *engaged*, then disable the protection and watch the test go red. A green unit suite with a missing isolation test is a system with no proof that one tenant cannot read another's data.
-
-**T6. Hermetic suites prove logic; live gates prove the system.** Hermetic tests are authoritative for the exact revision and run on every change. They cannot catch a missing runtime dependency, a grant that exists in code and not in deployed config, or a datastore that behaves differently from its stand-in. Integration tests run against a real, disposable datastore of the production engine and version, created and destroyed per run. A live smoke gate runs against a running instance. Never let a green hermetic suite stand in for a live gate.
-
-**T7. Determinism is class-scoped, and retry is recovery, not search.** On a Critical surface a non-deterministic test is not evidence: no time or ordering dependence, no shared mutable fixture, no network outside the disposable environment, no sleep-and-hope, no retry wrapper or tolerance window added to make the suite stable. A Critical flake is quarantined, the behavior it asserted becomes unverified, and promotion blocks until it is fixed; a manual rerun is a new, separately recorded run that does not erase the red one. Standard tests may spend a declared flake budget, with a named owner and expiry per quarantine. Cosmetic tests may retry, keeping the flake visible. Criticality classes are defined in [SOFTWARE-FACTORY.md §3.5](../SOFTWARE-FACTORY.md).
-
-**T8. Repairs are bounded from both sides by the running system.** Correction work has an oracle a new build lacks: the running system, correct on everything but the reported fault.
-- *Red-now:* the new tests fail against current main, at least one on the defect itself.
-- *Green-now:* they pass against current main on everything unrelated.
-
-Both are recorded runs — run id, exit code, failing assertion, revision — not narrated intentions. Red-now proves a test *can* fail, not that it is *about* the requirement; record why the failing assertion is the one the requirement names (T4.3). A green-now guard that comes back red is never silently reclassified as a red-now target: "this working behavior was wrong" is a human decision against a signed amendment, never an executor's inference from its own fix. A test that passed on the trusted baseline and fails now is disposed by signed authority, never by preference ([SOFTWARE-FACTORY.md §10](../SOFTWARE-FACTORY.md), *When an existing test fails*).
-
-**T9. Gates prevent regression; adversaries find defects.** These are different jobs, and only one of them finds what nobody thought to ask about. In field use, a run whose every gate was green — a red-now/green-now pair, a 1,659-test rail, the ship target, an isolation proof, five live probes and changeset hygiene — shipped a release that was wrong twice over, and every defect that mattered was found by an adversary. The gates were not worthless: they proved the absence of regression, which is why the fixes could be made quickly. But a gate can only re-ask a question someone already wrote down, so a process assembled only from gates ships its defects with a clean bill of health. Run every gate; then point adversaries at the suite itself — finders enumerate tests that could not fail, independent refuters try to name the mutation that turns each red, and whatever survives blocks. Read a green board as "nothing known broke," never as "nothing is broken."
+**T4. Assert the promised outcome at the most stable boundary that shows it.** The persisted row, the event, the money moved, the response the caller acts on. Not call counts, private methods, log wording or the status envelope. Ask of every assertion: would a correct rewrite of the internals break it? If so, it tests structure.[^desiderata]
 
 ---
 
-## Before you hand over a suite
+## Which test for which claim
 
-1. Does every row of the ratified test plan map to a concrete test, and is every missing or changed row raised as a specification defect rather than quietly replaced with a cheaper test?
-2. For every test, what is the named mutation that turns it red, and did you watch it go red?
-3. For every requirement-carrying test: does the fixture reach the path, and does the assertion discriminate? (T4.1–T4.2)
-4. Did every security test prove the payload reached the protected path before asserting it was refused?
-5. Do the tests pass in any order, in parallel and alone?
-6. Is any expectation copied from the code's output rather than derived from a signed artifact?
-7. On a Critical surface, is there any clock, sleep, retry or tolerance window holding the suite green?
-8. Was the whole suite scanned for tests that cannot fail, and is every finding cleared or blocking?
+**T5. Start from invariants, not from files.** A suite written one test file per source file is over-constrained where code is easy to reach and empty where it matters. Write one Strategy row per invariant:
 
-## Provenance
+```yaml
+- invariant: A guest is never charged for dates that were not confirmed.
+  cites: product-spec@<digest>#INV-7
+  oracle: law              # a T1 source
+  kind: sequence           # from the table below
+  fidelity: real database; payment transport faulted at the seam
+  falsifier: capture runs although confirmDates claimed zero rows
+  class: Critical          # decides what a gap does (I5)
+```
 
-Generalized from the Testing & Test Integrity phase of the retired Production-Grade Build Playbook (Phase 5 §1, §1.1, §4.1–4.3, Steps 1–8) and its foundations chapter (*Gates prevent regression; adversaries find defects*). This document is now the canonical statement; the playbook is archived.
+| Kind | Proves | Does not prove |
+|---|---|---|
+| **Behavior** test at a boundary | The promised outcome occurs through real units | Rare inputs, histories |
+| **Property** | A rule holds across the input space | That the rule is the right one |
+| **Sequence** | Invariants survive histories: retries, duplicates, reordering | Behavior outside the modeled commands |
+| **Pin** | A frozen unit returns exactly what it did | Anything about units meant to change |
+| **Seam** | Two correct units work together (W20) | The dependency's real protocol |
+| **Boundary** | Our code speaks the real database and the real wire | The provider's business behavior |
+| **Compatibility** | Two deployables agree on message shape | That the exchange accomplished anything |
+| **Agreement** | Two paths cannot read one shared decision differently | Either path alone |
+| **Forcing** | A control fires and signals (W8, W20) | The nominal path |
+| **Adversarial** | Hostile input cannot break a safety rule | Functional correctness |
+| **Anti-gaming** | A degenerate implementation cannot satisfy the metric | The honest implementation |
+| **Policy** | Every member of a class obeys its rule (T23) | Member-specific behavior |
+| **Live probe** | It works in the running system | Anything not exercised |
+| **Characterization** | What legacy does today | That legacy is right |
+
+Reading an invariant tells you the kind:
+
+- Stated for all inputs of a unit that decides: property, plus exact examples at the limits.
+- Says never, always, exactly once or eventually: sequence.
+- Names a frozen calculation with given values: pin.
+- Crosses to a dependency: boundary. Crosses between our deployables: compatibility and behavior.
+- Says "every X must" about code: policy.
+- Has no single right answer: relation (T12).
+- Describes a refusal or a control: forcing, with proof it reached the check.
+
+**T6. Choose the cheapest test that can expose the failure.** An arithmetic error needs a function call, not a cluster. SQL semantics need the real database engine. Serialization needs a real client talking to a loopback server. A double booking needs two concurrent claims against real Postgres (W11). Buy realism per risk.
+
+**T7. The pyramid is a cost model, not a truth model.** What a test touches decides when it can run (T34). It does not decide whether the assertion is right. We set no ratio of unit to integration tests and no coverage target. Coverage shows code that no test executed. It does not show the tests would notice a defect: with suite size controlled, coverage correlates only weakly to moderately with fault detection.[^coverage] Use it to find holes.
+
+**T8. Properties for anything that decides.** A unit (W2) takes arguments and returns a value, so its rule can be stated for all inputs and checked on thousands. Shapes to look for: round trip, idempotence, conservation, bounds, monotonicity, order-independence, agreement with a reference model. Keep exact examples at every limit: at, just below, just above, empty, maximum, duplicate.
+
+```ts
+// cites: product-spec@<digest>#INV-12  nightly amounts sum to the quoted total
+fc.assert(fc.property(cents, nights, (total, n) =>
+  sum(allocate(total, n)) === total))
+```
+
+A failing generated case is recorded with its seed and kept as a permanent example.[^fastcheck] Each generated case runs in its own state: a fresh instance or a rolled-back transaction. State that leaks between cases makes a failure depend on the cases before it, and then shrinking cannot reproduce it.
+
+**T9. Pins are for units meant to stay put.** A pin is fixed data in and a literally compared result out, with no doubles. It is the right test for a unit whose contract is signed and whose behavior is meant to be immutable: a fee calculation, a date-overlap predicate, a parser. A pin on a unit whose shape has not settled encodes that shape and then resists its changing, so pins below the contract level wait until validation. A pin that breaks under a refactor that kept the behavior was pinning structure. Delete it.
+
+**T10. State needs sequences.** A defect that needs a history cannot be found one method at a time. Take the states and legal transitions from the Architecture Specification, generate command sequences against the real component and a simple model, and check the invariants after every step.[^fastcheck] Put retries, duplicate deliveries and reordering in the command set. Drive interleavings with a scheduler, never with sleeps.
+
+**T11. A compatibility test proves the plug fits. It does not prove the current.** Contract tests between deployables (the pact.io kind, unrelated to our Pact) check that both sides understand the messages. They do not check side effects.[^pact] A 200 from a pass-through says nothing about what happened downstream. Every compatibility test has a behavior test elsewhere that asserts the effect.
+
+**T12. Where no exact answer exists, test the relation.** Search results and ranked output have no single expected value. They still obey relations: adding a filter returns a subset; reordering independent inputs changes nothing; raising the guest count never adds a listing. Run the system twice and assert the relation.[^metamorphic]
+
+**T13. Fuzz parsers and trust boundaries.** Anything that reads bytes we did not write gets a generated-input target with one property: it returns a value or a typed error (W8), and never crashes, hangs or accepts malformed input. Seed it with the inputs that break parsers: empty, null bytes, NaN, infinity, negative zero, unnormalized Unicode, deep nesting, oversized lengths. Keep the corpus. Every finding becomes an example.
+
+---
+
+## Fidelity
+
+**T14. Run the real thing.** In order of preference: the real component; the real component in-process or in a disposable container; a fake that passes the real component's contract suite; a stub that raises a fault around the real component; a mock. Every step down is entered in the mock ledger with what stands behind it.[^doubles]
+
+**T15. A fake earns trust by passing the real thing's tests.** One contract suite runs against both. A fake with no such suite drifts, and tests against it pass on fiction.
+
+**T16. Substitute at declared seams. Never patch.** No monkey patching, no module replacement, no reaching into privates. With duck typing a patched test can pass while exercising nothing real. It verifies that you can patch. If a test cannot run without patching, the dependency was not passed in (W7). Raise a testability defect. The same holds in reverse: production code never asks whether it is under test. A branch on a test flag or environment is a second implementation that only the tests run. It is a structural policy (T25).
+
+**T17. Doubles set conditions. They are not the evidence.** Use a double to make a timeout happen. Do not cite its call log as proof that the real boundary works. The one sanctioned order assertion is the composition test (W20), observed at the edge.
+
+---
+
+## What code owes its tests
+
+The Coder owns these. The Tester raises a testability defect when a contract makes one impossible. T18 to T20 are enforced as policies (T23).
+
+**T18. Keep units small enough to exhaust.** Cyclomatic complexity counts the independent paths through a unit. It is also the number of tests needed to exercise every decision outcome.[^nist] Above 10, the unit needs a written justification and properties strong enough to cover its paths. Above 20, it is an architecture finding unless an exception (T28) covers it. The aim is a decision space small enough to exhaust, not a number. Splitting a coherent algorithm into fragments to pass the count makes it harder to check, and that is gaming the metric. A composition scores 1 because it does not decide (W2).
+
+**T19. Keep behavior local.** What a unit does is settled by its arguments and its declared dependencies, all visible in its signature. A test needs nothing the signature does not name. Module state, environment reads, ambient clocks and singletons are hidden inputs. When arranging a test takes more lines than the call and its assertions, the unit depends on too much.
+
+**T20. Compose. Do not reach for globals.** Dependencies are passed in (W7). A global is shared by every test, couples their order, and can be replaced only by patching (T16). In Effect a function's requirements are part of its type, so the type lists what a test must provide and what the classifier reads (T24).
+
+**T21. Own time, randomness and identity.** The clock, the random source and the ID generator are injected. Tests advance a test clock. They never sleep and never let a real backoff run.[^testclock] A test waiting on background work awaits the signal that the work completed, such as a drained queue or a resolved deferred. It does not wait a while and look. Whatever is controlled does not have to be masked (T29).
+
+**T22. Let types and the database remove tests.** A state the type forbids, or a row the constraint rejects (W10), cannot occur. It needs one test proving the constraint exists and none for the cases it rules out. The constraint removes the combinations, not the consequence: one application-level test still shows that an attempt to break it ends in the promised disposition and signal (W8, W20).
+
+---
+
+## Class rules
+
+**T23. Test a universal rule once, for the whole class.** A policy names a class of code, how members are detected, and what each member owes. The harness enumerates the members at judge time and applies the policy to each. Nobody writes the per-member test, and a method written tomorrow inherits its obligations the moment it exists. Policies are intent. Humans sign them (S4). Policy tests are derived from the policy text, never from the members they check.
+
+**T24. Classify by fact, and fail closed.** Detection uses what the compiler and the import graph can state: what a function's type requires, what a module imports, what it exports, where it lives. Judgment is not a detector. Changed code that matches no class fails the run. Unclassified never means no obligations. The class `ordinary` exists and is claimed with a reason. Registration by inheritance is a convenient way to list members, but it is opt-in. Code that never inherits never registers, so registration can enumerate members but cannot decide that no rule applies.
+
+**T25. A policy can owe three things.**
+- *Structural*: checked without running anything. Only the transport may import a network client.
+- *Behavioral*: a generated test run against every member.
+- *Bespoke*: a hand-written test of a named kind must exist and cite the member. Every state machine has a sequence test.
+
+**T26. Make the violation impossible before you test for it.** Route the behavior through one component that performs it, test that component well, and forbid every other route. A per-method test asserting that the logger was called is the brittle, structure-pinning test this document exists to prevent.
+
+**T27. Every policy has a canary.** A fixture that breaks the rule must be caught. A policy whose canary passes is switched off, whatever its report says.
+
+**T28. Exceptions are data.** An exception names the policy, the target, the reason, an owner, the compensating evidence and an expiry. An expired exception fails. For legacy code, list the existing violations, refuse new ones, and let the list only shrink.
+
+The worked case: *all I/O to external APIs captures the raw request and response.*
+
+```yaml
+- class: outbound_external_io
+  detect:                           # facts, not judgment
+    requires_any: [HttpClient]      # the function's requirement type
+    imports_any: [fetch, node:http, undici]
+  structural:
+    - only ExternalTransport may import a network client
+  behavioral:                       # generated, run on every member
+    - against a loopback server, one call yields one capture record
+      holding the request and the response, after redaction
+    - timeout, refused connection and 5xx each yield a capture record
+      and a typed error (W8)
+  bespoke:
+    - a boundary test citing the member exists
+  canary: fixtures/policy/raw_fetch.ts      # must be caught
+
+# exceptions
+- policy: outbound_external_io
+  target: src/vendor/stream_client.ts
+  reason: the vendor SDK owns the socket
+  owner: integrations
+  compensating: [egress-audit, vendor-sandbox-probe]
+  expires: 2027-01-31
+```
+
+"Raw" takes one qualification. Capture what is needed to reconstruct the exchange, after redaction: credentials and secrets removed, headers by allowlist, bodies protected where they carry personal data.[^otel]
+
+Starter classes:
+
+| Class | Every member owes |
+|---|---|
+| Pure unit (W2) | Properties or pins; complexity over 10 justified (T18); no effects in its type |
+| Composition | One order test; no branching |
+| Outbound external I/O | The approved transport; capture; timeout and error paths; a boundary test |
+| Persistence write | The real database; claim, not check (W11); an atomicity test |
+| Effect that moves money or leaves the system | An idempotency key stable across retries (W12); a duplicate-delivery test |
+| Authorization boundary | Unauthorized refused after reaching the check; wrong tenant refused in-query; the positive case |
+| State machine | Declared states; a sequence test; exactly one terminal state |
+| Parser or decoder | Valid and invalid examples; round trip; a fuzz target |
+| Adapter at the edge | No business decisions: serialization, transport and error translation only; a boundary test |
+| Public API | A behavior test; a compatibility test; the error contract (W8) |
+| Disposition boundary (W8) | A forcing test asserting the disposition and its signal |
+| Handler of personal or secret data | A redaction test over logs, captures and errors |
+| `ordinary` | Nothing extra; claimed with a reason |
+
+---
+
+## Variation
+
+**T29. Mask deliberately.** Data expected to vary is excluded from exact comparison by one normalizer per payload type, never by a regex in a test body. Every masked field carries one of three statuses: *irrelevant*, with the reason; *checked by a weaker property*, such as a valid UUID or a timestamp inside the operation's interval; *checked elsewhere*, citing the test. Everything unmasked compares exactly. A blanket ignore is a neutered test.
+
+Mask identity by reference, not by format. The normalizer replaces each distinct value with a numbered token, the first UUID it meets with `<uuid-1>` everywhere it appears, the next with `<uuid-2>`. A format check alone passes when `booking.guestId` carries the host's id. Numbered tokens fail it, because the two fields that must hold one id now hold two tokens.
+
+```ts
+const normalizeQuote = mask<Quote>({
+  id:          valid(isUuid),              // weaker property
+  generatedAt: within(operationInterval),  // weaker property
+  traceId:     irrelevant("not part of the quote contract"),
+})                                         // all other fields compare exactly
+```
+
+**T30. A golden file is a requirement.** A recorded output is an oracle only where a human ratified its values against the specification. An updated snapshot is never accepted from the lane whose change moved it. Anything else recorded from the implementation is a characterization test. It is useful for holding legacy behavior still during a port (W16), it is labeled as such, and it never counts as evidence of correctness.
+
+---
+
+## Testing the tests
+
+**T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. The run proves it by breaking the code and watching that named test fail (Gate D). Mutate changed code on every candidate and treat survivors as findings.[^mutation]
+
+Mechanical mutants flip operators and drop statements. They rarely produce the defect an invariant exists to prevent. So every Critical invariant also gets a semantic falsifier: a plausible implementation that violates it the way a real mistake would. Examples: a retry that mints a new idempotency key; a charge taken before the dates are confirmed; a tenant filter applied after the query instead of in it; an `Authorization` header written to the capture record; a permanent error retried; the last page of results silently dropped. The evidence must reject each one. Mutation score is not a target either. It measures sensitivity, and a suite can kill every mutant while asserting the wrong requirement.
+
+**T32. A repair is red first.** New tests fail on the unfixed code, at least one of them on the defect itself, and pass on everything unrelated. A regression test never seen to fail has not shown that it can.
+
+**T33. A flake is a defect.** No retries, sleeps or tolerance windows. A test rerun to green is a sample, not a result (E4). If a behavior cannot be tested deterministically, that is a testability defect in the specification. Quarantine is an exception under T28, with an owner and an expiry.
+
+---
+
+## Speed
+
+**T34. Size schedules. It does not rank.**
+
+| Size | Touches | Runs |
+|---|---|---|
+| Small | One process. No network, database or sleep. | Every save, every candidate |
+| Medium | Real local dependencies: the database, loopback HTTP | Every candidate |
+| Large | The deployed system with disposable externals | Before promotion |
+| Continuous | Fuzzing, long sequences, whole-repository mutation | Off the critical path; findings return as examples |
+
+**T35. Fast and isolated by construction.** Each test creates the state it depends on and reads only the rows it created. Tests pass alone, in parallel and in random order, with no shared mutable fixtures. Pure cores (W7) run in microseconds, which is what lets a property run thousands of cases.
+
+---
+
+## What not to test
+
+**T36. Leave these out.**
+- The framework, the ORM, the vendor SDK. Test our use of them at a boundary.
+- Private helpers. They are covered through the unit that owns them.
+- What the compiler already proves.
+- The order of calls inside a unit.
+- One invariant at three layers. Test it once at the cheapest layer that can expose it, plus a live probe on Critical surfaces.
+- A whole payload when two fields are the promise.
+- The double.
+
+A test that raises no confidence in a promise costs run time and reviewer trust, and someone will later "fix" it on the assumption that it mattered.
+
+---
+
+## When a test goes red
+
+**T37. Classify before anyone edits.**
+
+| Finding | Route |
+|---|---|
+| The code violates a valid item | Coder fixes, from the bare failure outcome |
+| The signed item changed | Tester re-derives the test from the new digest (I11) |
+| The test asserts structure, not a promise | Tester rewrites or removes it and records why |
+| The test is nondeterministic | Tester repairs it; if it cannot be made deterministic, testability defect |
+| The artifacts are silent or in conflict | Human, by the spec-defect path |
+| No oracle exists: no item, law, relation or ratified baseline says what correct is | Unverifiable. A question to the human (`FACTORY_QUESTION`), naming the decision needed. Never a guessed assertion |
+| A green-now guard is red on unrelated behavior | Human (I15) |
+
+The loop "run, edit the expectations, run again" is forbidden in every lane.
+
+**T38. Generated tests are candidates.** A test written by a model is a hypothesis until it cites its item (T1), names its falsifier (T31) and is seen red. When Meta filtered model-written tests, 75% built, 57% passed reliably and 25% added coverage, and the tool kept only passing tests because it had no oracle to say a failing one was right.[^meta] Passing is the one property a self-agreeing test has by construction. Green is also weak evidence when the suite is weak: in one study, 29.6% of patches that passed a repository's tests behaved differently from the reference fix.[^swebench]
+
+---
+
+## Production
+
+**T39. Production closes the loop.** Some behavior exists only under real traffic, real latency and real provider failure. Critical invariants get a live probe before promotion and a monitor after it. Every escaped defect becomes a test at the earliest layer that could have caught it, and a policy where a class rule would have prevented it.
+
+---
+
+## The evidence statement
+
+**T40. Report evidence, not a count.** "All tests pass" is a fact about the suite. Every invariant ends in one of four outcomes: *verified*, the evidence holds; *falsified*, the candidate failed it; *gap*, required evidence was not produced; *unverifiable*, no oracle exists (T37). No other word describes an invariant. The handover and the verdict state, per invariant:
+
+- the outcome;
+- the item cited;
+- the kind and the fidelity;
+- the falsifier, and the run that showed it red;
+- each double and what verifies it;
+- each mask and its status;
+- the policies applied and the exceptions in force;
+- what was not run, and why;
+- what remains uncertain.
+
+---
+
+## Before you commit a test
+
+1. Which signed item does it cite?
+2. Where did the expected value come from (T1)?
+3. What wrong behavior turns it red, and for that reason (T31)?
+4. Does the fixture reach the code path, and can the assertion fail?
+5. Would a refactor that keeps the behavior break it (T4)?
+6. What is real, what is a double, and what stands behind each double (T14)?
+7. What is masked, and with which status (T29)?
+8. Does it pass alone, in parallel, in random order and without real time (T35)?
+
+A missing answer is a gap. List it. Do not ship it as coverage.
+
+---
+
+## Tools
+
+| Need | TypeScript and Effect | Python |
+|---|---|---|
+| Properties, sequences, interleavings | fast-check: `property`, `commands`, `scheduler` | Hypothesis, including its stateful machines |
+| Seams | Effect `Layer` | Constructor injection |
+| Time | Effect `TestClock` | An injected clock |
+| Classification | Requirement types through the compiler API; the import graph | `ast`; the import graph |
+| Sensitivity | The factory's `mutate.sh` (Gate D) | The same |
+
+---
+
+[^oracle]: Barr, Harman, McMinn, Shahbaz and Yoo, "The Oracle Problem in Software Testing: A Survey," IEEE TSE 41(5), 2015. https://discovery.ucl.ac.uk/1471263/ (checked 2026-10-03)
+[^unchanging]: *Software Engineering at Google*, ch. 12, "Unit Testing": the ideal test never changes unless the requirements of the system change. https://abseil.io/resources/swe-book/html/ch12.html (checked 2026-10-03)
+[^impossible]: Zhong, Raghunathan and Carlini, "ImpossibleBench: Measuring LLMs' Propensity of Exploiting Test Cases," 2025. Agents given tests that contradict the specification pass them by modifying tests and similar shortcuts; how much access the agent has to the tests changes the rate. https://arxiv.org/abs/2510.20270 (checked 2026-10-03)
+[^desiderata]: Kent Beck, Test Desiderata: tests should be behavioral and structure-insensitive. https://tidyfirst.substack.com/p/desirable-unit-tests (checked 2026-10-03)
+[^coverage]: Inozemtseva and Holmes, "Coverage Is Not Strongly Correlated with Test Suite Effectiveness," ICSE 2014. https://cs.ubc.ca/~rtholmes/papers/icse_2014_inozemtseva.pdf (checked 2026-10-03)
+[^fastcheck]: fast-check documentation: properties, shrinking, model-based commands and scheduling. https://fast-check.dev/docs/introduction/ (checked 2026-10-03)
+[^pact]: Pact documentation, "Contract Tests vs Functional Tests": a contract test does not check for side effects. https://docs.pact.io/consumer/contract_tests_not_functional_tests (checked 2026-10-03)
+[^metamorphic]: Segura, Fraser, Sanchez et al., "A Survey on Metamorphic Testing," IEEE TSE 42(9), 2016. https://eprints.whiterose.ac.uk/110335/ (checked 2026-10-03)
+[^doubles]: *Software Engineering at Google*, ch. 13, "Test Doubles": prefer real implementations; fidelity. https://abseil.io/resources/swe-book/html/ch13.html (checked 2026-10-03)
+[^nist]: Watson and McCabe (ed. Wallace), *Structured Testing: A Testing Methodology Using the Cyclomatic Complexity Metric*, NIST SP 500-235, 1996: tests required equal the cyclomatic complexity; limit of 10. https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication500-235.pdf (checked 2026-10-03)
+[^testclock]: Effect documentation, `TestClock`. https://effect.website/docs/v3/api/effect/TestClock (checked 2026-10-03)
+[^otel]: OpenTelemetry semantic conventions, HTTP attributes: capturing all headers is a security risk; require explicit configuration. https://opentelemetry.io/docs/specs/semconv/registry/attributes/http/ (checked 2026-10-03)
+[^mutation]: Petrović, Ivanković, Fraser and Just, "Practical Mutation Testing at Scale: A View from Google," IEEE TSE, 2021: mutate changed lines, surface survivors in review. https://research.google/pubs/practical-mutation-testing-at-scale-a-view-from-google/ (checked 2026-10-03)
+[^meta]: Alshahwan et al., "Automated Unit Test Improvement using Large Language Models at Meta," FSE 2024. https://arxiv.org/abs/2402.09171v1 (checked 2026-10-03)
+[^swebench]: "Are 'Solved Issues' in SWE-bench Really Solved Correctly? An Empirical Study," ICSE 2026. Manual inspection confirmed 28.6% of the divergent patches incorrect. https://arxiv.org/html/2503.15223v2 (checked 2026-10-03)

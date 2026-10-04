@@ -257,15 +257,19 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 
 **Ignore:** business logic.
 
-### C9 — Tests (W19–W20, T1–T9, A57)
+### C9 — Tests (W19–W20, T1–T40, A57)
 **Question:** Would these tests fail if the code were wrong?
 
 **Look for:**
-- Tests that mirror the implementation instead of the spec.
+- Tests that mirror the implementation instead of the spec; an expected value with no outside oracle (T1).
+- A test edited in a change set that cites no superseding signed item (T3).
 - A unit without contract tests: nominal, each provokable error, the catch-all.
 - A composition without an order test; a seam without a test through real units.
 - A disposition or signal never forced by a test.
-- Mocks of the thing under test; fixtures where real payloads exist.
+- Mocks of the thing under test; patching instead of a declared seam (T16); fixtures where real payloads exist.
+- A test with no named falsifier, or a Critical invariant with no semantic falsifier (T31).
+- A blanket mask or a regex in a test body where a normalizer belongs (T29); a golden file nobody ratified (T30).
+- A retry, sleep or tolerance window holding a test green (T33).
 - Assertions that cannot fail.
 
 **Ignore:** the code under test, except to read what it claims.

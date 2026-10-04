@@ -16,7 +16,7 @@ Every prompt refers to this repository by name so the same prompt bytes work on
 any machine. When unset it resolves to the root of the checkout the prompt was
 read from, so an existing installation changes nothing:
 
-| Name | Meaning | Default |
+| Name | Meaning | When unset |
 |---|---|---|
 | `$FACTORY_HOME` | This repository's checkout | The root of this checkout |
 
@@ -31,6 +31,7 @@ them before dispatch; either is conforming.
 | `validate.md` | Validator — owns the human relationship, the signed artifacts, running the tests, and the verdict |
 | `engineer.md` | Coder — the implementation, against the signed specification |
 | `test.md` | Tester — the tests, against the signed specification; never reads the implementation |
+| `build.md` | `/build` — the single-agent research-plan-build-ship pipeline; collapsed roles, so Cosmetic and small Standard work only |
 | `orchestrate.md` | Orchestrator-agent — the advisory runner seat beside the enforcing dispatcher scripts |
 | `code-review.md` | The code-review standard every reviewing agent binds to |
 | `diff-intent-gate.md` | Standing directive for every lane: diffs are checked against declared intent; agents escalate, humans ratify |
