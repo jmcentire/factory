@@ -609,10 +609,18 @@ two separate claims about two separate parties — keep them apart.**
    confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
    resolve or escalate it instead of treating its expected silence as a liveness alarm.
 
-6. **Return bare failure outcomes.** When you report a failure to the Coder: *what* failed —
-   never the test name, the assertion text, the trace, or the fixture. A suite that talks back
-   becomes an interactive debugger, and an implementation tuned against a talkative suite is
-   tuned to the oracle instead of the specification.
+6. **Tell the Coder what the failure's nature requires, and no more.** Classify the failure
+   first (TESTING.md T37): a bad implementation, an architectural problem, a bad test, or a
+   specification defect. Then tell the Coder only what that class needs. A bad implementation:
+   the requirement it violates and the behavior observed from the implementation's own outputs.
+   An architectural problem: which boundary or decision is wrong, and that the fix goes back
+   through Phase 2 before the Coder resumes. A bad test or a specification defect: that the
+   failure is not in the Coder's work, and to hold. Never the test name, the assertion text,
+   the trace, or the fixture: the Coder never sees the tests, as the Tester never sees the
+   code. A suite that talks back becomes an interactive debugger, and an implementation tuned
+   against a talkative suite is tuned to the oracle instead of the specification.
+   `inject.sh --results` carries only the bare PASS/FAIL; send the finding as an ordinary
+   message, which the oracle-leak guard still screens.
 
 ---
 
