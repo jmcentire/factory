@@ -3,6 +3,37 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.4] - 2026-10-05
+
+Installation. No gate or doctrine changes.
+
+### Added
+
+- **`make install`** takes a fresh clone to a working factory in one step. It builds the
+  virtualenv and the pinned Tessera (when `cargo` is present), writes a `factory` launcher to
+  `~/.local/bin`, and installs the Claude Code commands `/validate`, `/engineer`, `/test`,
+  `/orchestrate`, `/build` and `/review` to `~/.claude/commands/` as short loaders that read the
+  prompts in the checkout. Previously nothing installed the commands, and the `factory` CLI
+  worked only inside the activated venv. The installer (`scripts/install.py`) never overwrites
+  or removes a file it did not write: each generated file carries a digest of its own content,
+  so a file without one, or an installed loader the operator has since edited, is kept.
+- **`make doctor`** checks the install read-only (Python floor, venv in sync, pinned Tessera,
+  launcher, PATH, each command, Claude Code) and prints the exact fix for each gap. It fails
+  when a different `factory` comes first on PATH, such as an old `pip install`.
+- **`make uninstall`** removes only the unedited files the installer wrote.
+- README opens with an Install section, including what an AI agent asked to install the
+  factory should do and what it should ask the user first.
+
+### Changed
+
+- **Every `factory` subcommand now reads `FACTORY_TESSERA_BIN`** for its `--tessera-bin`
+  default. Before, `init`, `record-statement` and `record-ruling` did, but `chain-repair`,
+  `ledger-unlock`, `tessera-wrap` and the verifying subcommands used whichever `tessera` came
+  first on PATH. The launcher sets the variable to the pinned build, so signing and
+  verification use the same binary.
+- The README quickstart no longer says to build `../tessera` first; `make tessera` fetches the
+  pinned commit into `.tools/`.
+
 ## [0.8.3] - 2026-10-05
 
 Doctrine change, by founder ruling. No code or gate behavior changes.

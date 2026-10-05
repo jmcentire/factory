@@ -87,6 +87,17 @@ def _tessera(path: str) -> TesseraCli:
     return TesseraCli((str(Path(path).expanduser()),))
 
 
+def _default_tessera_bin() -> str:
+    """One default for every ``--tessera-bin``: ``FACTORY_TESSERA_BIN``, else ``tessera`` on PATH.
+
+    The installed ``factory`` launcher points the variable at the pinned build, so every
+    subcommand signs and verifies with the same binary instead of whichever ``tessera``
+    happens to come first on PATH.
+    """
+
+    return os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+
+
 def _add_authority_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--genesis", required=True, help="signed Tessera genesis envelope")
     parser.add_argument(
@@ -95,7 +106,9 @@ def _add_authority_arguments(parser: argparse.ArgumentParser) -> None:
         required="FACTORY_ROOT_PUBLIC_KEY" not in os.environ,
         help="externally pinned founder Ed25519 public key",
     )
-    parser.add_argument("--tessera-bin", default="tessera", help="Tessera executable path")
+    parser.add_argument(
+        "--tessera-bin", default=_default_tessera_bin(), help="Tessera executable path"
+    )
 
 
 def _add_replay_verifier_arguments(parser: argparse.ArgumentParser) -> None:
@@ -111,7 +124,9 @@ def _add_replay_verifier_arguments(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("FACTORY_ROOT_PUBLIC_KEY", ""),
         help="externally pinned founder Ed25519 public key",
     )
-    parser.add_argument("--tessera-bin", default="tessera", help="Tessera executable path")
+    parser.add_argument(
+        "--tessera-bin", default=_default_tessera_bin(), help="Tessera executable path"
+    )
 
 
 def _load_workflow(arguments: argparse.Namespace) -> FactoryWorkflow:
@@ -192,7 +207,7 @@ def _parser() -> argparse.ArgumentParser:
                               "from the human's own words")
     chain_repair.add_argument("--genesis", required=True)
     chain_repair.add_argument("--root-public-key", required=True)
-    chain_repair.add_argument("--tessera-bin", default="tessera")
+    chain_repair.add_argument("--tessera-bin", default=_default_tessera_bin())
 
     ledger_unlock = commands.add_parser(
         "ledger-unlock",
@@ -206,7 +221,7 @@ def _parser() -> argparse.ArgumentParser:
     ledger_unlock.add_argument("--unlock-record", required=True)
     ledger_unlock.add_argument("--genesis", required=True)
     ledger_unlock.add_argument("--root-public-key", required=True)
-    ledger_unlock.add_argument("--tessera-bin", default="tessera")
+    ledger_unlock.add_argument("--tessera-bin", default=_default_tessera_bin())
 
     ci_retain = commands.add_parser(
         "ci-retain",
@@ -265,7 +280,7 @@ def _parser() -> argparse.ArgumentParser:
     init_project.add_argument("--keys-dir", default=".factory/keys")
     init_project.add_argument("--repository-id", required=True)
     init_project.add_argument(
-        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+        "--tessera-bin", default=_default_tessera_bin()
     )
 
     record_statement = commands.add_parser(
@@ -280,7 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     record_statement.add_argument("--said-at", required=True, help="when they said it")
     record_statement.add_argument("--output", required=True)
     record_statement.add_argument(
-        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+        "--tessera-bin", default=_default_tessera_bin()
     )
 
     record_ruling = commands.add_parser(
@@ -299,7 +314,7 @@ def _parser() -> argparse.ArgumentParser:
     record_ruling.add_argument("--said-at", required=True, help="when they said it")
     record_ruling.add_argument("--output", required=True)
     record_ruling.add_argument(
-        "--tessera-bin", default=os.environ.get("FACTORY_TESSERA_BIN", "tessera")
+        "--tessera-bin", default=_default_tessera_bin()
     )
 
     verify_genesis = commands.add_parser(
@@ -620,7 +635,7 @@ def _parser() -> argparse.ArgumentParser:
     wrap.add_argument("--kind", required=True)
     wrap.add_argument("--key", required=True)
     wrap.add_argument("--output", required=True)
-    wrap.add_argument("--tessera-bin", default="tessera")
+    wrap.add_argument("--tessera-bin", default=_default_tessera_bin())
 
     # Gate L — the sole harness-close path. Renders the pure decide_promotion verdict for a
     # run and writes promotion_verdict.json; promote.sh is the sole writer of harness.json

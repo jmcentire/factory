@@ -6,6 +6,40 @@ segregation of duties, and a hard generic-core / target-as-data boundary — as 
 separately-shippable Python package that imports **nothing target-specific**. The pure
 `factory_core` policy layer is joined by `factory_runtime`, the impure orchestration boundary.
 
+## Install
+
+Needs git, Python 3.12+, and Rust (`cargo`, from https://rustup.rs) to build the pinned
+Tessera signer. To use the role commands you also need Claude Code.
+
+```bash
+git clone https://github.com/jmcentire/factory.git ~/Code/factory
+cd ~/Code/factory
+make install
+```
+
+`make install` sets up the virtualenv, builds the pinned Tessera, writes a `factory` launcher
+to `~/.local/bin`, and installs the Claude Code commands `/validate`, `/engineer`, `/test`,
+`/orchestrate`, `/build` and `/review` to `~/.claude/commands/`. Each command file is a short
+loader that reads its prompt from this checkout, so a `git pull` updates them all. It ends by
+running `make doctor`, which checks every piece and prints the exact fix for anything that is
+missing. When doctor says `READY`, you are done. Otherwise apply the fixes it lists and run
+`make doctor` again.
+
+- **Change the locations** with `make install BINDIR=... CLAUDE_COMMANDS_DIR=...`.
+- **Files you already have are safe.** The installer never overwrites or removes a file it did
+  not write. If you edit an installed command (for example, to add machine-local auth notes),
+  reinstalling leaves your version alone.
+- **Update** with `git pull && make install`.
+- **Remove** with `make uninstall`, which deletes only the unedited files the installer wrote.
+
+To use it, open Claude Code in the repository you want to work on. Type `/build` for small
+work, or `/validate` to start a full factory run. `factory --help` lists the CLI.
+
+**For an AI agent asked to install this:** clone it, run `make install`, then run `make doctor`
+until it prints `READY`. Apply each listed fix as you go. Editing the user's shell profile (for
+PATH), removing another `factory` install, or installing Python or Rust is the user's call, so
+ask before doing it.
+
 ## The canonical doctrine
 
 The foundation of this repository is a written doctrine, and the code implements pieces of
@@ -175,17 +209,17 @@ every refactor, so it was removed as a verified restatement (remediation 5.2).
 The tree plus each module's first-line invariant docstring is the inventory;
 [`docs/GLOSSARY.md`](docs/GLOSSARY.md) anchors the load-bearing terms.
 
-## Quickstart
+## Developing the factory
 
 ```bash
-make dev          # install the package + dev tooling (editable)
+make dev          # install the package + dev tooling (editable); `make install` includes this
 make check-purity # prove the core imports nothing target-specific
 make check-doctrine # prove active doctrine surfaces retain the canonical structure
 make test         # run the pytest suite
 make ship         # every gate, fail-closed: purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test
 make test-isolation # macOS: prove kernel-enforced Coder/Tester separation
-make test-tessera # build ../tessera first; prove real signatures and the runtime to preview
-factory --help    # executable intake/ratification/status boundary
+make tessera      # fetch and build the pinned Tessera into .tools/ (`make install` does this)
+make test-tessera # prove real signatures and the runtime to preview
 ```
 
 Nothing needs a target to run. The suite exercises the core end-to-end against a **synthetic

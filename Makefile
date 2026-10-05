@@ -1,4 +1,4 @@
-.PHONY: help dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
+.PHONY: help install uninstall doctor dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
 
 .DEFAULT_GOAL := help
 
@@ -105,6 +105,30 @@ ifneq ($(strip $(VENV_PREREQ)),)
 else
 	$(PY) -m pip install -e ".[dev]"
 endif
+
+# --- Putting a checkout to use ---------------------------------------------------------------
+#
+# `make install` is the one step from a fresh clone to a working factory: the venv, the pinned
+# Tessera (when cargo is present), a `factory` launcher in BINDIR, and the Claude Code commands
+# (/validate, /engineer, /test, /orchestrate, /build, /review) as thin loaders that read the
+# prompts in this checkout. It ends with `make doctor`, so it exits non-zero until every piece is
+# in place and prints the exact fix for whatever is not. The installer never overwrites or
+# removes a file it did not write (scripts/install.py states the rule).
+BINDIR ?= $(HOME)/.local/bin
+CLAUDE_COMMANDS_DIR ?= $(HOME)/.claude/commands
+INSTALL_ARGS = --bindir "$(BINDIR)" --commands-dir "$(CLAUDE_COMMANDS_DIR)" --tessera "$(FACTORY_TESSERA_BIN)"
+
+install: venv ## set up everything needed to use the factory, then run doctor
+	@if command -v cargo >/dev/null 2>&1; then $(MAKE) --no-print-directory tessera; \
+	else echo "install: cargo not found; skipping the Tessera build (doctor says how to fix)"; fi
+	@$(PY) scripts/install.py install $(INSTALL_ARGS)
+	@$(PY) scripts/install.py doctor $(INSTALL_ARGS)
+
+doctor: ## check the install and print the fix for anything missing (read-only)
+	@$(PY_BOOTSTRAP) scripts/install.py doctor $(INSTALL_ARGS)
+
+uninstall: ## remove the launcher and command loaders that install wrote (keeps edited ones)
+	@$(PY_BOOTSTRAP) scripts/install.py uninstall $(INSTALL_ARGS)
 
 # Fail closed on the interpreter itself. Without this, a pre-3.12 `python3` reaches
 # check_core_purity.py and dies on `import tomllib` — a stdlib error message that says nothing

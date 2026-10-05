@@ -8,7 +8,8 @@ the text a runner injects into a lane.
 (`~/.claude/commands/`, `~/.codex/prompts/`, `~/.gemini/config/skills/`) are thin
 loaders that read the files here —
 reconciled 2026-08-30 so a canonical edit propagates everywhere without fan-out and no
-external copy can drift.
+external copy can drift. `make install` writes the Claude Code loaders
+(`scripts/install.py` renders them; `make doctor` checks they point at this checkout).
 
 ## Locations
 
