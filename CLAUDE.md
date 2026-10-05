@@ -29,6 +29,8 @@ The tree, not a listing here, is the authority.
 ## Commands
 
 ```bash
+make install        # put this checkout to use (venv, Tessera, launcher, /commands); ends in doctor
+make doctor         # read-only: is the install complete? prints the fix for each gap
 make check-purity   # the boundary guarantee — run this first
 make check-doctrine # structural doctrine parity (four roles / three phases / eight rules)
 make test           # pytest suite
