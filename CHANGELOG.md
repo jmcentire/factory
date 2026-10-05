@@ -3,6 +3,25 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.3] - 2026-10-05
+
+Doctrine change, by founder ruling. No code or gate behavior changes.
+
+### Changed
+
+- **What the Coder hears about a failure depends on its nature** (kernel I3, founder ruling
+  2026-10-04). The Tester still never sees the implementation and the Coder still never sees
+  the tests. The Validator now classifies each failure (bad implementation, architectural
+  problem, bad test, specification defect) and tells the Coder only what that class needs: the
+  violated requirement and observed behavior for an implementation defect; the wrong boundary
+  and a return to Phase 2 for an architectural problem; "not in your work, hold" for a bad test
+  or a specification defect, without saying a test is involved. Previously the Coder got a bare
+  pass/fail only. Updated in `DOCTRINE-KERNEL.md` (I3 and the ruling record),
+  `SOFTWARE-FACTORY.md` (build loop step 5), `prompts/validate.md` rule 6 (and the regenerated
+  `ROLE-DOCTRINE.md`), `TESTING.md` T37, and a comment in `harness/inject.sh`. The results
+  channel to the Coder still carries only PASS or FAIL; the finding travels as an ordinary
+  message, still screened by the oracle-leak guard.
+
 ## [0.8.2] - 2026-10-04
 
 Documentation only. No code or gate changes.

@@ -4,7 +4,10 @@
 > role/phase doctrine revision, 2026-07-26 (four-role ruling: the Orchestrator is a role and
 > is always resident, 2026-09-21), and Criticality amendment,
 > 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27, and the
-> Validator-as-product-manager capability/technical-guidance amendment, 2026-07-30.** An agent may still
+> Validator-as-product-manager capability/technical-guidance amendment, 2026-07-30, plus the
+> repair-feedback ruling, 2026-10-04: "tester stays blind and vice versa. Coder gets what the
+> validator tells it which should be minimal but depends on the nature of the failure. IS there
+> an architectural issue, a bad implementation, a bad test, etc."** An agent may still
 > treat a statement as *more* protected than listed, never
 > less. Only the founder may move a statement down a tier or remove it. Changes to this file
 > pass through the Diff-Intent Gate
@@ -40,7 +43,7 @@ judgment. Four tiers:
 |---|---|
 | I1 | The eight non-negotiables (fail-closed on hazards; single authoritative owner per fact; least privilege; full auditability; no silent failure; honesty; provenance of intent; live-verified not self-attested). |
 | I2 | Segregation of duties: implementer ≠ verifier ≠ approver; identity resolution is deny-wins; Critical changes carry the ≥2-distinct-enrolled-humans floor and mandatory specialist review. |
-| I3 | Oracle independence: Coder and Tester receive the same signed spec but have no channel; the Tester never sees the implementation, the Coder never sees the tests, and the Validator returns only bare failure outcomes to an automated repair context. |
+| I3 | Oracle independence: Coder and Tester receive the same signed spec but have no channel; the Tester never sees the implementation, the Coder never sees the tests, and the Validator tells an automated repair context only what the nature of the failure requires (implementation, architecture, test or specification), never test internals. |
 | I4 | The two controls (negative and positive) bound every correction spec against the trusted baseline. |
 | I5 | Oracle adequacy and criticality are independent axes: depth keys on oracle adequacy, never blast radius; a gap blocks on Critical, gates for expiring human risk acceptance on Standard, and reports-and-promotes on Cosmetic. |
 | I6 | The same built artifact is promoted up the ladder by digest; the evidence plane is content-addressed, hash-chained, and tamper-evident. |

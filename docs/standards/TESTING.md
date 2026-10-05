@@ -284,7 +284,8 @@ Deleting a test that no longer adds evidence is healthy. Record why. The deletio
 
 | Finding | Route |
 |---|---|
-| The code violates a valid item | Coder fixes, from the bare failure outcome |
+| The code violates a valid item | Coder fixes, from the Validator's finding: the item violated and the behavior observed |
+| The architecture cannot satisfy the item | Back through the architecture phase; the Coder holds |
 | The stated item changed | Tester re-derives the test from the latest statement (H3) |
 | The test asserts structure, not a promise | Tester rewrites or removes it and records why |
 | The test is nondeterministic | Tester repairs it; if it cannot be made deterministic, testability defect |

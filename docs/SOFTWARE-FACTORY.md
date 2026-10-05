@@ -1037,10 +1037,17 @@ Once the three phases are agreed, the loop runs.
 4. The runtime freezes the exact Coder and Tester outputs independently before review. A hash
    without recoverable subject bytes is not an immutable review artifact. **Validator** runs the
    tests only from those frozen subjects when both are complete.
-5. On failure, the Validator reports the failure to the Coder — **not the tests.** Test names,
-   traces, and assertion text do not reach an automated repair context, because a suite that
-   returns its internals becomes an interactive debugger the implementation is tuned against.
-   Any automated retry starts clean and receives only a bare pass/fail result.
+5. On failure, the Validator first classifies it: an implementation that violates a stated
+   item, an architectural problem, a defective test, or a specification defect. It tells the
+   Coder what that classification requires, and as little as that. For an implementation defect:
+   the requirement violated and the behavior observed. For an architectural problem: the
+   boundary or decision that is wrong, and that the fix goes back through Phase 2 before the
+   Coder resumes. For a defective test or a specification defect: that the failure is not in the
+   Coder's work, and to hold. **Never the tests.** The Coder never sees them, as the Tester never
+   sees the implementation. Test names, traces, and assertion text do not reach an automated
+   repair context, because a suite that returns its internals becomes an interactive debugger
+   the implementation is tuned against. Any automated retry starts clean and receives only the
+   Validator's finding.
 6. On pass, the Validator first emits the host-required adversarial code-review report over the
    same frozen subject and ratified intent, then verifies the mechanical evidence, confirms
    provenance and oracle adequacy, and drives the change live. A green suite is evidence inside

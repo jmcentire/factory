@@ -6,7 +6,8 @@
 # status probe uses tmux_lane_message.sh and the Codex session API. Every injection is receipted
 # (sha256 of the message, from, to, ts) into .factory/runs/<run>/injections.jsonl.
 # Coder-bound *result* traffic passes a verdict filter: bare pass/fail only — never
-# a test name, assertion, or trace (validate.md, "Return bare failure outcomes").
+# a test name, assertion, or trace. The Validator's classified finding travels as an
+# ordinary message under the oracle-leak guard below (validate.md, rule 6).
 # usage: inject.sh <run> <to-window> [--results] "<message>"
 #        INJECT_FROM=dispatcher inject.sh <run> orchestrator "<message>"
 set -euo pipefail
