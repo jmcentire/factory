@@ -793,8 +793,11 @@ that is a question for the human — which provider and which model — not a se
 harness enforces the lane half: an Ollama-backed launch names its model explicitly and is refused
 unless that model is already available on the machine. The operator states the choice once, in a
 **model profile** that binds every role to an agent and a model (`factory profile create`;
-`make install` asks for the first). A run ignited with a profile records it as
-`model-profile.json`, and every seat and lane in that run launches on those bindings.
+`make install` asks for the first). Every run records how it was started as
+`model-profile.json`: the profile, or an explicit none. The launches the harness starts (the
+Validator, the Orchestrator and the tmux lanes) run on those bindings. The qualified dispatch
+path takes its model from the runner manifest, which the Validator writes from the profile; the
+harness does not yet check the two against each other.
 
 **The tier is recorded in the manifest**, because a verdict produced at the moderate tier and one
 produced at the stronger tier are not the same evidence, and nothing downstream can tell them

@@ -169,17 +169,28 @@ def test_make_doctor_judges_the_callers_path_not_makes(tmp_path: Path) -> None:
     assert path_line.split()[0] == "ok", done.stdout
 
 
-def test_doctor_is_not_ready_without_a_model_profile(tmp_path: Path) -> None:
-    """The factory never picks a model, so an install with no profile is not a working install."""
+def test_doctor_reports_what_a_launch_would_do_about_profiles(tmp_path: Path) -> None:
+    """Doctor reports a launch's real answer and holds no standard of its own. With no profile a
+    launch works on each agent's own default model, so doctor warns and stays READY. A malformed
+    file or profiles with no default make factory.sh refuse, so those fail."""
 
     layout = _layout(tmp_path)
     inst.install(layout)
     checks = inst.doctor(layout, _path_env(layout, tmp_path))
-    assert _failing(checks) == {"profile"}, checks
-    text, ready = inst.report(checks)
-    assert not ready and "factory profile create" in text
+    profile = next(c for c in checks if c.name == "profile")
+    assert profile.status == "warn", checks
+    assert "own default model" in profile.detail and "factory profile create" in profile.detail
+    assert _failing(checks) == set() and inst.report(checks)[1] is True
+
     layout.profiles.write_text("{not json", encoding="utf-8")
     assert _failing(inst.doctor(layout, _path_env(layout, tmp_path))) == {"profile"}
+
+    mp = inst.model_profiles(REPO)
+    bindings = {role: mp.parse_binding(role, "codex:gpt-test") for role in mp.ROLES}
+    mp.save(layout.profiles, mp.Profiles(None, {"local": mp.Profile("local", "", bindings)}))
+    no_default = inst.doctor(layout, _path_env(layout, tmp_path))
+    assert _failing(no_default) == {"profile"}
+    assert "factory profile use" in inst.report(no_default)[0]
 
 
 def test_install_asks_for_a_profile_in_a_terminal_and_never_suggests_one(tmp_path: Path) -> None:
@@ -233,4 +244,22 @@ def test_doctor_warns_when_a_profiles_ollama_model_is_absent(tmp_path: Path) -> 
     checks = inst.doctor(layout, os.pathsep.join([_path_env(layout, tmp_path), str(tools)]))
     coder = next(c for c in checks if c.name == "coder")
     assert coder.status == "warn" and "ollama pull glm-test:cloud" in coder.detail
+    assert _failing(checks) == set(), checks
+
+
+def test_doctor_answers_when_ollama_hangs(tmp_path: Path) -> None:
+    """A read-only diagnostic always comes back: a hung Ollama is a warning, not a traceback."""
+
+    layout = _layout(tmp_path)
+    inst.install(layout)
+    _with_profile(layout, coder="codex-ollama:glm-test:cloud")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for tool, body in (("codex", "exit 0"), ("ollama", "exec sleep 5")):
+        (tools / tool).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        (tools / tool).chmod(0o755)
+    path_env = os.pathsep.join([_path_env(layout, tmp_path), str(tools)])
+    checks = inst.doctor(layout, path_env, ollama_timeout=0.5)
+    coder = next(c for c in checks if c.name == "coder")
+    assert coder.status == "warn" and "timed out after 0.5s" in coder.detail
     assert _failing(checks) == set(), checks

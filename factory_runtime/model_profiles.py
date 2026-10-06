@@ -8,8 +8,10 @@ another for a single run with ``factory.sh --profile <name>``.
 
 The invariant: **a profile binds every role, and nothing fills a gap.** A role with no agent or
 no model is a malformed profile, refused when the file is read, never completed from a default.
-``factory.sh`` writes the profile it used into the run as ``model-profile.json``, so every lane
-launched later in that run uses the same bindings even if the operator edits the file meanwhile.
+``factory.sh`` records how every run was started as ``model-profile.json``: the profile it used,
+or an explicit ``"profile": null`` when it used none. Lanes read that record, so a lane launched
+later uses the same bindings even if the operator edits the file meanwhile, and a missing record
+is an error rather than a guess about how the run began.
 
 The file holds no secrets: an agent's credentials stay with the agent.
 
@@ -278,8 +280,13 @@ def _snapshot(profile: Profile, source: Path) -> dict[str, object]:
     }
 
 
-def read_snapshot(path: Path) -> dict[str, Binding]:
-    """The bindings a run recorded. Refused unless the file is the shape ``snapshot`` writes."""
+# What a run started without a profile records: the fact, stated, not left to be inferred.
+NO_PROFILE_SNAPSHOT: Mapping[str, object] = {"schema_version": SNAPSHOT_VERSION, "profile": None}
+
+
+def read_snapshot(path: Path) -> dict[str, Binding] | None:
+    """The bindings a run recorded, or None when it recorded that it was started without a
+    profile. Refused unless the file is one of the two shapes ``write_snapshot`` writes."""
 
     if path.is_symlink() or not path.is_file():
         raise ProfileError(f"{path} is not a regular file")
@@ -287,6 +294,8 @@ def read_snapshot(path: Path) -> dict[str, Binding]:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ProfileError(f"{path} is not readable JSON: {error}") from None
+    if document == NO_PROFILE_SNAPSHOT:
+        return None
     if (
         not isinstance(document, dict)
         or document.get("schema_version") != SNAPSHOT_VERSION
@@ -338,12 +347,14 @@ def prompt_profile(
     return Profile(name, description, roles)
 
 
-def write_snapshot(profile: Profile, source: Path, target: Path) -> None:
-    """Record ``profile`` in a run. Replaced, never followed: a symlink there is refused."""
+def write_snapshot(profile: Profile | None, source: Path, target: Path) -> None:
+    """Record how a run was started: ``profile``, or that there was none. Replaced, never
+    followed: a symlink there is refused."""
 
     if target.is_symlink():
         raise ProfileError(f"refusing a symlinked model profile snapshot: {target}")
-    payload = json.dumps(_snapshot(profile, source), indent=2, sort_keys=True) + "\n"
+    record = dict(NO_PROFILE_SNAPSHOT) if profile is None else _snapshot(profile, source)
+    payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
     fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".model-profile-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:

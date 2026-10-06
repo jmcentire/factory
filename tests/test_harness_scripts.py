@@ -19,7 +19,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9391,6 +9391,66 @@ def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> 
     assert launch("tester").returncode == 0
     tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
     assert "--oss --local-provider ollama -m glm-test:cloud" in tester_call
+
+
+def _ignite_and_launcher(
+    tmp_path: Path, task: str, env_extra: dict[str, str] | None = None
+) -> tuple[Path, Path, Path, Callable[[str], subprocess.CompletedProcess[str]]]:
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    env = {**env, **(env_extra or {})}
+    ignited = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the lane's work.\n")
+
+    def launch(role: str) -> subprocess.CompletedProcess[str]:
+        lane = tmp_path / f"standalone-{role}"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+        return run(
+            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(lane),
+             "--prompt", str(prompt), "--runs", str(root.parent)],
+            operator,
+            env,
+        )
+
+    return root, operator, tmux_log, launch
+
+
+def test_a_lane_refuses_a_run_whose_model_profile_record_is_missing(tmp_path: Path) -> None:
+    """A run ignited with a profile loses its record. "No file" cannot tell "started without a
+    profile" from "record lost", so the lane refuses rather than guess and launch on Codex's
+    built-in default: the unnamed model profiles exist to stop."""
+
+    profiles = tmp_path / "profiles.json"
+    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="agy:gemini-test",
+                    coder="codex:gpt-coder", tester="codex:gpt-tester")
+    root, _, tmux_log, launch = _ignite_and_launcher(
+        tmp_path, "Refuse a run that lost its model profile record.",
+        {"FACTORY_PROFILES": str(profiles)},
+    )
+    (root / "model-profile.json").unlink()
+    refused = launch("tester")
+    assert refused.returncode == 64, refused.stdout + refused.stderr
+    assert "model-profile.json is missing" in refused.stderr
+    assert not any("-n tester" in line for line in tmux_log.read_text().splitlines())
+
+
+def test_a_run_without_a_profile_records_an_explicit_none(tmp_path: Path) -> None:
+    """With no profile the run still states how it began, and its lanes keep the pre-profile
+    launch: Codex with no model flag."""
+
+    root, _, tmux_log, launch = _ignite_and_launcher(tmp_path, "Start without a profile.")
+    assert json.loads((root / "model-profile.json").read_text(encoding="utf-8")) == {
+        "schema_version": "factory-model-profile/1", "profile": None
+    }
+    assert launch("coder").returncode == 0
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    assert " -m " not in coder_call and " exec  --ignore-user-config" in coder_call
 
 
 def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:

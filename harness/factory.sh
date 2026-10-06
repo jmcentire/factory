@@ -185,13 +185,12 @@ case "$ORCHESTRATOR_AGENT" in
     ;;
 esac
 
-if [ -n "$PROFILE_NAME" ]; then
-  # The run keeps the bindings it was ignited with: lanes launched later read this, never the
-  # operator's file, which may change meanwhile. No harness metadata exists yet, so a file here
-  # can only be left by an ignition that failed, and is replaced.
-  "$FACTORY_PYTHON" "$D/model_profile.py" snapshot --name "$PROFILE_NAME" \
-    --expect-digest "$PROFILE_DIGEST" --output "$ROOT/model-profile.json" || exit 64
-fi
+# The run records how it was started, always: the profile it used, or an explicit none. Lanes
+# launched later read this record, never the operator's file, which may change meanwhile, and a
+# missing record is an error for them rather than a guess. No harness metadata exists yet, so a
+# file here can only be left by an ignition that failed, and is replaced.
+"$FACTORY_PYTHON" "$D/model_profile.py" snapshot --name "$PROFILE_NAME" \
+  --expect-digest "${PROFILE_DIGEST:-none}" --output "$ROOT/model-profile.json" || exit 64
 
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \

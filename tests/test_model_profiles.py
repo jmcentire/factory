@@ -177,9 +177,40 @@ def test_harness_entry_prints_nul_fields_and_refuses_a_changed_profile(
                     "--expect-digest", profile.digest, "--output", str(output)]) == 0
     capsysbinary.readouterr()
     assert harness_main(["binding", "--snapshot", str(output), "--role", "coder"]) == 0
-    assert capsysbinary.readouterr().out == b"codex-ollama\0glm-test:cloud\0"
+    assert capsysbinary.readouterr().out == b"profile\0codex-ollama\0glm-test:cloud\0"
     assert harness_main(["resolve", "--profiles", str(path), "--name", "nope"]) == 64
     assert capsysbinary.readouterr().out == b""  # a refusal prints no first field
+
+
+def test_a_run_started_without_a_profile_records_that_fact(
+    tmp_path: Path, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    """With no profile the run still writes its record, an explicit none, so a lane can tell
+    "started without a profile" from "record lost". A missing record is refused, not guessed."""
+
+    path = tmp_path / "profiles.json"
+    output = tmp_path / "model-profile.json"
+    assert harness_main(["snapshot", "--profiles", str(path), "--expect-digest", "none",
+                         "--output", str(output)]) == 0
+    assert json.loads(output.read_text(encoding="utf-8")) == {
+        "schema_version": mp.SNAPSHOT_VERSION, "profile": None
+    }
+    assert mp.read_snapshot(output) is None
+    capsysbinary.readouterr()
+    assert harness_main(["binding", "--snapshot", str(output), "--role", "tester"]) == 0
+    assert capsysbinary.readouterr().out == b"none\0"
+    assert harness_main(["binding", "--snapshot", str(tmp_path / "absent.json"),
+                         "--role", "tester"]) == 64
+    assert capsysbinary.readouterr().out == b""
+    # A profile that appears between resolve and snapshot is a changed ignition, refused.
+    mp.save(path, mp.Profiles("local", {"local": _profile()}))
+    assert harness_main(["snapshot", "--profiles", str(path), "--expect-digest", "none",
+                         "--output", str(output)]) == 64
+    # Anything else carrying a null profile is malformed, not "none".
+    output.write_text(json.dumps({"schema_version": mp.SNAPSHOT_VERSION, "profile": None,
+                                  "roles": {}}), encoding="utf-8")
+    with pytest.raises(mp.ProfileError, match="snapshot"):
+        mp.read_snapshot(output)
 
 
 def test_prompt_asks_again_until_every_binding_is_launchable() -> None:

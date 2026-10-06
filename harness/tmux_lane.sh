@@ -39,15 +39,30 @@ REPO_ROOT="$(cd "$D/.." && pwd -P)"
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
-# The model profile factory.sh recorded in the run binds this lane's agent and model. Without
-# one, --agent and FACTORY_LANE_OLLAMA_MODEL keep their earlier meaning; with one, either is
-# refused if it disagrees, never silently preferred.
+# The run's model-profile.json, which factory.sh writes for every run, says how it was started.
+# With a profile, it binds this lane's agent and model, and --agent or FACTORY_LANE_OLLAMA_MODEL
+# is refused if it disagrees, never silently preferred. With an explicit none, they keep their
+# earlier meaning.
 MODEL=""
 PROFILE_SNAPSHOT="$ROOT/model-profile.json"
-if [ "$ACTION" = "launch" ] && { [ -e "$PROFILE_SNAPSHOT" ] || [ -L "$PROFILE_SNAPSHOT" ]; }; then
+PROFILE_STATE=""
+if [ "$ACTION" = "launch" ]; then
+  # factory.sh records how every run was started. Without that record the lane cannot tell a run
+  # started with no profile from one whose record was lost, so it refuses rather than guess.
+  [ -e "$PROFILE_SNAPSHOT" ] || [ -L "$PROFILE_SNAPSHOT" ] || {
+    echo "tmux-lane: $PROFILE_SNAPSHOT is missing. factory.sh records every run's model profile (an explicit none when it used none), so this run was ignited before 0.8.11 or the record was lost; ignite a new run with harness/factory.sh" >&2
+    exit 64
+  }
   exec 3< <("$FACTORY_PYTHON" "$D/model_profile.py" binding \
     --snapshot "$PROFILE_SNAPSHOT" --role "$ROLE")
-  { IFS= read -r -d '' PROFILE_AGENT <&3 && IFS= read -r -d '' MODEL <&3; } || exit 64
+  IFS= read -r -d '' PROFILE_STATE <&3 || exit 64
+  case "$PROFILE_STATE" in
+    profile|none) ;;
+    *) echo "tmux-lane: the run's model profile record is malformed" >&2; exit 70 ;;
+  esac
+fi
+if [ "$PROFILE_STATE" = "profile" ]; then
+  { IFS= read -r -d '' PROFILE_AGENT <&3 && IFS= read -r -d '' MODEL <&3; } || exit 70
   exec 3<&-
   [ -z "$AGENT_ARG" ] || [ "$AGENT_ARG" = "$PROFILE_AGENT" ] || {
     echo "tmux-lane: --agent $AGENT_ARG contradicts the run's model profile ($ROLE: $PROFILE_AGENT)" >&2
@@ -61,9 +76,13 @@ if [ "$ACTION" = "launch" ] && { [ -e "$PROFILE_SNAPSHOT" ] || [ -L "$PROFILE_SN
     }
     factory_require_ollama_model tmux-lane "the $ROLE model in the run's model profile" "$MODEL" || exit $?
   fi
-elif [ "$AGENT" = "codex-ollama" ] && [ "$ACTION" = "launch" ]; then
-  MODEL="${FACTORY_LANE_OLLAMA_MODEL:-}"
-  factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
+elif [ "$PROFILE_STATE" = "none" ]; then
+  exec 3<&-
+  # Started without a profile: --agent and FACTORY_LANE_OLLAMA_MODEL keep their earlier meaning.
+  if [ "$AGENT" = "codex-ollama" ]; then
+    MODEL="${FACTORY_LANE_OLLAMA_MODEL:-}"
+    factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
+  fi
 fi
 TMUX_ROOT="$ROOT/tmux-lanes"
 EVENTS="$TMUX_ROOT/$ROLE-launch.jsonl"

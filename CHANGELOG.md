@@ -17,16 +17,20 @@ over as they like, and each run uses one.
   with one marked the default. A profile that leaves a role unbound, names an agent its role
   cannot run, or names no model is refused when the file is read, never completed from a
   default. `create` asks for every binding in a terminal and suggests none.
-- **`make install` asks for the first profile, and `make doctor` is not READY without one.** The
-  factory never picks a model, so an install with no profile is not a working install. Doctor
-  also warns when a default-profile agent is not on PATH or its Ollama model is not on the
-  machine. A non-interactive install prints the command instead of guessing.
+- **`make install` asks for the first profile in a terminal.** Doctor reports what a launch
+  would do and holds no standard of its own. With no profile, launches use each agent's own
+  default model, so doctor warns, names the fix and stays READY. A malformed profiles file, or
+  profiles with no default, makes `factory.sh` refuse, so doctor fails on those. Doctor also
+  warns when a default-profile agent is not on PATH, when its Ollama model is not on the
+  machine, or when Ollama cannot be asked (a hung Ollama times out into a warning, never a
+  traceback). A non-interactive install prints the command instead of guessing.
 - **`harness/factory.sh --profile <name>`**, else `$FACTORY_PROFILE`, else the default. The
   Validator and a Codex Orchestrator get the profile's model with `--model`; agy takes no model
-  flag, so its model is recorded as selected inside agy and the ignition says so. The profile is
-  snapshotted into the run as `model-profile.json`. `tmux_lane.sh` launches each lane from that
-  snapshot (`-m` for Codex, the existing Ollama path for `codex-ollama`), and
-  `tmux_lane_message.sh` resumes on the model the lane launched with.
+  flag, so its model is recorded as selected inside agy and the ignition says so. Every run
+  records how it was started as `model-profile.json`: the profile, or an explicit
+  `"profile": null`. `tmux_lane.sh` launches each lane from that record (`-m` for Codex, the
+  existing Ollama path for `codex-ollama`), and `tmux_lane_message.sh` resumes on the model the
+  lane launched with.
 
 ### Changed
 
@@ -35,14 +39,18 @@ over as they like, and each run uses one.
   `FACTORY_LANE_OLLAMA_MODEL` and `tmux_lane.sh --agent` still work, and must match the profile
   when one is in effect. With no profiles at all, they keep their earlier meaning and every
   launch command is unchanged.
+- **A lane refuses a run with no `model-profile.json`.** Without that record a lane cannot tell
+  a run started with no profile from one whose record was lost, and guessing would launch on
+  Codex's built-in default. Runs ignited before 0.8.11 have no record; ignite a new run.
 - Codex lanes run with `--ignore-user-config`, so before this a Codex lane ran Codex's built-in
   default model, which no one named. With a profile, it runs the named one.
 - Doctrine: `SOFTWARE-FACTORY.md` §6 names the model profile as where the operator configures
   models; `prompts/validate.md` (regenerated `ROLE-DOCTRINE.md`) and `prompts/orchestrate.md`
   point at the run's `model-profile.json`.
 
-Not changed: the qualified dispatch path (`dispatch_lane.sh`) still takes its runner manifests,
-which the Validator writes; the profile is the source for them, not a substitute.
+Not changed: the qualified dispatch path (`dispatch_lane.sh`) still takes its model from the
+runner manifest, which the Validator writes from the profile. Checking the manifest's model
+against the run's record is a follow-up.
 
 ## [0.8.10] - 2026-10-06
 

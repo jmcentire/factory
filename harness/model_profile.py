@@ -8,8 +8,11 @@ the form the scripts read with ``read -d ''``.
   resolve    ``none`` when the operator has no profiles and nothing was asked for, else
              ``profile`` then the name, the digest, and each role's agent and model in ROLES
              order. A refusal prints nothing, so a missing first field always means stop.
-  snapshot   record the resolved profile in the run, refused if it changed since ``resolve``.
-  binding    one role's agent and model from a run's snapshot.
+  snapshot   record how the run was started, refused if that changed since ``resolve``:
+             ``--expect-digest none`` records an explicit no-profile snapshot.
+  binding    from a run's snapshot: ``none`` when it was started without a profile, else
+             ``profile`` then one role's agent and model. A missing or malformed snapshot is
+             refused, so a lane never guesses how its run began.
 """
 
 from __future__ import annotations
@@ -50,8 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "binding":
-            bound: Binding = read_snapshot(pathlib.Path(arguments.snapshot))[arguments.role]
-            _nul(bound.agent, bound.model)
+            recorded = read_snapshot(pathlib.Path(arguments.snapshot))
+            if recorded is None:
+                _nul("none")
+                return 0
+            bound: Binding = recorded[arguments.role]
+            _nul("profile", bound.agent, bound.model)
             return 0
         path = (
             pathlib.Path(arguments.profiles).expanduser()
@@ -60,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         profile = resolve(path, arguments.name)
         if arguments.command == "snapshot":
-            if profile is None or profile.digest != arguments.expect_digest:
+            digest = "none" if profile is None else profile.digest
+            if digest != arguments.expect_digest:
                 raise ProfileError(f"{path} changed during ignition; ignite again")
             write_snapshot(profile, path, pathlib.Path(arguments.output))
             return 0

@@ -10,8 +10,8 @@ thin, generated file outside the repository:
              tells the agent to read the canonical prompt in this checkout. The prompt bytes
              stay here; the loader only names where they are.
   profile    the operator's first model profile, asked for in a terminal when none exists
-             (``factory_runtime/model_profiles.py``): which agent and model run each role. The
-             factory never picks a model, so a working install has one.
+             (``factory_runtime/model_profiles.py``): which agent and model run each role.
+             Without one, launches use each agent's own default model; doctor says so.
 
 The invariant: the installer never overwrites or removes a file it cannot prove it wrote.
 Every generated file ends with a marker carrying the SHA-256 of the rest of its content. A file
@@ -164,8 +164,8 @@ def ensure_profile(
     if existing.profiles:
         return f"same    model profiles in {layout.profiles} (default: {existing.default})"
     if not interactive:
-        return (f"skipped model profile: none in {layout.profiles}; create one with "
-                "`factory profile create` (doctor fails until you do)")
+        return (f"skipped model profile: none in {layout.profiles}; launches use each agent's "
+                "own default model until you create one with `factory profile create`")
     say("")
     say("No model profile yet. The factory never picks a model, so name the agent and the")
     say("model for each role. Add more profiles later with `factory profile create`.")
@@ -310,9 +310,11 @@ def _kindex_check(path_env: str) -> Check:
     return Check("ok", "kindex", f"kindex-lite {match.group(0)} at {lite}")
 
 
-def _profile_checks(layout: Layout, path_env: str) -> list[Check]:
-    """A default model profile must exist; its agents and Ollama models are checked as warnings,
-    because a launch refuses them anyway and they may be installed after the profile is made."""
+def _profile_checks(layout: Layout, path_env: str, ollama_timeout: float) -> list[Check]:
+    """Report what a launch would do, never a stricter standard of its own. With no profile a
+    launch works on each agent's own default model, so that is a warning. A malformed file or no
+    default makes factory.sh refuse, so those fail. A default profile's agents and Ollama models
+    are warnings, because a launch refuses them anyway and they may come after the profile."""
 
     profiles_module = model_profiles(layout.root)
     create = "factory profile create  (or rerun `make install` in a terminal to be asked)"
@@ -322,8 +324,8 @@ def _profile_checks(layout: Layout, path_env: str) -> list[Check]:
         return [Check("fail", "profile", str(error), f"fix {layout.profiles}, or move it aside "
                       f"and: {create}")]
     if not profiles.profiles:
-        return [Check("fail", "profile", f"no model profile in {layout.profiles}; the factory "
-                      "never picks a model", create)]
+        return [Check("warn", "profile", f"no model profile in {layout.profiles}; launches use "
+                      f"each agent's own default model. Create one: {create}", create)]
     if profiles.default is None:
         return [Check("fail", "profile", f"{layout.profiles} has no default profile",
                       "factory profile use <name>")]
@@ -340,10 +342,21 @@ def _profile_checks(layout: Layout, path_env: str) -> list[Check]:
                                 f"{', '.join(missing)}, not found on PATH"))
             continue
         if bound.agent in profiles_module.OLLAMA_AGENTS:
-            shown = subprocess.run(
-                [shutil.which("ollama", path=path_env) or "ollama", "show", bound.model],
-                capture_output=True, text=True, check=False, timeout=30,
-            )
+            # A read-only diagnostic always answers; "could not find out" is an answer.
+            try:
+                shown = subprocess.run(
+                    [shutil.which("ollama", path=path_env) or "ollama", "show", bound.model],
+                    capture_output=True, text=True, check=False, timeout=ollama_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                checks.append(Check("warn", role, f"could not ask Ollama about {bound.model} "
+                                    f"(timed out after {ollama_timeout:g}s); check that Ollama "
+                                    "is running"))
+                continue
+            except OSError as error:
+                checks.append(Check("warn", role, f"could not ask Ollama about {bound.model} "
+                                    f"({error})"))
+                continue
             if shown.returncode != 0:
                 checks.append(Check("warn", role, f"Ollama model {bound.model} is not on this "
                                     "machine (or Ollama is not running); the factory never "
@@ -353,11 +366,11 @@ def _profile_checks(layout: Layout, path_env: str) -> list[Check]:
     return checks
 
 
-def doctor(layout: Layout, path_env: str) -> list[Check]:
+def doctor(layout: Layout, path_env: str, *, ollama_timeout: float = 30.0) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
-    checks += _profile_checks(layout, path_env)
+    checks += _profile_checks(layout, path_env, ollama_timeout)
     checks.append(_kindex_check(path_env))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "

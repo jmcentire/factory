@@ -575,11 +575,15 @@ dependency-free (bash + python3 + git):
   `${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json` (or `$FACTORY_PROFILES`). `factory.sh`
   uses `--profile <name>`, else `$FACTORY_PROFILE`, else the default; passes each model on the
   agent's command line (`--model` for Codex and Claude, `-m` for Codex lanes; agy takes none, so
-  its model is recorded as selected inside agy); and snapshots the profile into the run as
-  `model-profile.json`. `tmux_lane.sh` and `tmux_lane_message.sh` launch and resume each lane
-  from that snapshot, so an edit to the operator's file never changes a run underway. With a
-  profile in effect, a per-seat variable or `--agent` that disagrees with it is refused; with no
-  profiles at all, the variables keep their earlier meaning.
+  its model is recorded as selected inside agy); and records how every run was started as
+  `model-profile.json`: the profile, or an explicit `"profile": null` when it used none.
+  `tmux_lane.sh` launches each lane from that record and `tmux_lane_message.sh` resumes on the
+  model the lane launched with, so an edit to the operator's file never changes a run underway.
+  A lane refuses a run with no record (ignited before 0.8.11, or the record was lost) rather
+  than guess that it had no profile. With a profile in effect, a per-seat variable or `--agent`
+  that disagrees with it is refused; with an explicit none, the variables keep their earlier
+  meaning. The qualified dispatch path takes its model from the runner manifest, which the
+  Validator writes from the profile; the two are not yet checked against each other.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
