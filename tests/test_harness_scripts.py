@@ -37,6 +37,7 @@ from harness.semantic_union import (
     derive_observation_id,
     update_spec,
 )
+from tests.test_lane_kindex import install_kindex
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
 
@@ -1403,20 +1404,9 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         encoding="utf-8",
     )
     codex.chmod(0o755)
-    # Kindex for lane scoping: `import` records the environment it ran under, so a test can
-    # prove a lane's store was built with the lane's private HOME, never the operator's.
-    kin = stub / "kin"
-    kin.write_text(
-        "#!/usr/bin/env bash\n"
-        f'printf \'%s HOME=%s KIN_PROFILE=%s KIN_PROJECT_PATH=%s\\n\' "$*" "$HOME" '
-        f'"${{KIN_PROFILE:-}}" "${{KIN_PROJECT_PATH:-}}" >> "{tmp_path / "kin.log"!s}"\n'
-        'if [ "${1:-}" = import ]; then echo "Import complete: 2 created, 0 updated"; fi\n'
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    kin.chmod(0o755)
-    (stub / "kin-mcp").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    (stub / "kin-mcp").chmod(0o755)
+    # Kindex for lane scoping: a stand-in `kindex-lite` MCP server and its `kin`, side by side.
+    # `kin` logs each load with the HOME and project it ran under (stub/kin.log).
+    install_kindex(stub)
     timers = tmp_path / "timers.txt"
     timers.write_text("", encoding="utf-8")
     transcripts = tmp_path / "transcripts"
@@ -1568,8 +1558,8 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert "--sandbox" not in coder_call
     # Kindex scoped to this lane's own copy of the target's .kin, never the operator's graph.
     lane_home = root / "tmux-lanes" / "coder-kindex-home"
-    assert "mcp_servers.kindex=" in coder_call and str(lane_home.resolve()) in coder_call
-    assert "KIN_PROFILE" in coder_call and "factory-lane" in coder_call
+    assert "mcp_servers.kindex=" in coder_call and "kindex-lite" in coder_call
+    assert str(lane_home.resolve()) in coder_call and str(lane.resolve()) in coder_call
     rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
     assert [row["status"] for row in rows] == ["planned", "active"]
     assert rows[-1]["kindex"]["scope"] == "lane-copy-of-target-kin"
@@ -9405,15 +9395,14 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> No
     tested = launch("tester", lanes["tester"])
     assert tested.returncode == 0, tested.stdout + tested.stderr
 
-    imports = [line for line in (tmp_path / "kin.log").read_text().splitlines()
+    stub_log = Path(env["PATH"].split(os.pathsep)[0]) / "kin.log"
+    imports = [line for line in stub_log.read_text().splitlines()
                if line.startswith("import ") and "knowledge.jsonl" in line]
     assert len(imports) == 2
     for role, line in zip(("coder", "tester"), imports, strict=True):
         home = (root / "tmux-lanes" / f"{role}-kindex-home").resolve()
         repo = lanes[role].resolve()
-        assert f"import {repo}/.kin/knowledge.jsonl" in line
-        assert f"HOME={home} " in line and "KIN_PROFILE=factory-lane" in line
-        assert f"KIN_PROJECT_PATH={repo}" in line
-        assert os.environ.get("HOME", "/nonexistent") not in line.split("HOME=", 1)[1].split()[0]
-        config = (home / ".config" / "kindex" / "kin.yaml").read_text()
-        assert str(home / "store") in config
+        assert line == f"import {repo}/.kin/knowledge.jsonl --project-path {repo}|{home}|{repo}"
+        rows = read_chain(root / "tmux-lanes" / f"{role}-launch.jsonl")
+        assert rows[-1]["kindex"]["store"] == f"{repo}/.kin/local/kindex"
+        assert rows[-1]["kindex"]["kinbase_submissions_allowed"] is False

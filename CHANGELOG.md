@@ -3,6 +3,41 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.9] - 2026-10-06
+
+Coder and Tester lanes run `kindex-lite`, and a launch is refused unless the lane can read
+Kinbase and cannot write to it.
+
+### Changed
+
+- **Lane Kindex server is `kindex-lite --repo <lane copy>`** (Kindex >= 0.48.0, released as
+  0.48.1 and agreed with the Kindex release in the `tobaseorno` channel). It binds to the copy's
+  `.kin/local/kindex` store, refuses global, profile and environment redirection, and admits
+  only an allowlist of tools. By default it allows Kinbase sync and explain, but neither
+  submission nor the status call that can write. Before, lanes ran the full `kin-mcp`, kept off
+  the operator's graph only by a private HOME. That still exposed the ingest and exec tools.
+- **The launch is refused, never downgraded, unless the lane's own server proves the scope.**
+  `harness/lane_kindex.py` starts the server exactly as the lane will and requires all of:
+  - Kindex >= 0.48.0, read from the `kin` installed beside `kindex-lite`;
+  - `kinbase_sync` and `kinbase_explain` present, `kinbase_submit` and `kinbase_status` absent;
+  - a `scope_info` naming this copy and a store inside it, with submissions disallowed.
+- **The store is loaded from approved inputs only:** the copy's `.kin` export, the run's shared
+  seed, and its Kinbase events (raw mode, no Kinbase binary). A copy that arrives already
+  carrying a `.kin/local` store is refused, because that is the operator's unreviewed graph. A
+  failed attempt removes what it created. A lane's home is bound only after a successful launch,
+  so an interrupted one is refused rather than resumed with a partial store.
+- **Seed nodes are tagged `lane-seed`,** and the lane prompts start with
+  `list_nodes(tags="lane-seed")`. In a store holding thousands of Kinbase entries, search alone
+  can bury the seed. The tag goes into `domains`, because `kin import` ignores a `tags` field
+  (reported to Kindex).
+- `make doctor` checks for `kindex-lite` and Kindex >= 0.48.0.
+
+Verified by hand against Kindex 0.48.1. A fresh lane loaded its copy's 31 nodes, the seed, and
+10,213 Kinbase items in about 9 seconds. Through the lane's own server, `list_nodes` returned
+the seed, a search for "booking" found Kinbase knowledge, a request for the global graph was
+refused, and `kinbase_submit` was an unknown tool. A relaunch kept the store. Another lane on the
+same home, and a copy already carrying a store, were both refused.
+
 ## [0.8.8] - 2026-10-06
 
 Kindex by role: the full graph for the Validator and Orchestrator, a scoped store for each lane.

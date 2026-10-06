@@ -78,7 +78,8 @@ makes a fabricated or stale citation *unpromotable*.
 3. **Orient in the graph and the repo.** Your kindex is scoped to your lane: your copy of the target
    repository's `.kin`, the run's shared seed (research, constraints and decisions both lanes may
    read), and the company's Kinbase knowledge for this repository, in a store no other lane can
-   read. You cannot write to Kinbase. The operator's shared graph is out of reach by
+   read. You cannot write to Kinbase. Read the shared seed first, in full, with
+   `list_nodes(tags="lane-seed")`; search ranks it among thousands of Kinbase entries. The operator's shared graph is out of reach by
    design. `search` kindex for prior work, constraints, and
    watches on this area before reading files — and read the **run-tagged research nodes
    your dispatch cites** (the Validator's Phase A0 output: vendor docs, standards, prior

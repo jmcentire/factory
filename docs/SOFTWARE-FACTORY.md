@@ -726,8 +726,9 @@ Kindex is a channel, so which graph each role reads is part of the separation.
   submission is an unverified claim about unfinished work, and a Kinbase write one lane can make
   and the other can read is a channel. After the verdict, the Validator submits what held up.
 
-`harness/lane_kindex.py` builds each lane's store and keeps every Kinbase write out of the lane's
-reach. `harness/tmux_lane.sh` refuses to launch two lanes on one repository copy or on different
+`harness/lane_kindex.py` gives each lane `kindex-lite` bound to its own copy, loads the store,
+and refuses the launch unless the lane's server proves it can read Kinbase and cannot write to
+it. `harness/tmux_lane.sh` refuses to launch two lanes on one repository copy or on different
 seeds, and the lane freeze leaves the Kindex runtime state out of the judged snapshot.
 
 ### Why agent panels are not the correctness authority
