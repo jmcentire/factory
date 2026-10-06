@@ -27,6 +27,8 @@
 #
 #   usage: promote.sh <run> [--runs <path>] [--endgame-admission <path>]
 set -uo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: promote.sh <run> [--runs <path>] [--endgame-admission <path>]}"; shift || true
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"

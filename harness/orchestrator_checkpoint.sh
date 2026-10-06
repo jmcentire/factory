@@ -3,6 +3,8 @@
 # a schema-checked assessment that covers it. The checkpoint transport makes no
 # semantic judgment; the Orchestrator alone returns block, halt, or no-op.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: orchestrator_checkpoint.sh <run> <kind> <detail> [--runs <path>]}"
 KIND="${2:?kind}"

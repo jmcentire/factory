@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Shared checked projection loader. This is sourced by harness entry points; it never selects a
 # repository, ref, SHA, or working directory from cwd, an operator checkout, or harness metadata.
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 # Project keys minted by `factory init` (default .factory/keys). When FACTORY_KEYS_DIR names a
 # minted project, its genesis and root key are the trust anchors unless the operator set them

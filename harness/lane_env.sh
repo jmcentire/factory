@@ -4,6 +4,8 @@
 # were never present) plus two harness preflights: no run during an incident
 # HALT, no run without a fresh grounding receipt.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
 GROUND_ROOT="${HARNESS_RUN_ROOT:-$H}"
 D="$(cd "$(dirname "$0")" && pwd -P)"

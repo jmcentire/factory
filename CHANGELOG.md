@@ -3,6 +3,25 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.6] - 2026-10-05
+
+The harness runs on the factory's own Python.
+
+### Fixed
+
+- **Harness scripts no longer run factory code on whichever `python3` is first on PATH.** On a
+  clean Mac that is Python 3.9 without the factory's dependencies, so `harness/factory.sh` and
+  the lane scripts failed on a fresh install. A stale global install had been hiding this. The
+  new prelude `harness/factory_python.sh` resolves the interpreter once: an explicit
+  `FACTORY_PYTHON`, else the checkout's `.venv/bin/python`, else a `python3` that can import the
+  factory (as in CI). With none, the script stops and says to run `make install`. Every harness
+  entry point that runs factory code sources it. `mutate.sh`, `flake.sh` and `receipt.sh` run the
+  target's code or a caller's command, so they keep the target's `python3`.
+- **The run-owned Orchestrator tools name their interpreter.** `factory.sh` copies
+  `orchestrator_channel.py` and its siblings into each run, and the Orchestrator runs them by
+  shebang. The copies now name the interpreter that started the run instead of
+  `/usr/bin/env python3`.
+
 ## [0.8.5] - 2026-10-05
 
 Models come from the operator. The factory never picks, downloads or installs one.

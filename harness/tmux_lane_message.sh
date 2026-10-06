@@ -2,6 +2,8 @@
 # Deliver one typed status probe or specification answer to a resumable tmux Codex lane.
 # Raw Orchestrator prose remains forbidden: it can ask only the generated status question.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <coder|tester> <status|answer> [options]}"
 SENDER="${2:?sender}"
@@ -30,7 +32,6 @@ done
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
-FACTORY_PYTHON="${PYTHON:-python3}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"

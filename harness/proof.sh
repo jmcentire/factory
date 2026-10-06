@@ -15,6 +15,8 @@
 #   probe: <name>:: <command>  # exercised via receipt.sh; nonzero = proof failure
 # usage: proof.sh <run>
 set -uo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 RUN="${1:?usage: proof.sh <run>}"
 H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
 ROOT="${HARNESS_RUN_ROOT:-$H/runs/$RUN}"

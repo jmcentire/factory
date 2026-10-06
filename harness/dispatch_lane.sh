@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Dispatch one qualified model lane from the exact externally anchored Stage-E target-state.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 ORIGINAL_ARGS=("$@")
 
 RUN="${1:?usage: dispatch_lane.sh <run> <coder|tester> --dispatch <file> [--runs <path>] [--agent <name>]}"
@@ -70,7 +72,7 @@ if [ -z "${FACTORY_DISPATCH_LOCK_FD:-}" ]; then
   "$D/orchestrator_checkpoint.sh" "$RUN" pre_dispatch \
     "before dispatching the $ROLE lane" --runs "$FACTORY_RUNS_ROOT" || \
     fail "resident Orchestrator did not assess the pre-dispatch checkpoint"
-  exec python3 "$D/attention_gate.py" hold --root "$ROOT" --role "$ROLE" -- \
+  exec "$FACTORY_PYTHON" "$D/attention_gate.py" hold --root "$ROOT" --role "$ROLE" -- \
     bash "$0" "${ORIGINAL_ARGS[@]}"
 fi
 python3 "$D/attention_gate.py" verify-held --root "$ROOT" --role "$ROLE" \

@@ -17,6 +17,8 @@
 #          --reason <bounded text> --subject-digest sha256:<hex>
 #          --evidence-file <run-retained-path> --evidence-digest sha256:<hex>
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 RUN="${1:?usage: consume_block.sh <run> <lane>}"; LANE="${2:?lane}"
 shift 2
 [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {

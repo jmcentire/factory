@@ -1486,6 +1486,10 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         text=True,
     )
     assert imported.returncode == 0, imported.stderr
+    # The Orchestrator runs these by shebang; it names the interpreter that started the run.
+    for tool in orchestrator_bin.glob("*.py"):
+        shebang = tool.read_text(encoding="utf-8").split("\n", 1)[0]
+        assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
 
@@ -9302,3 +9306,32 @@ def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> No
     assert refused.returncode == 64
     assert "FACTORY_VALIDATOR_OLLAMA_MODEL" in refused.stderr
     assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
+
+
+@pytest.mark.skipif(
+    not (HARNESS.parent / ".venv" / "bin" / "python").exists(),
+    reason="needs the checkout venv that `make install` builds (CI installs into its interpreter)",
+)
+def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> None:
+    """A clean Mac's python3 (3.9, no factory) first on PATH must not reach factory code: the
+    harness runs on the checkout's own interpreter, and so do the run-owned Orchestrator tools."""
+
+    task = "Ignite with a broken python3 first on PATH."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _ = factory_ignition_env(tmp_path, root)
+    bad = tmp_path / "bad-python"
+    bad.mkdir()
+    (bad / "python3").write_text("#!/bin/sh\necho BAD-PYTHON >&2\nexit 1\n", encoding="utf-8")
+    (bad / "python3").chmod(0o755)
+    env = {**env, "PATH": f"{bad}:{env['PATH']}"}
+    ignited = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    assert "BAD-PYTHON" not in ignited.stderr
+    channel = root / "orchestrator" / "bin" / "orchestrator_channel.py"
+    helped = subprocess.run([str(channel), "--help"], capture_output=True, text=True,
+                            env={"PATH": env["PATH"]}, check=False)
+    assert helped.returncode == 0, helped.stderr

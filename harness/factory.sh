@@ -2,6 +2,8 @@
 # Ignite coordination for an already Stage-E-authorized Factory run. Target selection belongs
 # exclusively to factory_runtime; this script may consume target-state, never invent it.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>]}"
 TASK_IN="${2:?verbatim task text or file}"
@@ -272,8 +274,8 @@ resource_event() {
 }
 resource_event '{}' planned
 
-printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q python3 %q --run %q --root %q' \
-  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$D/dispatcher.py" "$RUN" "$ROOT"
+printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q %q %q --run %q --root %q' \
+  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/dispatcher.py" "$RUN" "$ROOT"
 VALIDATOR_PROMPT="Act as the Validator under docs/VALIDATION-DIRECTIVE.md and the /validate contract. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block, halt, or no-op: block gates the next transition; halt stops the Validator outright (HALT is set and its window is killed, and only a human clears HALT and re-seats it). Use halt when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
@@ -324,6 +326,21 @@ cp "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
 cp "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" \
   "$ROOT/orchestrator/bin/"
+# The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
+# run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
+# imports factory_core). A shebang cannot carry whitespace; such a path keeps `env python3`.
+case "$FACTORY_PYTHON" in
+  *[[:space:]]*) ;;
+  *) for tool in "$ROOT"/orchestrator/bin/*.py; do
+       python3 - "$tool" "$FACTORY_PYTHON" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+first, rest = path.read_text(encoding="utf-8").split("\n", 1)
+if first.startswith("#!"):
+    path.write_text("#!" + sys.argv[2] + "\n" + rest, encoding="utf-8")
+PY
+     done ;;
+esac
 chmod 400 "$ROOT/orchestrator/ROLE.md"
 chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \

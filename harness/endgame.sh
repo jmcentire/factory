@@ -2,6 +2,8 @@
 # Judge an exact candidate already present in a run-owned workspace. Nothing here inspects,
 # merges, mutates, or blocks on unrelated operator branches, stashes, worktrees, PRs, or dirt.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: endgame.sh <run> <final-sha> --candidate-resource <id> [--runs <path>]}"
 SHA="${2:?final sha}"
