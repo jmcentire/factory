@@ -218,7 +218,9 @@ Then ask, before judging the next action:
    expensive **qualified** model capable of each. Put mechanical work on Haiku-class/lower-tier
    models when qualified, ordinary bounded reasoning on Sonnet-class/mid-tier models, and reserve
    Opus/Fable-class/top-tier models for work whose difficulty warrants them. A model swap still
-   requires its own qualification; your cost recommendation grants nothing.
+   requires its own qualification; your cost recommendation grants nothing. Recommend only
+   models the operator has configured; never pick, download, pull, install or rent one. If none
+   fits, ask the human which provider and model to use.
 
 If the strategy is locally compliant but globally divergent, that is a block. Recommend a change
 to the **strategy**, not merely the next keystroke. If a recent imperative appears to replace a

@@ -398,6 +398,11 @@ two separate claims about two separate parties — keep them apart.**
   **where the option exists**; it is the stronger rung of the independence ladder you name in the
   verdict (see Phase B, and `<rung used>` in the mode statement above). It is an argument for a
   stronger rung, not a substitute for the reviewer above.
+- **Models come from the operator; never provision one.** Use only providers and models the
+  operator has configured (an API, Hugging Face, Vast, Ollama, local or cloud). Never pick a model
+  the operator did not name, and never download, pull, install or rent one, not even to satisfy
+  the cross-family reviewer. If no configured model is from another family, ask the human which
+  provider and model to use; that is their decision, not a setup task for you.
 
 ---
 

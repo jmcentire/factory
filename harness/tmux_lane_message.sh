@@ -61,7 +61,7 @@ active = [
 ]
 if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
-values = (active[0].get("repository"), active[0].get("agent"))
+values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""))
 if any(not isinstance(value, str) or "\0" in value for value in values):
     raise SystemExit("lane-message: retained launch fields are malformed")
 for value in values:
@@ -74,8 +74,16 @@ IFS= read -r -d '' REPOSITORY <&3 || {
 IFS= read -r -d '' AGENT <&3 || {
   echo "lane-message: retained agent is missing or malformed" >&2; exit 70;
 }
+IFS= read -r -d '' MODEL <&3 || {
+  echo "lane-message: retained model is missing or malformed" >&2; exit 70;
+}
 exec 3<&-
 case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: unsupported retained agent" >&2; exit 70 ;; esac
+if [ "$AGENT" = "codex-ollama" ]; then
+  # shellcheck source=harness/model_availability.sh
+  source "$(cd "$(dirname "$0")" && pwd -P)/model_availability.sh"
+  factory_require_ollama_model lane-message "the launch's model (relaunch with FACTORY_LANE_OLLAMA_MODEL)" "$MODEL" || exit 70
+fi
 
 MESSAGE_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-message.XXXXXX")"
 trap 'rm -f "$MESSAGE_TMP"' EXIT
@@ -175,7 +183,7 @@ SAFE_SHELL="${SHELL:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
-[ "$AGENT" != "codex-ollama" ] || LOCAL_ARGS="--oss --local-provider ollama"
+[ "$AGENT" != "codex-ollama" ] || LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
 PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || echo unknown)
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")

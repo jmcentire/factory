@@ -29,6 +29,13 @@ case "$AGENT" in codex|codex-ollama) ;;
 esac
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
+# shellcheck source=harness/model_availability.sh
+source "$D/model_availability.sh"
+MODEL=""
+if [ "$AGENT" = "codex-ollama" ] && [ "$ACTION" = "launch" ]; then
+  MODEL="${FACTORY_LANE_OLLAMA_MODEL:-}"
+  factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
+fi
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 FACTORY_PYTHON="${PYTHON:-python3}"
 # shellcheck source=harness/run_context.sh
@@ -192,11 +199,11 @@ PY
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   PLANNED=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
-    "$REPOSITORY_RECEIPT" "$CODEX_VERSION" <<'PY'
+    "$REPOSITORY_RECEIPT" "$CODEX_VERSION" "$MODEL" <<'PY'
 import datetime, json, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
-    profile_digest, preflight, agent_version,
+    profile_digest, preflight, agent_version, model,
 ) = sys.argv[1:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
@@ -205,6 +212,7 @@ print(json.dumps({
     "run_id": run,
     "role": role,
     "agent": agent,
+    "model": model,
     "repository": repository,
     "prompt_path": prompt,
     "prompt_digest": prompt_digest,
@@ -230,7 +238,7 @@ PY
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
   LOCAL_ARGS=""
   if [ "$AGENT" = "codex-ollama" ]; then
-    LOCAL_ARGS="--oss --local-provider ollama"
+    LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
   fi
   THREAD_FILE="$TMUX_ROOT/$ROLE-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$ROLE-codex-events.jsonl"

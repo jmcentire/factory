@@ -36,6 +36,12 @@ case "$ORCHESTRATOR_AGENT" in
 esac
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
+if [ "$VALIDATOR_AGENT" = "ollama" ]; then
+  # shellcheck source=harness/model_availability.sh
+  source "$D/model_availability.sh"
+  VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-}"
+  factory_require_ollama_model factory FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL" || exit $?
+fi
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
@@ -278,7 +284,6 @@ case "$VALIDATOR_AGENT" in
       "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
     ;;
   ollama)
-    VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-glm-5.2:cloud}"
     printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q ollama launch codex --model %q -- --sandbox workspace-write %q' \
       "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
     ;;
