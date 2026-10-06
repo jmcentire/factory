@@ -3,6 +3,19 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.7] - 2026-10-05
+
+Test fix for 0.8.6. No runtime change.
+
+### Fixed
+
+- **CI failed on 0.8.6.** Six harness tests pin PATH to system directories. On the CI runner, the
+  `python3` there cannot import the factory, and CI has no checkout `.venv`, so the 0.8.6 harness
+  correctly refused to run. Locally the `.venv` hid this. The tests' `run()` helper now names
+  the test process's own interpreter as `FACTORY_PYTHON`, as an operator would. Tests of
+  interpreter resolution clear it. Verified by running the harness suite with the `.venv` moved
+  aside.
+
 ## [0.8.6] - 2026-10-05
 
 The harness runs on the factory's own Python.

@@ -49,6 +49,10 @@ def run(
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": os.environ.get("HOME", "/tmp"),
+        # The interpreter running these tests is the factory's; name it the way an operator
+        # would, so a fixture that pins PATH to system directories does not leave the harness
+        # without one. Resolution itself is tested by clearing this (tests/test_factory_python.py).
+        "FACTORY_PYTHON": sys.executable,
     }
     if env_extra:
         env.update(env_extra)
@@ -9323,7 +9327,7 @@ def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> 
     bad.mkdir()
     (bad / "python3").write_text("#!/bin/sh\necho BAD-PYTHON >&2\nexit 1\n", encoding="utf-8")
     (bad / "python3").chmod(0o755)
-    env = {**env, "PATH": f"{bad}:{env['PATH']}"}
+    env = {**env, "PATH": f"{bad}:{env['PATH']}", "FACTORY_PYTHON": ""}
     ignited = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
