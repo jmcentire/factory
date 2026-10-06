@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "factory-core"
-version = "0.8.6"
+version = "0.8.7"
 description = "Founder-owned, portable software-factory core (generic; imports nothing target-specific)."
 readme = "README.md"
 requires-python = ">=3.12"
