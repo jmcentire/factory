@@ -4,7 +4,9 @@ Git is intentionally useful inside an author lane: the agent may stage, inspect,
 and checkpoint its own work.  Once the agent starts, however, host code treats
 the whole repository (including Git metadata, refs, hooks, and config) as
 untrusted.  Export walks regular files without invoking Git, excludes the root
-``.git`` entry, and publishes only a content-addressed snapshot.
+``.git`` entry and the lane's Kindex runtime state (``.kin/local``, its graph store, and
+``.kin/events``, its copy of the company's Kinbase evidence), and publishes only a
+content-addressed snapshot of the lane's work.
 
 This is an audited coordination workflow, not OS isolation.  A separate uid,
 container, or qualified runner is required to contain a malicious same-user
@@ -23,6 +25,10 @@ import unicodedata
 from dataclasses import dataclass
 
 from factory_runtime.snapshot import FrozenTree, SnapshotError, freeze_tree
+
+# Runtime state, not work product: the lane's own Kindex store and its read-only Kinbase
+# evidence. The Validator reads lane captures from the retained repository, not the snapshot.
+KINDEX_RUNTIME_ENTRIES = (".kin/local", ".kin/events")
 
 
 class LaneRepositoryError(RuntimeError):
@@ -163,6 +169,9 @@ def _capture_plain_tree(
                     )
                 excluded.append(relative)
                 continue
+            if relative in KINDEX_RUNTIME_ENTRIES:
+                excluded.append(relative)
+                continue
             child = -1
             try:
                 child = os.open(
@@ -229,7 +238,7 @@ def _capture_plain_tree(
         walk(root_fd, "", 0)
     finally:
         os.close(root_fd)
-    if excluded != [".git"]:
+    if excluded.count(".git") != 1:
         raise LaneRepositoryError("lane export did not find exactly one root .git entry")
     return captured, tuple(excluded), total_bytes
 

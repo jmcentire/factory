@@ -51,6 +51,13 @@ into this same Codex thread. Ordinary prose is not the typed question channel.
 
 ## Research — kindex, scoped to your lane
 
+Your kindex is scoped to you. It holds your own copy of the target repository's `.kin`, the
+run's shared seed (the research, constraints and decisions both lanes may read), and the
+company's Kinbase knowledge for this repository, in a store no other lane can read. Nothing you
+capture leaves it, and you cannot write to Kinbase. The operator's shared graph is not
+reachable from your lane by design. A search that finds nothing is that scope working, not a
+fault to work around.
+
 Before authoring, `search` kindex for the **run-tagged research nodes** your dispatch
 cites (the Validator's Phase A0 output: vendor docs, standards, domain references,
 fetched with provenance) and for standing constraints and watches on the surfaces you

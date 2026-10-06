@@ -1403,6 +1403,20 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         encoding="utf-8",
     )
     codex.chmod(0o755)
+    # Kindex for lane scoping: `import` records the environment it ran under, so a test can
+    # prove a lane's store was built with the lane's private HOME, never the operator's.
+    kin = stub / "kin"
+    kin.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s HOME=%s KIN_PROFILE=%s KIN_PROJECT_PATH=%s\\n\' "$*" "$HOME" '
+        f'"${{KIN_PROFILE:-}}" "${{KIN_PROJECT_PATH:-}}" >> "{tmp_path / "kin.log"!s}"\n'
+        'if [ "${1:-}" = import ]; then echo "Import complete: 2 created, 0 updated"; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    kin.chmod(0o755)
+    (stub / "kin-mcp").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (stub / "kin-mcp").chmod(0o755)
     timers = tmp_path / "timers.txt"
     timers.write_text("", encoding="utf-8")
     transcripts = tmp_path / "transcripts"
@@ -1552,8 +1566,14 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert "default_permissions" in coder_call and "factory-lane" in coder_call
     assert ".git" in coder_call and "write" in coder_call
     assert "--sandbox" not in coder_call
+    # Kindex scoped to this lane's own copy of the target's .kin, never the operator's graph.
+    lane_home = root / "tmux-lanes" / "coder-kindex-home"
+    assert "mcp_servers.kindex=" in coder_call and str(lane_home.resolve()) in coder_call
+    assert "KIN_PROFILE" in coder_call and "factory-lane" in coder_call
     rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
     assert [row["status"] for row in rows] == ["planned", "active"]
+    assert rows[-1]["kindex"]["scope"] == "lane-copy-of-target-kin"
+    assert rows[-1]["kindex"]["home"] == str(lane_home.resolve())
     assert rows[-1]["repository_preflight"]["ownership_after_launch"].startswith("agent-owned")
     retained_prompt = (root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "inspect your own status/diff" in retained_prompt
@@ -9339,3 +9359,61 @@ def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> 
     helped = subprocess.run([str(channel), "--help"], capture_output=True, text=True,
                             env={"PATH": env["PATH"]}, check=False)
     assert helped.returncode == 0, helped.stderr
+
+
+def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> None:
+    """Each lane's Kindex is built from its own repository copy's committed .kin, under its own
+    private HOME. Two lanes may not share a repository: that would share files and memory."""
+
+    task = "Two lanes, two memories."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    ignited = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the lane's work.\n")
+    lanes = {}
+    for role in ("coder", "tester"):
+        lane = tmp_path / f"standalone-{role}"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+        (lane / ".kin").mkdir()
+        (lane / ".kin" / "knowledge.jsonl").write_text(f'{{"title":"{role} copy"}}\n')
+        lanes[role] = lane
+
+    def launch(role: str, repo: Path) -> subprocess.CompletedProcess[str]:
+        return run(
+            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(repo),
+             "--prompt", str(prompt), "--runs", str(root.parent)],
+            operator,
+            env,
+        )
+
+    seed = root / "lane-seed.jsonl"
+    seed.write_text('{"title":"shared research"}\n', encoding="utf-8")
+    assert launch("coder", lanes["coder"]).returncode == 0
+    shared = launch("tester", lanes["coder"])
+    assert shared.returncode != 0 and "own copy" in shared.stderr
+    seed.write_text('{"title":"tester-only extra"}\n', encoding="utf-8")
+    drifted = launch("tester", lanes["tester"])
+    assert drifted.returncode != 0 and "same lane-seed.jsonl" in drifted.stderr
+    assert not any("-n tester" in line for line in tmux_log.read_text().splitlines())
+    seed.write_text('{"title":"shared research"}\n', encoding="utf-8")
+    tested = launch("tester", lanes["tester"])
+    assert tested.returncode == 0, tested.stdout + tested.stderr
+
+    imports = [line for line in (tmp_path / "kin.log").read_text().splitlines()
+               if line.startswith("import ") and "knowledge.jsonl" in line]
+    assert len(imports) == 2
+    for role, line in zip(("coder", "tester"), imports, strict=True):
+        home = (root / "tmux-lanes" / f"{role}-kindex-home").resolve()
+        repo = lanes[role].resolve()
+        assert f"import {repo}/.kin/knowledge.jsonl" in line
+        assert f"HOME={home} " in line and "KIN_PROFILE=factory-lane" in line
+        assert f"KIN_PROJECT_PATH={repo}" in line
+        assert os.environ.get("HOME", "/nonexistent") not in line.split("HOME=", 1)[1].split()[0]
+        config = (home / ".config" / "kindex" / "kin.yaml").read_text()
+        assert str(home / "store") in config

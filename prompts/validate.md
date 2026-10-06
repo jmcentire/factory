@@ -249,6 +249,16 @@ re-deriving it, and the next run starts where this one ended.
    smallest chunk-specific projection and its relevant node ids/digests; never paste the search
    result or a long node dump into the prompt. Respect the projection boundary: never route a
    research node carrying implementation detail to the Tester.
+   The Coder and the Tester cannot read your graph. Each lane's kindex is loaded at launch from
+   its own copy of the target's `.kin` (make the copy from the working tree, which carries
+   `.kin` when git does not), the run's shared seed, and the repository's Kinbase evidence. Write
+   the shared seed before launching either lane: `lane-seed.jsonl` in the run's control root, one
+   node per line in the `.kin/knowledge.jsonl` format, holding the vital context both lanes may
+   read (Phase A0 research, standing constraints, ratified decisions) and never implementation or
+   test material. Both lanes get the same seed; the second lane will not launch on a changed one.
+   Lanes read Kinbase but cannot write to it, and nobody in the run submits to Kinbase before the
+   verdict; afterwards, submit what held up. What a lane captures stays in its own store, under
+   the run's `tmux-lanes/<role>-kindex-home/`; read it there when you review the handover.
 7. **Pre-register diagnostic branches.** Before observing results, record competing causal
    hypotheses and what each outcome would mean. Amended semantics that hold while known omissions
    recur mean incomplete enumeration; recurrence among the amended semantics means

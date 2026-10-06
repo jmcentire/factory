@@ -75,7 +75,11 @@ makes a fabricated or stale citation *unpromotable*.
    attribute one to the human without a citation that resolves to text bearing it. If you
    cannot find authority for something you believe is needed, that is a spec-defect to
    raise, not a gap to fill from judgment.
-3. **Orient in the graph and the repo.** `search` kindex for prior work, constraints, and
+3. **Orient in the graph and the repo.** Your kindex is scoped to your lane: your copy of the target
+   repository's `.kin`, the run's shared seed (research, constraints and decisions both lanes may
+   read), and the company's Kinbase knowledge for this repository, in a store no other lane can
+   read. You cannot write to Kinbase. The operator's shared graph is out of reach by
+   design. `search` kindex for prior work, constraints, and
    watches on this area before reading files — and read the **run-tagged research nodes
    your dispatch cites** (the Validator's Phase A0 output: vendor docs, standards, prior
    art, fetched and annotated for this run). Do not re-derive what the run already
