@@ -3,6 +3,8 @@
 # This mode deliberately lets the agent own its standalone .git directory. It is
 # coordination/unqualified: promotion still requires the qualified Factory path.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: tmux_lane.sh <run> <coder|tester> <launch|freeze> [options]}"
 ROLE="${2:?role}"
@@ -37,7 +39,6 @@ if [ "$AGENT" = "codex-ollama" ] && [ "$ACTION" = "launch" ]; then
   factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
 fi
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
-FACTORY_PYTHON="${PYTHON:-python3}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"

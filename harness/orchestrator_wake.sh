@@ -9,6 +9,8 @@
 # failure artifact and a blocking control-plane event that the Validator consumes between
 # tasks; it never writes into a live lane pane.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 RUN="${1:?usage: orchestrator_wake.sh <run> <trigger-json>}"
 TRIGGER="${2:?trigger json}"
 H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"

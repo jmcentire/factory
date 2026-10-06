@@ -18,6 +18,8 @@
 # There is deliberately no ambient override. A human may amend and re-ratify the artifacts;
 # an environment variable may not convert an inadequate phase into authority.
 set -uo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 RUN="${1:?usage: phase1_gate.sh <run> [--root <control-root>] [--workdir <target-workdir>]}"; shift || true
 ROOT="${HARNESS_RUN_ROOT:-}"
 WORKDIR=""

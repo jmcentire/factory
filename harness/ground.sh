@@ -2,6 +2,8 @@
 # Re-derive run truth from disk. With --run, repository truth comes only from checked
 # factory-target-state; the script never fetches or selects origin/main or ambient HEAD.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN=""
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"

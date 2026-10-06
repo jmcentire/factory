@@ -18,6 +18,8 @@
 #   denial_probe.sh --all               # run every gate's probes (a denial-probe-only pass)
 # exit: nonzero if any probe fails (a gate does not block its prohibited action).
 set -uo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 D="$(cd "$(dirname "$0")" && pwd)"; REG="$D/gates.tsv"
 [ -f "$REG" ] || { echo "no gate registry at $REG" >&2; exit 2; }
 
@@ -62,7 +64,7 @@ if [ "${1:-}" = "--all" ]; then
   [ -n "$ALL" ] || { echo "no probes registered" >&2; exit 2; }
   echo "== denial probes: all gates =="
   # shellcheck disable=SC2086
-  exec python3 -m pytest -q $ALL
+  exec "$FACTORY_PYTHON" -m pytest -q $ALL
 fi
 
 GATE="$1"
@@ -70,4 +72,4 @@ NODES="$(probe_for "$GATE")" || { echo "unknown gate: $GATE (see denial_probe.sh
 [ -n "$NODES" ] || { echo "gate $GATE has no registered probes" >&2; exit 1; }
 echo "== denial probe: gate $GATE =="
 # shellcheck disable=SC2086
-exec python3 -m pytest -q $NODES
+exec "$FACTORY_PYTHON" -m pytest -q $NODES

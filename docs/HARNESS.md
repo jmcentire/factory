@@ -31,6 +31,10 @@
 Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout);
 defined in `prompts/README.md`, Locations.
 
+Interpreter: harness scripts run factory code on `$FACTORY_HOME/.venv/bin/python` (what
+`make install` builds), never on whichever `python3` is first on PATH; `harness/factory_python.sh`
+resolves it once (an explicit `FACTORY_PYTHON` wins) and stops with the fix when there is none.
+
 Two execution surfaces exist and must not be conflated. `factory_runtime` is the executable
 authority/isolation/evidence path: its signed ledger, target-bound generation tuple, macOS
 Seatbelt projections, frozen review bytes, and Validator-signed preview survive removal of the

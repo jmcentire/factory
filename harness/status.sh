@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Render one run from checked runtime state and run-owned evidence only.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 RUN="${1:?usage: status.sh <run> [--runs <path>]}"
 shift || true
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"

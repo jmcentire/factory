@@ -17,6 +17,8 @@
 #
 #   usage: projection_receipt.sh <role> <artifact.md> [--conf <path>]
 set -uo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 ROLE="${1:?usage: projection_receipt.sh <role> <artifact.md> [--conf <path>]}"
 ART="${2:?artifact}"
 CONF="${HARNESS_PROJECTION_CONF:-.factory/projection.conf}"

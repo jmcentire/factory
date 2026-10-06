@@ -2,6 +2,8 @@
 # Disable coordination for a pre-v2 harness without pretending it ran qualified execution.
 # This preserves the run for inspection; it does not close or disposition run-owned resources.
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 RUN="${1:?usage: abandon_legacy.sh <run> --actor human:<id> --reason <text> --acknowledge-unqualified-restart [--runs <path>]}"
 shift

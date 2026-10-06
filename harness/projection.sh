@@ -2,6 +2,8 @@
 # Mint an asymmetric lane projection from an already verified, run-owned source checkout.
 # usage: projection.sh <coder|tester> <source-root> <exact-commit> <dest-dir>
 set -euo pipefail
+# shellcheck source=harness/factory_python.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 ROLE="${1:?usage: projection.sh <coder|tester> <source-root> <exact-commit> <dest-dir>}"
 SRC="${2:?source root}"
 SHA="${3:?exact commit}"
