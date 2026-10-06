@@ -31,7 +31,16 @@ def _layout(tmp_path: Path) -> inst.Layout:
     tessera.write_text("#!/bin/sh\n", encoding="utf-8")
     tessera.chmod(0o755)
     return inst.Layout(root=REPO, venv=venv, tessera=tessera, bindir=tmp_path / "bin",
-                       commands_dir=tmp_path / "commands")
+                       commands_dir=tmp_path / "commands", profiles=tmp_path / "profiles.json")
+
+
+def _with_profile(layout: inst.Layout, **roles: str) -> None:
+    """Give the layout a default model profile; any role not named runs codex:gpt-test."""
+
+    mp = inst.model_profiles(REPO)
+    bindings = {role: roles.get(role, "codex:gpt-test") for role in mp.ROLES}
+    profile = mp.Profile("local", "", {r: mp.parse_binding(r, b) for r, b in bindings.items()})
+    mp.save(layout.profiles, mp.Profiles("local", {"local": profile}))
 
 
 def _path_env(layout: inst.Layout, tmp_path: Path) -> str:
@@ -49,6 +58,7 @@ def _failing(checks: list[inst.Check]) -> set[str]:
 def test_install_then_doctor_is_ready(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     inst.install(layout)
+    _with_profile(layout)
     checks = inst.doctor(layout, _path_env(layout, tmp_path))
     assert _failing(checks) == set(), checks
     assert inst.report(checks)[1] is True
@@ -76,6 +86,7 @@ def test_launcher_runs_the_venv_cli_with_the_pinned_tessera(tmp_path: Path) -> N
 def test_install_is_idempotent(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     inst.install(layout)
+    _with_profile(layout)
     assert all(line.startswith("same") for line in inst.install(layout))
 
 
@@ -128,7 +139,8 @@ def test_doctor_flags_a_loader_from_another_checkout(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     inst.install(layout)
     elsewhere = inst.Layout(root=tmp_path / "other", venv=layout.venv, tessera=layout.tessera,
-                            bindir=layout.bindir, commands_dir=layout.commands_dir)
+                            bindir=layout.bindir, commands_dir=layout.commands_dir,
+                            profiles=layout.profiles)
     (elsewhere.root / "prompts").mkdir(parents=True)
     (elsewhere.root / "prompts" / "build.md").write_text("# /build — x\n", encoding="utf-8")
     layout.loader("build").write_text(
@@ -155,3 +167,70 @@ def test_make_doctor_judges_the_callers_path_not_makes(tmp_path: Path) -> None:
     )
     path_line = next(line for line in done.stdout.splitlines() if "PATH" in line.split()[:2])
     assert path_line.split()[0] == "ok", done.stdout
+
+
+def test_doctor_is_not_ready_without_a_model_profile(tmp_path: Path) -> None:
+    """The factory never picks a model, so an install with no profile is not a working install."""
+
+    layout = _layout(tmp_path)
+    inst.install(layout)
+    checks = inst.doctor(layout, _path_env(layout, tmp_path))
+    assert _failing(checks) == {"profile"}, checks
+    text, ready = inst.report(checks)
+    assert not ready and "factory profile create" in text
+    layout.profiles.write_text("{not json", encoding="utf-8")
+    assert _failing(inst.doctor(layout, _path_env(layout, tmp_path))) == {"profile"}
+
+
+def test_install_asks_for_a_profile_in_a_terminal_and_never_suggests_one(tmp_path: Path) -> None:
+    """With no profile, an interactive install asks for every role's agent and model, asks again
+    on an answer the harness could not launch, and saves what was named as the default."""
+
+    layout = _layout(tmp_path)
+    answers = iter([
+        "local",
+        "agy", "claude", "opus-test",            # agy cannot be the Validator: asked again
+        "codex", "",                             # an empty model is refused: asked again
+        "codex", "gpt-orch",
+        "codex-ollama", "glm-test:cloud",
+        "codex", "gpt-tester",
+    ])
+    said: list[str] = []
+    line = inst.ensure_profile(layout, interactive=True, ask=lambda _: next(answers),
+                               say=said.append)
+    assert line.startswith("wrote") and "'local'" in line
+    assert any("choose one of" in text for text in said)
+    mp = inst.model_profiles(REPO)
+    saved = mp.load(layout.profiles)
+    assert saved.default == "local"
+    assert {r: (b.agent, b.model) for r, b in saved.profiles["local"].roles.items()} == {
+        "validator": ("claude", "opus-test"),
+        "orchestrator": ("codex", "gpt-orch"),
+        "coder": ("codex-ollama", "glm-test:cloud"),
+        "tester": ("codex", "gpt-tester"),
+    }
+    assert oct(layout.profiles.stat().st_mode & 0o777) == "0o600"
+    # A second install leaves the operator's profiles alone.
+    assert inst.ensure_profile(layout, interactive=True).startswith("same")
+
+
+def test_install_without_a_terminal_names_the_command_instead_of_guessing(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    lines = inst.install(layout, interactive=False)
+    assert any("factory profile create" in line for line in lines)
+    assert not layout.profiles.exists()
+
+
+def test_doctor_warns_when_a_profiles_ollama_model_is_absent(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    inst.install(layout)
+    _with_profile(layout, coder="codex-ollama:glm-test:cloud")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for tool, body in (("codex", "exit 0"), ("ollama", 'exit 1')):
+        (tools / tool).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        (tools / tool).chmod(0o755)
+    checks = inst.doctor(layout, os.pathsep.join([_path_env(layout, tmp_path), str(tools)]))
+    coder = next(c for c in checks if c.name == "coder")
+    assert coder.status == "warn" and "ollama pull glm-test:cloud" in coder.detail
+    assert _failing(checks) == set(), checks

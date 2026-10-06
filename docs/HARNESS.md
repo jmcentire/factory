@@ -570,6 +570,16 @@ dependency-free (bash + python3 + git):
   (`FACTORY_VALIDATOR_OLLAMA_MODEL`, `FACTORY_LANE_OLLAMA_MODEL`) and is refused unless that
   model is already available (`harness/model_availability.sh`); the factory never picks,
   pulls or installs a model.
+  **Model profiles** (`factory_runtime/model_profiles.py`, `factory profile ...`) replace those
+  per-seat variables with one named binding of every role to an agent and a model, kept in
+  `${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json` (or `$FACTORY_PROFILES`). `factory.sh`
+  uses `--profile <name>`, else `$FACTORY_PROFILE`, else the default; passes each model on the
+  agent's command line (`--model` for Codex and Claude, `-m` for Codex lanes; agy takes none, so
+  its model is recorded as selected inside agy); and snapshots the profile into the run as
+  `model-profile.json`. `tmux_lane.sh` and `tmux_lane_message.sh` launch and resume each lane
+  from that snapshot, so an edit to the operator's file never changes a run underway. With a
+  profile in effect, a per-seat variable or `--agent` that disagrees with it is refused; with no
+  profiles at all, the variables keep their earlier meaning.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;

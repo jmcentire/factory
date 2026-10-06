@@ -9,6 +9,9 @@ thin, generated file outside the repository:
   loaders    ``~/.claude/commands/{validate,engineer,test,orchestrate,build,review}.md`` — each
              tells the agent to read the canonical prompt in this checkout. The prompt bytes
              stay here; the loader only names where they are.
+  profile    the operator's first model profile, asked for in a terminal when none exists
+             (``factory_runtime/model_profiles.py``): which agent and model run each role. The
+             factory never picks a model, so a working install has one.
 
 The invariant: the installer never overwrites or removes a file it cannot prove it wrote.
 Every generated file ends with a marker carrying the SHA-256 of the rest of its content. A file
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import os
 import re
 import shlex
@@ -29,8 +33,10 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[1]
 PY_FLOOR = (3, 12)
@@ -59,6 +65,7 @@ class Layout:
     tessera: Path
     bindir: Path
     commands_dir: Path
+    profiles: Path
 
     @property
     def launcher(self) -> Path:
@@ -127,13 +134,56 @@ def _write(path: Path, content: str, mark: re.Pattern[str], *, executable: bool)
     return f"{'wrote' if state == 'absent' else 'updated'} {path}"
 
 
-def install(layout: Layout) -> list[str]:
+def model_profiles(root: Path) -> ModuleType:
+    """The checkout's model_profiles module, loaded by path: the doctor may run on the bootstrap
+    interpreter before the venv exists, and the module is stdlib-only for exactly that."""
+
+    name = "factory_install_model_profiles"
+    spec = importlib.util.spec_from_file_location(
+        name, root / "factory_runtime" / "model_profiles.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load model_profiles from {root}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # dataclasses resolve their module through sys.modules
+    spec.loader.exec_module(module)
+    return module
+
+
+def ensure_profile(
+    layout: Layout,
+    *,
+    interactive: bool,
+    ask: Callable[[str], str] = input,
+    say: Callable[[str], None] = print,
+) -> str:
+    """Leave existing profiles alone; with none, ask for one in a terminal, else say how."""
+
+    profiles_module = model_profiles(layout.root)
+    existing = profiles_module.load(layout.profiles)
+    if existing.profiles:
+        return f"same    model profiles in {layout.profiles} (default: {existing.default})"
+    if not interactive:
+        return (f"skipped model profile: none in {layout.profiles}; create one with "
+                "`factory profile create` (doctor fails until you do)")
+    say("")
+    say("No model profile yet. The factory never picks a model, so name the agent and the")
+    say("model for each role. Add more profiles later with `factory profile create`.")
+    profile = profiles_module.prompt_profile(ask, say)
+    profiles_module.save(
+        layout.profiles, profiles_module.Profiles(profile.name, {profile.name: profile})
+    )
+    return f"wrote   {layout.profiles} (model profile {profile.name!r}, the default)"
+
+
+def install(layout: Layout, *, interactive: bool = False) -> list[str]:
     lines = [_write(layout.launcher, render_launcher(layout), LAUNCHER_MARK, executable=True)]
     for name, source in COMMANDS:
         lines.append(
             _write(layout.loader(name), render_loader(layout, name, source), LOADER_MARK,
                    executable=False)
         )
+    lines.append(ensure_profile(layout, interactive=interactive))
     return lines
 
 
@@ -260,10 +310,54 @@ def _kindex_check(path_env: str) -> Check:
     return Check("ok", "kindex", f"kindex-lite {match.group(0)} at {lite}")
 
 
+def _profile_checks(layout: Layout, path_env: str) -> list[Check]:
+    """A default model profile must exist; its agents and Ollama models are checked as warnings,
+    because a launch refuses them anyway and they may be installed after the profile is made."""
+
+    profiles_module = model_profiles(layout.root)
+    create = "factory profile create  (or rerun `make install` in a terminal to be asked)"
+    try:
+        profiles = profiles_module.load(layout.profiles)
+    except profiles_module.ProfileError as error:
+        return [Check("fail", "profile", str(error), f"fix {layout.profiles}, or move it aside "
+                      f"and: {create}")]
+    if not profiles.profiles:
+        return [Check("fail", "profile", f"no model profile in {layout.profiles}; the factory "
+                      "never picks a model", create)]
+    if profiles.default is None:
+        return [Check("fail", "profile", f"{layout.profiles} has no default profile",
+                      "factory profile use <name>")]
+    profile = profiles.profiles[profiles.default]
+    checks = [Check("ok", "profile", f"{profile.name} (default) in {layout.profiles}")]
+    for role in profiles_module.ROLES:
+        bound = profile.roles[role]
+        needed = {"codex-ollama": ("codex", "ollama"), "ollama": ("ollama", "codex")}.get(
+            bound.agent, (bound.agent,)
+        )
+        missing = [tool for tool in needed if shutil.which(tool, path=path_env) is None]
+        if missing:
+            checks.append(Check("warn", role, f"{bound.agent}:{bound.model} needs "
+                                f"{', '.join(missing)}, not found on PATH"))
+            continue
+        if bound.agent in profiles_module.OLLAMA_AGENTS:
+            shown = subprocess.run(
+                [shutil.which("ollama", path=path_env) or "ollama", "show", bound.model],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if shown.returncode != 0:
+                checks.append(Check("warn", role, f"Ollama model {bound.model} is not on this "
+                                    "machine (or Ollama is not running); the factory never "
+                                    f"downloads one. Fix: ollama pull {bound.model}"))
+                continue
+        checks.append(Check("ok", role, f"{bound.agent}:{bound.model}"))
+    return checks
+
+
 def doctor(layout: Layout, path_env: str) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
+    checks += _profile_checks(layout, path_env)
     checks.append(_kindex_check(path_env))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "
@@ -300,6 +394,8 @@ def _layout(arguments: argparse.Namespace) -> Layout:
                  else root / ".tools/tessera/target/release/tessera"),
         bindir=Path(arguments.bindir).expanduser(),
         commands_dir=Path(arguments.commands_dir).expanduser(),
+        profiles=(Path(arguments.profiles).expanduser() if arguments.profiles
+                  else model_profiles(root).default_path()),
     )
 
 
@@ -312,14 +408,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bindir", default="~/.local/bin", help="where the launcher goes")
     parser.add_argument("--commands-dir", default="~/.claude/commands",
                         help="Claude Code user commands directory")
+    parser.add_argument("--profiles", default="",
+                        help="model profiles file (default: $FACTORY_PROFILES, else "
+                        "${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json)")
     arguments = parser.parse_args(argv)
     layout = _layout(arguments)
     if arguments.action == "doctor":
         text, ready = report(doctor(layout, os.environ.get("PATH", "")))
         print(text)
         return 0 if ready else 1
-    action = install if arguments.action == "install" else uninstall
-    for line in action(layout):
+    if arguments.action == "install":
+        lines = install(layout, interactive=sys.stdin.isatty() and sys.stdout.isatty())
+    else:
+        lines = uninstall(layout)
+    for line in lines:
         print(f"{arguments.action}: {line}")
     return 0
 

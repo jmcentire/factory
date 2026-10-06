@@ -54,6 +54,9 @@ def run(
         # would, so a fixture that pins PATH to system directories does not leave the harness
         # without one. Resolution itself is tested by clearing this (tests/test_factory_python.py).
         "FACTORY_PYTHON": sys.executable,
+        # The operator's own model profiles must never reach a fixture. Tests of profiles name
+        # a file of their own.
+        "FACTORY_PROFILES": str(cwd / ".no-model-profiles.json"),
     }
     if env_extra:
         env.update(env_extra)
@@ -1398,7 +1401,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         'if [ "${1:-}" = "--version" ]; then echo "codex-cli 0.152.1-test"; exit 0; fi\n'
         'if [[ "$*" == *"--help"* ]]; then '
         'echo "--ignore-user-config --ignore-rules --strict-config --json '
-        '--thread --no-alt-screen --add-dir"; '
+        '--thread --no-alt-screen --add-dir --model"; '
         "exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -9320,6 +9323,134 @@ def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> No
     assert refused.returncode == 64
     assert "FACTORY_VALIDATOR_OLLAMA_MODEL" in refused.stderr
     assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
+
+
+def _write_profiles(path: Path, **roles: str) -> None:
+    """A profiles file holding one default profile, "team", with the given AGENT:MODEL roles."""
+
+    from factory_runtime import model_profiles as mp
+
+    profile = mp.Profile("team", "", {r: mp.parse_binding(r, roles[r]) for r in mp.ROLES})
+    mp.save(path, mp.Profiles("team", {"team": profile}))
+
+
+def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> None:
+    """With a profile, each seat runs the agent and model the operator named: the Validator and a
+    Codex Orchestrator get --model, the profile is snapshotted into the run, and every lane
+    launched later in that run follows the snapshot rather than the operator's file or flags."""
+
+    task = "Run every seat on the operator's named models."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    profiles = tmp_path / "profiles.json"
+    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="codex:gpt-orch",
+                    coder="codex:gpt-coder", tester="codex-ollama:glm-test:cloud")
+    env = {**env, "FACTORY_PROFILES": str(profiles)}
+    ignited = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    assert "model profile: team sha256:" in ignited.stdout
+    calls = tmux_log.read_text().splitlines()
+    validator = next(line for line in calls if "codex --sandbox workspace-write --model" in line)
+    assert "--model gpt-val " in validator
+    assert any("--no-alt-screen --model gpt-orch " in line for line in calls)
+    snapshot = json.loads((root / "model-profile.json").read_text(encoding="utf-8"))
+    assert snapshot["name"] == "team"
+    assert snapshot["roles"]["tester"] == {
+        "agent": "codex-ollama", "model": "glm-test:cloud", "model_passing": "command-line"
+    }
+
+    # The operator edits their file after ignition; the run keeps what it was ignited with.
+    _write_profiles(profiles, validator="claude:other", orchestrator="agy:other",
+                    coder="codex-ollama:other", tester="codex:other")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the lane's work.\n")
+    stub_dir = Path(env["PATH"].split(os.pathsep)[0])
+    _ollama_stub(stub_dir, available=True)
+
+    def launch(role: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        lane = tmp_path / f"standalone-{role}"
+        if not lane.exists():
+            subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+        return run(
+            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(lane),
+             "--prompt", str(prompt), "--runs", str(root.parent), *extra],
+            operator,
+            env,
+        )
+
+    refused = launch("coder", "--agent", "codex-ollama")
+    assert refused.returncode == 64 and "contradicts the run's model profile" in refused.stderr
+    assert launch("coder").returncode == 0
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    assert " -m gpt-coder " in coder_call and "--oss" not in coder_call
+    assert read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]["model"] == "gpt-coder"
+    assert launch("tester").returncode == 0
+    tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
+    assert "--oss --local-provider ollama -m glm-test:cloud" in tester_call
+
+
+def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:
+    """A Codex lane launched on a profile's model resumes on that model, not on Codex's built-in
+    default; a retained model that is not one shell word is refused."""
+
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task="Resume on the launch model.", harness_status="open"
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
+    )
+
+    def probe(model: str) -> subprocess.CompletedProcess[str]:
+        row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
+               "role": "coder", "agent": "codex", "model": model, "repository": str(lane)}
+        (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+        return run(
+            ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+             "--runs", str(root.parent)],
+            operator,
+            env,
+        )
+
+    malformed = probe("gpt coder")
+    assert malformed.returncode == 70 and "retained model is malformed" in malformed.stderr
+    resumed = probe("gpt-coder")
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
+    assert " codex -m gpt-coder --ask-for-approval never " in respawn
+
+
+def test_a_seat_variable_that_contradicts_the_profile_is_refused(tmp_path: Path) -> None:
+    """A stale FACTORY_VALIDATOR_AGENT in the shell must not silently override the profile, and
+    a profile that does not exist is refused rather than replaced by a default."""
+
+    task = "Refuse a contradicted profile."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    profiles = tmp_path / "profiles.json"
+    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="agy:gemini-test",
+                    coder="codex:gpt-coder", tester="codex:gpt-tester")
+    env = {**env, "FACTORY_PROFILES": str(profiles)}
+    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+    contradicted = run(ignite, operator, {**env, "FACTORY_VALIDATOR_AGENT": "claude"})
+    assert contradicted.returncode == 64
+    assert "FACTORY_VALIDATOR_AGENT=claude contradicts model profile 'team'" in contradicted.stderr
+    unknown = run([*ignite, "--profile", "nope"], operator, env)
+    assert unknown.returncode == 64 and "no model profile named 'nope'" in unknown.stderr
+    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
+    assert not (root / "model-profile.json").exists()
+
+    agreeing = run(ignite, operator, {**env, "FACTORY_VALIDATOR_AGENT": "codex"})
+    assert agreeing.returncode == 0, agreeing.stdout + agreeing.stderr
+    assert "select gemini-test inside agy with /model" in agreeing.stdout
 
 
 @pytest.mark.skipif(

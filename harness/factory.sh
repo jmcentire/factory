@@ -5,7 +5,7 @@ set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>]}"
+RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>] [--profile <name>]}"
 TASK_IN="${2:?verbatim task text or file}"
 shift 2
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
@@ -13,8 +13,7 @@ BUDGET=""
 AUDIT_MIN="15"
 ENGAGEMENT="scheduled"
 QUESTION_CHANNEL=""
-VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
-ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
+PROFILE_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -22,12 +21,52 @@ while [ "$#" -gt 0 ]; do
     --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
     --engagement) ENGAGEMENT="$2"; shift 2 ;;
     --question-channel) QUESTION_CHANNEL="$2"; shift 2 ;;
+    --profile) PROFILE_ARG="$2"; shift 2 ;;
     --repo|--target-manifest|--sha)
       echo "factory: $1 is forbidden; authorize and resolve the exact target through Stage R/E" >&2
       exit 64 ;;
     *) echo "factory: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
+
+D="$(cd "$(dirname "$0")" && pwd -P)"
+# The operator's model profile names the agent and the model for every role
+# (factory_runtime/model_profiles.py): --profile, else $FACTORY_PROFILE, else the default. With
+# no profiles at all, the per-seat variables keep their earlier meaning. With one, a per-seat
+# variable that disagrees with it is refused rather than silently winning.
+PROFILE_NAME=""
+PROFILE_DIGEST=""
+VALIDATOR_MODEL=""
+ORCHESTRATOR_MODEL=""
+exec 3< <("$FACTORY_PYTHON" "$D/model_profile.py" resolve --name "$PROFILE_ARG")
+IFS= read -r -d '' PROFILE_STATE <&3 || exit 64
+case "$PROFILE_STATE" in
+  profile|none) ;;
+  *) echo "factory: model profile resolution is malformed" >&2; exit 70 ;;
+esac
+if [ "$PROFILE_STATE" = "profile" ]; then
+  for FIELD in PROFILE_NAME PROFILE_DIGEST VALIDATOR_AGENT VALIDATOR_MODEL ORCHESTRATOR_AGENT \
+    ORCHESTRATOR_MODEL; do
+    IFS= read -r -d '' "$FIELD" <&3 || {
+      echo "factory: model profile resolution is malformed" >&2; exit 70;
+    }
+  done
+  exec 3<&-
+  profile_conflict() {
+    local current="${!1:-}"
+    [ -z "$current" ] || [ "$current" = "$2" ] || {
+      echo "factory: $1=$current contradicts model profile '$PROFILE_NAME' ($2); unset it or choose another profile" >&2
+      exit 64
+    }
+  }
+  profile_conflict FACTORY_VALIDATOR_AGENT "$VALIDATOR_AGENT"
+  profile_conflict FACTORY_ORCHESTRATOR_AGENT "$ORCHESTRATOR_AGENT"
+  [ "$VALIDATOR_AGENT" != "ollama" ] || profile_conflict FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL"
+else
+  exec 3<&-
+  VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
+  ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
+fi
 case "$VALIDATOR_AGENT" in
   codex|ollama|claude) ;;
   *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude)" >&2; exit 64 ;;
@@ -37,12 +76,15 @@ case "$ORCHESTRATOR_AGENT" in
   *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex)" >&2; exit 64 ;;
 esac
 
-D="$(cd "$(dirname "$0")" && pwd -P)"
 if [ "$VALIDATOR_AGENT" = "ollama" ]; then
   # shellcheck source=harness/model_availability.sh
   source "$D/model_availability.sh"
-  VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-}"
-  factory_require_ollama_model factory FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL" || exit $?
+  if [ -n "$PROFILE_NAME" ]; then
+    factory_require_ollama_model factory "the validator model in profile '$PROFILE_NAME'" "$VALIDATOR_MODEL" || exit $?
+  else
+    VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-}"
+    factory_require_ollama_model factory FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL" || exit $?
+  fi
 fi
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 # shellcheck source=harness/run_context.sh
@@ -131,7 +173,9 @@ case "$ORCHESTRATOR_AGENT" in
       echo "factory: codex CLI is not runnable" >&2; exit 70;
     }
     ORCHESTRATOR_HELP=$(codex --help 2>/dev/null) || exit 70
-    for REQUIRED in --no-alt-screen --add-dir; do
+    REQUIRED_FLAGS="--no-alt-screen --add-dir"
+    [ -z "$ORCHESTRATOR_MODEL" ] || REQUIRED_FLAGS="$REQUIRED_FLAGS --model"
+    for REQUIRED in $REQUIRED_FLAGS; do
       printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
         echo "factory: codex CLI contract lacks $REQUIRED ($ORCHESTRATOR_VERSION)" >&2
         exit 70
@@ -140,6 +184,14 @@ case "$ORCHESTRATOR_AGENT" in
     ORCHESTRATOR_CLI_CONTRACT="codex-resident-tui-v1"
     ;;
 esac
+
+if [ -n "$PROFILE_NAME" ]; then
+  # The run keeps the bindings it was ignited with: lanes launched later read this, never the
+  # operator's file, which may change meanwhile. No harness metadata exists yet, so a file here
+  # can only be left by an ignition that failed, and is replaced.
+  "$FACTORY_PYTHON" "$D/model_profile.py" snapshot --name "$PROFILE_NAME" \
+    --expect-digest "$PROFILE_DIGEST" --output "$ROOT/model-profile.json" || exit 64
+fi
 
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
@@ -280,18 +332,29 @@ VALIDATOR_PROMPT="Act as the Validator under docs/VALIDATION-DIRECTIVE.md and th
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block, halt, or no-op: block gates the next transition; halt stops the Validator outright (HALT is set and its window is killed, and only a human clears HALT and re-seats it). Use halt when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
 ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
+# A profile's model goes on the command line. Without a profile these stay empty and every
+# command is exactly what it was.
+VALIDATOR_MODEL_ARGS=""
+case "$VALIDATOR_AGENT" in
+  codex|claude)
+    [ -z "$VALIDATOR_MODEL" ] || printf -v VALIDATOR_MODEL_ARGS -- '--model %q ' "$VALIDATOR_MODEL" ;;
+esac
+ORCHESTRATOR_MODEL_ARGS=""
+if [ "$ORCHESTRATOR_AGENT" = "codex" ] && [ -n "$ORCHESTRATOR_MODEL" ]; then
+  printf -v ORCHESTRATOR_MODEL_ARGS -- '--model %q ' "$ORCHESTRATOR_MODEL"
+fi
 case "$VALIDATOR_AGENT" in
   codex)
-    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write %q' \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write %s%q' \
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   ollama)
     printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q ollama launch codex --model %q -- --sandbox workspace-write %q' \
       "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
     ;;
   claude)
-    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %q' \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %s%q' \
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
 esac
 
@@ -313,9 +376,9 @@ case "$ORCHESTRATOR_AGENT" in
     ;;
   codex)
     SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
       "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
+      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
 esac
 
@@ -379,5 +442,11 @@ echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
 echo "  model lanes  : QUALIFIED_PR2"
 echo "  validator    : operator-owned coordination"
-echo "  validator ai : $VALIDATOR_AGENT"
-echo "  orchestrator : $ORCHESTRATOR_AGENT (resident strategic monitor; tmux-unqualified)"
+echo "  validator ai : $VALIDATOR_AGENT${VALIDATOR_MODEL:+ ($VALIDATOR_MODEL)}"
+echo "  orchestrator : $ORCHESTRATOR_AGENT${ORCHESTRATOR_MODEL:+ ($ORCHESTRATOR_MODEL)} (resident strategic monitor; tmux-unqualified)"
+if [ -n "$PROFILE_NAME" ]; then
+  echo "  model profile: $PROFILE_NAME $PROFILE_DIGEST ($ROOT/model-profile.json)"
+  if [ "$ORCHESTRATOR_AGENT" = "agy" ]; then
+    echo "  note         : agy takes no model flag; select $ORCHESTRATOR_MODEL inside agy with /model"
+  fi
+fi

@@ -3,6 +3,47 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.11] - 2026-10-06
+
+Model profiles: the operator names the agent and the model for every role once, as many times
+over as they like, and each run uses one.
+
+### Added
+
+- **`factory_runtime/model_profiles.py` and `factory profile create|list|show|use|delete`.** A
+  profile binds the Validator, Orchestrator, Coder and Tester each to an agent the harness can
+  launch and a model the operator named. Profiles live in
+  `${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json` (`$FACTORY_PROFILES` overrides), owner-only,
+  with one marked the default. A profile that leaves a role unbound, names an agent its role
+  cannot run, or names no model is refused when the file is read, never completed from a
+  default. `create` asks for every binding in a terminal and suggests none.
+- **`make install` asks for the first profile, and `make doctor` is not READY without one.** The
+  factory never picks a model, so an install with no profile is not a working install. Doctor
+  also warns when a default-profile agent is not on PATH or its Ollama model is not on the
+  machine. A non-interactive install prints the command instead of guessing.
+- **`harness/factory.sh --profile <name>`**, else `$FACTORY_PROFILE`, else the default. The
+  Validator and a Codex Orchestrator get the profile's model with `--model`; agy takes no model
+  flag, so its model is recorded as selected inside agy and the ignition says so. The profile is
+  snapshotted into the run as `model-profile.json`. `tmux_lane.sh` launches each lane from that
+  snapshot (`-m` for Codex, the existing Ollama path for `codex-ollama`), and
+  `tmux_lane_message.sh` resumes on the model the lane launched with.
+
+### Changed
+
+- **With a profile in effect, a disagreeing per-seat setting is refused, not preferred.**
+  `FACTORY_VALIDATOR_AGENT`, `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_VALIDATOR_OLLAMA_MODEL`,
+  `FACTORY_LANE_OLLAMA_MODEL` and `tmux_lane.sh --agent` still work, and must match the profile
+  when one is in effect. With no profiles at all, they keep their earlier meaning and every
+  launch command is unchanged.
+- Codex lanes run with `--ignore-user-config`, so before this a Codex lane ran Codex's built-in
+  default model, which no one named. With a profile, it runs the named one.
+- Doctrine: `SOFTWARE-FACTORY.md` §6 names the model profile as where the operator configures
+  models; `prompts/validate.md` (regenerated `ROLE-DOCTRINE.md`) and `prompts/orchestrate.md`
+  point at the run's `model-profile.json`.
+
+Not changed: the qualified dispatch path (`dispatch_lane.sh`) still takes its runner manifests,
+which the Validator writes; the profile is the source for them, not a substitute.
+
 ## [0.8.10] - 2026-10-06
 
 ### Fixed

@@ -28,6 +28,7 @@ from factory_runtime.instruction_control import (
     verify_role_contract,
 )
 from factory_runtime.isolation import MacOSSandbox
+from factory_runtime.model_profiles import ROLES as MODEL_PROFILE_ROLES
 from factory_runtime.orchestrator_projection import build_orchestrator_projection
 from factory_runtime.projection_bundle import bundle_runner_projection
 from factory_runtime.resources import ResourceLedger
@@ -316,6 +317,42 @@ def _parser() -> argparse.ArgumentParser:
     record_ruling.add_argument(
         "--tessera-bin", default=_default_tessera_bin()
     )
+
+    profile = commands.add_parser(
+        "profile",
+        help="the operator's model profiles: which agent and model run each role",
+    )
+    profile_commands = profile.add_subparsers(dest="profile_command", required=True)
+    profile_list = profile_commands.add_parser("list", help="every profile and the default")
+    profile_show = profile_commands.add_parser(
+        "show", help="one profile's bindings (default: the one a run would use)"
+    )
+    profile_show.add_argument("name", nargs="?", default="")
+    profile_create = profile_commands.add_parser(
+        "create",
+        help="add a profile; with no role flags, asks for every agent and model in a terminal",
+    )
+    profile_create.add_argument("name", nargs="?", default="")
+    for role in MODEL_PROFILE_ROLES:
+        profile_create.add_argument(f"--{role}", default="", metavar="AGENT:MODEL")
+    profile_create.add_argument("--description", default="")
+    profile_create.add_argument(
+        "--default", action="store_true", help="make it the default (the first profile always is)"
+    )
+    profile_create.add_argument(
+        "--replace", action="store_true", help="overwrite the profile of the same name"
+    )
+    profile_use = profile_commands.add_parser("use", help="make a profile the default")
+    profile_use.add_argument("name")
+    profile_delete = profile_commands.add_parser("delete", help="remove a profile")
+    profile_delete.add_argument("name")
+    for sub in (profile_list, profile_show, profile_create, profile_use, profile_delete):
+        sub.add_argument(
+            "--profiles",
+            default="",
+            help="profiles file (default: $FACTORY_PROFILES, else "
+            "${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json)",
+        )
 
     verify_genesis = commands.add_parser(
         "verify-genesis",
@@ -956,6 +993,100 @@ def _read_array(path: str) -> list[dict[str, Any]]:
     return raw
 
 
+def _profile_command(arguments: argparse.Namespace) -> None:
+    """``factory profile``: the only writer of the operator's model profiles file."""
+
+    from factory_runtime import model_profiles
+
+    path = (
+        Path(arguments.profiles).expanduser()
+        if arguments.profiles
+        else model_profiles.default_path()
+    )
+    profiles = model_profiles.load(path)
+    action = arguments.profile_command
+    if action == "list":
+        _emit(
+            {
+                "source": str(path),
+                "default": profiles.default,
+                "profiles": {
+                    name: profiles.profiles[name].document() for name in sorted(profiles.profiles)
+                },
+            }
+        )
+        return
+    if action == "show":
+        shown = model_profiles.resolve(path, arguments.name)
+        if shown is None:
+            raise ValueError(
+                f"no model profiles at {path}; create one with `factory profile create`"
+            )
+        _emit(
+            {
+                "name": shown.name,
+                "default": shown.name == profiles.default,
+                "digest": shown.digest,
+                "source": str(path),
+                **shown.document(),
+            }
+        )
+        return
+    if action == "create":
+        given = {role: getattr(arguments, role) for role in MODEL_PROFILE_ROLES}
+        if all(given.values()):
+            created = model_profiles.Profile(
+                model_profiles.validate_name(arguments.name or ""),
+                arguments.description,
+                {role: model_profiles.parse_binding(role, given[role]) for role in given},
+            )
+        elif any(given.values()) or not sys.stdin.isatty():
+            missing = [f"--{role}" for role, value in given.items() if not value]
+            raise ValueError(
+                "name every role as AGENT:MODEL (missing: " + ", ".join(missing) + "), "
+                "or run `factory profile create` in a terminal to be asked"
+            )
+        else:
+            created = model_profiles.prompt_profile(
+                input, print, name=arguments.name, description=arguments.description
+            )
+        if created.name in profiles.profiles and not arguments.replace:
+            raise ValueError(f"profile {created.name!r} exists in {path}; pass --replace")
+        default = (
+            created.name
+            if arguments.default or profiles.default is None
+            else profiles.default
+        )
+        model_profiles.save(
+            path,
+            model_profiles.Profiles(default, {**profiles.profiles, created.name: created}),
+        )
+        _emit(
+            {
+                "saved": created.name,
+                "digest": created.digest,
+                "default": default,
+                "source": str(path),
+            }
+        )
+        return
+    name = model_profiles.validate_name(arguments.name)
+    if name not in profiles.profiles:
+        raise ValueError(f"no model profile named {name!r} in {path}")
+    if action == "use":
+        model_profiles.save(path, model_profiles.Profiles(name, profiles.profiles))
+        _emit({"default": name, "source": str(path)})
+        return
+    remaining = {key: value for key, value in profiles.profiles.items() if key != name}
+    if name == profiles.default and remaining:
+        raise ValueError(
+            f"{name!r} is the default; make another the default with `factory profile use` first"
+        )
+    new_default = profiles.default if remaining else None
+    model_profiles.save(path, model_profiles.Profiles(new_default, remaining))
+    _emit({"deleted": name, "default": new_default, "source": str(path)})
+
+
 def _emit(value: Any) -> None:
     if hasattr(value, "to_dict"):
         value = value.to_dict()
@@ -1456,6 +1587,9 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "task_digest": digest_bytes(task_bytes),
             }
         )
+        return
+    if arguments.command == "profile":
+        _profile_command(arguments)
         return
     if arguments.command == "init":
         from factory_runtime.project_init import WORKERS, ProjectKeys

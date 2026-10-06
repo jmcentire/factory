@@ -791,7 +791,10 @@ name, or downloads, pulls, installs or rents one, even to satisfy the cross-fami
 When a required party (a cross-family reviewer, an Ollama-backed lane) has no configured model,
 that is a question for the human — which provider and which model — not a setup task. The
 harness enforces the lane half: an Ollama-backed launch names its model explicitly and is refused
-unless that model is already available on the machine.
+unless that model is already available on the machine. The operator states the choice once, in a
+**model profile** that binds every role to an agent and a model (`factory profile create`;
+`make install` asks for the first). A run ignited with a profile records it as
+`model-profile.json`, and every seat and lane in that run launches on those bindings.
 
 **The tier is recorded in the manifest**, because a verdict produced at the moderate tier and one
 produced at the stronger tier are not the same evidence, and nothing downstream can tell them
