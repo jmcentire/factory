@@ -630,16 +630,21 @@ dependency-free (bash + python3 + git):
   violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
   checkpoints, never promotion evidence.
   Each lane needs its own repository copy; a launch on a copy the other lane already uses (or one
-  nested in it) is refused. `harness/lane_kindex.py` gives the lane a Kindex MCP server scoped to
-  that copy (SOFTWARE-FACTORY §6, Memory is scoped by role): a private home under
-  `tmux-lanes/<role>-kindex-home/` holding a single-profile store loaded from the copy's
-  `.kin/knowledge.jsonl` (or `.json`), the run's shared `lane-seed.jsonl`, and the copy's
-  `.kin/events` Kinbase evidence (verified with `kin kinbase sync --mode raw`, no Kinbase binary).
-  The private HOME hides the operator's graph; the server's PATH holds no `kinbase`, so no Kinbase
-  write is reachable. Both lanes must load the same seed. The launch row records scope, seed and
-  source digests and Kinbase counts, and a resumed lane gets the same server. The freeze leaves
-  `.kin/local` and `.kin/events` out of the snapshot. A launch without Kindex installed is
-  refused rather than run without memory.
+  nested in it) is refused. `harness/lane_kindex.py` gives the lane `kindex-lite --repo <copy>`
+  (Kindex >= 0.48.0; SOFTWARE-FACTORY §6, Memory is scoped by role), bound to the copy's
+  `.kin/local/kindex` store. Before launch, under a private home in
+  `tmux-lanes/<role>-kindex-home/`, the store is loaded from approved inputs only: the copy's
+  `.kin/knowledge.jsonl` (or `.json`), the run's shared `lane-seed.jsonl` (each node tagged
+  `lane-seed`, so `list_nodes(tags="lane-seed")` returns it), and the copy's `.kin/events`
+  Kinbase evidence (verified with `kin kinbase sync --mode raw`, no Kinbase binary). A copy that
+  arrives with its own `.kin/local` store is refused. The launch is then refused, never
+  downgraded, unless the lane's own server lists `kinbase_sync` and `kinbase_explain`, lacks
+  `kinbase_submit` and `kinbase_status`, and its `scope_info` names this copy with submissions
+  disallowed. The server's PATH holds no `kinbase`, so live Kinbase lookups stay off. Both lanes
+  must load the same seed. A failed attempt removes what it created; a lane's home is bound only
+  after a successful launch, and a relaunch keeps its store. The launch row records the server,
+  version, tools, store, digests and Kinbase counts, and a resumed lane gets the same server. The
+  freeze leaves `.kin/local` and `.kin/events` out of the snapshot.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and runs a sandboxed frozen-projection audit in a fresh empty directory.
   It refuses any run without a resident Orchestrator and never substitutes for one.

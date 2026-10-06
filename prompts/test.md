@@ -56,7 +56,9 @@ run's shared seed (the research, constraints and decisions both lanes may read),
 company's Kinbase knowledge for this repository, in a store no other lane can read. Nothing you
 capture leaves it, and you cannot write to Kinbase. The operator's shared graph is not
 reachable from your lane by design. A search that finds nothing is that scope working, not a
-fault to work around.
+fault to work around. Start by reading the shared seed in full with
+`list_nodes(tags="lane-seed")`: search ranks it among thousands of Kinbase entries, so it can be
+missed.
 
 Before authoring, `search` kindex for the **run-tagged research nodes** your dispatch
 cites (the Validator's Phase A0 output: vendor docs, standards, domain references,

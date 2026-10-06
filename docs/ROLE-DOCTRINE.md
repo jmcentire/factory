@@ -390,7 +390,8 @@ re-deriving it, and the next run starts where this one ended.
    research node carrying implementation detail to the Tester.
    The Coder and the Tester cannot read your graph. Each lane's kindex is loaded at launch from
    its own copy of the target's `.kin` (make the copy from the working tree, which carries
-   `.kin` when git does not), the run's shared seed, and the repository's Kinbase evidence. Write
+   `.kin` when git does not, but without `.kin/local`, your project graph, which the launch
+   refuses), the run's shared seed, and the repository's Kinbase evidence. Write
    the shared seed before launching either lane: `lane-seed.jsonl` in the run's control root, one
    node per line in the `.kin/knowledge.jsonl` format, holding the vital context both lanes may
    read (Phase A0 research, standing constraints, ratified decisions) and never implementation or
@@ -1051,7 +1052,8 @@ makes a fabricated or stale citation *unpromotable*.
 3. **Orient in the graph and the repo.** Your kindex is scoped to your lane: your copy of the target
    repository's `.kin`, the run's shared seed (research, constraints and decisions both lanes may
    read), and the company's Kinbase knowledge for this repository, in a store no other lane can
-   read. You cannot write to Kinbase. The operator's shared graph is out of reach by
+   read. You cannot write to Kinbase. Read the shared seed first, in full, with
+   `list_nodes(tags="lane-seed")`; search ranks it among thousands of Kinbase entries. The operator's shared graph is out of reach by
    design. `search` kindex for prior work, constraints, and
    watches on this area before reading files — and read the **run-tagged research nodes
    your dispatch cites** (the Validator's Phase A0 output: vendor docs, standards, prior
@@ -1313,7 +1315,9 @@ run's shared seed (the research, constraints and decisions both lanes may read),
 company's Kinbase knowledge for this repository, in a store no other lane can read. Nothing you
 capture leaves it, and you cannot write to Kinbase. The operator's shared graph is not
 reachable from your lane by design. A search that finds nothing is that scope working, not a
-fault to work around.
+fault to work around. Start by reading the shared seed in full with
+`list_nodes(tags="lane-seed")`: search ranks it among thousands of Kinbase entries, so it can be
+missed.
 
 Before authoring, `search` kindex for the **run-tagged research nodes** your dispatch
 cites (the Validator's Phase A0 output: vendor docs, standards, domain references,

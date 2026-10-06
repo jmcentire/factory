@@ -251,7 +251,8 @@ re-deriving it, and the next run starts where this one ended.
    research node carrying implementation detail to the Tester.
    The Coder and the Tester cannot read your graph. Each lane's kindex is loaded at launch from
    its own copy of the target's `.kin` (make the copy from the working tree, which carries
-   `.kin` when git does not), the run's shared seed, and the repository's Kinbase evidence. Write
+   `.kin` when git does not, but without `.kin/local`, your project graph, which the launch
+   refuses), the run's shared seed, and the repository's Kinbase evidence. Write
    the shared seed before launching either lane: `lane-seed.jsonl` in the run's control root, one
    node per line in the `.kin/knowledge.jsonl` format, holding the vital context both lanes may
    read (Phase A0 research, standing constraints, ratified decisions) and never implementation or

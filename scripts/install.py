@@ -243,16 +243,28 @@ def _loader_checks(layout: Layout) -> list[Check]:
     return checks
 
 
+def _kindex_check(path_env: str) -> Check:
+    """Coder and Tester lanes refuse to launch without kindex-lite >= 0.48.0 (lane_kindex.py)."""
+
+    fix = "pip install 'kindex[mcp,kinbase]>=0.48.1' (reinstall if kindex-lite is missing)"
+    lite = shutil.which("kindex-lite", path=path_env)
+    if lite is None:
+        return Check("warn", "kindex", "kindex-lite not found; Coder and Tester lanes refuse to "
+                     f"launch without it. Fix: {fix}")
+    kin = Path(lite).resolve().parent / "kin"
+    done = subprocess.run([str(kin), "--version"], capture_output=True, text=True, check=False)
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", done.stdout)
+    if done.returncode != 0 or match is None or tuple(map(int, match.groups())) < (0, 48, 0):
+        return Check("warn", "kindex", f"Kindex beside {lite} is older than 0.48.0 or unreadable; "
+                     f"lanes will refuse to launch. Fix: {fix}")
+    return Check("ok", "kindex", f"kindex-lite {match.group(0)} at {lite}")
+
+
 def doctor(layout: Layout, path_env: str) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
-    missing = [tool for tool in ("kin", "kin-mcp") if shutil.which(tool, path=path_env) is None]
-    if missing:
-        checks.append(Check("warn", "kindex", f"{' and '.join(missing)} not found; Coder and "
-                            "Tester lanes refuse to launch without Kindex"))
-    else:
-        checks.append(Check("ok", "kindex", "kin and kin-mcp found"))
+    checks.append(_kindex_check(path_env))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "
                             "(https://claude.com/claude-code)"))
