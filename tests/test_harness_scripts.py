@@ -9224,3 +9224,81 @@ def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
     rows = _refusal_events(root)
     assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
     assert "candidate archive failed" in str(rows[0]["detail"])
+
+
+def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
+    """An `ollama` that logs every call; `show` succeeds only when the model is available."""
+
+    log = stub_dir.parent / "ollama.log"
+    ollama = stub_dir / "ollama"
+    ollama.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
+        f'if [ "$1" = show ]; then exit {0 if available else 1}; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    ollama.chmod(0o755)
+    return log
+
+
+def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
+    """The operator names the model and must already have it. A codex-ollama launch with no
+    model, or with a model this machine lacks, is refused before Codex's --oss mode could pull
+    one; an available model is passed explicitly and recorded on the launch row."""
+
+    task = "Exercise an Ollama-backed author lane."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    ignited = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    prompt = tmp_path / "coder-prompt.txt"
+    prompt.write_text("Implement the signed specification.\n")
+    launch = [
+        "bash", str(HARNESS / "tmux_lane.sh"), "r1", "coder", "launch", "--repo", str(lane),
+        "--prompt", str(prompt), "--runs", str(root.parent), "--agent", "codex-ollama",
+    ]
+    stub_dir = Path(env["PATH"].split(os.pathsep)[0])
+
+    unnamed = run(launch, operator, env)
+    assert unnamed.returncode == 64
+    assert "never picks or downloads a model" in unnamed.stderr
+
+    ollama_log = _ollama_stub(stub_dir, available=False)
+    missing = run(launch, operator, {**env, "FACTORY_LANE_OLLAMA_MODEL": "glm-test:cloud"})
+    assert missing.returncode == 69
+    assert "never downloads models" in missing.stderr
+    assert ollama_log.read_text().splitlines() == ["show glm-test:cloud"]
+    assert not any("-n coder" in line for line in tmux_log.read_text().splitlines())
+
+    _ollama_stub(stub_dir, available=True)
+    launched = run(launch, operator, {**env, "FACTORY_LANE_OLLAMA_MODEL": "glm-test:cloud"})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    assert "--oss --local-provider ollama -m glm-test:cloud" in coder_call
+    assert not any("pull" in line for line in ollama_log.read_text().splitlines())
+    rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
+    assert rows[-1]["status"] == "active" and rows[-1]["model"] == "glm-test:cloud"
+
+
+def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> None:
+    """factory.sh no longer defaults the Ollama Validator to a model; with none named it refuses
+    before any session starts."""
+
+    task = "Exercise an Ollama-backed Validator."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    refused = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        {**env, "FACTORY_VALIDATOR_AGENT": "ollama"},
+    )
+    assert refused.returncode == 64
+    assert "FACTORY_VALIDATOR_OLLAMA_MODEL" in refused.stderr
+    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()

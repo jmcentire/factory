@@ -3,6 +3,31 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.5] - 2026-10-05
+
+Models come from the operator. The factory never picks, downloads or installs one.
+
+### Changed
+
+- **Doctrine: models come from the operator; never provision one** (`SOFTWARE-FACTORY.md` §6,
+  `prompts/validate.md`, `prompts/orchestrate.md`, regenerated `ROLE-DOCTRINE.md`). Which
+  providers and models a run may use (an API, Hugging Face, Vast, Ollama) is the operator's
+  configuration. No role picks a model the operator did not name or downloads, pulls, installs
+  or rents one, even to satisfy the unconditional cross-family reviewer. When none is
+  configured, the agent asks the human which provider and model to use. Before this, the
+  reviewer rule said "unconditional" without saying where the reviewer comes from, and an agent
+  with only one family available could treat obtaining one as its job.
+- **Ollama launches name their model and require it to be present.** `harness/factory.sh` no
+  longer defaults an Ollama Validator to `glm-5.2:cloud`; it needs
+  `FACTORY_VALIDATOR_OLLAMA_MODEL`. A `codex-ollama` tmux lane needs `FACTORY_LANE_OLLAMA_MODEL`
+  and passes it explicitly. Before, the lane passed no model, so Codex's `--oss` mode chose its
+  own default and pulled it. Both paths refuse unless `ollama show` finds the model on the
+  machine (`harness/model_availability.sh`), so a launch never starts a download. The launch
+  row records the model, and lane messages resume with the same one.
+- **`make` targets put the venv first on PATH.** Harness scripts call bare `python3`, so the
+  harness tests had been passing on whatever global interpreter could import `factory_core`.
+  On a clean machine that is none.
+
 ## [0.8.4] - 2026-10-05
 
 Installation. No gate or doctrine changes.

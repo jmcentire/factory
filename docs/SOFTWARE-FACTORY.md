@@ -753,6 +753,15 @@ surface all three had read identically and all missed, at a cost far below the d
 **Same-family reviewers inherit the frame: three readings of one specification are one reading.**
 What that run evidences is cross-family *review*; it says nothing about cross-family lanes.
 
+**Models come from the operator; the factory never provisions one.** Which providers and models
+a run may use — an API, Hugging Face, a rented GPU host such as Vast, Ollama, local or cloud —
+is the operator's configuration. No role and no harness script picks a model the operator did not
+name, or downloads, pulls, installs or rents one, even to satisfy the cross-family reviewer above.
+When a required party (a cross-family reviewer, an Ollama-backed lane) has no configured model,
+that is a question for the human — which provider and which model — not a setup task. The
+harness enforces the lane half: an Ollama-backed launch names its model explicitly and is refused
+unless that model is already available on the machine.
+
 **The tier is recorded in the manifest**, because a verdict produced at the moderate tier and one
 produced at the stronger tier are not the same evidence, and nothing downstream can tell them
 apart otherwise. A claimed tier that the recorded arrangement does not support is not a weaker

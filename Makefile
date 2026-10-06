@@ -74,6 +74,9 @@ else
   PY := $(abspath $(VENV))/bin/python
   PY_SOURCE := repo-managed venv at $(VENV)
   VENV_PREREQ := $(VENV_STAMP)
+  # Harness scripts the tests drive call bare `python3`; without this they would run whatever
+  # global interpreter is on PATH and pass or fail on what happens to be installed there.
+  export PATH := $(abspath $(VENV))/bin:$(PATH)
 endif
 
 # Re-provision whenever the dependency declaration moves. The stamp is inside the venv, so

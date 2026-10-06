@@ -562,6 +562,10 @@ dependency-free (bash + python3 + git):
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
+  An Ollama-backed Validator or tmux lane takes its model only from the operator
+  (`FACTORY_VALIDATOR_OLLAMA_MODEL`, `FACTORY_LANE_OLLAMA_MODEL`) and is refused unless that
+  model is already available (`harness/model_availability.sh`); the factory never picks,
+  pulls or installs a model.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
