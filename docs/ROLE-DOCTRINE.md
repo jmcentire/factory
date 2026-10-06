@@ -388,6 +388,16 @@ re-deriving it, and the next run starts where this one ended.
    smallest chunk-specific projection and its relevant node ids/digests; never paste the search
    result or a long node dump into the prompt. Respect the projection boundary: never route a
    research node carrying implementation detail to the Tester.
+   The Coder and the Tester cannot read your graph. Each lane's kindex is loaded at launch from
+   its own copy of the target's `.kin` (make the copy from the working tree, which carries
+   `.kin` when git does not), the run's shared seed, and the repository's Kinbase evidence. Write
+   the shared seed before launching either lane: `lane-seed.jsonl` in the run's control root, one
+   node per line in the `.kin/knowledge.jsonl` format, holding the vital context both lanes may
+   read (Phase A0 research, standing constraints, ratified decisions) and never implementation or
+   test material. Both lanes get the same seed; the second lane will not launch on a changed one.
+   Lanes read Kinbase but cannot write to it, and nobody in the run submits to Kinbase before the
+   verdict; afterwards, submit what held up. What a lane captures stays in its own store, under
+   the run's `tmux-lanes/<role>-kindex-home/`; read it there when you review the handover.
 7. **Pre-register diagnostic branches.** Before observing results, record competing causal
    hypotheses and what each outcome would mean. Amended semantics that hold while known omissions
    recur mean incomplete enumeration; recurrence among the amended semantics means
@@ -1038,7 +1048,11 @@ makes a fabricated or stale citation *unpromotable*.
    attribute one to the human without a citation that resolves to text bearing it. If you
    cannot find authority for something you believe is needed, that is a spec-defect to
    raise, not a gap to fill from judgment.
-3. **Orient in the graph and the repo.** `search` kindex for prior work, constraints, and
+3. **Orient in the graph and the repo.** Your kindex is scoped to your lane: your copy of the target
+   repository's `.kin`, the run's shared seed (research, constraints and decisions both lanes may
+   read), and the company's Kinbase knowledge for this repository, in a store no other lane can
+   read. You cannot write to Kinbase. The operator's shared graph is out of reach by
+   design. `search` kindex for prior work, constraints, and
    watches on this area before reading files — and read the **run-tagged research nodes
    your dispatch cites** (the Validator's Phase A0 output: vendor docs, standards, prior
    art, fetched and annotated for this run). Do not re-derive what the run already
@@ -1293,6 +1307,13 @@ into this same Codex thread. Ordinary prose is not the typed question channel.
 ---
 
 ### Research — kindex, scoped to your lane
+
+Your kindex is scoped to you. It holds your own copy of the target repository's `.kin`, the
+run's shared seed (the research, constraints and decisions both lanes may read), and the
+company's Kinbase knowledge for this repository, in a store no other lane can read. Nothing you
+capture leaves it, and you cannot write to Kinbase. The operator's shared graph is not
+reachable from your lane by design. A search that finds nothing is that scope working, not a
+fault to work around.
 
 Before authoring, `search` kindex for the **run-tagged research nodes** your dispatch
 cites (the Validator's Phase A0 output: vendor docs, standards, domain references,

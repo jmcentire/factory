@@ -62,7 +62,8 @@ active = [
 ]
 if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
-values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""))
+values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
+          (active[0].get("kindex") or {}).get("mcp_override", ""))
 if any(not isinstance(value, str) or "\0" in value for value in values):
     raise SystemExit("lane-message: retained launch fields are malformed")
 for value in values:
@@ -77,6 +78,9 @@ IFS= read -r -d '' AGENT <&3 || {
 }
 IFS= read -r -d '' MODEL <&3 || {
   echo "lane-message: retained model is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
+  echo "lane-message: retained Kindex scope is missing or malformed" >&2; exit 70;
 }
 exec 3<&-
 case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: unsupported retained agent" >&2; exit 70 ;; esac
@@ -196,11 +200,14 @@ if [ "$PANE_DEAD" = "0" ]; then
 elif [ "$PANE_DEAD" = "1" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
   SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
-  printf -v RESUME_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %q -' \
+  # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
+  KINDEX_C=""
+  [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
+  printf -v RESUME_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
-    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$THREAD_ID"
+    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
   tmux respawn-pane -k -t "$RUN:$LANE" -c "$REPOSITORY" "$RESUME_CMD"
   TRANSPORT="resume"
 else

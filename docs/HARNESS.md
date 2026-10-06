@@ -629,6 +629,17 @@ dependency-free (bash + python3 + git):
   special entries, nested Git metadata, portable-name collisions, privileged modes and ceiling
   violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
   checkpoints, never promotion evidence.
+  Each lane needs its own repository copy; a launch on a copy the other lane already uses (or one
+  nested in it) is refused. `harness/lane_kindex.py` gives the lane a Kindex MCP server scoped to
+  that copy (SOFTWARE-FACTORY §6, Memory is scoped by role): a private home under
+  `tmux-lanes/<role>-kindex-home/` holding a single-profile store loaded from the copy's
+  `.kin/knowledge.jsonl` (or `.json`), the run's shared `lane-seed.jsonl`, and the copy's
+  `.kin/events` Kinbase evidence (verified with `kin kinbase sync --mode raw`, no Kinbase binary).
+  The private HOME hides the operator's graph; the server's PATH holds no `kinbase`, so no Kinbase
+  write is reachable. Both lanes must load the same seed. The launch row records scope, seed and
+  source digests and Kinbase counts, and a resumed lane gets the same server. The freeze leaves
+  `.kin/local` and `.kin/events` out of the snapshot. A launch without Kindex installed is
+  refused rather than run without memory.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and runs a sandboxed frozen-projection audit in a fresh empty directory.
   It refuses any run without a resident Orchestrator and never substitutes for one.

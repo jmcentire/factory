@@ -247,6 +247,12 @@ def doctor(layout: Layout, path_env: str) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
+    missing = [tool for tool in ("kin", "kin-mcp") if shutil.which(tool, path=path_env) is None]
+    if missing:
+        checks.append(Check("warn", "kindex", f"{' and '.join(missing)} not found; Coder and "
+                            "Tester lanes refuse to launch without Kindex"))
+    else:
+        checks.append(Check("ok", "kindex", "kin and kin-mcp found"))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "
                             "(https://claude.com/claude-code)"))

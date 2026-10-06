@@ -3,6 +3,48 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.8] - 2026-10-06
+
+Kindex by role: the full graph for the Validator and Orchestrator, a scoped store for each lane.
+
+### Added
+
+- **Doctrine: memory is scoped by role** (`SOFTWARE-FACTORY.md` §6, the lane and Validator
+  prompts, regenerated `ROLE-DOCTRINE.md`):
+  - The Validator and the Orchestrator use the operator's full Kindex graph.
+  - The Coder and the Tester each get Kindex scoped to their own copy of the target repository.
+    It is a private store, loaded at launch from that copy's `.kin`, the run's shared seed, and
+    the repository's Kinbase evidence. No other lane can read it.
+  - Scope the data; never remove the capability. A lane with no Kindex cannot follow its prompt,
+    and a search-before-explore policy deadlocks it (ci-r2).
+  - Both lanes are seeded with the same vital, shared-only context: research, standing
+    constraints and ratified decisions, never implementation or test material.
+  - Lanes read Kinbase. Nobody in a run writes to it until the verdict, and then the Validator
+    submits what held up.
+- **`harness/lane_kindex.py`** builds each lane's store under a private Kindex home
+  (`tmux-lanes/<role>-kindex-home/`) with a single profile, so no outer graph opens. It loads
+  the copy's `.kin/knowledge.jsonl` or `.json`, the run's `lane-seed.jsonl`, and the copy's
+  `.kin/events` (verified with `kin kinbase sync --mode raw`, no Kinbase binary). It emits the
+  Codex `-c mcp_servers.kindex=...` override. The server's PATH must not contain `kinbase`, so
+  submit and the writing `status` fail closed. A home bound to another lane's repository is
+  refused.
+- **`harness/tmux_lane.sh`** launches each Coder and Tester lane with that server. It refuses a
+  lane whose repository is, or is nested in, the other lane's copy, and a lane whose seed
+  differs from the other lane's. Both refusals happen before any side effect. The launch row
+  records the scope, seed and source digests, and Kinbase counts. A resumed lane gets the same
+  server. A launch without Kindex installed is refused.
+- **The lane freeze leaves `.kin/local` and `.kin/events` out of the snapshot.** They are
+  Kindex runtime state, not the lane's work. They stay in the retained repository, where the
+  Validator reads lane captures.
+- `make doctor` warns when `kin` or `kin-mcp` is missing.
+
+Verified by hand against Kindex 0.45.0. A lane loaded its copy's 31 nodes, or 10,213 Kinbase
+items from an enrolled repository's events. It found nothing from the 25,220-node operator
+graph, and `kinbase_submit` and `kinbase_status` were refused.
+
+Coordinated with the Kindex release in the `tobaseorno` channel. Once `kindex-lite` ships with
+its read-only Kinbase default, lanes switch to it.
+
 ## [0.8.7] - 2026-10-05
 
 Test fix for 0.8.6. No runtime change.

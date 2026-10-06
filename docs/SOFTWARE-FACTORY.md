@@ -695,10 +695,40 @@ The independence is enforced by construction, not by agreement:
 - The Tester has no channel to the Coder
 - The Coder has no channel to the Tester and does not read the tests
 - The Validator, holding neither pen, executes
+- Memory is scoped by role, below, because a shared memory is a channel
 
 > **The agent that writes a fix does not control the thing that decides whether the fix is
 > correct.** The natural way to fix a bug is to write a test that says the fix worked, and an
 > agent that writes both will write a test that passes on its own wrong fix.
+
+### Memory is scoped by role
+
+Kindex is a channel, so which graph each role reads is part of the separation.
+
+- **The Validator and the Orchestrator use the operator's full Kindex graph.** They carry the
+  run's context and the human's history, and neither holds a pen the other lanes are judged by.
+- **The Coder and the Tester each get Kindex scoped to their own copy of the target
+  repository**: a private store, under a home only that lane uses, loaded at launch from the
+  copy's `.kin` (the working tree's, which git may not carry), the run's shared seed, and the
+  company's Kinbase evidence for the repository. Neither lane can reach the operator's graph or
+  the other lane's store, so nothing one lane captures reaches the other.
+- **Scope the data; never remove the capability.** The lane prompts depend on Kindex, and a
+  search-before-explore policy deadlocks a lane that lacks it. In ci-r2 (2026-08-29) the shared
+  graph was the defect, not the lane's access to memory. A run that launches a lane with no
+  Kindex has departed from this rule.
+- **Seed both lanes with the same vital, shared-only context.** Kindex is how a lane stays on
+  track, so the Validator writes the run's shared seed (`lane-seed.jsonl` in the run's control
+  root): the research, standing constraints, and ratified decisions both lanes may read, never
+  implementation or test material. Both lanes load the same seed; the second lane does not
+  launch on a different one.
+- **Lanes read Kinbase; nobody in a run writes to it until the verdict.** Kinbase supplies the
+  company context implementation needs, so lanes read it. They never write: a mid-run
+  submission is an unverified claim about unfinished work, and a Kinbase write one lane can make
+  and the other can read is a channel. After the verdict, the Validator submits what held up.
+
+`harness/lane_kindex.py` builds each lane's store and keeps every Kinbase write out of the lane's
+reach. `harness/tmux_lane.sh` refuses to launch two lanes on one repository copy or on different
+seeds, and the lane freeze leaves the Kindex runtime state out of the judged snapshot.
 
 ### Why agent panels are not the correctness authority
 

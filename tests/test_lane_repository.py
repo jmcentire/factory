@@ -102,3 +102,24 @@ def test_plain_export_rejects_links_nested_git_and_portable_name_collisions(
     monkeypatch.setattr(lane_repository.os, "listdir", colliding_listdir)
     with pytest.raises(LaneRepositoryError, match="portable-name collision"):
         freeze_lane_repository(repo, tmp_path / "store-c", durable_through=tmp_path)
+
+
+def test_plain_export_leaves_out_the_lanes_kindex_runtime_state(tmp_path: Path) -> None:
+    """The lane's Kindex store and its Kinbase evidence copy are runtime state, not work: they
+    stay in the retained repository for the Validator and never enter the judged snapshot."""
+
+    repo = standalone_repo(tmp_path)
+    (repo / "answer.txt").write_text("agent output\n", encoding="utf-8")
+    (repo / ".kin" / "local" / "kindex").mkdir(parents=True)
+    (repo / ".kin" / "local" / "kindex" / "kindex.db").write_bytes(b"sqlite")
+    (repo / ".kin" / "events" / "00").mkdir(parents=True)
+    (repo / ".kin" / "events" / "00" / "e.json").write_text("{}", encoding="utf-8")
+    (repo / ".kin" / "knowledge.jsonl").write_text('{"title":"tracked"}\n', encoding="utf-8")
+
+    export = freeze_lane_repository(repo, tmp_path / "run" / "snapshots", durable_through=tmp_path)
+
+    manifest = json.loads(export.frozen_tree.manifest_path.read_text(encoding="utf-8"))
+    paths = {row["path"] for row in manifest["files"]}
+    assert paths == {"answer.txt", ".kin/knowledge.jsonl"}
+    assert set(export.excluded_entries) == {".git", ".kin/local", ".kin/events"}
+    assert (repo / ".kin" / "local" / "kindex" / "kindex.db").exists()

@@ -95,6 +95,45 @@ lane = pathlib.Path(sys.argv[2]).resolve(strict=True)
 if os.path.commonpath((control, lane)) in {str(control), str(lane)}:
     raise SystemExit("tmux-lane: lane repository and control root may not overlap")
 PY
+  # Each lane works in its own copy of the target, so its files and its .kin are its own. A
+  # repository shared with (or nested in) the other lane's would be a channel between them.
+  OTHER_ROLE=$([ "$ROLE" = coder ] && echo tester || echo coder)
+  "$FACTORY_PYTHON" - "$TMUX_ROOT/$OTHER_ROLE-launch.jsonl" "$REPOSITORY" "$OTHER_ROLE" <<'PY'
+import json, os, pathlib, sys
+
+events, mine, other = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).resolve(), sys.argv[3]
+if events.is_file():
+    for line in events.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        theirs = row.get("repository")
+        if row.get("status") != "active" or not theirs:
+            continue
+        theirs = pathlib.Path(theirs).resolve()
+        if os.path.commonpath((mine, theirs)) in {str(mine), str(theirs)}:
+            raise SystemExit(
+                f"tmux-lane: the {other} lane already works in {theirs}; give each lane its own copy"
+            )
+PY
+  # Shared means shared: both lanes start from the same seed, or the second does not start.
+  SEED_DIGEST=$("$FACTORY_PYTHON" - "$TMUX_ROOT/$OTHER_ROLE-launch.jsonl" "$ROOT/lane-seed.jsonl" \
+    "$OTHER_ROLE" <<'PY'
+import hashlib, json, pathlib, sys
+
+events, seed, other = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+mine = "sha256:" + hashlib.sha256(seed.read_bytes()).hexdigest() if seed.is_file() else ""
+if events.is_file():
+    rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    active = [row for row in rows if row.get("status") == "active"]
+    if active:
+        theirs = ((active[-1].get("kindex") or {}).get("seed") or {}).get("digest") or ""
+        if theirs != mine:
+            raise SystemExit(
+                f"tmux-lane: the {other} lane launched with a different shared seed; both lanes "
+                "must start from the same lane-seed.jsonl (relaunch both, or restore it)"
+            )
+print(mine)
+PY
+  ) || exit 70
 
   TASK_COPY="$TMUX_ROOT/$ROLE-task.txt"
   TASK_DIGEST=$("$FACTORY_PYTHON" - "$PROMPT_SOURCE" "$TASK_COPY" <<'PY'
@@ -195,16 +234,31 @@ PY
     exit 70
   }
 
+  # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
+  SEED_ARGS=()
+  [ ! -e "$ROOT/lane-seed.jsonl" ] || SEED_ARGS=(--seed "$ROOT/lane-seed.jsonl")
+  KINDEX=$("$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
+    --home "$TMUX_ROOT/$ROLE-kindex-home" "${SEED_ARGS[@]}") || exit 70
+  # The seed may not move between the check above and the load: the store must hold what was checked.
+  printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c '
+import json, sys
+seed = json.load(sys.stdin).get("seed") or {}
+if (seed.get("digest") or "") != sys.argv[1]:
+    raise SystemExit("tmux-lane: lane-seed.jsonl changed during launch; relaunch")
+' "$SEED_DIGEST" || exit 70
+  KINDEX_OVERRIDE=$(printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c \
+    'import json,sys; print(json.load(sys.stdin)["mcp_override"])')
+
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
   SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   PLANNED=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
-    "$REPOSITORY_RECEIPT" "$CODEX_VERSION" "$MODEL" <<'PY'
+    "$REPOSITORY_RECEIPT" "$CODEX_VERSION" "$MODEL" "$KINDEX" <<'PY'
 import datetime, json, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
-    profile_digest, preflight, agent_version, model,
+    profile_digest, preflight, agent_version, model, kindex,
 ) = sys.argv[1:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
@@ -214,6 +268,7 @@ print(json.dumps({
     "role": role,
     "agent": agent,
     "model": model,
+    "kindex": json.loads(kindex),
     "repository": repository,
     "prompt_path": prompt,
     "prompt_digest": prompt_digest,
@@ -243,11 +298,11 @@ PY
   fi
   THREAD_FILE="$TMUX_ROOT/$ROLE-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$ROLE-codex-events.jsonl"
-  printf -v LANE_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -' \
+  printf -v LANE_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
     "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$ROLE" "$LOCAL_ARGS" "$REPOSITORY" \
-    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY"
+    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE"
 
   tmux set-option -t "$RUN" remain-on-exit on >/dev/null
   if ! tmux new-window -t "$RUN" -n "$ROLE" -c "$REPOSITORY" "$LANE_CMD"; then
