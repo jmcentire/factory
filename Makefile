@@ -62,6 +62,9 @@ PY_BOOTSTRAP := $(shell command -v $(PY_PREFERRED) >/dev/null 2>&1 && echo $(PY_
 # `make show-python` reports which branch is in force.
 VENV ?= .venv
 VENV_STAMP := $(VENV)/.factory-deps
+# The PATH the operator's shell has, captured before the venv is put in front of it below.
+# `doctor` must judge what `factory` resolves to for the operator, not inside make.
+CALLER_PATH := $(PATH)
 
 ifneq ($(filter command line environment,$(origin PY)),)
   PY_SOURCE := explicit PY override
@@ -125,10 +128,10 @@ install: venv ## set up everything needed to use the factory, then run doctor
 	@if command -v cargo >/dev/null 2>&1; then $(MAKE) --no-print-directory tessera; \
 	else echo "install: cargo not found; skipping the Tessera build (doctor says how to fix)"; fi
 	@$(PY) scripts/install.py install $(INSTALL_ARGS)
-	@$(PY) scripts/install.py doctor $(INSTALL_ARGS)
+	@PATH="$(CALLER_PATH)" $(PY) scripts/install.py doctor $(INSTALL_ARGS)
 
 doctor: ## check the install and print the fix for anything missing (read-only)
-	@$(PY_BOOTSTRAP) scripts/install.py doctor $(INSTALL_ARGS)
+	@PATH="$(CALLER_PATH)" $(PY_BOOTSTRAP) scripts/install.py doctor $(INSTALL_ARGS)
 
 uninstall: ## remove the launcher and command loaders that install wrote (keeps edited ones)
 	@$(PY_BOOTSTRAP) scripts/install.py uninstall $(INSTALL_ARGS)

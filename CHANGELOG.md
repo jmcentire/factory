@@ -3,6 +3,17 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.10] - 2026-10-06
+
+### Fixed
+
+- **`make install` and `make doctor` no longer report a false PATH failure.** Since 0.8.6, make
+  puts the venv's `bin` first on PATH for its own recipes, so the doctor, running inside make,
+  always found the venv's own `factory` before the launcher and reported "NOT READY". The
+  Makefile now captures the caller's PATH before changing it, and the doctor checks that PATH:
+  what `factory` resolves to in the operator's shell. A new test runs the real `make doctor` and
+  fails on the old Makefile.
+
 ## [0.8.9] - 2026-10-06
 
 Coder and Tester lanes run `kindex-lite`, and a launch is refused unless the lane can read

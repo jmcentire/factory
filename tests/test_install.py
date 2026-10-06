@@ -137,3 +137,21 @@ def test_doctor_flags_a_loader_from_another_checkout(tmp_path: Path) -> None:
     assert "/build" in _failing(inst.doctor(layout, _path_env(layout, tmp_path)))
     inst.install(layout)  # ours, so install repoints it
     assert "/build" not in _failing(inst.doctor(layout, _path_env(layout, tmp_path)))
+
+
+def test_make_doctor_judges_the_callers_path_not_makes(tmp_path: Path) -> None:
+    """make puts the venv's bin first on PATH for its own recipes. The doctor must still check
+    what `factory` resolves to in the operator's shell, or every install reports a false PATH
+    failure (the venv's own `factory` would always come first)."""
+
+    layout = _layout(tmp_path)
+    inst.install(layout)
+    env = {**os.environ, "PATH": f"{layout.bindir}{os.pathsep}{os.environ['PATH']}"}
+    env.pop("CI", None)  # exercise the venv-managed branch that rewrites PATH
+    done = subprocess.run(
+        ["make", "--no-print-directory", "doctor", f"BINDIR={layout.bindir}",
+         f"CLAUDE_COMMANDS_DIR={layout.commands_dir}"],
+        cwd=REPO, env=env, capture_output=True, text=True, check=False,
+    )
+    path_line = next(line for line in done.stdout.splitlines() if "PATH" in line.split()[:2])
+    assert path_line.split()[0] == "ok", done.stdout
