@@ -11,6 +11,7 @@ import json
 import os
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -283,3 +284,114 @@ def test_keys_chain_root_and_signed_records_stay_out_of_git(tmp_path: Path) -> N
     assert ".factory/.gitignore" in status
     for local_only in (".key", ".chain-root.key", ".tessera.json", "grants/"):
         assert local_only not in status
+
+
+def test_a_stage_r_statement_carries_its_requests_nonce_and_expiry(tmp_path: Path) -> None:
+    cli = _cli()
+    project = init_project(tmp_path / "keys", repository_id="demo", tessera=cli)
+    now = int(time.time())
+    request = {"nonce": "resolution-nonce-001", "expires_at": now + 3600}
+    receipt = record_human_statement(
+        project, run_id="run-1", action="authorize-target-resolution", subject_digest=SUBJECT,
+        said="Yes.", said_at="now", output_path=tmp_path / "r.json", tessera=cli, request=request,
+    )
+    assert receipt.payload["nonce"] == request["nonce"]
+    assert receipt.payload["expires_at"] == request["expires_at"]
+    refused = (
+        ("authorize-change", {"nonce": "n", "expires_at": now + 60}),
+        ("authorize-target-resolution", {"nonce": "n", "expires_at": now - 1}),
+        ("authorize-target-resolution", {}),
+    )
+    for action, bad_request in refused:
+        with pytest.raises(ProjectInitError, match="--request"):
+            record_human_statement(
+                project, run_id="run-1", action=action, subject_digest=SUBJECT, said="Yes.",
+                said_at="now", output_path=tmp_path / "x.json", tessera=cli,
+                request=bad_request,
+            )
+
+
+def test_init_retries_after_a_failed_first_attempt(tmp_path: Path) -> None:
+    keys = tmp_path / "keys"
+    with pytest.raises(TesseraVerificationError):
+        init_project(keys, repository_id="demo", tessera=TesseraCli((str(tmp_path / "none"),)))
+    (keys / ".gitignore").unlink()
+    (keys / ".gitignore").symlink_to(tmp_path / "victim")
+    with pytest.raises(ProjectInitError, match="holds files"):
+        init_project(keys, repository_id="demo", tessera=_cli())
+    (keys / ".gitignore").unlink()
+    (keys / ".gitignore").mkdir()
+    with pytest.raises(ProjectInitError, match="holds files"):
+        init_project(keys, repository_id="demo", tessera=_cli())
+    (keys / ".gitignore").rmdir()
+    assert init_project(keys, repository_id="demo", tessera=_cli()).policy.repository_id == "demo"
+
+
+def test_a_factory_init_project_passes_stage_r_and_resolves_its_target(tmp_path: Path) -> None:
+    from factory_core.manifest import digest_obj
+    from factory_core.target import load_target_manifest
+    from factory_runtime.state import RunState
+    from factory_runtime.workflow import FactoryWorkflow
+
+    cli = _cli()
+    repo = tmp_path / "target"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+         "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+    )
+    project = init_project(repo / ".factory" / "keys", repository_id="demo", tessera=cli)
+    manifest_path = tmp_path / "target.toml"
+    manifest_path.write_text(
+        'schema_version = "factory-target-manifest/2"\ntarget_id = "demo"\n'
+        f'[repo]\nurl = "file://{repo}"\nref = "main"\n'
+        '[adapters]\nrepo = "readonly_git"\nknowledge = "kin_reader"\n'
+        'compliance = "rules_json"\nidp = "oidc"\nartifact_sink = "local_fs"\n'
+        '[compliance]\nrules_path = "compliance/rules.json"\n'
+        f'[build]\npattern_catalog_digest = "{SUBJECT}"\nmax_attempts = 2\n'
+        'construction_modes = ["regenerate"]\n[build.signal]\nsignal_pass_deadline = 2\n'
+        "signal_pass_warn = 1\nsignal_wall_clock_cap_hours = 24\n",
+        encoding="utf-8",
+    )
+    now = int(time.time())
+    request = {
+        "schema_version": "factory-target-resolution-request/1",
+        "request_id": "resolution-1",
+        "run_id": "run-1",
+        "repository_id": "demo",
+        "generation": 1,
+        "target_manifest_digest": load_target_manifest(manifest_path).source_digest,
+        "normalized_url": f"file://{repo}",
+        "requested_ref": "main",
+        "subpath": "",
+        "allowed_contact_operations": ["git-ls-remote", "git-fetch"],
+        "lane_execution": False,
+        "nonce": "resolution-nonce-001",
+        "created_at": now,
+        "expires_at": now + 3600,
+    }
+    request_path = tmp_path / "target-request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    assert main([
+        "record-statement", "--keys-dir", str(project.keys_dir), "--run-id", "run-1",
+        "--action", "authorize-target-resolution", "--subject-digest", digest_obj(request),
+        "--request", str(request_path), "--said", "Yes, use that repo.", "--said-at", "now",
+        "--output", str(tmp_path / "target-receipt.json"),
+        "--tessera-bin", os.environ["FACTORY_TESSERA_BIN"],
+    ]) == 0
+
+    workflow = FactoryWorkflow(
+        repo / ".factory" / "runs", authority_policy=project.policy, tessera=cli
+    )
+    workflow.authorize_target_resolution(
+        "run-1",
+        manifest_path=manifest_path,
+        request_path=request_path,
+        receipt_path=tmp_path / "target-receipt.json",
+    )
+    workflow.resolve_target("run-1")
+
+    resolved = workflow.store.load("run-1")
+    assert resolved.state == RunState.TARGET_RESOLVED
+    assert resolved.target_state["resource_ledger_head"].startswith("hmac-sha256:")

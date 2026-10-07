@@ -255,7 +255,7 @@ PY
 
   # This is the final host Git use in the lane. After tmux starts the agent, the
   # repository is radioactive and only the no-Git freeze path may inspect it.
-  git -C "$REPOSITORY" config user.name "Factory ${ROLE^}"
+  git -C "$REPOSITORY" config user.name "Factory ${ROLE}"
   git -C "$REPOSITORY" config user.email "factory-${ROLE}@local"
 
   CODEX_VERSION=$(codex --version 2>/dev/null) || {
@@ -279,7 +279,7 @@ PY
   SEED_ARGS=()
   [ ! -e "$ROOT/lane-seed.jsonl" ] || SEED_ARGS=(--seed "$ROOT/lane-seed.jsonl")
   KINDEX=$("$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
-    --home "$TMUX_ROOT/$ROLE-kindex-home" "${SEED_ARGS[@]}") || exit 70
+    --home "$TMUX_ROOT/$ROLE-kindex-home" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
   # The seed may not move between the check above and the load: the store must hold what was checked.
   printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c '
 import json, sys

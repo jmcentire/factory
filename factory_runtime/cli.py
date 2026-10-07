@@ -295,6 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     record_statement.add_argument("--said", required=True, help="the human's message, verbatim")
     record_statement.add_argument("--said-at", required=True, help="when they said it")
     record_statement.add_argument("--output", required=True)
+    record_statement.add_argument("--request", help="the target-resolution request it approves")
     record_statement.add_argument(
         "--tessera-bin", default=_default_tessera_bin()
     )
@@ -1627,6 +1628,7 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             said_at=arguments.said_at,
             output_path=arguments.output,
             tessera=tessera,
+            request=_read_object(arguments.request) if arguments.request else None,
         )
         _emit({"receipt": str(envelope.path), "payload_digest": envelope.payload_digest})
         return

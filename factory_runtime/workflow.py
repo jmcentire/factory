@@ -431,6 +431,7 @@ class FactoryWorkflow:
         if receipt.nonce != request["nonce"]:
             raise AuthorityVerificationError(
                 "target-resolution receipt nonce differs from the signed request"
+                " (record-statement --request binds it)"
             )
         if receipt.expires_at != request["expires_at"]:
             raise AuthorityVerificationError(

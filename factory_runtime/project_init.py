@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from factory_core.manifest import digest_bytes
 from factory_runtime.authority import (
@@ -184,7 +185,10 @@ def init_project(
     directory = Path(keys_dir)
     if (directory / GENESIS_FILE).exists():
         return _load(directory, tessera)
-    if directory.exists() and any(directory.iterdir()):
+    if directory.exists() and any(
+        p.name != ".gitignore" or p.is_symlink() or not p.is_file() or p.read_bytes() != b"*\n"
+        for p in directory.iterdir()
+    ):
         raise ProjectInitError(
             f"{directory} holds files but no genesis; move them aside before minting"
         )
@@ -257,6 +261,7 @@ def record_human_statement(
     tessera: TesseraCli,
     ttl_seconds: int = 7 * 24 * 3600,
     clock: Callable[[], int] | None = None,
+    request: Mapping[str, Any] | None = None,
 ) -> VerifiedEnvelope:
     """Record what the human said as the authority receipt for one action on one subject.
 
@@ -269,6 +274,13 @@ def record_human_statement(
     if not said.strip():
         raise ProjectInitError("an authority receipt needs the human's words")
     now = (clock or (lambda: int(time.time())))()
+    if request is not None and (
+        action != "authorize-target-resolution"
+        or not isinstance(request.get("nonce"), str)
+        or not isinstance(request.get("expires_at"), int)
+        or not now < request["expires_at"] <= now + ttl_seconds
+    ):
+        raise ProjectInitError("--request takes a live target-resolution request within the TTL")
     receipt = {
         "schema_version": "factory-authority-receipt/1",
         "receipt_id": f"{action}-{secrets.token_hex(6)}",
@@ -279,8 +291,9 @@ def record_human_statement(
         "signer_identity": project.identities["human"],
         "capabilities": [ACTION_CAPABILITY[action]],
         "issued_at": now,
-        "expires_at": now + ttl_seconds,
-        "nonce": secrets.token_hex(16),
+        # Stage R requires the receipt to carry its request's own nonce and expiry.
+        "expires_at": request["expires_at"] if request else now + ttl_seconds,
+        "nonce": request["nonce"] if request else secrets.token_hex(16),
         "basis": {"source": "user-message", "said": said, "said_at": said_at},
     }
     validate_document("authority-receipt", receipt)

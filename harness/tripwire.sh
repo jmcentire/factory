@@ -5,7 +5,7 @@
 set -uo pipefail
 H="${HARNESS_DIR:-.factory}"; mkdir -p "$H"
 PAT='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}'
-PAT+='|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}'
+PAT+='|(^|[^A-Za-z0-9]|\\[bfnrt]|\\u[0-9A-Fa-f]{4}|%[0-9A-Fa-f]{2}|\[[0-9;:]*m)sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}'
 PAT+='|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}'
 PAT+='|"private_key_id"|"type": *"service_account"'
 # -e is load-bearing: $PAT begins with dashes ("-----BEGIN"), and without -e grep

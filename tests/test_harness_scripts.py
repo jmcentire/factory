@@ -698,10 +698,23 @@ def test_tripwire_halts_on_credential_shape(tmp_path: Path) -> None:
     halt = tmp_path / ".harness" / "HALT"
     assert halt.exists() and "INCIDENT" in halt.read_text()
 
+    # Transcripts are JSON: a key right after an escaped newline must still halt,
+    # and so must one after a colour code (raw or JSON-escaped) or an identifier's _ or -.
+    probes = {
+        "nl": "\\n", "ansi": "\\u001b[32m", "raw": "\x1b[32m", "sgr": "\\u001b[38:2::255:0:0m",
+        "env": "MY_TOKEN_", "flag": "--token-",
+    }
+    for name, prefix in probes.items():
+        escaped = tmp_path / f"{name}.jsonl"
+        escaped.write_text('{"text": "ok' + prefix + "sk-" + "a" * 24 + '"}\n')
+        env = {"HARNESS_DIR": str(tmp_path / f".{name}")}
+        halted = run(["bash", str(HARNESS / "tripwire.sh"), str(escaped)], tmp_path, env)
+        assert halted.returncode == 2
+
 
 def test_tripwire_clean_paths_pass(tmp_path: Path) -> None:
     scan = tmp_path / "clean.log"
-    scan.write_text("nothing to see\n")
+    scan.write_text("nothing to see\ntask-says-the-check-ran-and-passed-cleanly\n")
     env = {"HARNESS_DIR": str(tmp_path / ".harness")}
     r = run(["bash", str(HARNESS / "tripwire.sh"), str(scan)], tmp_path, env)
     assert r.returncode == 0 and "clean" in r.stdout

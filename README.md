@@ -179,12 +179,15 @@ become authorized?”; it is not the future collaborative UI.
    make tessera
    factory init --repository-id my-repo --tessera-bin .tools/tessera/target/release/tessera
    ```
-2. A contributor writes an `authorization-request` before implementation. The closed schema
+2. Stage R pins the target first: `authorize-target-resolution`, then `resolve-target`. Its
+   receipt comes from `record-statement --action authorize-target-resolution --request
+   target-request.json`, which carries the request's nonce and expiry.
+   Then a contributor writes an `execution-request` before implementation. The closed schema
    requires the exact `run_id`, repository, target digest, preserved verbatim request and its
    digest, proposed outcome, and disturbed surfaces. Validate and address it:
 
    ```bash
-   factory validate-document --schema authorization-request --input request.json
+   factory validate-document --schema execution-request --input request.json
    factory digest-json --input request.json
    ```
 
@@ -196,7 +199,7 @@ become authorized?”; it is not the future collaborative UI.
    factory record-statement --run-id RUN --action authorize-change \
      --subject-digest sha256:... --said "Yes, build that." --said-at 2026-10-04T09:00Z \
      --output receipt.tessera.json
-   factory authorize-change --runs ./runs --run-id RUN --target-digest sha256:... \
+   factory authorize-change --runs .factory/runs --run-id RUN \
      --request request.json --receipt receipt.tessera.json \
      --genesis genesis.tessera.json --root-public-key PUBLIC_KEY \
      --tessera-bin /path/to/tessera
