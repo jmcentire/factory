@@ -206,7 +206,13 @@ elif [ -n "$MODEL" ]; then
   esac
   LOCAL_ARGS="-m $MODEL"
 fi
-PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
+# A missing window must not be probed by target: tmux resolves "$RUN:$WINDOW" to the session's
+# active pane when no such window exists, which reads as a live lane and queues to nobody.
+if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$WINDOW" >/dev/null; then
+  PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
+else
+  PANE_DEAD=missing
+fi
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.
@@ -214,7 +220,7 @@ if [ "$PANE_DEAD" = "0" ]; then
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME" \
     codex $LOCAL_ARGS queue --thread "$THREAD_ID" --message "$MESSAGE" >/dev/null
   TRANSPORT="queue"
-elif [ "$PANE_DEAD" = "1" ]; then
+elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
   SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
@@ -232,7 +238,12 @@ elif [ "$PANE_DEAD" = "1" ]; then
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
-  tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
+  if [ "$PANE_DEAD" = "missing" ]; then
+    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  else
+    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  fi
   # Every running lane has a watcher: replace the finished one with a fresh life of it.
   tmux kill-window -t "$RUN:watch-$WINDOW" >/dev/null 2>&1 || true
   tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {

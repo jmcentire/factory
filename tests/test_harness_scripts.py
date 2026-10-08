@@ -1619,6 +1619,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = has-session ]; then exit 1; fi\n'
+        'if [ "$1" = list-windows ]; then printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
         'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
@@ -9766,6 +9767,39 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert " codex -m gpt-coder --ask-for-approval never " in respawn
+
+
+def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_path: Path) -> None:
+    """tmux resolves a missing window target to the session's active pane, which reads as a
+    live lane; delivery to a lane with no window must resume its thread, never queue."""
+
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task="Resume a lane whose window closed.", harness_status="open"
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    env["TMUX_STUB_WINDOWS"] = "main"
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
+    )
+    row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
+           "role": "coder", "agent": "codex", "model": "", "repository": str(lane)}
+    (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    probe = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+         "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert "via Codex resume" in probe.stdout
+    calls = tmux_log.read_text()
+    assert "new-window -t r1 -n coder" in calls and "exec --json resume" in calls
 
 
 def test_a_seat_variable_that_contradicts_the_profile_is_refused(tmp_path: Path) -> None:
