@@ -339,6 +339,21 @@ def test_cli_doors_are_pinned() -> None:
         assert result.returncode != 0  # nonexistent run refuses, door exists
 
 
+def test_signal_knobs_before_phase_a_reports_unprepared_not_a_refusal(
+    monkeypatch, capsys
+) -> None:
+    """Dogfood #11/#14 at the CLI: with no prepared generation, signal-knobs prints
+    generation_prepared=false and exits 0 instead of refusing."""
+    from types import SimpleNamespace
+
+    from factory_runtime import cli
+
+    store = SimpleNamespace(load=lambda run_id: SimpleNamespace(generation_artifact_digests={}))
+    monkeypatch.setattr(cli, "_load_replay_store", lambda arguments: store)
+    assert cli.main(["signal-knobs", "--runs", "/nonexistent", "--run-id", "r1"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"run_id": "r1", "generation_prepared": False}
+
+
 def test_backstop_rearms_after_progress(tmp_path: Path) -> None:
     """Round-6 6-6: fired-once latches ONE stall, never permanent silence — a pass
     advance re-arms the backstop so a second stall pages again."""
