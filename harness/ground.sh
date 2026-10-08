@@ -54,11 +54,19 @@ echo "== 3/6 cadence audit =="
 HARNESS_DIR="$H" "$D/sched_audit.sh"
 
 echo "== 4/6 tripwire =="
-[ -n "${TRANSCRIPTS:-}" ] || { [ -d "$HOME/.claude/projects" ] && TRANSCRIPTS="$HOME/.claude/projects"; } || true
+# Scope is this run's seats only: Claude names a transcript dir after the seat's cwd with
+# every non-alphanumeric byte as "-", so match the workdir's dir and any nested lane cwds.
+# Never widen to the whole machine — an unrelated session's output must not halt this run.
+if [ -z "${TRANSCRIPTS:-}" ]; then
+  SEAT_PREFIX="$HOME/.claude/projects/$(printf '%s' "$WORKDIR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  for seat_dir in "$SEAT_PREFIX" "$SEAT_PREFIX"-*; do
+    [ -d "$seat_dir" ] && TRANSCRIPTS="${TRANSCRIPTS:+$TRANSCRIPTS }$seat_dir"
+  done
+fi
 if [ -n "${TRANSCRIPTS:-}" ]; then
   HARNESS_DIR="$H" "$D/tripwire.sh" $TRANSCRIPTS
 else
-  echo "(set TRANSCRIPTS=<paths> to scan)"
+  echo "(no seat transcripts yet; set TRANSCRIPTS=<paths> to scan others)"
 fi
 
 echo "== 5/6 channels =="
