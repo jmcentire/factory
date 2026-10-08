@@ -57,6 +57,8 @@ echo "== 4/6 tripwire =="
 # Scope is this run's seats only: Claude names a transcript dir after the seat's cwd with
 # every non-alphanumeric byte as "-", so match the workdir's dir and any nested lane cwds.
 # Never widen to the whole machine — an unrelated session's output must not halt this run.
+# Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both "-repo-x-lane"),
+# so a sibling workdir like /repo/x-other is also scanned for /repo/x; set TRANSCRIPTS to pin the scan.
 if [ -z "${TRANSCRIPTS:-}" ]; then
   SEAT_PREFIX="$HOME/.claude/projects/$(printf '%s' "$WORKDIR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   for seat_dir in "$SEAT_PREFIX" "$SEAT_PREFIX"-*; do
