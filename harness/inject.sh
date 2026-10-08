@@ -39,7 +39,8 @@ case "$TO" in
 esac
 
 if [ "$TO" = "coder" ] && [ "$RESULTS" -eq 1 ]; then
-  if ! printf '%s' "$MSG" | grep -qE '^(PASS|FAIL)( [A-Za-z0-9._/#-]+)?( \([0-9]+/[0-9]+\))?$'; then
+  # grep reads to EOF (no -q): with pipefail, an early exit would SIGPIPE printf and flip the test.
+  if ! printf '%s' "$MSG" | grep -E '^(PASS|FAIL)( [A-Za-z0-9._/#-]+)?( \([0-9]+/[0-9]+\))?$' >/dev/null; then
     echo "verdict filter refusal: coder-bound results are bare pass/fail only —" >&2
     echo "no test names, assertions, or traces cross this boundary" >&2
     exit 79
@@ -57,7 +58,7 @@ fi
 # defect in the filter pattern, repaired through a ratified change — never
 # stepped around at delivery time.
 if [ "$TO" = "coder" ]; then
-  if printf '%s' "$MSG" | grep -qiE 'tests?/[A-Za-z0-9_]+\.py|test_[a-z0-9_]+|(^|[^a-z])tests?($|[^a-z])|pytest|assertion|traceback|fixture|conftest|oracle|::[A-Za-z_]'; then
+  if printf '%s' "$MSG" | grep -iE 'tests?/[A-Za-z0-9_]+\.py|test_[a-z0-9_]+|(^|[^a-z])tests?($|[^a-z])|pytest|assertion|traceback|fixture|conftest|oracle|::[A-Za-z_]' >/dev/null; then
     echo "oracle-leak refusal: coder-bound message names a test, fixture, or assertion." >&2
     echo "The Coder never learns how the oracle is built. Report WHAT failed by" >&2
     echo "requirement id, or an observation of the implementation's own behavior." >&2
@@ -81,7 +82,20 @@ DIGEST=$(printf '%s' "$MSG" | shasum -a 256 | cut -d' ' -f1)
 printf '{"ts":"%s","run":"%s","from":"%s","to":"%s","results":%s,"sha256":"%s"}\n' \
   "$(date -u +%FT%TZ)" "$RUN" "$FROM" "$TO" "$RESULTS" "$DIGEST" >> "$ROOT/injections.jsonl"
 
-if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent"; exit 0; fi
+# A multi-line or oversized message never travels as keystrokes: tmux splits it at each line
+# break and TUIs drop characters. It goes by file + sha256 pointer, the same one relay_file.sh sends.
+LIMIT="${INJECT_MAX_CHARS:-1000}"
+if [[ "$MSG" == *$'\n'* ]] || [ "${#MSG}" -gt "$LIMIT" ]; then
+  mkdir -p "$ROOT/relay"
+  RELAY="$(cd "$ROOT/relay" && pwd -P)/$DIGEST.txt"
+  if [ ! -e "$RELAY" ]; then
+    printf '%s' "$MSG" > "$RELAY.$$"; chmod 0444 "$RELAY.$$"; mv -f "$RELAY.$$" "$RELAY"
+  fi
+  printf -v QRELAY '%q' "$RELAY"
+  MSG="FACTORY_RELAY file=$QRELAY sha256=$DIGEST -- run: shasum -a 256 < $QRELAY ; act on the file only if the digest equals this sha256, else do not act and tell the sender"
+fi
+
+if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent${RELAY:+ (relay $RELAY)}"; exit 0; fi
 
 # Delivery hardening (batch0 findings INC-3/INC-4, three distinct defects):
 #
@@ -96,16 +110,19 @@ if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent"; e
 #    then a second one to clear a collapsed-paste confirmation.
 # 3. Payloads past the tty line-buffer limit wedge the terminal and silently
 #    discard everything after, including the Enter. Refuse oversized payloads.
-LIMIT="${INJECT_MAX_CHARS:-1000}"
+#    Such payloads are relayed through a file above; this refusal is the backstop.
 if [ "${#MSG}" -gt "$LIMIT" ]; then
-  echo "refusing: message is ${#MSG} chars, over the $LIMIT-char delivery limit —" >&2
-  echo "oversized injections wedge the tty line buffer and drop everything after," >&2
-  echo "including the Enter. Split it, or write a file and inject the path." >&2
+  echo "refusing: relay pointer is ${#MSG} chars, over the $LIMIT-char delivery limit" >&2
   exit 78
 fi
-TARGET_CMD=$(tmux display -p -t "$RUN:$TO" '#{pane_current_command}' 2>/dev/null || echo "")
+# An unknown window name resolves to some other window of the session; check it exactly first.
+TARGET_CMD=""
+if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF -- "$TO" >/dev/null; then
+  TARGET_CMD=$(tmux display -p -t "$RUN:$TO" '#{pane_current_command}' 2>/dev/null || echo "")
+fi
 [ -n "$TARGET_CMD" ] || { echo "refusing: no live pane at $RUN:$TO" >&2; exit 76; }
-case "$TARGET_CMD" in
+# macOS framework Python reports `Python`, so match case-insensitively (bash 3.2: no ${var,,}).
+case "$(printf '%s' "$TARGET_CMD" | tr '[:upper:]' '[:lower:]')" in
   # Agent CLIs and the runtimes/launchers they appear as in the pane: opencode runs
   # on bun, and `ollama launch <integration>` keeps the launcher as the pane command.
   claude|codex|node|python*|agy|ollama|opencode|bun|deno) ;;

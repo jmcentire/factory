@@ -224,6 +224,7 @@ names a consuming project:
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
 - `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.
+- `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting.
 - `sched_audit.sh` — control 6: unregistered OS timer = hostile. (`SCHED_AUDIT_INPUT`
   is a test seam for the forced-negative drill.)
 - `ground.sh` — control 7 + 9: resume from disk; reconcilers under `.factory/reconcile.d/`.

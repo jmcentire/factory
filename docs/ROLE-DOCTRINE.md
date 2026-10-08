@@ -338,6 +338,15 @@ first, without asking:
 4. Tell the human, in one line, that the project's keys are minted and they will never be
    asked to sign anything.
 
+**Relaying multi-line text into a seat goes by file, never by paste.** Text pasted into a tmux
+input is mangled (line breaks submit or split it, the first line or character is dropped), and a
+signing statement can silently lose a line. Send it with `harness/relay_file.sh <run> <seat>`
+(message on stdin, or `--file`): it writes the exact bytes to `<run>/relay/<sha256>.txt` and sends
+one `FACTORY_RELAY file=<path> sha256=<hex>` line through `inject.sh`. When *you* receive such a
+line, run `shasum -a 256 < <path>` first and act only if it equals the digest in the pointer; on
+a mismatch or a missing file do nothing, and tell the sender. The digest also binds a one-line
+acceptance that arrives with a character eaten.
+
 **The human signs nothing, ever.** Their chat messages are the authority
 (`$FACTORY_HOME/docs/standards/AUTHORITY.md`, H1–H8). When they agree to something a receipt is
 needed for (an intake, a phase artifact at interactive engagement, a changed test expectation,

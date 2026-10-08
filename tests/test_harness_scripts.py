@@ -13,10 +13,12 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -889,6 +891,75 @@ def inject(
     return run(args, tmp, env)
 
 
+def inject_live(tmp_path: Path, pane_command: str, msg: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Real (non-dry) inject.sh against a tmux stub whose only window, validator, runs pane_command."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir(exist_ok=True)
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'[ "$1" = display ] && {{ echo {shlex.quote(pane_command)}; exit 0; }}\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", msg],
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    return r, calls
+
+
+def test_inject_pane_command_allowlist_is_case_insensitive(tmp_path: Path) -> None:
+    """macOS framework Python reports its pane command as 'Python'."""
+    r, calls = inject_live(tmp_path, "Python", "hello")
+    assert r.returncode == 0, r.stderr
+    assert " -l -- hello" in calls.read_text(encoding="utf-8")
+    (tmp_path / "sh").mkdir()
+    refused, _ = inject_live(tmp_path / "sh", "bash", "hello")
+    assert refused.returncode == 77 and "not an agent" in refused.stderr
+
+
+def test_inject_checks_the_window_by_exact_name(tmp_path: Path) -> None:
+    """tmux resolves an unknown window to another one; a missing window must be refused."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo orchestrator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "hi"],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"),
+         "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
+    )
+    assert r.returncode == 76 and "no live pane" in r.stderr
+
+
+def test_multiline_injection_travels_as_a_digest_bound_relay_file(tmp_path: Path) -> None:
+    """tmux splits a multi-line paste at each newline, so the seat would act on fragments.
+    The message goes to a relay file named by its sha256; the pane gets one pointer line."""
+    message = "Refused. Three blockers:\n1. F13 --allow-sys=uid\n2. ADMISSION_CAPACITY=1\n"
+    r = inject(tmp_path, "validator", message, frm="founder")
+    assert r.returncode == 0, r.stderr
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relay.read_text(encoding="utf-8") == message
+    assert str(relay) in r.stdout
+
+
 def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "do it differently", frm="orchestrator")
     assert r.returncode == 77 and "topology refusal" in r.stderr
@@ -906,6 +977,142 @@ def test_inject_validator_to_lane_is_receipted(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     receipts = read_chain(tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl")
     assert receipts and receipts[0]["to"] == "coder" and receipts[0]["from"] == "validator"
+
+
+def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path: Path) -> None:
+    """Dogfood #20/#24: multi-line text never rides tmux. It lands verbatim in a file under the
+    run, and the only thing sent is a single-line pointer carrying that file's sha256."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'for a in "$@"; do case "$a" in display*) echo claude; exit 0;; esac; done\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    text = "I ratify.\nLine two of the signing statement.\n\nLine four.\n"
+    r = subprocess.run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        input=text, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    relayed = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relayed.read_text(encoding="utf-8") == text
+    literal = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if " -l -- " in ln]
+    assert len(literal) == 1 and f"sha256={digest}" in literal[0]
+    assert "Line two" not in literal[0]
+
+
+def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path) -> None:
+    """The coder oracle-leak guard judges what the file says, not only the pointer line."""
+    leak = tmp_path / "leak.txt"
+    leak.write_text("Status:\nFAIL test_hidden raised AssertionError\n", encoding="utf-8")
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"), "INJECT_DRY_RUN": "1"},
+    )
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay"
+    assert not list(relay.glob("*.txt"))
+
+    # The pointer names the relay path, which the guard also reads: keep "pytest" out of it.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    clean = plain / "clean.txt"
+    clean.write_text("R12.5 is ruled in-scope.\nSee the ratified spec.\n", encoding="utf-8")
+    ok = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(clean)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    assert ok.returncode == 0, ok.stderr
+    digest = hashlib.sha256(clean.read_bytes()).hexdigest()
+    receipts = (plain / "run" / "injections.jsonl").read_text(encoding="utf-8")
+    assert f'"kind":"relay-file","sha256":"{digest}"' in receipts
+    shutil.rmtree(plain)
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_relay_guard_refuses_a_large_leak_despite_pipefail(tmp_path: Path, attempt: int) -> None:
+    """grep -q exits on its first match; under pipefail the SIGPIPE'd printf used to turn the
+    refusal into a pass for large inputs (65,574 bytes passed 5/5 before the fix)."""
+    head = b"FAIL test_hidden raised AssertionError\n"
+    # Keep "pytest" out of the paths: the guard also reads the pointer, which names them.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    leak = plain / "leak.txt"
+    leak.write_bytes(head + b"lorem ipsum dolor\n" * ((65_574 - len(head)) // 18) + b"x" * (
+        (65_574 - len(head)) % 18
+    ))
+    assert leak.stat().st_size == 65_574
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr, (attempt, r.returncode)
+
+
+def test_relay_file_refuses_binary_content(tmp_path: Path) -> None:
+    """$(cat) drops NULs, so the guards would judge different bytes than the seat receives."""
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    payload = plain / "payload.bin"
+    payload.write_bytes(b"type\0test\0assert balance == 31337\n" + b"x" * 70000)
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(payload)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    relayed = list((plain / "run" / "relay").glob("*.txt"))
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "binary content" in r.stderr, (r.returncode, r.stderr)
+    assert not relayed
+
+
+@pytest.mark.parametrize("via", ["relay_file", "inject"])
+def test_relay_pointer_shell_quotes_the_file_path(tmp_path: Path, via: str) -> None:
+    """A run root with a space must still yield a verification command that reads the file."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    (stub_dir / "tmux").write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(stub_dir / "tmux", 0o755)
+    message = "Line one.\nLine two.\n"
+    args = {
+        "relay_file": ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        "inject": ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", message],
+    }[via]
+    r = subprocess.run(
+        args, input=message, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_RUN_ROOT": str(tmp_path / "My Run"),
+            "INJECT_FROM": "founder",
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    sent = next(ln for ln in calls.read_text().splitlines() if " -l -- " in ln)
+    command = sent.split(" -- run: ", 1)[1].split(" ; act on", 1)[0]
+    verify = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True)
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    assert verify.returncode == 0 and verify.stdout.split()[0] == digest, verify.stderr
 
 
 def test_inject_verdict_filter_blocks_test_detail(tmp_path: Path) -> None:
@@ -5553,6 +5760,7 @@ def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         "  display) echo agy ;;\n"
+        "  list-windows) printf 'orchestrator\\nvalidator\\nctl\\ncoder\\ntester\\n' ;;\n"
         '  send-keys) if [ "$4" = "-l" ]; then\n'
         f'      {sys.executable} {assessor} {root} "$6" 2>>{stub / "assessor.log"}; fi ;;\n'
         "esac\n"
@@ -8429,6 +8637,7 @@ def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None
     tmux_stub.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$@" >> {shlex.quote(str(calls))}\n'
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
         'for a in "$@"; do\n'
         '  case "$a" in display*) echo bash; exit 0;; esac\n'
         "done\n"
