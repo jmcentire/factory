@@ -457,7 +457,18 @@ two separate claims about two separate parties — keep them apart.**
    forbidden thing and recording the refusal**; an untested boundary is a documented
    intention.
 
-2. **Dispatch the Coder and the Tester with no channel between them**, through the lane runner
+2. **Cache the declared dependencies for the offline lanes.** Lanes run with no network, so a
+   dependency nobody pre-fetched surfaces only after the Coder has built everything that avoids it.
+   After Phase A ratification and before the first dispatch, fetch exactly the dependencies the
+   ratified Architecture and Testing Strategy declare (names and versions as written there, no
+   more) into a store outside both lane repositories, then make it read-only
+   (`chmod -R a-w`) and point each lane's package-manager cache or vendor path at it
+   (`DENO_DIR`, `npm_config_cache`, `CARGO_HOME` or the stack's equivalent). Lanes may read the
+   store and may not write it. Verify it by resolving each declared dependency with the network
+   off. Declare a dependency the Architecture omitted by amending the Architecture, not by
+   adding it to the store.
+
+3. **Dispatch the Coder and the Tester with no channel between them**, through the lane runner
    chosen in the dispatch prerequisites (`tmux_lane.sh` unless the qualified runner was opted into).
    Both read the same signed artifacts and contracts; neither can see or reach the other's work.
 
@@ -476,7 +487,7 @@ two separate claims about two separate parties — keep them apart.**
      handed to exactly the reader it was meant to exclude. Where a role needs no coordination
      at all, omit the channel capability from its grant entirely.
 
-3. **Keep each lane's upward paths open, and only those.** A **question**, a **failure report**,
+4. **Keep each lane's upward paths open, and only those.** A **question**, a **failure report**,
    and a **specification defect** are open. Negotiating a verdict is not. In a tmux Codex lane,
    require `FACTORY_QUESTION: <one concrete question>` before the model guesses. The dispatcher
    assigns an occurrence-specific ID. Obtain the human answer or cite the ratified artifact, then
@@ -484,7 +495,7 @@ two separate claims about two separate parties — keep them apart.**
    binds lane, question, authority basis, exact bytes, and the resumed Codex thread. You are the
    only seat allowed to answer; the Orchestrator may issue only the generated status probe.
 
-4. **Your rulings are design changes, and the party that made a ruling is never the party that
+5. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most
    dangerously by accepting an implementation deviation as conforming — that ruling has changed the
    design, and nothing downstream re-derives it. Record it as a ruling with its reasoning, then
@@ -505,7 +516,7 @@ two separate claims about two separate parties — keep them apart.**
    Before routing a ruling, run the checklist and the mechanical sweeps in
    `docs/practices/ruling-discipline.md`.
 
-5. **Monitor the lanes on a cursor, and interrogate liveness rather than guessing it.** Two rules, both learned by going
+6. **Monitor the lanes on a cursor, and interrogate liveness rather than guessing it.** Two rules, both learned by going
    dark for twelve hours in batch0 while both lanes sat finished and idle. **Dedup by
    occurrence, never by content** — key on `(event, occurrence-index)` or a monotonic cursor,
    because an iterative process emits the *same* signal every round, and a content-keyed watcher
@@ -517,7 +528,7 @@ two separate claims about two separate parties — keep them apart.**
    confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
    resolve or escalate it instead of treating its expected silence as a liveness alarm.
 
-6. **Tell the Coder what the failure's nature requires, and no more.** Classify the failure
+7. **Tell the Coder what the failure's nature requires, and no more.** Classify the failure
    first (TESTING.md T37): a bad implementation, an architectural problem, a bad test, or a
    specification defect. Then tell the Coder only what that class needs. A bad implementation:
    the requirement it violates and the behavior observed from the implementation's own outputs.
