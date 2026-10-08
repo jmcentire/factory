@@ -188,7 +188,16 @@ SAFE_SHELL="${SHELL:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
-[ "$AGENT" != "codex-ollama" ] || LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
+if [ "$AGENT" = "codex-ollama" ]; then
+  LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
+elif [ -n "$MODEL" ]; then
+  # A model-profile launch: resume on the model it launched with. The model is spliced into an
+  # argument list, so it must be one word of the charset model_profiles.py admits.
+  case "$MODEL" in
+    *[!A-Za-z0-9._:/-]*) echo "lane-message: retained model is malformed" >&2; exit 70 ;;
+  esac
+  LOCAL_ARGS="-m $MODEL"
+fi
 PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || echo unknown)
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")

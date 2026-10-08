@@ -16,16 +16,17 @@ case "$ACTION" in launch|freeze) ;; *) echo "action must be launch|freeze" >&2; 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 REPOSITORY=""
 PROMPT_SOURCE=""
-AGENT="codex"
+AGENT_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
     --repo) REPOSITORY="$2"; shift 2 ;;
     --prompt) PROMPT_SOURCE="$2"; shift 2 ;;
-    --agent) AGENT="$2"; shift 2 ;;
+    --agent) AGENT_ARG="$2"; shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
+AGENT="${AGENT_ARG:-codex}"
 case "$AGENT" in codex|codex-ollama) ;;
   *) echo "tmux-lane: agent must be codex|codex-ollama" >&2; exit 64 ;;
 esac
@@ -33,16 +34,56 @@ esac
 D="$(cd "$(dirname "$0")" && pwd -P)"
 # shellcheck source=harness/model_availability.sh
 source "$D/model_availability.sh"
-MODEL=""
-if [ "$AGENT" = "codex-ollama" ] && [ "$ACTION" = "launch" ]; then
-  MODEL="${FACTORY_LANE_OLLAMA_MODEL:-}"
-  factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
-fi
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
+# The run's model-profile.json, which factory.sh writes for every run, says how it was started.
+# With a profile, it binds this lane's agent and model, and --agent or FACTORY_LANE_OLLAMA_MODEL
+# is refused if it disagrees, never silently preferred. With an explicit none, they keep their
+# earlier meaning.
+MODEL=""
+PROFILE_SNAPSHOT="$ROOT/model-profile.json"
+PROFILE_STATE=""
+if [ "$ACTION" = "launch" ]; then
+  # factory.sh records how every run was started. Without that record the lane cannot tell a run
+  # started with no profile from one whose record was lost, so it refuses rather than guess.
+  [ -e "$PROFILE_SNAPSHOT" ] || [ -L "$PROFILE_SNAPSHOT" ] || {
+    echo "tmux-lane: $PROFILE_SNAPSHOT is missing. factory.sh records every run's model profile (an explicit none when it used none), so this run was ignited before 0.8.11 or the record was lost; ignite a new run with harness/factory.sh" >&2
+    exit 64
+  }
+  exec 3< <("$FACTORY_PYTHON" "$D/model_profile.py" binding \
+    --snapshot "$PROFILE_SNAPSHOT" --role "$ROLE")
+  IFS= read -r -d '' PROFILE_STATE <&3 || exit 64
+  case "$PROFILE_STATE" in
+    profile|none) ;;
+    *) echo "tmux-lane: the run's model profile record is malformed" >&2; exit 70 ;;
+  esac
+fi
+if [ "$PROFILE_STATE" = "profile" ]; then
+  { IFS= read -r -d '' PROFILE_AGENT <&3 && IFS= read -r -d '' MODEL <&3; } || exit 70
+  exec 3<&-
+  [ -z "$AGENT_ARG" ] || [ "$AGENT_ARG" = "$PROFILE_AGENT" ] || {
+    echo "tmux-lane: --agent $AGENT_ARG contradicts the run's model profile ($ROLE: $PROFILE_AGENT)" >&2
+    exit 64
+  }
+  AGENT="$PROFILE_AGENT"
+  if [ "$AGENT" = "codex-ollama" ]; then
+    [ -z "${FACTORY_LANE_OLLAMA_MODEL:-}" ] || [ "$FACTORY_LANE_OLLAMA_MODEL" = "$MODEL" ] || {
+      echo "tmux-lane: FACTORY_LANE_OLLAMA_MODEL=$FACTORY_LANE_OLLAMA_MODEL contradicts the run's model profile ($ROLE: $MODEL)" >&2
+      exit 64
+    }
+    factory_require_ollama_model tmux-lane "the $ROLE model in the run's model profile" "$MODEL" || exit $?
+  fi
+elif [ "$PROFILE_STATE" = "none" ]; then
+  exec 3<&-
+  # Started without a profile: --agent and FACTORY_LANE_OLLAMA_MODEL keep their earlier meaning.
+  if [ "$AGENT" = "codex-ollama" ]; then
+    MODEL="${FACTORY_LANE_OLLAMA_MODEL:-}"
+    factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
+  fi
+fi
 TMUX_ROOT="$ROOT/tmux-lanes"
 EVENTS="$TMUX_ROOT/$ROLE-launch.jsonl"
 mkdir -p "$TMUX_ROOT"
@@ -295,6 +336,10 @@ PY
   LOCAL_ARGS=""
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
+  elif [ -n "$MODEL" ]; then
+    # A profile's model. Lanes run with --ignore-user-config, so without it Codex would fall
+    # back to its built-in default: a model nobody named.
+    LOCAL_ARGS="-m $MODEL"
   fi
   THREAD_FILE="$TMUX_ROOT/$ROLE-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$ROLE-codex-events.jsonl"
