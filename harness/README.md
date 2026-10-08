@@ -223,7 +223,7 @@ names a consuming project:
   receipts config.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
-- `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.
+- `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only. `ground.sh` scans only this run's seat transcripts (the workdir's Claude project dir and any `<dir>-*` nested ones); a sibling workdir such as `/repo/x-other` for `/repo/x` shares that prefix and is scanned too, because Claude's directory encoding cannot tell them apart. Set `TRANSCRIPTS=<paths>` to pin the scan.
 - `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting.
 - `sched_audit.sh` — control 6: unregistered OS timer = hostile. (`SCHED_AUDIT_INPUT`
   is a test seam for the forced-negative drill.)
