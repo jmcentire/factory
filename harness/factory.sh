@@ -434,6 +434,7 @@ tmux select-window -t "$RUN:validator" 2>/dev/null || true
 resource_event '{}' active
 
 echo "factory '$RUN' is live: tmux attach -t $RUN"
+echo "  — accept the folder-trust prompt in each seat window to continue —"
 echo "  exact commit : $FACTORY_BASE_COMMIT"
 echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
 echo "  control root : $ROOT"
