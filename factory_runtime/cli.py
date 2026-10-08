@@ -1506,6 +1506,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
 
         store = _load_replay_store(arguments)
         projection = store.load(arguments.run_id)
+        if not projection.generation_artifact_digests:
+            # Phase A has not prepared a generation yet: no knobs to read is not a refusal.
+            print(json.dumps({"run_id": arguments.run_id, "generation_prepared": False}))
+            return
         target, _, _, _ = verify_prepared_generation(arguments.runs, projection)
         signal = target.build.get("signal")
         if not isinstance(signal, dict):
