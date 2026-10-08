@@ -446,15 +446,20 @@ what is *true about the world*; the artifacts decide what is *required of the bu
 A ratified run that cannot dispatch is discovered only after Phase A's artifacts are signed, and
 fixing it then means re-committing the target and re-resolving the run. Check these first.
 
-1. **The target carries its lane projections.** `dispatch_lane.sh` reads `.factory/projection.conf`
-   from the immutable target workdir at the pinned commit, never from the control root: a config
-   the pin does not contain would let one commit project differently per operator. Before ignition,
-   confirm the target's pinned commit contains `.factory/projection.conf` and every contract file
-   the Tester's `tester-include` lines name (vendored in-tree). If not, commit them and
-   re-resolve the target before Phase A; a missing or symlinked config refuses dispatch.
+1. **The target carries its lane projections.** `projection.sh` and `dispatch_lane.sh` read
+   `.factory/projection.conf` from the immutable target workdir at the pinned commit, never from
+   the control root: a config the pin does not contain would let one commit project differently
+   per operator. A missing config refuses projection for **both** lanes (the Coder would otherwise
+   get the full tree, tests included). Before ignition, confirm the target's pinned commit
+   contains `.factory/projection.conf` (a `tester-include:` line for the Tester, `coder-exclude:`
+   lines for the Coder) and every contract file the Tester's includes name, vendored in-tree. If
+   not, commit them and re-resolve the target before Phase A.
 2. **Pick the lane runner now; the default is the Codex subscription.** Dispatch Coder and Tester
    with `harness/tmux_lane.sh` (authoring/dogfood mode on the Codex login the installer set up;
-   no billing secret). The qualified runner, `dispatch_lane.sh`, is opt-in and only when the human
+   no billing secret; it requires `$ROOT/model-profile.json`, which `factory.sh` writes at
+   ignition, so a run ignited another way cannot use it). `tmux_lane.sh` does not apply or check
+   the projection: build each lane's repository with `projection.sh <role> <source> <sha> <dest>`
+   first and launch the lane on that output, never on the full target. The qualified runner, `dispatch_lane.sh`, is opt-in and only when the human
    asks for it: it needs an API-key billing secret, a cost ceiling, pricing, a secret root, a
    broker registry and per-role qualification, none of which setup creates. Collect all of
    that before Phase A, not at dispatch. Say which runner the run uses when you open it.
@@ -603,8 +608,9 @@ two separate claims about two separate parties — keep them apart.**
    more) into a store outside both lane repositories, then make it read-only
    (`chmod -R a-w`) and point each lane's package-manager cache or vendor path at it
    (`DENO_DIR`, `npm_config_cache`, `CARGO_HOME` or the stack's equivalent). Lanes may read the
-   store and may not write it. Verify it by resolving each declared dependency with the network
-   off. Declare a dependency the Architecture omitted by amending the Architecture, not by
+   store and may not write it. Verify the
+   store offline with `deno check --cached-only` / `deno run --cached-only` (or the stack's
+   offline flag); `deno cache --cached-only` is not a valid flag. Declare a dependency the Architecture omitted by amending the Architecture, not by
    adding it to the store.
 
 3. **Dispatch the Coder and the Tester with no channel between them**, through the lane runner

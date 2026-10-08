@@ -1567,6 +1567,24 @@ def test_projection_refuses_config_outside_immutable_source(tmp_path: Path) -> N
     assert not (tmp_path / "ws").exists()
 
 
+@pytest.mark.parametrize("role", ["coder", "tester"])
+def test_projection_refuses_both_lanes_when_the_config_is_missing(
+    tmp_path: Path, role: str
+) -> None:
+    src = projection_fixture(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    result = run(
+        ["bash", str(HARNESS / "projection.sh"), role, str(src), sha, str(tmp_path / "ws")],
+        tmp_path,
+    )
+
+    assert result.returncode == 66 and "no projection config" in result.stderr
+    assert not (tmp_path / "ws").exists()
+
+
 # --------------------------------------------------------------------------
 # Genericity — the target is data; the factory checkout is never the implicit root
 # --------------------------------------------------------------------------
@@ -2742,6 +2760,13 @@ def test_projection_receipt_does_not_gate_the_coder(tmp_path: Path) -> None:
     art.write_text("Coder reads src/pkg/config.py.\n")
     r = pr(tmp_path, "coder", art)
     assert r.returncode == 0 and "not include-listed" in r.stdout
+
+
+def test_projection_receipt_refuses_a_missing_config_for_the_coder_too(tmp_path: Path) -> None:
+    art = tmp_path / "s.md"
+    art.write_text("Coder reads src/pkg/config.py.\n")
+    r = pr(tmp_path, "coder", art)
+    assert r.returncode == 66 and "projection is undeclared" in r.stderr
 
 
 def test_projection_receipt_refuses_unsafe_include_path(tmp_path: Path) -> None:
