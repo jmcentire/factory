@@ -169,6 +169,10 @@ class SignalWatchdog:
             return "terminal"
         try:
             knobs = self.knobs()
+            if not knobs.get("generation_prepared", True):
+                # Phase A has no generation yet: nothing to watch, and not an error.
+                self._knobs = None
+                return "awaiting-generation"
             passes = int(self._cli_json("pass-count")["passes"])
         except (WatchdogError, KeyError, ValueError, TypeError) as exc:
             # Round-6 6-8: a persistent observation refusal must not silently disarm

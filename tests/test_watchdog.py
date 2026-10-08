@@ -300,6 +300,25 @@ def test_backstop_tampered_state_degrades_never_fires_falsely(tmp_path: Path) ->
     assert len(recorder.blocks) == 1
 
 
+def test_no_prepared_generation_is_not_a_watchdog_error(tmp_path: Path) -> None:
+    """Dogfood #11/#14: before Phase A prepares a generation the knobs door has
+    nothing to report; that must not log watchdog_error or escalate."""
+
+    class Unprepared(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                body = {"run_id": "r1", "generation_prepared": False}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+            return super().__call__(argv, capture_output, text)
+
+    watchdog, root = make_watchdog(tmp_path, Unprepared(), [1000.0])
+    recorder = Recorder()
+    for _ in range(4):
+        assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
+    assert recorder.events == []
+    assert not (root / "watchdog.json").exists()
+
+
 def test_cli_doors_are_pinned() -> None:
     """Round-5 F-8.3: the pass-count and signal-knobs handlers were deletable
     with the suite green. Pin their existence: the CLI must know both commands
