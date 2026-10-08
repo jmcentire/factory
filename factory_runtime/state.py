@@ -699,7 +699,13 @@ def _require_digest_keys(
         value = str(digests.get(key, ""))
         if not value:
             raise RunStateError(f"{context} requires artifact digest {key!r}")
-        _require_digest(value, f"artifact_digests[{key!r}]")
+        _require_artifact_digest(key, value)
+
+
+def _require_artifact_digest(key: str, value: str) -> None:
+    # A keyed run's resource ledger head is hmac-sha256, not a content digest.
+    check = _require_ledger_head if key == "resource-ledger" else _require_digest
+    check(value, f"artifact_digests[{key!r}]")
 
 
 def _required_phase_keys(
@@ -1263,7 +1269,7 @@ class RunStore:
                 "transition obligation digests are derived by the store, not supplied by callers"
             )
         for key, value in supplied.items():
-            _require_digest(value, f"artifact_digests[{key!r}]")
+            _require_artifact_digest(key, value)
         verified_entries = self._ledger(run_id).verified_entries()
         if not verified_entries or verified_entries[-1].get("entry_hash") != current.ledger_head:
             raise RunStateError("run changed while transition evidence was being read")

@@ -77,7 +77,7 @@ Arguments: $ARGUMENTS
 ## Phase 0: Orient
 
 ### Session setup
-1. Activate the `engineer` kindex mode: `mode_activate engineer`
+1. Activate the `code` kindex mode: `mode_activate code`
 2. `tag_start` with name `build-<task-id>` and focus on the task
 3. Determine the auth context: which repository identity to push as and which credentials
    the tools use. These are machine-local operator bindings, stated by the loader that
@@ -314,7 +314,7 @@ Mark task 6 complete.
 Run Advocate for adversarial review:
 
 ```bash
-advocate review <changed-files> -o $BUILD_DIR/advocate-report.json
+git add -N . && git diff <base> | advocate review --stdin -o $BUILD_DIR/advocate-report.json
 ```
 
 Six personas: Red Team, Adversarial, Sage, User, Subject Matter Expert, Good Friend.
@@ -336,7 +336,7 @@ Mark task 7 complete.
 ## Phase 7: Index
 
 ```bash
-kin ingest <repo-path> --adapter code
+kin ingest code --project-path <repo-path>
 ```
 
 Additionally capture:
