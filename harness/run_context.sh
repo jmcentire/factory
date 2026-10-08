@@ -309,3 +309,16 @@ print("\n".join(fields))
   export FACTORY_SOURCE_DIGEST
   export FACTORY_GENERATION
 }
+
+# `env` arguments for an interactive seat (validator, dispatcher): the run's roots plus the
+# externally supplied resume anchors, which a later ground or dispatch from the seat re-verifies.
+# Needs a loaded context.
+factory_seat_env() {
+  printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
+    "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
+  local var
+  for var in FACTORY_RESUME_CHECKPOINT FACTORY_RESUME_CHECKPOINT_DIGEST \
+    FACTORY_RESUME_CONFIG_MANIFEST FACTORY_RESUME_ACCEPTED_PREDECESSORS; do
+    if [ -n "${!var:-}" ]; then printf ' %s=%q' "$var" "${!var}"; else printf ' -u %s' "$var"; fi
+  done
+}
