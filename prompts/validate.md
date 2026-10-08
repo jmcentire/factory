@@ -313,6 +313,12 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    confirm the target's pinned commit contains `.factory/projection.conf` and every contract file
    the Tester's `tester-include` lines name (vendored in-tree). If not, commit them and
    re-resolve the target before Phase A; a missing or symlinked config refuses dispatch.
+2. **Pick the lane runner now; the default is the Codex subscription.** Dispatch Coder and Tester
+   with `harness/tmux_lane.sh` (authoring/dogfood mode on the Codex login the installer set up;
+   no billing secret). The qualified runner, `dispatch_lane.sh`, is opt-in and only when the human
+   asks for it: it needs an API-key billing secret, a cost ceiling, pricing, a secret root, a
+   broker registry and per-role qualification, none of which setup creates. Collect all of
+   that before Phase A, not at dispatch. Say which runner the run uses when you open it.
 
 ## Phase A — The frame (nothing is built until the human has agreed it)
 
@@ -451,8 +457,9 @@ two separate claims about two separate parties — keep them apart.**
    forbidden thing and recording the refusal**; an untested boundary is a documented
    intention.
 
-2. **Dispatch the Coder and the Tester with no channel between them.** Both read the same
-   signed artifacts and contracts; neither can see or reach the other's work.
+2. **Dispatch the Coder and the Tester with no channel between them**, through the lane runner
+   chosen in the dispatch prerequisites (`tmux_lane.sh` unless the qualified runner was opted into).
+   Both read the same signed artifacts and contracts; neither can see or reach the other's work.
 
    - Separate invocations, separate contexts, separate tool grants, no shared scratch space.
    - **If you use a coordination channel, use a hub-and-spoke topology** — one conversation

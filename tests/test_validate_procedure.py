@@ -13,3 +13,10 @@ def test_projection_config_requirement_is_stated_before_phase_a() -> None:
     assert prerequisites < phase_a
     section = PROCEDURE[prerequisites:phase_a]
     assert ".factory/projection.conf" in section and "pinned commit" in section
+
+
+def test_subscription_lane_runner_is_the_default_and_qualified_runner_opt_in() -> None:
+    phase_a = PROCEDURE.index("## Phase A \u2014 The frame")
+    section = PROCEDURE[PROCEDURE.index("## Dispatch prerequisites"):phase_a]
+    assert "harness/tmux_lane.sh" in section and "default" in section
+    assert "dispatch_lane.sh" in section and "opt-in" in section
