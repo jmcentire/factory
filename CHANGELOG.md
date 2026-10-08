@@ -3,6 +3,16 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [Unreleased]
+
+### Documentation
+
+- **ARCHITECTURE.md A24 covers transport integrity at storage boundaries.** It uses Google's
+  October 2026 notice as the example: Cloud Storage SDKs now verify CRC32C end to end on every
+  write by default. The example lists the per-SDK version floors and the Python `auto`-mode
+  caveat (it falls back to MD5 without the C extension). It also says how a mismatch maps onto
+  A25, A32 and A46.
+
 ## [0.8.10] - 2026-10-06
 
 ### Fixed
