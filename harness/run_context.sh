@@ -316,17 +316,22 @@ print("\n".join(fields))
 # finds left over from the first, so the per-run context that factory_load_context re-derives is
 # unset rather than inherited. Needs a loaded context.
 factory_seat_env() {
-  printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
-    "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
   local var
-  for var in FACTORY_RESUME_CHECKPOINT FACTORY_RESUME_CHECKPOINT_DIGEST \
-    FACTORY_RESUME_CONFIG_MANIFEST FACTORY_RESUME_ACCEPTED_PREDECESSORS; do
-    if [ -n "${!var:-}" ]; then printf ' %s=%q' "$var" "${!var}"; else printf ' -u %s' "$var"; fi
-  done
+  # env stops parsing options at the first NAME=VALUE, so every -u comes first.
   for var in FACTORY_RUNS_ROOT FACTORY_CONTROL_ROOT FACTORY_HARNESS_META FACTORY_RUN_STATE \
     FACTORY_TARGET_STATE_DIGEST FACTORY_SOURCE_ROOT FACTORY_WORKDIR FACTORY_OBJECT_STORE \
     FACTORY_BASE_COMMIT FACTORY_BASE_TREE FACTORY_CHECKOUT_ID FACTORY_TARGET_MANIFEST_DIGEST \
     FACTORY_SOURCE_DIGEST FACTORY_GENERATION FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST; do
-    printf ' -u %s' "$var"
+    printf -- '-u %s ' "$var"
+  done
+  for var in FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_RESUME_CHECKPOINT \
+    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST; do
+    [ -n "${!var:-}" ] || printf -- '-u %s ' "$var"
+  done
+  printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
+    "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
+  for var in FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_RESUME_CHECKPOINT \
+    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST; do
+    [ -z "${!var:-}" ] || printf ' %s=%q' "$var" "${!var}"
   done
 }
