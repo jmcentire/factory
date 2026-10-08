@@ -4340,6 +4340,22 @@ def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
     assert "orchestrator_not_resident" in blocking
 
 
+def test_dispatcher_snapshot_minutes_creates_missing_minutes_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "capture", lambda _window: "validator said something\n")
+
+    d.snapshot_minutes()  # type: ignore[attr-defined]
+
+    (log,) = (root / "minutes").glob("validator-*.log")
+    assert "validator said something" in log.read_text()
+
+
 def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

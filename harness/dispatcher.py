@@ -751,6 +751,7 @@ class Dispatcher:
             return
         day = datetime.date.today().isoformat()
         f = self.root / "minutes" / f"validator-{day}.log"
+        f.parent.mkdir(exist_ok=True)
         if not f.exists():
             f.write_text(
                 "[INFERRED] Non-authoritative pane capture. Minutes index the "
