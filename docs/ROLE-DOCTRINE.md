@@ -441,6 +441,18 @@ what is *true about the world*; the artifacts decide what is *required of the bu
 
 ---
 
+### Dispatch prerequisites — settle these before Phase A
+
+A ratified run that cannot dispatch is discovered only after Phase A's artifacts are signed, and
+fixing it then means re-committing the target and re-resolving the run. Check these first.
+
+1. **The target carries its lane projections.** `dispatch_lane.sh` reads `.factory/projection.conf`
+   from the immutable target workdir at the pinned commit, never from the control root: a config
+   the pin does not contain would let one commit project differently per operator. Before ignition,
+   confirm the target's pinned commit contains `.factory/projection.conf` and every contract file
+   the Tester's `tester-include` lines name (vendored in-tree). If not, commit them and
+   re-resolve the target before Phase A; a missing or symlinked config refuses dispatch.
+
 ### Phase A — The frame (nothing is built until the human has agreed it)
 
 Produce exactly **three intent authorities**. Nothing else authorizes a requirement: not the
