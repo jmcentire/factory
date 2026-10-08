@@ -1766,50 +1766,44 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert resources["tmux-session"]["status"] == "active"
 
 
-def test_seat_windows_carry_the_resume_anchors_they_need_to_ground_and_dispatch(
+def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
+    """Execute the command a seat window was given, as tmux would, with stale server env."""
+    line = next(l for l in tmux_log.read_text().splitlines() if f"-n {window} " in l)
+    command = line.split(" -c ", 1)[1].split(" ", 1)[1]
+    dump = tmp_path / f"{window}.env"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, **stale, "SEAT_DUMP": str(dump)},
+        capture_output=True,
+        text=True,
+    )
+    return result, dump
+
+
+def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_context(
     tmp_path: Path,
 ) -> None:
     task = "Build the exact authorized behavior."
     operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
-
     result = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
         env,
     )
-
     assert result.returncode == 0, result.stdout + result.stderr
-    seats = [line for line in tmux_log.read_text().splitlines() if " -n " in line]
-    for seat in ("validator", "ctl"):
-        call = next(line for line in seats if f"-n {seat} " in line)
-        for name in (
-            "FACTORY_RESUME_CHECKPOINT",
-            "FACTORY_RESUME_CHECKPOINT_DIGEST",
-            "FACTORY_RESUME_CONFIG_MANIFEST",
-        ):
-            assert f" {name}=" in call, (seat, name)
-
-
-def test_seat_windows_do_not_inherit_another_runs_context_from_the_tmux_server(
-    tmp_path: Path,
-) -> None:
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    seats = [line for line in tmux_log.read_text().splitlines() if " -n " in line]
-    for seat in ("validator", "ctl"):
-        call = next(line for line in seats if f"-n {seat} " in line)
-        for name in ("FACTORY_CONTROL_ROOT", "FACTORY_RUNS_ROOT", "FACTORY_WORKDIR"):
-            assert f" -u {name}" in call, (seat, name)
+    stub = tmp_path / "factory-bin" / "codex"
+    stub.write_text(stub.read_text().replace(
+        'exit 0\n', '[ -n "${SEAT_DUMP:-}" ] && env > "$SEAT_DUMP"\nexit 0\n'))
+    stale = {"PATH": env["PATH"], "FACTORY_CONTROL_ROOT": "/stale/run-b", "FACTORY_WORKDIR": "/stale"}
+    seated, dump = run_seat_command(tmux_log, "validator", tmp_path, stale)
+    assert seated.returncode == 0, seated.stderr
+    seat = dict(l.split("=", 1) for l in dump.read_text().splitlines() if "=" in l)
+    assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
+    assert seat["HARNESS_RUN_ROOT"] == str(root)
+    for name in ("FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",
+                 "FACTORY_RESUME_CONFIG_MANIFEST"):
+        assert seat[name], name
 
 
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
