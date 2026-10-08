@@ -312,7 +312,9 @@ print("\n".join(fields))
 
 # `env` arguments for an interactive seat (validator, dispatcher): the run's roots plus the
 # externally supplied resume anchors, which a later ground or dispatch from the seat re-verifies.
-# Needs a loaded context.
+# A tmux window inherits the tmux server's environment, which a second run on the same server
+# finds left over from the first, so the per-run context that factory_load_context re-derives is
+# unset rather than inherited. Needs a loaded context.
 factory_seat_env() {
   printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
     "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
@@ -320,5 +322,11 @@ factory_seat_env() {
   for var in FACTORY_RESUME_CHECKPOINT FACTORY_RESUME_CHECKPOINT_DIGEST \
     FACTORY_RESUME_CONFIG_MANIFEST FACTORY_RESUME_ACCEPTED_PREDECESSORS; do
     if [ -n "${!var:-}" ]; then printf ' %s=%q' "$var" "${!var}"; else printf ' -u %s' "$var"; fi
+  done
+  for var in FACTORY_RUNS_ROOT FACTORY_CONTROL_ROOT FACTORY_HARNESS_META FACTORY_RUN_STATE \
+    FACTORY_TARGET_STATE_DIGEST FACTORY_SOURCE_ROOT FACTORY_WORKDIR FACTORY_OBJECT_STORE \
+    FACTORY_BASE_COMMIT FACTORY_BASE_TREE FACTORY_CHECKOUT_ID FACTORY_TARGET_MANIFEST_DIGEST \
+    FACTORY_SOURCE_DIGEST FACTORY_GENERATION FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST; do
+    printf ' -u %s' "$var"
   done
 }

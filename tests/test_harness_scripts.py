@@ -1791,6 +1791,27 @@ def test_seat_windows_carry_the_resume_anchors_they_need_to_ground_and_dispatch(
             assert f" {name}=" in call, (seat, name)
 
 
+def test_seat_windows_do_not_inherit_another_runs_context_from_the_tmux_server(
+    tmp_path: Path,
+) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    seats = [line for line in tmux_log.read_text().splitlines() if " -n " in line]
+    for seat in ("validator", "ctl"):
+        call = next(line for line in seats if f"-n {seat} " in line)
+        for name in ("FACTORY_CONTROL_ROOT", "FACTORY_RUNS_ROOT", "FACTORY_WORKDIR"):
+            assert f" -u {name}" in call, (seat, name)
+
+
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     tmp_path: Path,
 ) -> None:
