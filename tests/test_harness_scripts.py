@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -858,6 +859,27 @@ def test_ground_writes_marker_on_clean_state(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / ".harness" / "grounded").exists()
     assert "grounded @" in r.stdout
+
+
+def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
+    env = ground_fixture(tmp_path)
+    del env["TRANSCRIPTS"]
+    home = tmp_path / "home"
+    projects = home / ".claude" / "projects"
+    secret = "-----BEGIN " + "PRIVATE KEY-----\n"
+    (projects / "-unrelated-session").mkdir(parents=True)
+    (projects / "-unrelated-session" / "t.jsonl").write_text(secret)
+    env["HOME"] = str(home)
+
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no seat transcripts yet" in r.stdout
+
+    seat = projects / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
+    seat.mkdir()
+    (seat / "t.jsonl").write_text(secret)
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
 
 
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
