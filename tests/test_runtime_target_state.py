@@ -275,3 +275,144 @@ def test_subpath_escape_forms_are_refused(value: str) -> None:
 def test_repository_url_credentials_and_ambiguous_forms_are_refused(value: str) -> None:
     with pytest.raises(TargetResolutionError):
         normalize_repository_url(value)
+
+
+def _vendor_contracts(source: Path, *, pinned: str | None) -> None:
+    import hashlib
+
+    contract = source / "contracts" / "property"
+    contract.mkdir(parents=True)
+    body = b"restated contract\n"
+    (contract / "restated-contract.md").write_bytes(body)
+    digest = pinned or hashlib.sha256(body).hexdigest()
+    (source / "contracts" / "SOURCES.md").write_text(
+        "| Dependency | Kind | Source | sha256 |\n|---|---|---|---|\n"
+        f"| property | RESTATED | pin | {digest} |\n"
+        f"| ghost | RESTATED | pin | {'1' * 64} |\n"
+        "| Ref | Full SHA |\n| api | " + "2" * 40 + " |\n",
+        encoding="utf-8",
+    )
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "vendor contracts")
+
+
+def test_matching_contract_sources_resolve_and_unidentified_rows_only_warn(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    _vendor_contracts(source, pinned=None)
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.warns(UserWarning, match="ghost"):
+        state = _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+    assert state["resolved_commit"]
+
+
+def test_contract_sources_digest_mismatch_is_refused_with_the_list(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    _vendor_contracts(source, pinned="c" * 64)
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-digest-mismatch"
+    assert "property: pinned cccccccc" in str(raised.value)
+
+
+def test_stale_restated_file_beside_a_matching_one_is_refused_run_c_shape(tmp_path: Path) -> None:
+    import hashlib
+
+    source = _source(tmp_path)
+    folder = source / "contracts" / "site-infra"
+    folder.mkdir(parents=True)
+    schema = b'{"openapi": "3.1.0"}\n'
+    (folder / "openapi.json").write_bytes(schema)
+    (folder / "restated-contract.md").write_text("edited after pinning\n", encoding="utf-8")
+    (source / "contracts" / "SOURCES.md").write_text(
+        "| Dependency | Kind | Source | sha256 |\n|---|---|---|---|\n"
+        f"| site-infra | RESTATED | pin | {'b' * 64} |\n"
+        f"| site-infra schema | RESTATED | pin | {hashlib.sha256(schema).hexdigest()} |\n",
+        encoding="utf-8",
+    )
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "vendor site-infra")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-digest-mismatch"
+    assert "restated-contract.md" in str(raised.value)
+    assert "openapi.json" not in str(raised.value)
+
+
+def test_a_linked_contracts_directory_is_refused(tmp_path: Path) -> None:
+    import hashlib
+
+    source = _source(tmp_path)
+    external = tmp_path / "external-contracts" / "property"
+    external.mkdir(parents=True)
+    body = b"restated contract\n"
+    (external / "restated-contract.md").write_bytes(body)
+    (external.parent / "SOURCES.md").write_text(
+        f"| Dependency | sha256 |\n|---|---|\n| property | {hashlib.sha256(body).hexdigest()} |\n",
+        encoding="utf-8",
+    )
+    (source / "contracts").symlink_to(external.parent)
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "link contracts outside the checkout")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-source-link"
+
+
+def test_a_vendored_dependency_with_no_pinned_rows_is_refused(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    stale = source / "contracts" / "authz"
+    stale.mkdir(parents=True)
+    (stale / "contract.md").write_text("never pinned\n", encoding="utf-8")
+    _vendor_contracts(source, pinned=None)
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.warns(UserWarning), pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-digest-mismatch"
+    assert "authz: contract.md" in str(raised.value)
+
+
+@pytest.mark.parametrize("replacement", ["deleted", "directory"])
+def test_vendored_contracts_without_a_regular_sources_file_are_refused(
+    tmp_path: Path, replacement: str
+) -> None:
+    source = _source(tmp_path)
+    _vendor_contracts(source, pinned=None)
+    sources = source / "contracts" / "SOURCES.md"
+    sources.unlink()
+    if replacement == "directory":
+        sources.mkdir()
+        (sources / "README").write_text("not a pin list\n", encoding="utf-8")
+    _git("-C", str(source), "add", "-A", "contracts")
+    _git("-C", str(source), "commit", "-m", f"SOURCES.md {replacement}")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-sources-missing"
