@@ -476,10 +476,15 @@ Phase B item 7). You are the second pair of eyes, not the first.
   - **Above 0.7** is a finding you must assess.
   - **Between 0.3 and 0.7** is yours to judge from the evidence.
   - **Below 0.3** clears nothing.
+  - Runtime selection, bounded receipts, evidence handles, and assessment/4 consumption:
+    `orchestrator/JEV.md` (retained from `docs/practices/jev-runtime.md`).
+    When `harness.json` selects `jev_screen`, read
+    `orchestrator/jev.jsonl` and submit assessment/4 with `screen_review`; an omitted
+    finding or unavailable check is refused. A disabled screen is explicit `null`.
 - **jev findings are add-only signals.** Lane text can talk jev out of a verdict, so a jev
   "no" never clears a finding, a block, or a halt. It never excuses you from looking at the
-  pane yourself. Until the screen is wired, the rule ids below name the checks you run by
-  reading the panes.
+  pane yourself. When the screen is disabled or lacks evidence for a rule, run that check
+  yourself from the retained evidence and record the basis.
 
 **Deterministic checks** (watchdog signals):
 
@@ -488,7 +493,7 @@ Phase B item 7). You are the second pair of eyes, not the first.
 | D1 | A running lane with no commit within N minutes is stopped, and the Validator is woken. | §2 |
 | D2 | A lane done and idle more than M minutes with no Validator action. | §3 |
 | D3 | A repair round with more than about 12 items: cap it or split it by disjoint scope. | §8 |
-| D4 | Spend per output below the run's threshold: cut the lane and tell the founder. | §2 |
+| D4 | Output per dollar below the run's threshold: cut the lane and tell the founder. | §2 |
 
 **Semantic checks** (jev rule ids):
 

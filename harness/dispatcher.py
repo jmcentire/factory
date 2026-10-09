@@ -32,6 +32,7 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
+from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
     pending_questions,
@@ -245,6 +246,7 @@ class Dispatcher:
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
         self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "")
         self.last_delivered_cursor = 0
+        self.last_delivered_screen_cursor: int | None = None
         # Plan §0.4c: the signal-deadline watchdog rides this seam. Knobs come
         # only from the frozen generation blob via the CLI door; passes only
         # from the verified ledger via pass-count — never ambient environment,
@@ -567,20 +569,24 @@ class Dispatcher:
         if self.orchestrator_mode != "resident-monitoring":
             return
         try:
+            screen_cursor = screen_pending(self.root)
             cursor = activity_highwater(self.root)
-        except OrchestratorChannelError as exc:
+        except (OrchestratorChannelError, ScreenError, OSError) as exc:
             self._record_orchestrator_transport_failure(str(exc))
             return
-        if cursor <= self.last_delivered_cursor:
+        if (cursor <= self.last_delivered_cursor
+                and screen_cursor == self.last_delivered_screen_cursor):
             return
-        start = self.last_delivered_cursor + 1
+        start = min(self.last_delivered_cursor + 1, cursor)
         report = f"orchestrator/assessment-{cursor}.json"
         message = (
-            f"FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
+            f"# FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
             "in that range from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's "
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
             f"assessment/3 to {report}, then submit: python3 "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
+            "Review orchestrator/jev.jsonl when jev_screen is enabled; use assessment/4 "
+            f"(screen cursor={screen_cursor}); consume its completed prefix. "
             "Decide block, halt, or no-op; never grant or close."
         )
         environment = dict(os.environ)
@@ -607,6 +613,7 @@ class Dispatcher:
             self._record_orchestrator_transport_failure(detail)
             return
         self.last_delivered_cursor = cursor
+        self.last_delivered_screen_cursor = screen_cursor
         self.event(
             "orchestrator_activity_delivered",
             f"delivered every activity record through cursor {cursor}",

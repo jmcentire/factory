@@ -442,10 +442,7 @@ PY
   STANDARD_BLOCK=""
   if [ "$ROLE" = tester ]; then
     STANDARD_BLOCK="$TMUX_ROOT/$SLOT-testing-standard.md"
-    STRATEGY_ARGS=()
-    if [ -e "$ROOT/artifacts/testing-strategy.md" ] || [ -L "$ROOT/artifacts/testing-strategy.md" ]; then
-      STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
-    fi
+    STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
     STANDARD_RECEIPT=$("$FACTORY_PYTHON" "$D/testing_standard.py" block \
       --factory-home "$REPO_ROOT" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
       refuse 70 "TESTING STANDARD: $STANDARD_RECEIPT" \

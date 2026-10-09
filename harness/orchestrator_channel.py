@@ -30,6 +30,7 @@ if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
 from attention_gate import AttentionGateError, append_blocking_event  # noqa: E402
+from jev_screen import ScreenError, validate_review  # noqa: E402
 from lane_dialogue import (  # noqa: E402
     LaneDialogueError,
     pending_questions,
@@ -550,14 +551,16 @@ def _validate_assessment(
     schema = value.get("schema_version")
     if schema == _LEGACY_ASSESSMENT_SCHEMA:
         expected = base_fields
-    elif schema == _ASSESSMENT_SCHEMA:
+    elif schema in {_ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"}:
         expected = base_fields | guidance_fields
+        if schema == "factory-orchestrator-assessment/4":
+            expected = expected | {"screen_review"}
     else:
         expected = set()
     if set(value) != expected:
         raise OrchestratorChannelError("assessment has unknown or missing fields")
     checked_guidance: dict[str, Any] | None = None
-    if schema == _ASSESSMENT_SCHEMA:
+    if schema in {_ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"}:
         checked_guidance = _guidance_fields(value)
     if guidance_expected is not None:
         if checked_guidance is None:
@@ -788,6 +791,16 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
         existing = _read_jsonl(report_path)
         previous_cursor = _validate_report_rows(existing, highwater=highwater)
         cursor = int(assessment["through_cursor"])
+        try:
+            review_previous = previous_cursor
+            if cursor == previous_cursor and existing:
+                review_previous = (existing[-2]["assessment"]["through_cursor"]
+                                   if len(existing) > 1 else 0)
+            validate_review(directory, activity_rows, harness.get("jev_screen"),
+                            review_previous, cursor, assessment.get("screen_review"),
+                            assessment["decision"], assessment["adherence_findings"])
+        except ScreenError as exc:
+            raise OrchestratorChannelError(str(exc)) from exc
         if cursor < previous_cursor:
             raise OrchestratorChannelError("assessment is older than the retained report cursor")
         digest = "sha256:" + hashlib.sha256(_canonical(assessment)).hexdigest()
@@ -923,10 +936,24 @@ def _require_current_guidance(
 ) -> dict[str, Any] | None:
     harness = _read_harness(root)
     expected = _guidance_expected(root, harness)
+    latest = _latest_assessment(rows)
+    if latest is not None:
+        previous_assessment = _latest_assessment(rows[:-1])
+        previous = int(previous_assessment["through_cursor"]) if previous_assessment else 0
+        directory = root / "orchestrator"
+        activities = _read_jsonl(directory / "activity.jsonl")
+        try:
+            validate_review(directory, activities, harness.get("jev_screen"), previous,
+                            latest["through_cursor"], latest.get("screen_review"),
+                            latest["decision"], latest["adherence_findings"])
+        except ScreenError as exc:
+            raise OrchestratorChannelError(str(exc)) from exc
     if expected is None:
         return None
     latest = _latest_assessment(rows)
-    if latest is None or latest.get("schema_version") != _ASSESSMENT_SCHEMA:
+    if latest is None or latest.get("schema_version") not in {
+        _ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"
+    }:
         raise OrchestratorChannelError("current run has no assessment/3 guidance evidence")
     if _guidance_fields(latest) != expected:
         raise OrchestratorChannelError(

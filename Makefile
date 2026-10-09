@@ -186,6 +186,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py harness/lane_repository.py \
 		harness/model_profile.py harness/orchestrator_channel.py harness/testing_standard.py \
+		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
 
@@ -195,6 +196,7 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py harness/lane_repository.py \
 		harness/model_profile.py harness/orchestrator_channel.py harness/testing_standard.py \
+		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
 

@@ -11,8 +11,9 @@ what the lane was given:
 - ``docs/standards/TESTING.md`` — How We Test (the T-rules);
 - ``prompts/test.md`` — the Tester role doctrine;
 - the run's ``testing-strategy.md``, when the caller passes one (``tmux_lane.sh`` passes the
-  run's; ``dispatch_lane.sh`` does not, because run-model injects the ratified strategy from
-  the state capsule and a mutable Markdown view must not condition a qualified lane, Gate B).
+  run's, mandatorily; ``dispatch_lane.sh`` does not, because run-model injects the ratified
+  strategy from the state capsule. A mutable Markdown view must not condition a qualified
+  lane (Gate B).
 
 A source that is missing, empty, a symlink, not a regular file or not UTF-8 refuses the block,
 and the caller refuses the launch.
@@ -53,20 +54,25 @@ class StandardMissing(RuntimeError):
 
 def _read(path: pathlib.Path, label: str) -> str:
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
     except OSError as error:
         raise StandardMissing(f"{label} cannot be read at {path}: {error.strerror}") from None
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_SOURCE_BYTES:
             raise StandardMissing(f"{label} at {path} is not a non-empty bounded regular file")
-        raw = b""
-        while chunk := os.read(descriptor, 1024 * 1024):
-            raw += chunk
+        raw = os.read(descriptor, MAX_SOURCE_BYTES + 1)
+        if len(raw) > MAX_SOURCE_BYTES:
+            raise StandardMissing(f"{label} at {path} exceeds its byte ceiling")
     finally:
         os.close(descriptor)
     try:
-        return raw.decode("utf-8")
+        text = raw.decode("utf-8")
+        if not text.strip():
+            raise StandardMissing(f"{label} at {path} is empty")
+        return text
     except UnicodeDecodeError:
         raise StandardMissing(f"{label} at {path} is not UTF-8") from None
 
