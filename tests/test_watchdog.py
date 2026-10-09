@@ -319,6 +319,51 @@ def test_no_prepared_generation_is_not_a_watchdog_error(tmp_path: Path) -> None:
     assert not (root / "watchdog.json").exists()
 
 
+def _unprepared() -> type:
+    class Unprepared(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                body = {"run_id": "r1", "generation_prepared": False}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+            return super().__call__(argv, capture_output, text)
+
+    return Unprepared
+
+
+def test_lanes_launched_without_generation_escalates_once(tmp_path: Path) -> None:
+    """Dogfood #44: tmux_lane never prepares a generation, so once a lane has
+    launched the quiet wait must become one loud, non-repeating escalation."""
+    watchdog, root = make_watchdog(tmp_path, _unprepared()(), [1000.0])
+    recorder = Recorder()
+    assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
+    assert recorder.events == []
+    (root / "tmux-lanes").mkdir()
+    (root / "tmux-lanes" / "coder-launch.jsonl").write_text("{}\n", encoding="utf-8")
+    for _ in range(3):
+        assert watchdog.check(recorder.emit, recorder.block) == "unobservable"
+    assert recorder.kinds() == ["watchdog_unobservable"]
+    assert recorder.events[0][2] is True
+
+
+def test_real_refusal_still_escalates_after_lane_launch(tmp_path: Path) -> None:
+    """A refusing signal-knobs door is still watchdog_error, lane records or not."""
+
+    class Refusing(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                return subprocess.CompletedProcess(argv, 1, "", "refused")
+            return super().__call__(argv, capture_output, text)
+
+    watchdog, root = make_watchdog(tmp_path, Refusing(), [1000.0])
+    (root / "tmux-lanes").mkdir()
+    (root / "tmux-lanes" / "coder-launch.jsonl").write_text("{}\n", encoding="utf-8")
+    recorder = Recorder()
+    for _ in range(3):
+        assert watchdog.check(recorder.emit, recorder.block) == "error"
+    assert recorder.kinds() == ["watchdog_error"] * 3
+    assert [wake for _, _, wake in recorder.events] == [False, False, True]
+
+
 def test_cli_doors_are_pinned() -> None:
     """Round-5 F-8.3: the pass-count and signal-knobs handlers were deletable
     with the suite green. Pin their existence: the CLI must know both commands
