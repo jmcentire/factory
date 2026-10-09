@@ -12,6 +12,7 @@ import factory_runtime.lane_repository as lane_repository
 from factory_runtime.lane_repository import (
     LaneRepositoryError,
     freeze_lane_repository,
+    read_freeze_excludes,
     validate_standalone_repository,
 )
 
@@ -123,3 +124,51 @@ def test_plain_export_leaves_out_the_lanes_kindex_runtime_state(tmp_path: Path) 
     assert paths == {"answer.txt", ".kin/knowledge.jsonl"}
     assert set(export.excluded_entries) == {".git", ".kin/local", ".kin/events"}
     assert (repo / ".kin" / "local" / "kindex" / "kindex.db").exists()
+
+
+def _declared(tmp_path: Path, *lines: str) -> Path:
+    conf = tmp_path / "projection.conf"
+    conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return conf
+
+
+def _node_modules_repo(tmp_path: Path) -> Path:
+    repo = standalone_repo(tmp_path)
+    (repo / "app.ts").write_text("x", encoding="utf-8")
+    (repo / "node_modules").mkdir()
+    os.symlink(repo / "app.ts", repo / "node_modules" / "link")
+    return repo
+
+
+def test_declared_freeze_exclude_skips_a_symlink_tree_unread(tmp_path: Path) -> None:
+    repo = _node_modules_repo(tmp_path)
+    exclude = read_freeze_excludes(_declared(tmp_path, "freeze-exclude: node_modules"))
+
+    export = freeze_lane_repository(
+        repo, tmp_path / "store", durable_through=tmp_path, exclude=exclude
+    )
+
+    manifest = json.loads(export.frozen_tree.manifest_path.read_text(encoding="utf-8"))
+    assert {row["path"] for row in manifest["files"]} == {"app.ts"}
+    assert export.excluded_entries == (".git", "node_modules")
+
+
+def test_undeclared_symlink_is_refused_and_lane_gitignore_has_no_effect(tmp_path: Path) -> None:
+    repo = _node_modules_repo(tmp_path)
+    (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    with pytest.raises(LaneRepositoryError, match="symbolic links"):
+        freeze_lane_repository(repo, tmp_path / "store-a", durable_through=tmp_path)
+
+    # a declared exclude covers only its own top-level path, not other symlinks
+    os.symlink(repo / "app.ts", repo / "other-link")
+    exclude = read_freeze_excludes(_declared(tmp_path, "freeze-exclude: node_modules"))
+    with pytest.raises(LaneRepositoryError, match="symbolic links"):
+        freeze_lane_repository(
+            repo, tmp_path / "store-b", durable_through=tmp_path, exclude=exclude
+        )
+
+
+def test_freeze_exclude_rejects_unsafe_values(tmp_path: Path) -> None:
+    for bad in ("a/b", "..", ".git", ""):
+        with pytest.raises(LaneRepositoryError):
+            read_freeze_excludes(_declared(tmp_path, f"freeze-exclude: {bad}"))

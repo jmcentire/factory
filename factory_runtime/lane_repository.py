@@ -22,6 +22,7 @@ import stat
 import subprocess
 import tempfile
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from factory_runtime.snapshot import FrozenTree, SnapshotError, freeze_tree
@@ -101,6 +102,28 @@ def validate_standalone_repository(source: str | pathlib.Path) -> StandaloneRepo
     return StandaloneRepository(root, git_directory, common_directory)
 
 
+def read_freeze_excludes(conf: str | pathlib.Path) -> tuple[str, ...]:
+    """Top-level paths a target declares unfrozen via ``freeze-exclude:`` in projection.conf.
+
+    The conf is committed in the target at the pinned commit, so the lane cannot change it.
+    """
+
+    path = pathlib.Path(conf)
+    if path.is_symlink() or not path.is_file():
+        return ()
+    names: list[str] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.startswith("freeze-exclude:"):
+            continue
+        value = line.partition(":")[2].strip()
+        if value in {"", ".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+            raise LaneRepositoryError(f"unsafe freeze-exclude on line {number}: {value!r}")
+        if _portable_name(value) == ".git":
+            raise LaneRepositoryError("freeze-exclude may not name .git")
+        names.append(value)
+    return tuple(names)
+
+
 def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (
         metadata.st_dev,
@@ -123,6 +146,7 @@ def _capture_plain_tree(
     max_file_bytes: int,
     max_total_bytes: int,
     max_depth: int,
+    exclude: Sequence[str] = (),
 ) -> tuple[dict[str, tuple[bytes, int]], tuple[str, ...], int]:
     flags = (
         os.O_RDONLY
@@ -169,7 +193,7 @@ def _capture_plain_tree(
                     )
                 excluded.append(relative)
                 continue
-            if relative in KINDEX_RUNTIME_ENTRIES:
+            if relative in KINDEX_RUNTIME_ENTRIES or (not prefix and name in exclude):
                 excluded.append(relative)
                 continue
             child = -1
@@ -252,6 +276,7 @@ def freeze_lane_repository(
     max_file_bytes: int = 16 * 1024 * 1024,
     max_total_bytes: int = 256 * 1024 * 1024,
     max_depth: int = 64,
+    exclude: Sequence[str] = (),
 ) -> LaneExport:
     """Freeze only regular working-tree bytes, never consulting agent-owned Git state."""
 
@@ -264,6 +289,7 @@ def freeze_lane_repository(
         max_file_bytes=max_file_bytes,
         max_total_bytes=max_total_bytes,
         max_depth=max_depth,
+        exclude=exclude,
     )
     store = pathlib.Path(store_root)
     boundary = pathlib.Path(durable_through)

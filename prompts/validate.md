@@ -307,12 +307,16 @@ what is *true about the world*; the artifacts decide what is *required of the bu
 A ratified run that cannot dispatch is discovered only after Phase A's artifacts are signed, and
 fixing it then means re-committing the target and re-resolving the run. Check these first.
 
-1. **The target carries its lane projections.** `dispatch_lane.sh` reads `.factory/projection.conf`
-   from the immutable target workdir at the pinned commit, never from the control root: a config
-   the pin does not contain would let one commit project differently per operator. Before ignition,
-   confirm the target's pinned commit contains `.factory/projection.conf` and every contract file
-   the Tester's `tester-include` lines name (vendored in-tree). If not, commit them and
-   re-resolve the target before Phase A; a missing or symlinked config refuses dispatch.
+1. **The target carries its lane projections.** `projection.sh` and `dispatch_lane.sh` read
+   `.factory/projection.conf` from the immutable target workdir at the pinned commit, never from
+   the control root: a config the pin does not contain would let one commit project differently
+   per operator. A missing config refuses projection for **both** lanes (the Coder would otherwise
+   get the full tree, tests included). Before ignition, confirm the target's pinned commit
+   contains `.factory/projection.conf` (a `tester-include:` line for the Tester, `coder-exclude:`
+   lines for the Coder; a `freeze-exclude: <top-level path>` line for a git-ignored
+   dependency tree such as `node_modules`, which the lane freeze would otherwise refuse as symlinks)
+   and every contract file the Tester's includes name, vendored in-tree. If
+   not, commit them and re-resolve the target before Phase A.
 
 ## Phase A — The frame (nothing is built until the human has agreed it)
 
