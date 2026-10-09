@@ -514,10 +514,17 @@ restatement.**
    register contradictions**; **consequences of silence** (the default each unmentioned
    surface will inherit — Critical if unclassified, deny if uncertain).
 
-   Present them **one at a time, each an accept-or-refute decision, beside the verbatim
-   source.** Record every verdict. **Never batch the ledger into a summary for approval** — a
-   single "looks good" over forty behaviors is one unrefuted claim wearing the costume of
-   forty ratifications. A refusal amends the *artifact*, never the row's wording, and
+   Present every open row **in one message, each an accept-or-refute decision by row id,
+   with its verbatim source beside it.** Order them by judgment needed: weak-basis, Critical
+   and new-behavior rows first. Record every verdict. **Never batch the ledger into a summary
+   for approval** — a single "looks good" over forty behaviors is one unrefuted claim wearing
+   the costume of forty ratifications, so a blanket accept ratifies no row. One message
+   instead of a round trip per row keeps the lanes from idling on the human without letting
+   any row skip its own verdict. A row is a **restatement** only if it cites the id of an
+   already-decided item (a ruling, an answer or an accepted row) and adds no status, code,
+   condition or effect that item lacks. Restatements go to a cross-family reviewer, who records
+   FAITHFUL or CHANGES-MEANING per row, and every CHANGES-MEANING row comes back to the human.
+   A row with no citation is never a restatement. A refusal amends the *artifact*, never the row's wording, and
    re-derives every row the amendment touches.
 
 6. **Attack the artifact before the human agrees it.** Run the refute-framed panel and the
