@@ -310,7 +310,7 @@ print("\n".join(fields))
   export FACTORY_GENERATION
 }
 
-# `env` arguments for an interactive seat (validator, dispatcher): the run's roots plus the
+# `env` arguments for an interactive seat (validator, dispatcher, orchestrator): the run's roots plus the
 # externally supplied resume anchors, which a later ground or dispatch from the seat re-verifies.
 # A tmux window inherits the tmux server's environment, which a second run on the same server
 # finds left over from the first, so the per-run context that factory_load_context re-derives is
@@ -330,8 +330,13 @@ factory_seat_env() {
   done
   printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
     "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
+  # The trust anchors and tools a ground or dispatch from the seat needs, named explicitly so a
+  # seat started under `env -i` (the Orchestrator) carries the same authority as the others.
+  # FACTORY_KEYS_DIR is left out: the Orchestrator signs nothing, and ground needs only the
+  # genesis and root key named here.
   for var in FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_RESUME_CHECKPOINT \
-    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST; do
+    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST FACTORY_GENESIS \
+    FACTORY_ROOT_PUBLIC_KEY FACTORY_TESSERA_BIN FACTORY_CLI FACTORY_PYTHON FACTORY_HOME; do
     [ -z "${!var:-}" ] || printf ' %s=%q' "$var" "${!var}"
   done
 }
