@@ -370,15 +370,15 @@ case "$ORCHESTRATOR_AGENT" in
     # --sandbox restricts terminal effects; --dangerously-skip-permissions only
     # prevents unattended tool prompts from neutering the resident monitor. It
     # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
-      "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
     ;;
   codex)
     SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
-      "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
 esac
 

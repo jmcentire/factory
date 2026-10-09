@@ -1786,34 +1786,65 @@ def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[st
     return result, dump
 
 
+SEAT_AUTHORITY = (
+    "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",
+    "FACTORY_RESUME_CONFIG_MANIFEST", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
+    "FACTORY_TESSERA_BIN", "FACTORY_CLI", "FACTORY_PYTHON", "FACTORY_HOME",
+)
+
+
+@pytest.mark.parametrize("orchestrator", ["agy", "codex"])
 def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_context(
-    tmp_path: Path,
+    tmp_path: Path, orchestrator: str
 ) -> None:
     task = "Build the exact authorized behavior."
     operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    env.update({
+        "FACTORY_ORCHESTRATOR_AGENT": orchestrator,
+        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
+        "FACTORY_KEYS_DIR": str(keys),
+        "FACTORY_HOME": str(HARNESS.parent),
+    })
     result = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
         env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    stub = tmp_path / "factory-bin" / "codex"
-    stub.write_text(stub.read_text().replace(
-        'exit 0\n', '[ -n "${SEAT_DUMP:-}" ] && env > "$SEAT_DUMP"\nexit 0\n'))
+    # Every seat, ctl and both Orchestrator variants included, names the resume anchors.
+    for window in ("validator", "ctl", "orchestrator"):
+        line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
+        for name in SEAT_AUTHORITY:
+            assert f" {name}=" in line, (window, name)
+    # The Orchestrator signs nothing, so it never learns where the role keys live.
+    orchestrator_line = next(
+        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
+    )
+    assert "FACTORY_KEYS_DIR" not in orchestrator_line
+    # The Orchestrator starts under `env -i`, so the stubs dump to a fixed path, not $SEAT_DUMP.
+    dump = tmp_path / "seat.env"
+    for agent in ("codex", "agy"):
+        stub = tmp_path / "factory-bin" / agent
+        stub.write_text(stub.read_text().replace('exit 0\n', f'env > "{dump}"\nexit 0\n'))
     stale = {
         "PATH": env["PATH"],
         "FACTORY_CONTROL_ROOT": "/stale/run-b",
         "FACTORY_WORKDIR": "/stale",
     }
-    seated, dump = run_seat_command(tmux_log, "validator", tmp_path, stale)
-    assert seated.returncode == 0, seated.stderr
-    seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
-    assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
-    assert seat["HARNESS_RUN_ROOT"] == str(root)
-    for name in ("FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",
-                 "FACTORY_RESUME_CONFIG_MANIFEST"):
-        assert seat[name], name
+    for window in ("validator", "orchestrator"):
+        dump.unlink(missing_ok=True)
+        seated, _ = run_seat_command(tmux_log, window, tmp_path, stale)
+        assert seated.returncode == 0, seated.stderr
+        seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
+        assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
+        assert seat["HARNESS_RUN_ROOT"] == str(root)
+        for name in SEAT_AUTHORITY:
+            assert seat.get(name), (window, name)
+        if window == "orchestrator":
+            assert "FACTORY_KEYS_DIR" not in seat
 
 
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
