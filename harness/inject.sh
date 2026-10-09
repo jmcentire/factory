@@ -39,8 +39,11 @@ case "$TO" in
 esac
 
 if [ "$TO" = "coder" ] && [ "$RESULTS" -eq 1 ]; then
-  # grep reads to EOF (no -q): with pipefail, an early exit would SIGPIPE printf and flip the test.
-  if ! printf '%s' "$MSG" | grep -E '^(PASS|FAIL)( [A-Za-z0-9._/#-]+)?( \([0-9]+/[0-9]+\))?$' >/dev/null; then
+  # Exactly one verdict line (one trailing newline allowed): a matching first line must not carry
+  # anything after it. grep reads to EOF (no -q) so pipefail cannot flip the test.
+  VERDICT="${MSG%$'\n'}"
+  if [[ "$VERDICT" == *$'\n'* ]] \
+    || ! printf '%s' "$VERDICT" | grep -E '^(PASS|FAIL)( [A-Za-z0-9._/#-]+)?( \([0-9]+/[0-9]+\))?$' >/dev/null; then
     echo "verdict filter refusal: coder-bound results are bare pass/fail only —" >&2
     echo "no test names, assertions, or traces cross this boundary" >&2
     exit 79
