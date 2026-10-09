@@ -23,7 +23,7 @@ _THREAD = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _MAX_PROMPT = 4 * 1024 * 1024
-_FACTORY_QUESTION = re.compile(r"^FACTORY_QUESTION:\s*(\S.*)$")
+_FACTORY_QUESTION = re.compile(r"^[ \t]*FACTORY_QUESTION:\s*(\S.*)", re.MULTILINE | re.DOTALL)
 
 
 class SessionError(RuntimeError):
@@ -80,10 +80,9 @@ def _agent_message(value: object) -> str | None:
 
 
 def _retain_questions(root: pathlib.Path, role: str, message: str) -> None:
-    for line in message.splitlines():
-        matched = _FACTORY_QUESTION.fullmatch(line.strip())
-        if matched is not None:
-            record_question(root, role, matched.group(1))
+    matched = _FACTORY_QUESTION.search(message)  # the body runs to the end of the message
+    if matched is not None:
+        record_question(root, role, matched.group(1).strip())
 
 
 def _read_thread(path: pathlib.Path) -> str:

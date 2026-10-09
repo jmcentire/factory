@@ -79,6 +79,34 @@ def test_codex_lane_session_retains_typed_question_from_agent_message(
     ]
 
 
+def test_codex_lane_session_retains_a_multi_line_question_in_full(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    root.mkdir()
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("do the work\n", encoding="utf-8")
+    script = (
+        "import json; "
+        "print(json.dumps({'type':'thread.started',"
+        "'thread_id':'12345678-1234-4234-8234-123456789abc'})); "
+        "print(json.dumps({'type':'item.completed','item':{"
+        "'type':'agent_message','text':"
+        "'Blocked.\\nFACTORY_QUESTION: Please resolve these together:\\n1. A?\\n2. B?'}}))"
+    )
+
+    run_turn(
+        prompt,
+        tmp_path / "thread-id",
+        tmp_path / "events.jsonl",
+        [sys.executable, "-c", script],
+        root=root,
+        role="tester",
+    )
+
+    assert [row["text"] for row in pending_questions(root, "tester")] == [
+        "Please resolve these together:\n1. A?\n2. B?"
+    ]
+
+
 def test_codex_lane_session_refuses_a_symlinked_thread_identity(tmp_path: Path) -> None:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("do the work\n", encoding="utf-8")
