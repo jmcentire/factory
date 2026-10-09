@@ -410,6 +410,9 @@ class Dispatcher:
                     )
 
         for kind, pat in TRIGGER_PATTERNS.items():
+            # The Validator answers questions; its own "BLOCKED" status lines are not one (#46).
+            if kind == "blocking_question" and window == "validator":
+                continue
             for line in fresh.splitlines()[-25:]:
                 if re.search(pat, line, re.IGNORECASE):
                     key = f"{window}:{kind}:{hashlib.sha256(line.encode()).hexdigest()[:12]}"

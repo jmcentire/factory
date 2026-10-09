@@ -2341,6 +2341,33 @@ def test_dispatcher_registers_a_lane_question_without_guessing_its_answer(
     assert dialogue[0]["question_id"] in trigger["detail"]
 
 
+def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(
+    tmp_path: Path,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "validator", "Verdict BLOCKED on the missing oracle; awaiting the Validator."
+    )
+
+    assert not (root / "orchestrator" / "activity.jsonl").exists()
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "coder", "blocked on the schema; awaiting the Validator"
+    )
+
+    activity = (root / "orchestrator" / "activity.jsonl").read_text(encoding="utf-8")
+    assert "blocking_question" in activity
+
+
 def test_lane_roles_require_typed_question_before_guessing() -> None:
     """Both author seats must know the executable channel, not only their supervisors."""
 
