@@ -14,6 +14,7 @@ from factory_runtime.lane_repository import (
     LaneRepositoryError,
     StandaloneRepository,
     freeze_lane_repository,
+    read_freeze_excludes,
     validate_standalone_repository,
 )
 
@@ -49,6 +50,7 @@ def main() -> int:
     freeze = subparsers.add_parser("freeze")
     freeze.add_argument("--source", type=pathlib.Path, required=True)
     freeze.add_argument("--store", type=pathlib.Path, required=True)
+    freeze.add_argument("--projection-conf", type=pathlib.Path)
     freeze.add_argument("--durable-through", type=pathlib.Path, required=True)
     arguments = parser.parse_args()
     try:
@@ -60,6 +62,11 @@ def main() -> int:
                     arguments.source,
                     arguments.store,
                     durable_through=arguments.durable_through,
+                    exclude=(
+                        read_freeze_excludes(arguments.projection_conf)
+                        if arguments.projection_conf
+                        else ()
+                    ),
                 )
             )
         print(json.dumps(output, sort_keys=True, separators=(",", ":")))

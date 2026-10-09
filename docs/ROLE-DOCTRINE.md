@@ -452,7 +452,9 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    per operator. A missing config refuses projection for **both** lanes (the Coder would otherwise
    get the full tree, tests included). Before ignition, confirm the target's pinned commit
    contains `.factory/projection.conf` (a `tester-include:` line for the Tester, `coder-exclude:`
-   lines for the Coder) and every contract file the Tester's includes name, vendored in-tree. If
+   lines for the Coder; a `freeze-exclude: <top-level path>` line for a git-ignored
+   dependency tree such as `node_modules`, which the lane freeze would otherwise refuse as symlinks)
+   and every contract file the Tester's includes name, vendored in-tree. If
    not, commit them and re-resolve the target before Phase A.
 2. **Pick the lane runner now; the default is the Codex subscription.** Dispatch Coder and Tester
    with `harness/tmux_lane.sh` (authoring/dogfood mode on the Codex login the installer set up;
