@@ -1656,7 +1656,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
         'if [ "${1:-}" = "--help" ]; then '
         'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
-        '--disable-slash-commands --add-dir"; '
+        '--disable-slash-commands --add-dir" >&2; '
         "exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",

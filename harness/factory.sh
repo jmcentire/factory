@@ -158,7 +158,7 @@ case "$ORCHESTRATOR_AGENT" in
     ORCHESTRATOR_VERSION=$(agy --version 2>/dev/null) || {
       echo "factory: agy CLI is not runnable" >&2; exit 70;
     }
-    ORCHESTRATOR_HELP=$(agy --help 2>/dev/null) || exit 70
+    ORCHESTRATOR_HELP=$(agy --help 2>&1) || exit 70
     for REQUIRED in --new-project --prompt-interactive --sandbox \
       --dangerously-skip-permissions --add-dir; do
       printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
