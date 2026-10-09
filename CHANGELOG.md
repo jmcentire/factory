@@ -7,6 +7,20 @@ public API is still pre-1.0.
 
 ### Documentation
 
+- **The msg-r2 rules are standing checks for the Validator and the Orchestrator.** The lessons
+  from the msg-r2 rebuild (`docs/practices/lessons-msg-r2-2026-10.md`) are now enforced in
+  four places:
+  - **Validator.** `prompts/validate.md` Phase B item 7 requires every lane to launch through
+    the harness. It also requires a capped qualification probe and output per dollar, that every
+    Tester brief carries `TESTING.md` and the TESTING-STRATEGY, and that the Validator answers
+    Orchestrator adherence challenges before its next dispatch.
+  - **Orchestrator.** `prompts/orchestrate.md` gains "Adherence: what are you allowing to
+    happen?". It runs every rule on every tick, challenges the Validator bluntly, records each
+    challenge, and escalates to the founder after one tick.
+  - **jev screen.** The rulebook in `docs/proposals/jev-screen/` gains 17 rules with eval cases
+    and a three-band registry.
+  - **Tests.** `tests/test_jev_rulebook.py` checks the rulebook's structure.
+
 - **ARCHITECTURE.md A24 covers transport integrity at storage boundaries.** It uses Google's
   October 2026 notice as the example: Cloud Storage SDKs now verify CRC32C end to end on every
   write by default. The example lists the per-SDK version floors and the Python `auto`-mode

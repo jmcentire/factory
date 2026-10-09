@@ -504,6 +504,23 @@ two separate claims about two separate parties — keep them apart.**
 
 ---
 
+7. **Launch every lane through the Factory harness, never a run-local launcher.** `harness/dispatch_lane.sh` and `harness/tmux_lane.sh` carry the controls a run depends on:
+   - an objective spend cap for every metered model;
+   - a no-progress watchdog that stops a lane with no commit within its window and wakes you;
+   - a completion watcher;
+   - a non-interactive auth preflight.
+
+   A script written for one run bypasses all four, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first.
+
+   Before a model takes a lane, it passes a capped qualification probe:
+   - a small brief;
+   - a spend cap and a wall-clock cap;
+   - pass criteria: time to first commit, and the fraction of its new tests that are red at base for the named reason.
+
+   Report each lane's output per dollar, cut a lane that falls below the run's threshold, and tell the founder. Never park the run on a founder action you can perform yourself.
+
+   Every Tester brief carries the testing standard: `docs/standards/TESTING.md` and the run's TESTING-STRATEGY are mandatory first reading, and the lane report cites the T-rules it relied on. The harness launcher is being changed to inject both mechanically; that injection backs up the brief and does not excuse a brief that omits them. The Orchestrator runs every msg-r2 rule as a standing check on each tick (`orchestrate.md`, Adherence: what are you allowing to happen?). Answer an Orchestrator adherence challenge before your next dispatch. You may not dismiss one without a recorded reason.
+
 ## Cadence — the status loop, and the orchestrator as your state-keeper
 
 **Set the reminder before the first dispatch.** Your monitoring loop must not exist only as
