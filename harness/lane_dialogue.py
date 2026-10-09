@@ -3,7 +3,8 @@
 
 The channel preserves Coder/Tester separation: a lane can publish only its own
 question, the Orchestrator can send only a generated status probe, and only the
-Validator can bind a specification answer to one pending question.  Delivery is
+Validator can bind a specification answer to one pending question or cite a
+ruling (id + file digest) to a lane.  Delivery is
 recorded separately from intent so a failed queue/resume is never called sent.
 """
 
@@ -39,6 +40,7 @@ _SCHEMA = "factory-lane-dialogue/1"
 _LANES = frozenset({"coder", "tester"})
 _SENDERS = frozenset({"validator", "orchestrator"})
 _AUTHORITIES = frozenset({"human-answer", "ratified-spec", "runtime-protocol"})
+_RULING_BASIS = re.compile(r"^ruling=\S+ sha256:[0-9a-f]{64}$")
 _THREAD = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -235,6 +237,14 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                     raise LaneDialogueError(
                         "a lane question may have only one planned specification answer"
                     )
+            elif kind == "ruling-notice":
+                if (
+                    sender != "validator"
+                    or authority not in {"ratified-spec", "runtime-protocol"}
+                    or row.get("question_id") is not None
+                    or not _RULING_BASIS.fullmatch(str(row.get("basis")))
+                ):
+                    raise LaneDialogueError("ruling notice is not a Validator-cited ruling")
             else:
                 raise LaneDialogueError("dialogue message kind is invalid")
             value = _text(row.get("text"), "message")
@@ -328,8 +338,17 @@ def plan_message(
     basis: str,
     authority: str,
     question_id: str | None = None,
+    ruling_id: str | None = None,
+    ruling_sha256: str | None = None,
 ) -> dict[str, Any]:
     text = _text(text, "message")
+    if message_kind == "ruling-notice":
+        # The citation is the basis: a notice with no ruling id and file digest has no authority.
+        if not ruling_id or not ruling_id.strip() or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", ruling_sha256 or ""
+        ):
+            raise LaneDialogueError("ruling notice requires a ruling id and a sha256 file digest")
+        basis = f"ruling={ruling_id} {ruling_sha256}"
     basis = _text(basis, "basis", maximum=4096)
     with _locked(pathlib.Path(root)) as directory:
         path = directory / "journal.jsonl"
@@ -350,8 +369,17 @@ def plan_message(
                 raise LaneDialogueError("answer does not bind an existing question for this lane")
             if str(question_id) in _answered_question_ids(rows):
                 raise LaneDialogueError("question already has a delivered answer")
+        elif message_kind == "ruling-notice":
+            if (
+                sender != "validator"
+                or question_id is not None
+                or authority not in {"ratified-spec", "runtime-protocol"}
+            ):
+                raise LaneDialogueError("only the Validator may send a ruling notice")
         else:
-            raise LaneDialogueError("message kind must be status-probe or spec-answer")
+            raise LaneDialogueError(
+                "message kind must be status-probe, spec-answer, or ruling-notice"
+            )
         delivered = {
             str(row["message_id"]) for row in rows if row.get("record_type") == "message-delivered"
         }
@@ -478,6 +506,15 @@ def _read_message_file(path: pathlib.Path) -> str:
         raise LaneDialogueError("message input is not UTF-8") from exc
 
 
+def _digest_file(path: pathlib.Path) -> str:
+    if path.is_symlink():
+        raise LaneDialogueError("ruling file may not be a symlink")
+    try:
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise LaneDialogueError(f"ruling file cannot be read: {exc}") from exc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -489,11 +526,15 @@ def main() -> int:
     plan.add_argument("--root", type=pathlib.Path, required=True)
     plan.add_argument("--sender", choices=sorted(_SENDERS), required=True)
     plan.add_argument("--lane", choices=sorted(_LANES), required=True)
-    plan.add_argument("--kind", choices=("status-probe", "spec-answer"), required=True)
+    plan.add_argument(
+        "--kind", choices=("status-probe", "spec-answer", "ruling-notice"), required=True
+    )
     plan.add_argument("--message-file", type=pathlib.Path, required=True)
     plan.add_argument("--basis", required=True)
     plan.add_argument("--authority", choices=sorted(_AUTHORITIES), required=True)
     plan.add_argument("--question-id")
+    plan.add_argument("--ruling-id")
+    plan.add_argument("--ruling-file", type=pathlib.Path)
     delivered = commands.add_parser("delivered")
     delivered.add_argument("--root", type=pathlib.Path, required=True)
     delivered.add_argument("--message-id", required=True)
@@ -520,6 +561,10 @@ def main() -> int:
                 basis=arguments.basis,
                 authority=arguments.authority,
                 question_id=arguments.question_id,
+                ruling_id=arguments.ruling_id,
+                ruling_sha256=(
+                    _digest_file(arguments.ruling_file) if arguments.ruling_file else None
+                ),
             )
             print(json.dumps(row, sort_keys=True, separators=(",", ":")))
         elif arguments.command == "delivered":

@@ -169,6 +169,26 @@ class SignalWatchdog:
             return "terminal"
         try:
             knobs = self.knobs()
+            if not knobs.get("generation_prepared", True):
+                # Phase A has no generation yet: nothing to watch, and not an error
+                # — until a lane has launched. Lanes dispatched via tmux_lane never
+                # create one (dogfood #44), so waiting on it would silently end
+                # monitoring: escalate once per run instead.
+                self._knobs = None
+                if not any((self.root / "tmux-lanes").glob("*-launch.jsonl")):
+                    return "awaiting-generation"
+                state = _load_json(self.state_path)
+                if not state.get("unobservable_escalated"):
+                    state["unobservable_escalated"] = True
+                    self._write_state(state)
+                    emit(
+                        "watchdog_unobservable",
+                        "lanes dispatched via tmux_lane with no prepared generation; "
+                        "signal knobs unobservable — monitoring lost, operator "
+                        "attention required",
+                        wake=True,
+                    )
+                return "unobservable"
             passes = int(self._cli_json("pass-count")["passes"])
         except (WatchdogError, KeyError, ValueError, TypeError) as exc:
             # Round-6 6-8: a persistent observation refusal must not silently disarm

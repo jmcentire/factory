@@ -12,11 +12,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -858,6 +861,27 @@ def test_ground_writes_marker_on_clean_state(tmp_path: Path) -> None:
     assert "grounded @" in r.stdout
 
 
+def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
+    env = ground_fixture(tmp_path)
+    del env["TRANSCRIPTS"]
+    home = tmp_path / "home"
+    projects = home / ".claude" / "projects"
+    secret = "-----BEGIN " + "PRIVATE KEY-----\n"
+    (projects / "-unrelated-session").mkdir(parents=True)
+    (projects / "-unrelated-session" / "t.jsonl").write_text(secret)
+    env["HOME"] = str(home)
+
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no seat transcripts yet" in r.stdout
+
+    seat = projects / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
+    seat.mkdir()
+    (seat / "t.jsonl").write_text(secret)
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
     env = ground_fixture(tmp_path)
     rec = tmp_path / ".harness" / "reconcile.d"
@@ -889,6 +913,80 @@ def inject(
     return run(args, tmp, env)
 
 
+def inject_live(
+    tmp_path: Path, pane_command: str, msg: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Real (non-dry) inject.sh against a tmux stub.
+
+    The stub's only window, validator, runs pane_command.
+    """
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir(exist_ok=True)
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'[ "$1" = display ] && {{ echo {shlex.quote(pane_command)}; exit 0; }}\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", msg],
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    return r, calls
+
+
+def test_inject_pane_command_allowlist_is_case_insensitive(tmp_path: Path) -> None:
+    """macOS framework Python reports its pane command as 'Python'."""
+    r, calls = inject_live(tmp_path, "Python", "hello")
+    assert r.returncode == 0, r.stderr
+    assert " -l -- hello" in calls.read_text(encoding="utf-8")
+    (tmp_path / "sh").mkdir()
+    refused, _ = inject_live(tmp_path / "sh", "bash", "hello")
+    assert refused.returncode == 77 and "not an agent" in refused.stderr
+
+
+def test_inject_checks_the_window_by_exact_name(tmp_path: Path) -> None:
+    """tmux resolves an unknown window to another one; a missing window must be refused."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo orchestrator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "hi"],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"),
+         "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
+    )
+    assert r.returncode == 76 and "no live pane" in r.stderr
+
+
+def test_multiline_injection_travels_as_a_digest_bound_relay_file(tmp_path: Path) -> None:
+    """tmux splits a multi-line paste at each newline, so the seat would act on fragments.
+    The message goes to a relay file named by its sha256; the pane gets one pointer line."""
+    message = "Refused. Three blockers:\n1. F13 --allow-sys=uid\n2. ADMISSION_CAPACITY=1\n"
+    r = inject(tmp_path, "validator", message, frm="founder")
+    assert r.returncode == 0, r.stderr
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relay.read_text(encoding="utf-8") == message
+    assert str(relay) in r.stdout
+
+
 def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "do it differently", frm="orchestrator")
     assert r.returncode == 77 and "topology refusal" in r.stderr
@@ -908,11 +1006,156 @@ def test_inject_validator_to_lane_is_receipted(tmp_path: Path) -> None:
     assert receipts and receipts[0]["to"] == "coder" and receipts[0]["from"] == "validator"
 
 
+def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path: Path) -> None:
+    """Dogfood #20/#24: multi-line text never rides tmux. It lands verbatim in a file under the
+    run, and the only thing sent is a single-line pointer carrying that file's sha256."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'for a in "$@"; do case "$a" in display*) echo claude; exit 0;; esac; done\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    text = "I ratify.\nLine two of the signing statement.\n\nLine four.\n"
+    r = subprocess.run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        input=text, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    relayed = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relayed.read_text(encoding="utf-8") == text
+    literal = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if " -l -- " in ln]
+    assert len(literal) == 1 and f"sha256={digest}" in literal[0]
+    assert "Line two" not in literal[0]
+
+
+def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path) -> None:
+    """The coder oracle-leak guard judges what the file says, not only the pointer line."""
+    leak = tmp_path / "leak.txt"
+    leak.write_text("Status:\nFAIL test_hidden raised AssertionError\n", encoding="utf-8")
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"), "INJECT_DRY_RUN": "1"},
+    )
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay"
+    assert not list(relay.glob("*.txt"))
+
+    # The pointer names the relay path, which the guard also reads: keep "pytest" out of it.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    clean = plain / "clean.txt"
+    clean.write_text("R12.5 is ruled in-scope.\nSee the ratified spec.\n", encoding="utf-8")
+    ok = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(clean)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    assert ok.returncode == 0, ok.stderr
+    digest = hashlib.sha256(clean.read_bytes()).hexdigest()
+    receipts = (plain / "run" / "injections.jsonl").read_text(encoding="utf-8")
+    assert f'"kind":"relay-file","sha256":"{digest}"' in receipts
+    shutil.rmtree(plain)
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_relay_guard_refuses_a_large_leak_despite_pipefail(tmp_path: Path, attempt: int) -> None:
+    """grep -q exits on its first match; under pipefail the SIGPIPE'd printf used to turn the
+    refusal into a pass for large inputs (65,574 bytes passed 5/5 before the fix)."""
+    head = b"FAIL test_hidden raised AssertionError\n"
+    # Keep "pytest" out of the paths: the guard also reads the pointer, which names them.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    leak = plain / "leak.txt"
+    leak.write_bytes(head + b"lorem ipsum dolor\n" * ((65_574 - len(head)) // 18) + b"x" * (
+        (65_574 - len(head)) % 18
+    ))
+    assert leak.stat().st_size == 65_574
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr, (attempt, r.returncode)
+
+
+def test_relay_file_refuses_binary_content(tmp_path: Path) -> None:
+    """$(cat) drops NULs, so the guards would judge different bytes than the seat receives."""
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    payload = plain / "payload.bin"
+    payload.write_bytes(b"type\0test\0assert balance == 31337\n" + b"x" * 70000)
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(payload)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    relayed = list((plain / "run" / "relay").glob("*.txt"))
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "binary content" in r.stderr, (r.returncode, r.stderr)
+    assert not relayed
+
+
+@pytest.mark.parametrize("via", ["relay_file", "inject"])
+def test_relay_pointer_shell_quotes_the_file_path(tmp_path: Path, via: str) -> None:
+    """A run root with a space must still yield a verification command that reads the file."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    (stub_dir / "tmux").write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(stub_dir / "tmux", 0o755)
+    message = "Line one.\nLine two.\n"
+    args = {
+        "relay_file": ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        "inject": ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", message],
+    }[via]
+    r = subprocess.run(
+        args, input=message, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_RUN_ROOT": str(tmp_path / "My Run"),
+            "INJECT_FROM": "founder",
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    sent = next(ln for ln in calls.read_text().splitlines() if " -l -- " in ln)
+    command = sent.split(" -- run: ", 1)[1].split(" ; act on", 1)[0]
+    verify = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True)
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    assert verify.returncode == 0 and verify.stdout.split()[0] == digest, verify.stderr
+
+
 def test_inject_verdict_filter_blocks_test_detail(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "FAIL test_foo raised AssertionError on line 12", results=True)
     assert r.returncode == 79 and "bare pass/fail only" in r.stderr
     ok = inject(tmp_path, "coder", "FAIL", results=True)
     assert ok.returncode == 0, ok.stderr
+
+
+def test_inject_verdict_filter_accepts_only_a_single_verdict_line(tmp_path: Path) -> None:
+    smuggled = inject(
+        tmp_path, "coder", "PASS\nassert balance == 31337\n" + "x" * 70000, results=True
+    )
+    assert smuggled.returncode == 79 and "bare pass/fail only" in smuggled.stderr
+    assert inject(tmp_path, "coder", "PASS", results=True).returncode == 0
+    assert inject(tmp_path, "coder", "FAIL R12 (3/5)\n", results=True).returncode == 0
 
 
 def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
@@ -1338,6 +1581,24 @@ def test_projection_refuses_config_outside_immutable_source(tmp_path: Path) -> N
     assert not (tmp_path / "ws").exists()
 
 
+@pytest.mark.parametrize("role", ["coder", "tester"])
+def test_projection_refuses_both_lanes_when_the_config_is_missing(
+    tmp_path: Path, role: str
+) -> None:
+    src = projection_fixture(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    result = run(
+        ["bash", str(HARNESS / "projection.sh"), role, str(src), sha, str(tmp_path / "ws")],
+        tmp_path,
+    )
+
+    assert result.returncode == 66 and "no projection config" in result.stderr
+    assert not (tmp_path / "ws").exists()
+
+
 # --------------------------------------------------------------------------
 # Genericity — the target is data; the factory checkout is never the implicit root
 # --------------------------------------------------------------------------
@@ -1390,6 +1651,8 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = has-session ]; then exit 1; fi\n'
+        'if [ "$1" = list-windows ]; then '
+        'printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
         'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
@@ -1402,7 +1665,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
         'if [ "${1:-}" = "--help" ]; then '
         'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
-        '--disable-slash-commands --add-dir"; '
+        '--disable-slash-commands --add-dir" >&2; '
         "exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -1518,6 +1781,81 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
+
+
+def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
+    """Execute the command a seat window was given, as tmux would, with stale server env."""
+    line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
+    command = line.split(" -c ", 1)[1].split(" ", 1)[1]
+    dump = tmp_path / f"{window}.env"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, **stale, "SEAT_DUMP": str(dump)},
+        capture_output=True,
+        text=True,
+    )
+    return result, dump
+
+
+SEAT_AUTHORITY = (
+    "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",
+    "FACTORY_RESUME_CONFIG_MANIFEST", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
+    "FACTORY_TESSERA_BIN", "FACTORY_CLI", "FACTORY_PYTHON", "FACTORY_HOME",
+)
+
+
+@pytest.mark.parametrize("orchestrator", ["agy", "codex"])
+def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_context(
+    tmp_path: Path, orchestrator: str
+) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    env.update({
+        "FACTORY_ORCHESTRATOR_AGENT": orchestrator,
+        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
+        "FACTORY_KEYS_DIR": str(keys),
+        "FACTORY_HOME": str(HARNESS.parent),
+    })
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Every seat, ctl and both Orchestrator variants included, names the resume anchors.
+    for window in ("validator", "ctl", "orchestrator"):
+        line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
+        for name in SEAT_AUTHORITY:
+            assert f" {name}=" in line, (window, name)
+    # The Orchestrator signs nothing, so it never learns where the role keys live.
+    orchestrator_line = next(
+        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
+    )
+    assert "FACTORY_KEYS_DIR" not in orchestrator_line
+    # The Orchestrator starts under `env -i`, so the stubs dump to a fixed path, not $SEAT_DUMP.
+    dump = tmp_path / "seat.env"
+    for agent in ("codex", "agy"):
+        stub = tmp_path / "factory-bin" / agent
+        stub.write_text(stub.read_text().replace('exit 0\n', f'env > "{dump}"\nexit 0\n'))
+    stale = {
+        "PATH": env["PATH"],
+        "FACTORY_CONTROL_ROOT": "/stale/run-b",
+        "FACTORY_WORKDIR": "/stale",
+    }
+    for window in ("validator", "orchestrator"):
+        dump.unlink(missing_ok=True)
+        seated, _ = run_seat_command(tmux_log, window, tmp_path, stale)
+        assert seated.returncode == 0, seated.stderr
+        seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
+        assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
+        assert seat["HARNESS_RUN_ROOT"] == str(root)
+        for name in SEAT_AUTHORITY:
+            assert seat.get(name), (window, name)
+        if window == "orchestrator":
+            assert "FACTORY_KEYS_DIR" not in seat
 
 
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
@@ -2053,6 +2391,33 @@ def test_dispatcher_registers_a_lane_question_without_guessing_its_answer(
     assert dialogue[0]["question_id"] in trigger["detail"]
 
 
+def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(
+    tmp_path: Path,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "validator", "Verdict BLOCKED on the missing oracle; awaiting the Validator."
+    )
+
+    assert not (root / "orchestrator" / "activity.jsonl").exists()
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "coder", "blocked on the schema; awaiting the Validator"
+    )
+
+    activity = (root / "orchestrator" / "activity.jsonl").read_text(encoding="utf-8")
+    assert "blocking_question" in activity
+
+
 def test_lane_roles_require_typed_question_before_guessing() -> None:
     """Both author seats must know the executable channel, not only their supervisors."""
 
@@ -2522,6 +2887,13 @@ def test_projection_receipt_does_not_gate_the_coder(tmp_path: Path) -> None:
     art.write_text("Coder reads src/pkg/config.py.\n")
     r = pr(tmp_path, "coder", art)
     assert r.returncode == 0 and "not include-listed" in r.stdout
+
+
+def test_projection_receipt_refuses_a_missing_config_for_the_coder_too(tmp_path: Path) -> None:
+    art = tmp_path / "s.md"
+    art.write_text("Coder reads src/pkg/config.py.\n")
+    r = pr(tmp_path, "coder", art)
+    assert r.returncode == 66 and "projection is undeclared" in r.stderr
 
 
 def test_projection_receipt_refuses_unsafe_include_path(tmp_path: Path) -> None:
@@ -4121,6 +4493,22 @@ def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
     assert "orchestrator_not_resident" in blocking
 
 
+def test_dispatcher_snapshot_minutes_creates_missing_minutes_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "capture", lambda _window: "validator said something\n")
+
+    d.snapshot_minutes()  # type: ignore[attr-defined]
+
+    (log,) = (root / "minutes").glob("validator-*.log")
+    assert "validator said something" in log.read_text()
+
+
 def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5563,6 +5951,7 @@ def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         "  display) echo agy ;;\n"
+        "  list-windows) printf 'orchestrator\\nvalidator\\nctl\\ncoder\\ntester\\n' ;;\n"
         '  send-keys) if [ "$4" = "-l" ]; then\n'
         f'      {sys.executable} {assessor} {root} "$6" 2>>{stub / "assessor.log"}; fi ;;\n'
         "esac\n"
@@ -8439,6 +8828,7 @@ def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None
     tmux_stub.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$@" >> {shlex.quote(str(calls))}\n'
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
         'for a in "$@"; do\n'
         '  case "$a" in display*) echo bash; exit 0;; esac\n'
         "done\n"
@@ -9535,6 +9925,39 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert " codex -m gpt-coder --ask-for-approval never " in respawn
+
+
+def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_path: Path) -> None:
+    """tmux resolves a missing window target to the session's active pane, which reads as a
+    live lane; delivery to a lane with no window must resume its thread, never queue."""
+
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task="Resume a lane whose window closed.", harness_status="open"
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    env["TMUX_STUB_WINDOWS"] = "main"
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
+    )
+    row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
+           "role": "coder", "agent": "codex", "model": "", "repository": str(lane)}
+    (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    probe = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+         "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert "via Codex resume" in probe.stdout
+    calls = tmux_log.read_text()
+    assert "new-window -t r1 -n coder" in calls and "exec --json resume" in calls
 
 
 def test_a_seat_variable_that_contradicts_the_profile_is_refused(tmp_path: Path) -> None:

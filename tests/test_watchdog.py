@@ -300,6 +300,70 @@ def test_backstop_tampered_state_degrades_never_fires_falsely(tmp_path: Path) ->
     assert len(recorder.blocks) == 1
 
 
+def test_no_prepared_generation_is_not_a_watchdog_error(tmp_path: Path) -> None:
+    """Dogfood #11/#14: before Phase A prepares a generation the knobs door has
+    nothing to report; that must not log watchdog_error or escalate."""
+
+    class Unprepared(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                body = {"run_id": "r1", "generation_prepared": False}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+            return super().__call__(argv, capture_output, text)
+
+    watchdog, root = make_watchdog(tmp_path, Unprepared(), [1000.0])
+    recorder = Recorder()
+    for _ in range(4):
+        assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
+    assert recorder.events == []
+    assert not (root / "watchdog.json").exists()
+
+
+def _unprepared() -> type:
+    class Unprepared(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                body = {"run_id": "r1", "generation_prepared": False}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+            return super().__call__(argv, capture_output, text)
+
+    return Unprepared
+
+
+def test_lanes_launched_without_generation_escalates_once(tmp_path: Path) -> None:
+    """Dogfood #44: tmux_lane never prepares a generation, so once a lane has
+    launched the quiet wait must become one loud, non-repeating escalation."""
+    watchdog, root = make_watchdog(tmp_path, _unprepared()(), [1000.0])
+    recorder = Recorder()
+    assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
+    assert recorder.events == []
+    (root / "tmux-lanes").mkdir()
+    (root / "tmux-lanes" / "coder-launch.jsonl").write_text("{}\n", encoding="utf-8")
+    for _ in range(3):
+        assert watchdog.check(recorder.emit, recorder.block) == "unobservable"
+    assert recorder.kinds() == ["watchdog_unobservable"]
+    assert recorder.events[0][2] is True
+
+
+def test_real_refusal_still_escalates_after_lane_launch(tmp_path: Path) -> None:
+    """A refusing signal-knobs door is still watchdog_error, lane records or not."""
+
+    class Refusing(FakeRunner):
+        def __call__(self, argv, capture_output=True, text=True):
+            if "signal-knobs" in " ".join(str(a) for a in argv):
+                return subprocess.CompletedProcess(argv, 1, "", "refused")
+            return super().__call__(argv, capture_output, text)
+
+    watchdog, root = make_watchdog(tmp_path, Refusing(), [1000.0])
+    (root / "tmux-lanes").mkdir()
+    (root / "tmux-lanes" / "coder-launch.jsonl").write_text("{}\n", encoding="utf-8")
+    recorder = Recorder()
+    for _ in range(3):
+        assert watchdog.check(recorder.emit, recorder.block) == "error"
+    assert recorder.kinds() == ["watchdog_error"] * 3
+    assert [wake for _, _, wake in recorder.events] == [False, False, True]
+
+
 def test_cli_doors_are_pinned() -> None:
     """Round-5 F-8.3: the pass-count and signal-knobs handlers were deletable
     with the suite green. Pin their existence: the CLI must know both commands
@@ -318,6 +382,21 @@ def test_cli_doors_are_pinned() -> None:
         )
         assert "invalid choice" not in result.stderr, f"{command} door missing"
         assert result.returncode != 0  # nonexistent run refuses, door exists
+
+
+def test_signal_knobs_before_phase_a_reports_unprepared_not_a_refusal(
+    monkeypatch, capsys
+) -> None:
+    """Dogfood #11/#14 at the CLI: with no prepared generation, signal-knobs prints
+    generation_prepared=false and exits 0 instead of refusing."""
+    from types import SimpleNamespace
+
+    from factory_runtime import cli
+
+    store = SimpleNamespace(load=lambda run_id: SimpleNamespace(generation_artifact_digests={}))
+    monkeypatch.setattr(cli, "_load_replay_store", lambda arguments: store)
+    assert cli.main(["signal-knobs", "--runs", "/nonexistent", "--run-id", "r1"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"run_id": "r1", "generation_prepared": False}
 
 
 def test_backstop_rearms_after_progress(tmp_path: Path) -> None:

@@ -28,7 +28,13 @@ TREE=$(git -C "$SRC" rev-parse --verify "$SHA^{tree}")
   exit 67
 }
 
-if [ -e "$CONF" ] || [ -L "$CONF" ]; then
+# Both lanes need a declared projection: without one the Coder would get the full tree, tests
+# included, with no exclusions.
+[ -e "$CONF" ] || [ -L "$CONF" ] || {
+  echo "refusing: no projection config at $CONF; an undeclared projection is a contamination vector (the coder would get the full tree, tests included)" >&2
+  exit 66
+}
+{
   python3 - "$SRC" "$CONF" <<'PY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
@@ -39,7 +45,7 @@ resolved = conf.resolve(strict=True)
 if not resolved.is_relative_to(root):
     raise SystemExit("refusing: projection config escapes the immutable source root")
 PY
-fi
+}
 
 read_paths() {
   python3 - "$CONF" "$1" <<'PY'
