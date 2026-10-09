@@ -3,6 +3,18 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.13] - 2026-10-09
+
+- Refuse every tmux Tester launch and qualification without the run testing strategy.
+- Wire the 17 msg-r2 Jev rules into the resident dispatcher with explicit per-run selection,
+  bounded calls/input/deadline, durable pre-call reservations, and pinned rule/model digests.
+  Unavailable evidence is recorded; it never becomes a clean result. Artifact comparisons use
+  retained file handles, not pane text masquerading as a contract.
+- Require assessment/4 to consume exact screening receipts and disposition findings and
+  unavailable checks. Scores never grant authority or clear an existing block.
+- Keep generated activity/checkpoint notifications inert at a shell prompt if an agent exits
+  during delivery; their single-line text begins with a shell comment marker.
+
 ## [0.8.12] - 2026-10-09
 
 The harness is the lane launcher that prevents msg-r2's failures, so a Validator has no reason

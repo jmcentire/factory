@@ -87,6 +87,9 @@ class Lanes:
         env, self.tmux_log = factory_ignition_env(tmp_path, self.root)
         if profiles is not None:
             env["FACTORY_PROFILES"] = str(profiles)
+        strategy = self.root / "artifacts" / "testing-strategy.md"
+        strategy.parent.mkdir(exist_ok=True)
+        strategy.write_text("# Testing strategy\nExercise the real seam.\n")
         self.env = env
         self.stub = Path(env["PATH"].split(os.pathsep)[0])
         ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(self.root.parent)]
@@ -558,6 +561,7 @@ def test_a_tester_launch_is_refused_when_the_standard_cannot_be_injected(
     strategy = lanes.root / "artifacts" / "testing-strategy.md"
     strategy.parent.mkdir(exist_ok=True)
     (tmp_path / "elsewhere.md").write_text("not the run's strategy\n")
+    strategy.unlink()
     strategy.symlink_to(tmp_path / "elsewhere.md")
     refused = lanes.lane("tester")
     assert refused.returncode == 70 and "TESTING STANDARD" in refused.stderr
@@ -606,3 +610,36 @@ def test_the_lane_wrapper_tees_output_and_records_the_exit(
     assert log.read_text().splitlines() == ["got the brief", "__LANE_EXIT__ coder rc=3"]
     [row] = [json.loads(line) for line in exits.read_text().splitlines()]
     assert row["rc"] == 3 and row["slot"] == "coder" and row["stopped_by_signal"] is False
+
+
+@pytest.mark.parametrize("action", ["launch", "qualify"])
+def test_tester_without_run_strategy_is_refused_before_start(tmp_path: Path, action: str) -> None:
+    lanes = Lanes(tmp_path)
+    (lanes.root / "artifacts" / "testing-strategy.md").unlink()
+    result = lanes.lane("tester", action=action)
+    assert result.returncode == 70 and "testing strategy" in result.stderr
+    assert lanes.windows("tester") == []
+    assert not list((lanes.root / "tmux-lanes").glob("*-launch.jsonl"))
+
+
+@pytest.mark.parametrize("source_kind", ["empty", "whitespace", "directory", "fifo", "utf8"])
+def test_tester_refuses_unusable_strategy_without_waiting_for_input(
+    tmp_path: Path, source_kind: str,
+) -> None:
+    import os
+
+    strategy = tmp_path / "strategy.md"
+    if source_kind == "directory":
+        strategy.mkdir()
+    elif source_kind == "fifo":
+        os.mkfifo(strategy)
+    else:
+        strategy.write_bytes({"empty": b"", "whitespace": b" \n", "utf8": b"\xff"}[source_kind])
+    result = run(
+        [sys.executable, str(HARNESS / "testing_standard.py"), "block",
+         "--factory-home", str(REPO), "--strategy", str(strategy),
+         "--output", str(tmp_path / "injected.md")],
+        tmp_path,
+    )
+    assert result.returncode == 70 and "testing strategy" in result.stderr
+    assert not (tmp_path / "injected.md").exists()

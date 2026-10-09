@@ -1500,6 +1500,8 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         "agreement_contract.py",
         "attention_gate.py",
         "lane_dialogue.py",
+        "jev_rules.py",
+        "jev_screen.py",
         "orchestrator_channel.py",
         "run_guidance.py",
     }
@@ -1941,6 +1943,7 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
             {
                 "orchestrator_mode": "resident-monitoring",
                 "audit_interval_min": 45,
+                "status": "open",
             }
         ),
         encoding="utf-8",
@@ -1971,12 +1974,19 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     assert "orchestrator/ROLE.md" in command[3]
     assert str(root) not in command[3]
     assert len(command[3]) < 1_000
+    assert command[3].startswith("# ") and "\n" not in command[3]
+    inert = subprocess.Popen(["bash", "-c", command[3]], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+    output, error = inert.communicate(timeout=5)
+    assert inert.returncode == 0 and not output and not error
     assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
 
 
 def test_resident_checkpoint_notification_cannot_outgrow_default_inject_ceiling() -> None:
     source = (HARNESS / "orchestrator_checkpoint.sh").read_text(encoding="utf-8")
-    line = next(row for row in source.splitlines() if row.startswith('MESSAGE="FACTORY_CHECKPOINT'))
+    line = next(
+        row for row in source.splitlines() if row.startswith('MESSAGE="# FACTORY_CHECKPOINT')
+    )
 
     assert "$ROOT" not in line
     assert "orchestrator/ROLE.md" in line
@@ -9384,6 +9394,9 @@ def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> 
         env,
     )
     assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
     assert "model profile: team sha256:" in ignited.stdout
     calls = tmux_log.read_text().splitlines()
     validator = next(line for line in calls if "codex --sandbox workspace-write --model" in line)
@@ -9438,6 +9451,9 @@ def _ignite_and_launcher(
         env,
     )
     assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Do the lane's work.\n")
 
@@ -9588,6 +9604,9 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> No
         env,
     )
     assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Do the lane's work.\n")
     lanes = {}

@@ -5,7 +5,7 @@ set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>] [--profile <name>]}"
+RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>] [--profile <name>] [--jev-screen-calls <1..1000>]}"
 TASK_IN="${2:?verbatim task text or file}"
 shift 2
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
@@ -14,6 +14,7 @@ AUDIT_MIN="15"
 ENGAGEMENT="scheduled"
 QUESTION_CHANNEL=""
 PROFILE_ARG=""
+JEV_CALLS=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -22,6 +23,7 @@ while [ "$#" -gt 0 ]; do
     --engagement) ENGAGEMENT="$2"; shift 2 ;;
     --question-channel) QUESTION_CHANNEL="$2"; shift 2 ;;
     --profile) PROFILE_ARG="$2"; shift 2 ;;
+    --jev-screen-calls) JEV_CALLS="$2"; shift 2 ;;
     --repo|--target-manifest|--sha)
       echo "factory: $1 is forbidden; authorize and resolve the exact target through Stage R/E" >&2
       exit 64 ;;
@@ -30,6 +32,24 @@ while [ "$#" -gt 0 ]; do
 done
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
+# Explicit per-run opt-in: captured lane data leaves this host only when selected.
+JEV_CONFIG=$("$FACTORY_PYTHON" - "$D" "$JEV_CALLS" <<'PYJEV'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from jev_screen import configuration
+if not sys.argv[2]:
+    print("null")
+else:
+    try:
+        config = configuration(int(sys.argv[2]))
+    except (ValueError, RuntimeError):
+        raise SystemExit("factory: --jev-screen-calls must be 1..1000") from None
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        raise SystemExit("factory: Jev selected but TYPESAFE_API_KEY is unavailable")
+    print(json.dumps(config))
+PYJEV
+) || exit 64
+
 # The operator's model profile names the agent and the model for every role
 # (factory_runtime/model_profiles.py): --profile, else $FACTORY_PROFILE, else the default. With
 # no profiles at all, the per-seat variables keep their earlier meaning. With one, a per-seat
@@ -196,13 +216,13 @@ python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
-  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" <<'PY'
+  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, engagement, question_channel, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
-    generation_text, guidance_admission_raw,
+    generation_text, guidance_admission_raw, jev_config_raw,
 ) = sys.argv[1:]
 audit_value = int(audit)
 if audit_value < 1:
@@ -273,6 +293,7 @@ metadata = {
     "orchestrator_cli_version": orchestrator_version,
     "orchestrator_cli_contract": orchestrator_cli_contract,
     "orchestrator_mode": "resident-monitoring",
+    "jev_screen": json.loads(jev_config_raw),
     "orchestrator_window": "orchestrator",
     "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
     "orchestrator_effects": "monotone-block-halt-or-no-op",
@@ -385,8 +406,9 @@ mkdir -p "$ROOT/orchestrator"
 chmod 700 "$ROOT/orchestrator"
 mkdir -p "$ROOT/orchestrator/bin"
 cp "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
+cp "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
 cp "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
-  "$D/run_guidance.py" "$D/agreement_contract.py" \
+  "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
 # run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
@@ -403,15 +425,22 @@ if first.startswith("#!"):
 PY
      done ;;
 esac
-chmod 400 "$ROOT/orchestrator/ROLE.md"
+chmod 400 "$ROOT/orchestrator/ROLE.md" "$ROOT/orchestrator/JEV.md"
 chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \
-  "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py"
+  "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
+  "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD"; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2
   exit 70
 fi
+if [ -n "$JEV_CALLS" ]; then
+  # Run-scoped tmux memory only: never put the credential in a launch command,
+  # prompt, receipt, or retained file. Author lanes and Orchestrator use env -i.
+  tmux set-environment -t "$RUN" TYPESAFE_API_KEY "$TYPESAFE_API_KEY"
+fi
+
 if ! tmux new-window -t "$RUN" -n validator -c "$FACTORY_WORKDIR" "$VALIDATOR_CMD"; then
   if tmux kill-session -t "$RUN" 2>/dev/null; then
     resource_event '{"reason":"validator window failed; created session removed","residue":false}' abandoned || true

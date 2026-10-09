@@ -304,3 +304,7 @@ target-specific. Swap the target pack and the same core serves a new customer.
 
 Proprietary, all rights reserved — copyright Jeremy McEntire (see `LICENSE`). Not open source.
 The dependency arrow points **consumer → factory, never the reverse** (see `PROVENANCE.md`).
+
+
+The optional [Jev runtime screen](docs/practices/jev-runtime.md) adds bounded, retained semantic
+observations to the resident Orchestrator. Select it explicitly per run; it grants no authority.

@@ -862,3 +862,15 @@ suppresses the quiet-time alarm; it is already blocked by the question gate.
    incident becomes a policy test, a structural invariant, or a regression benchmark. The
    three postmortems plus the deploy saga are the first fifteen cases — the saga entering
    as the first environment-reconciliation regression.
+
+
+### Jev runtime observations
+
+`factory.sh --jev-screen-calls N` opts this run into the bounded semantic screen described in
+[the runtime guide](practices/jev-runtime.md). The dispatcher records a receipt for each activity
+cursor and assessment/4 requires consumption. It never replaces the resident Orchestrator or
+changes the deterministic gates. Without selection, `harness.json` records `jev_screen: null`.
+
+Every tmux Tester launch and qualification now requires `artifacts/testing-strategy.md`; missing
+or unreadable strategy bytes refuse launch. Injection proves delivery; applied T-rules and
+behavioral evidence in the lane report are still reviewed by the Validator and Orchestrator.

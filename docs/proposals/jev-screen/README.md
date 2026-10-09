@@ -1,6 +1,8 @@
 # jev rules screen — a supplement to the resident Orchestrator (proposal)
 
-Status: proposal plus a working prototype and eval (2026-09-21). Nothing here is wired into a run.
+Status: the msg-r2 rules are wired into the resident dispatcher as an opt-in screen
+(2026-10-09). See [runtime operation](../../practices/jev-runtime.md). The older batch0
+evaluations below remain prototype evidence, not runtime qualification.
 
 ## What it is for
 
@@ -17,7 +19,7 @@ judges, blocks, and halts.
 
 ## What the prototype showed
 
-The prototype is in this directory. `rules.py` is the rulebook. The evals are `run.py` and
+The prototype is in this directory. `harness/jev_rules.py` is the single rulebook (`rules.py` re-exports it here). The evals are `run.py` and
 `run2.py`, and they need `TYPESAFE_API_KEY`. The six rules tested in 2026-09 were: contamination (doing it
 vs. mentioning it), lane state, the Validator picking up a pen, promises, authority claims, and
 dropped qualifiers in a founder relay.
