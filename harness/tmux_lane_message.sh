@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Deliver one typed status probe or specification answer to a resumable tmux Codex lane.
+# Deliver one typed status probe, specification answer, or ruling notice to a resumable tmux Codex lane.
 # Raw Orchestrator prose remains forbidden: it can ask only the generated status question.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer> [options]}"
+RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer|ruling> [options]}"
 SENDER="${2:?sender}"
 SLOT="${3:?slot}"
-KIND="${4:?status|answer}"
+KIND="${4:?status|answer|ruling}"
 shift 4
 case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
 # A slot names one launched round of a lane exactly as tmux_lane.sh printed it: the role, an
@@ -18,13 +18,15 @@ case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid send
 }
 LANE="${BASH_REMATCH[1]}"
 WINDOW="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-case "$KIND" in status|answer) ;; *) echo "lane-message: kind must be status|answer" >&2; exit 64 ;; esac
+case "$KIND" in status|answer|ruling) ;; *) echo "lane-message: kind must be status|answer|ruling" >&2; exit 64 ;; esac
 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 QUESTION_ID=""
 ANSWER_FILE=""
 BASIS=""
 AUTHORITY=""
+RULING_ID=""
+RULING_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -32,6 +34,8 @@ while [ "$#" -gt 0 ]; do
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
     --basis) BASIS="$2"; shift 2 ;;
     --authority) AUTHORITY="$2"; shift 2 ;;
+    --ruling-id) RULING_ID="$2"; shift 2 ;;
+    --ruling-file) RULING_FILE="$2"; shift 2 ;;
     *) echo "lane-message: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -101,7 +105,7 @@ fi
 MESSAGE_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-message.XXXXXX")"
 trap 'rm -f "$MESSAGE_TMP"' EXIT
 if [ "$KIND" = "status" ]; then
-  [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
+  [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY$RULING_ID$RULING_FILE" ] || {
     echo "lane-message: status accepts no answer arguments" >&2
     exit 64
   }
@@ -117,23 +121,40 @@ else
     echo "lane-message: the Orchestrator may probe status but may not answer specifications" >&2
     exit 77
   }
-  [ -n "$QUESTION_ID" ] && [ -n "$ANSWER_FILE" ] && [ -n "$BASIS" ] && [ -n "$AUTHORITY" ] || {
+  if [ "$KIND" = "ruling" ]; then
+    # --answer-file carries the notice text; the ruling file is only cited, by id and digest.
+    [ -n "$RULING_ID" ] && [ -f "$RULING_FILE" ] && [ ! -L "$RULING_FILE" ] \
+      && [ -n "$ANSWER_FILE" ] && [ -n "$AUTHORITY" ] && [ -z "$QUESTION_ID" ] || {
+      echo "lane-message: ruling requires --ruling-id, a regular --ruling-file, --answer-file, and --authority (no --question-id)" >&2
+      exit 64
+    }
+    case "$AUTHORITY" in ratified-spec|runtime-protocol) ;; *)
+      echo "lane-message: ruling authority must be ratified-spec|runtime-protocol" >&2; exit 64 ;;
+    esac
+    RULING_SHA=$(shasum -a 256 < "$RULING_FILE" | cut -d' ' -f1)
+    BASIS="ruling=$RULING_ID sha256:$RULING_SHA"
+    MESSAGE_KIND="ruling-notice"
+    PREFIX="FACTORY_RULING_NOTICE ruling_id=$RULING_ID sha256=$RULING_SHA authority=$AUTHORITY"$'\n'"This is a Validator notice citing a ruling; it conveys no other lane's work."$'\n'
+  else
+  [ -n "$QUESTION_ID" ] && [ -n "$ANSWER_FILE" ] && [ -n "$BASIS" ] && [ -n "$AUTHORITY" ] && [ -z "$RULING_ID$RULING_FILE" ] || {
     echo "lane-message: answer requires --question-id, --answer-file, --basis, and --authority" >&2
     exit 64
   }
   case "$AUTHORITY" in human-answer|ratified-spec) ;; *)
     echo "lane-message: answer authority must be human-answer|ratified-spec" >&2; exit 64 ;;
   esac
+  MESSAGE_KIND="spec-answer"
+  PREFIX="FACTORY_ANSWER question_id=$QUESTION_ID authority=$AUTHORITY basis=$BASIS"$'\n'"This is specification input bound only to your question; it conveys no other lane's work."$'\n'
+  fi
   [ -f "$ANSWER_FILE" ] && [ ! -L "$ANSWER_FILE" ] || {
     echo "lane-message: answer file must be a regular non-symlink file" >&2
     exit 70
   }
-  MESSAGE_KIND="spec-answer"
-  "$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$QUESTION_ID" "$AUTHORITY" "$BASIS" <<'PY'
+  "$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$PREFIX" <<'PY'
 import os, pathlib, stat, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-question_id, authority, basis = sys.argv[3:]
+prefix = sys.argv[3].encode("utf-8")
 fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
 try:
     before = os.fstat(fd)
@@ -150,10 +171,6 @@ try:
 finally:
     os.close(fd)
 raw.decode("utf-8")
-prefix = (
-    f"FACTORY_ANSWER question_id={question_id} authority={authority} basis={basis}\n"
-    "This is specification input bound only to your question; it conveys no other lane's work.\n"
-).encode("utf-8")
 destination.write_bytes(prefix + raw)
 PY
   if [ "$LANE" = "coder" ]; then
@@ -169,6 +186,7 @@ PLAN_ARGS=(
   --message-file "$MESSAGE_TMP" --basis "$BASIS" --authority "$AUTHORITY"
 )
 [ -z "$QUESTION_ID" ] || PLAN_ARGS+=(--question-id "$QUESTION_ID")
+[ -z "$RULING_ID" ] || PLAN_ARGS+=(--ruling-id "$RULING_ID" --ruling-file "$RULING_FILE")
 PLANNED=$("$FACTORY_PYTHON" "$D/lane_dialogue.py" "${PLAN_ARGS[@]}") || exit $?
 MESSAGE_ID=$(printf '%s' "$PLANNED" | "$FACTORY_PYTHON" -c \
   'import json,sys; print(json.load(sys.stdin)["message_id"])')

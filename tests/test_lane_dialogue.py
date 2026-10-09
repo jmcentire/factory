@@ -149,3 +149,43 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
             authority="ratified-spec",
             question_id=str(question["question_id"]),
         )
+
+
+DIGEST = "sha256:" + "ab" * 32
+
+
+def test_ruling_notice_delivers_without_a_question_and_carries_the_digest(tmp_path: Path) -> None:
+    root = run_root(tmp_path)
+    notice = plan_message(
+        root,
+        sender="validator",
+        lane="coder",
+        message_kind="ruling-notice",
+        text="RUL-6 binds discovery: list endpoints paginate.",
+        basis="ignored: derived from the citation",
+        authority="ratified-spec",
+        ruling_id="RUL-6",
+        ruling_sha256=DIGEST,
+    )
+    assert notice["question_id"] is None
+    assert notice["basis"] == f"ruling=RUL-6 {DIGEST}"
+    record_delivery(root, message_id=str(notice["message_id"]), thread_id=THREAD, transport="queue")
+    assert pending_questions(root) == []
+
+
+def test_ruling_notice_is_refused_without_a_ruling_id_or_from_the_orchestrator(
+    tmp_path: Path,
+) -> None:
+    root = run_root(tmp_path)
+    kwargs = dict(
+        lane="coder",
+        message_kind="ruling-notice",
+        text="dependencies are now cached",
+        basis="x",
+        authority="runtime-protocol",
+        ruling_sha256=DIGEST,
+    )
+    with pytest.raises(LaneDialogueError, match="ruling id"):
+        plan_message(root, sender="validator", **kwargs)
+    with pytest.raises(LaneDialogueError, match="only the Validator"):
+        plan_message(root, sender="orchestrator", ruling_id="RUL-1", **kwargs)
