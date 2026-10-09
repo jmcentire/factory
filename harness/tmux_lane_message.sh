@@ -5,13 +5,19 @@ set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <coder|tester> <status|answer> [options]}"
+RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer> [options]}"
 SENDER="${2:?sender}"
-LANE="${3:?lane}"
+SLOT="${3:?slot}"
 KIND="${4:?status|answer}"
 shift 4
 case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
-case "$LANE" in coder|tester) ;; *) echo "lane-message: invalid lane" >&2; exit 64 ;; esac
+# A slot names one launched round of a lane exactly as tmux_lane.sh printed it: the role, an
+# optional parallel instance (tester-b) and an optional round (tester-b.r3).
+[[ "$SLOT" =~ ^(coder|tester)(-[a-z0-9][a-z0-9-]{0,15})?(\.[A-Za-z0-9][A-Za-z0-9_-]{0,39})?$ ]] || {
+  echo "lane-message: invalid lane slot" >&2; exit 64;
+}
+LANE="${BASH_REMATCH[1]}"
+WINDOW="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
 case "$KIND" in status|answer) ;; *) echo "lane-message: kind must be status|answer" >&2; exit 64 ;; esac
 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
@@ -37,12 +43,14 @@ source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
-LAUNCHES="$TMUX_ROOT/$LANE-launch.jsonl"
-THREAD_FILE="$TMUX_ROOT/$LANE-thread-id"
-CODEX_EVENTS="$TMUX_ROOT/$LANE-codex-events.jsonl"
+LAUNCHES="$TMUX_ROOT/$SLOT-launch.jsonl"
+THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
+CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
+LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
+LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
 
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
-  echo "lane-message: no retained Codex thread for $RUN:$LANE yet" >&2
+  echo "lane-message: no retained Codex thread for $RUN:$SLOT yet (codex-interactive and cursor-agent lanes have none: launch a new --round instead)" >&2
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
@@ -83,7 +91,7 @@ IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
   echo "lane-message: retained Kindex scope is missing or malformed" >&2; exit 70;
 }
 exec 3<&-
-case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: unsupported retained agent" >&2; exit 70 ;; esac
+case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: a $AGENT lane has no resumable Codex thread; launch a new --round instead" >&2; exit 70 ;; esac
 if [ "$AGENT" = "codex-ollama" ]; then
   # shellcheck source=harness/model_availability.sh
   source "$(cd "$(dirname "$0")" && pwd -P)/model_availability.sh"
@@ -198,7 +206,7 @@ elif [ -n "$MODEL" ]; then
   esac
   LOCAL_ARGS="-m $MODEL"
 fi
-PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || echo unknown)
+PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.
@@ -212,15 +220,29 @@ elif [ "$PANE_DEAD" = "1" ]; then
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
-  printf -v RESUME_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
+  printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-    "$FACTORY_RUNS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
+    "$FACTORY_RUNS_ROOT" "$ROOT"
+  # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
+  # and records its end, and a fresh watcher is started for it below.
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
+    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+    "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
-  tmux respawn-pane -k -t "$RUN:$LANE" -c "$REPOSITORY" "$RESUME_CMD"
+  printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
+    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
+  tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  # Every running lane has a watcher: replace the finished one with a fresh life of it.
+  tmux kill-window -t "$RUN:watch-$WINDOW" >/dev/null 2>&1 || true
+  tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
+    tmux send-keys -t "$RUN:$WINDOW" C-c >/dev/null 2>&1 || true
+    echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
+    exit 70
+  }
   TRANSPORT="resume"
 else
-  echo "lane-message: cannot determine whether $RUN:$LANE is live" >&2
+  echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2
   exit 70
 fi
 
@@ -228,5 +250,5 @@ fi
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 "$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
   --kind phase_transition --source "$SENDER" \
-  --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $LANE via $TRANSPORT" >/dev/null
-echo "lane-message: delivered $MESSAGE_ID to $RUN:$LANE via Codex $TRANSPORT"
+  --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
+echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via Codex $TRANSPORT"

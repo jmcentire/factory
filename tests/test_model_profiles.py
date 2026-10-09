@@ -177,7 +177,10 @@ def test_harness_entry_prints_nul_fields_and_refuses_a_changed_profile(
                     "--expect-digest", profile.digest, "--output", str(output)]) == 0
     capsysbinary.readouterr()
     assert harness_main(["binding", "--snapshot", str(output), "--role", "coder"]) == 0
-    assert capsysbinary.readouterr().out == b"profile\0codex-ollama\0glm-test:cloud\0"
+    # codex-ollama bills per use by construction, so the binding says so.
+    assert capsysbinary.readouterr().out == b"profile\0codex-ollama\0glm-test:cloud\0metered\0"
+    assert harness_main(["binding", "--snapshot", str(output), "--role", "tester"]) == 0
+    assert capsysbinary.readouterr().out == b"profile\0codex\0gpt-test\0unmetered\0"
     assert harness_main(["resolve", "--profiles", str(path), "--name", "nope"]) == 64
     assert capsysbinary.readouterr().out == b""  # a refusal prints no first field
 
@@ -261,3 +264,48 @@ def test_cli_refuses_a_half_named_profile_without_a_terminal(
     assert code == 2
     assert "missing: --orchestrator, --coder, --tester" in capsys.readouterr().err
     assert not path.exists()
+
+
+def test_a_profile_marks_a_binding_metered_and_keeps_old_digests(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``metered`` is optional and written only when set, so a profile that never used it keeps
+    its digest; a marked binding reaches the run's snapshot and the lane's binding; codex-ollama
+    is metered whatever the profile says; a non-boolean mark is refused."""
+
+    plain = _profile()
+    assert "metered" not in json.dumps(plain.document())
+    path = str(tmp_path / "profiles.json")
+    flags = [f"--{role}={binding}" for role, binding in BINDINGS.items()]
+    flags[-1] = "--tester=cursor-agent:grok-4.7-xhigh"
+    code, saved = _factory(["create", "hosted", "--profiles", path, *flags,
+                            "--metered", "tester"], capsys)
+    assert code == 0
+    profile = mp.load(Path(path)).profiles["hosted"]
+    assert profile.roles["tester"] == mp.Binding("cursor-agent", "grok-4.7-xhigh", True)
+    assert profile.roles["tester"].is_metered and profile.roles["coder"].is_metered
+    assert not profile.roles["validator"].is_metered
+    assert profile.document()["roles"]["tester"] == {
+        "agent": "cursor-agent", "model": "grok-4.7-xhigh", "metered": True
+    }
+    snapshot = tmp_path / "model-profile.json"
+    mp.write_snapshot(profile, Path(path), snapshot)
+    assert mp.read_snapshot(snapshot)["tester"].metered is True
+    with pytest.raises(mp.ProfileError, match="metered must be true or false"):
+        _load_document(tmp_path, _document(roles={
+            **_profile().document()["roles"],
+            "tester": {"agent": "codex", "model": "gpt-test", "metered": "yes"},
+        }))
+
+
+def test_every_lane_agent_is_described_by_the_launcher() -> None:
+    """lane_agent.py names each tmux lane agent once; the profile's lane agents and the agents
+    that are metered by construction are exactly the ones it describes."""
+
+    from harness import lane_agent
+
+    for lane in ("coder", "tester"):
+        assert set(mp.LAUNCHABLE[lane]) == set(lane_agent.AGENTS)
+    assert {name for name, agent in lane_agent.AGENTS.items() if agent.metered} == set(
+        mp.METERED_AGENTS
+    )

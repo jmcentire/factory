@@ -25,6 +25,18 @@
     "construction-no-candidate": {
       "class": "signal",
       "description": "a host-counted lane dispatch ended without a reviewable candidate (plan 0.4b): itself a NO-relevant signal \u2014 it fires the deadline and cannot burn unbounded wall-clock invisible to the instrument; RESERVED \u2014 no emitter is wired yet (the lane-completion accounting in dispatch_lane.sh wires it; round-6 6-10 corrected this description, which previously claimed an emitter that did not exist)"
+    },
+    "refusal-tmux-lane": {
+      "class": "signal",
+      "description": "tmux_lane.sh refuse(): a tmux author lane launch or qualification probe refused before the agent started (sign-in preflight, missing spend cap, unqualified metered model, budget, testing standard, CLI contract, or a lane with no watcher)"
+    },
+    "refusal-lane-stall": {
+      "class": "signal",
+      "description": "watchdog.py lane: the lane made no commit within its stall window after the read allowance, so the watcher stopped it and woke the operator"
+    },
+    "refusal-lane-cap": {
+      "class": "bound",
+      "description": "watchdog.py lane: the lane reached its spend cap (declared rate x wall clock) or wall-clock cap and the watcher stopped it; a declared bound, never an instrument-rewarded signal"
     }
   }
 }

@@ -623,7 +623,7 @@ two separate claims about two separate parties — keep them apart.**
    filtered round 2's `__DONE__` as already-seen: the exact awaited signal. A pane, a log, or a
    mailbox stays warm long after the seat behind it is dead; elapsed silence also cannot
    distinguish a reasoning loop from an I/O hang. Inspect tmux process/pane state and use
-   `tmux_lane_message.sh <run> validator <lane> status`. The exact-thread response classifies
+   `tmux_lane_message.sh <run> validator <slot> status`. The exact-thread response classifies
    `WORKING|BLOCKED|QUESTION|DONE`; silence alone stays `liveness_unknown` and never becomes a
    confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
    resolve or escalate it instead of treating its expected silence as a liveness alarm.
@@ -642,6 +642,20 @@ two separate claims about two separate parties — keep them apart.**
    message, which the oracle-leak guard still screens.
 
 ---
+
+7. **Launch every lane through the Factory harness, never a run-local launcher.** `harness/tmux_lane.sh` (author lanes) and `harness/dispatch_lane.sh` (qualified lanes) carry the controls a run depends on:
+   - a non-interactive sign-in preflight: a signed-out agent, or one whose check waits for input, is refused with the exact command that fixes it;
+   - a per-round spend cap for every metered model (`--spend-cap-usd` and `--usd-per-hour`), reserved against the run's objective budget (`factory.sh --budget`) and enforced as wall-clock time, because no agent we run reports live spend;
+   - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`;
+   - the founder's testing standard, `TESTING.md` and the Tester doctrine with the run's TESTING-STRATEGY, injected into every Tester prompt.
+
+   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama` and `cursor-agent`; a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
+
+   Before a model takes a lane, it passes a capped qualification probe, and a metered model cannot launch without one:
+   - `harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> --agent <agent> --model <model> [--spend-cap-usd <usd> --usd-per-hour <usd>]`, always wall-capped (30 minutes by default);
+   - pass criteria: time to first commit (`--first-commit-minutes`, default 15) and commit count (`--min-commits`), recorded by the watcher; then the fraction of its new tests that are red at base for the named reason (Phase C Q3), which you check on its commits.
+
+   Report each lane's output per dollar (`harness/lane_watchdog.py report --root <run root>`), cut a lane that falls below the run's threshold, and tell the founder. Never park the run on a founder action you can perform yourself.
 
 ### Cadence — the status loop, and the orchestrator as your state-keeper
 

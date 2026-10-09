@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -336,6 +337,15 @@ def _parser() -> argparse.ArgumentParser:
     for role in MODEL_PROFILE_ROLES:
         profile_create.add_argument(f"--{role}", default="", metavar="AGENT:MODEL")
     profile_create.add_argument("--description", default="")
+    profile_create.add_argument(
+        "--metered",
+        action="append",
+        default=[],
+        choices=MODEL_PROFILE_ROLES,
+        metavar="ROLE",
+        help="mark ROLE's binding as billed per use: its lanes need a per-round spend cap "
+        "(repeatable)",
+    )
     profile_create.add_argument(
         "--default", action="store_true", help="make it the default (the first profile always is)"
     )
@@ -1035,10 +1045,13 @@ def _profile_command(arguments: argparse.Namespace) -> None:
     if action == "create":
         given = {role: getattr(arguments, role) for role in MODEL_PROFILE_ROLES}
         if all(given.values()):
+            bindings = {role: model_profiles.parse_binding(role, given[role]) for role in given}
+            for role in arguments.metered:
+                bindings[role] = dataclasses.replace(bindings[role], metered=True)
             created = model_profiles.Profile(
                 model_profiles.validate_name(arguments.name or ""),
                 arguments.description,
-                {role: model_profiles.parse_binding(role, given[role]) for role in given},
+                bindings,
             )
         elif any(given.values()) or not sys.stdin.isatty():
             missing = [f"--{role}" for role, value in given.items() if not value]
@@ -1046,6 +1059,8 @@ def _profile_command(arguments: argparse.Namespace) -> None:
                 "name every role as AGENT:MODEL (missing: " + ", ".join(missing) + "), "
                 "or run `factory profile create` in a terminal to be asked"
             )
+        elif arguments.metered:
+            raise ValueError("--metered needs every role named as AGENT:MODEL on the command line")
         else:
             created = model_profiles.prompt_profile(
                 input, print, name=arguments.name, description=arguments.description

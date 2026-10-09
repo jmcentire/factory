@@ -12,7 +12,10 @@
     "operator": true,
     "preflight": true,
     "watchdog-deadline": false,
-    "construction-no-candidate": true
+    "construction-no-candidate": true,
+    "refusal-tmux-lane": true,
+    "refusal-lane-stall": true,
+    "refusal-lane-cap": false
   },
   "excluded_event_kinds": [
     "blocking_written"

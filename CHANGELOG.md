@@ -3,7 +3,46 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
-## [Unreleased]
+## [0.8.12] - 2026-10-09
+
+The harness is the lane launcher that prevents msg-r2's failures, so a Validator has no reason
+to bypass it (`docs/practices/lessons-msg-r2-2026-10.md`).
+
+### Added
+
+- **`tmux_lane.sh` runs every agent msg-r2 used.** `codex` (`codex exec`, still the default),
+  `codex-interactive` (the Codex TUI with `--no-daemon`), `codex-ollama`, and `cursor-agent`
+  (`agent -p --model <model> --force --trust --workspace <lane>`). Model profiles bind them as
+  before; `--model` names one without a profile. `--instance <name>` runs a parallel instance in
+  its own clone (a git worktree is refused), and `--round <tag>` launches a new round of a lane.
+- **Sign-in preflight** (`harness/lane_agent.py`). Before launch, the agent's own status command
+  runs with stdin closed, a time bound and the lane's scrubbed environment; a signed-out agent,
+  or a check that waits for input, is refused (exit 77) with the exact command that fixes it.
+- **Spend caps for metered agents.** `codex-ollama`, a binding the profile marks
+  `"metered": true` (`factory profile create --metered <role>`), or `--metered` refuses to
+  launch without `--spend-cap-usd` and `--usd-per-hour`. The cap is reserved in the run's
+  objective-budget ledger, whose single writer is now `harness/lane_budget.py` (also used by
+  `dispatch_lane.sh`), and enforced as wall-clock time, since no agent reports live spend.
+- **Lane watchdog** (`harness/lane_watchdog.py`, a `watch-<lane>` window per lane; no watcher,
+  no launch). It stops a lane with no commit within its window after a read allowance (20 and
+  15 minutes by default) or at its cap, records `refusal-lane-stall` / `refusal-lane-cap`, wakes
+  the operator on `__LANE_DONE__`, exit or stop (`tmux-lanes/wake.jsonl`, `events.jsonl`), and
+  records each lane's commits, wall time, spend and commits per dollar (`report`).
+- **Qualification probe.** `tmux_lane.sh <run> <role> qualify` runs a small wall-capped brief
+  and records time to first commit, commit count and a pass or fail; a metered agent and model
+  launch only after a pass for the role.
+- **The testing standard reaches every Tester** (`harness/testing_standard.py`). A Tester
+  prompt opens with the bytes of `TESTING.md`, `prompts/test.md` and the run's testing strategy,
+  each with its digest; the qualified tester dispatch opens with the first two. A Tester whose
+  standard cannot be read does not start.
+- Gate `LCH` (lane launch controls) with its denial probes in `tests/test_lane_controls.py`.
+
+### Changed
+
+- `tmux_lane_message.sh` addresses a lane slot (`tester-b.r2`) and wraps a resumed turn like a
+  launch, starting a new life of its watcher. Only `codex`/`codex-ollama` lanes keep a thread.
+- `dispatch_lane.sh --agent` accepts any agent whose runner manifest declares its adapter and
+  invocation (CFG), not only the two legacy names.
 
 ### Documentation
 
