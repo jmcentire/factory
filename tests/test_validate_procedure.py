@@ -15,6 +15,15 @@ def test_projection_config_requirement_is_stated_before_phase_a() -> None:
     assert ".factory/projection.conf" in section and "pinned commit" in section
 
 
+def test_ledger_rows_are_batched_with_per_row_verdicts_and_a_citable_restatement_rule() -> None:
+    flat = " ".join(PROCEDURE.split())
+    assert "in one message, each an accept-or-refute decision by row id" in flat
+    assert "verbatim source beside it" in flat
+    assert "a blanket accept ratifies no row" in flat
+    assert "A row with no citation is never a restatement." in flat
+    assert "every CHANGES-MEANING row comes back to the human" in flat
+
+
 def test_declared_dependencies_are_cached_read_only_before_dispatch() -> None:
     phase_b = PROCEDURE[PROCEDURE.index("## Phase B"):PROCEDURE.index("## Cadence")]
     cache = phase_b.index("Cache the declared dependencies")
