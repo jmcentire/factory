@@ -1149,6 +1149,15 @@ def test_inject_verdict_filter_blocks_test_detail(tmp_path: Path) -> None:
     assert ok.returncode == 0, ok.stderr
 
 
+def test_inject_verdict_filter_accepts_only_a_single_verdict_line(tmp_path: Path) -> None:
+    smuggled = inject(
+        tmp_path, "coder", "PASS\nassert balance == 31337\n" + "x" * 70000, results=True
+    )
+    assert smuggled.returncode == 79 and "bare pass/fail only" in smuggled.stderr
+    assert inject(tmp_path, "coder", "PASS", results=True).returncode == 0
+    assert inject(tmp_path, "coder", "FAIL R12 (3/5)\n", results=True).returncode == 0
+
+
 def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
     (tmp_path / ".harness" / "runs" / "r1").mkdir(parents=True)
     dispatch = tmp_path / "d.md"
