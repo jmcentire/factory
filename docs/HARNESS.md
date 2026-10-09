@@ -273,8 +273,8 @@ those products.
 
 ## Codified controls
 
-Nine controls, each mechanizing a specific postmortem lesson. The first six ship as
-scripts (see Scripts).
+Ten controls, each mechanizing a specific postmortem lesson. The first six and the tenth
+ship as scripts (see Scripts).
 
 **1. Directive ledger with qualifier-preserving supersession.** Every major failure was a
 real instruction with a qualifier removed ("two-way doors" → doors; "poll to *tend the
@@ -368,6 +368,64 @@ therefore reconciles declared truth against live truth for whatever the objectiv
 registered per-target reconcilers (terraform-vs-live IAM, tfvars-vs-runtime config, image
 digest expectations) run at ground time, and drift blocks the lane exactly as channel
 drift does. The harness owns the requirement and the receipt; the target owns the probe.
+
+**10. Lane launch controls.** In the msg-r2 rebuild the Validator launched every lane with a
+run-local script, so none of the harness's controls ran: a metered Tester model looped for
+hours (about $1,200 of credit), finished lanes sat idle until someone looked, an author agent
+sat on an interactive login screen for hours, and Tester briefs never carried the testing
+standard (`docs/practices/lessons-msg-r2-2026-10.md`). Prose lessons had already said all of
+it. So `harness/tmux_lane.sh` is the only lane launcher, and it enforces each lesson by
+machine, before the agent starts and while it runs:
+
+- **Agents.** `codex` (`codex exec`, non-interactive: the default author lane),
+  `codex-interactive` (the Codex TUI with `--no-daemon`), `codex-ollama` (`codex exec --oss` on
+  a model the local Ollama server already has) and `cursor-agent`
+  (`agent -p --model <model> --force --trust --workspace <lane>`). The run's model profile
+  binds each lane's agent and model exactly as before.
+- **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
+  (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
+  exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a
+  refusal (exit 77) that prints the command that fixes it. Codex on Ollama has no ChatGPT
+  sign-in; its model must already be on the Ollama server (`ollama show`). ollama.com sign-in
+  for a `:cloud` model has no non-interactive status command, so it is not checked.
+- **Spend caps.** A metered binding (`codex-ollama` always, any binding the profile marks
+  `"metered": true`, or `--metered`) refuses to launch without `--spend-cap-usd` and
+  `--usd-per-hour`. The cap is reserved in the run's objective-budget ledger
+  (`budget-reservations.jsonl`, the same chain `dispatch_lane.sh` writes, through
+  `harness/lane_budget.py`), so a run ignited without `--budget` cannot start a metered lane,
+  and caps cannot add up past the budget. None of these agents exposes live spend, so **the
+  enforced proxy is wall-clock time**: the watchdog stops the lane at `cap / rate` hours of
+  active time, or at `--wall-cap-minutes` if that is sooner, and reports spend as
+  `rate x active time`. A metered agent and model also needs a passing qualification probe for
+  the role (below).
+- **Progress watchdog.** Every launch starts `harness/lane_watchdog.py lane` in a
+  `watch-<lane>` window; when it cannot start, the lane is stopped and the launch refused.
+  After a read allowance (default 15 minutes) the lane must commit within the stall window
+  (default 20 minutes), counted from the allowance's end or its last commit. A lane that does
+  not is stopped and recorded (`refusal-lane-stall`); a lane at its cap likewise
+  (`refusal-lane-cap`). A lane waiting on its own unanswered `FACTORY_QUESTION` is not stalled.
+  When the lane prints `__LANE_DONE__ <slot> commits=<n>` or its process ends, the watcher wakes
+  the operator: a `wake: true` row in `events.jsonl`, a row in `tmux-lanes/wake.jsonl` (tail it
+  from the Validator's monitor), a `FACTORY_WAKE` line, and a tmux message. Commits come from the
+  lane repository's reflog file, never from running git there. Each lane's end appends its
+  commits, time to first commit, wall time, spend and commits per dollar to
+  `tmux-lanes/lane-output.jsonl` (`lane_watchdog.py report --root <run root>`).
+- **Qualification probe.** `tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <brief>
+  [--agent ... --model ...]` runs a small capped brief (always wall-capped, 30 minutes by
+  default) and records time to first commit, commit count and a pass or fail
+  (`--first-commit-minutes`, `--min-commits`) in the runs directory's
+  `lane-qualifications.jsonl`. The fraction of the probe's new tests that are red at base for
+  the named reason is the Validator's Phase C Q3 check on its commits.
+- **Testing standard for every Tester.** A Tester lane's prompt opens with the bytes of
+  `docs/standards/TESTING.md`, `prompts/test.md` and the run's `artifacts/testing-strategy.md`,
+  each fenced with its sha256 (`harness/testing_standard.py`), as mandatory first reading. The
+  qualified `dispatch_lane.sh` tester task opens with the first two; the ratified strategy
+  reaches it through run-model (Gate B). A Tester launch whose standard cannot be read is
+  refused.
+- **Parallel instances** (`--instance b`, window `tester-b`) each need their own clone: a git
+  worktree is refused, because the Codex sandbox blocks writes to the parent repository's git
+  directory, and two lanes may not share a repository. `--round <tag>` launches a new round of
+  a lane after its previous round ended.
 
 ## Build compilation and convergence
 
@@ -593,6 +651,12 @@ dependency-free (bash + python3 + git):
   receipt and retained exact evidence: canonical qualification, every presented prompt, private
   primary/child executable snapshots, state capsule, and bounded diagnostic. No failed canary
   reaches the broker. Ambient gap flags cannot bypass either precondition.
+  It reserves the runner's cost ceiling against the objective budget through
+  `harness/lane_budget.py` (the ledger's one writer), opens a Tester task with the testing
+  standard (control 10), and launches what the role's runner manifest declares: `codex` and
+  `ollama` keep their legacy adapters, and any other `--agent` must equal a manifest adapter that
+  declares its own invocation. Its runner carries its own credential through named secrets, so
+  the tmux sign-in preflight does not apply to it.
 - `harness/orchestrator_channel.py` + `orchestrator_checkpoint.sh` — append every resident-mode
   bounded observed activity snapshot under a monotonic cursor; validate the closed strategic
   assessment (goal, input class, trajectory, side effects, adherence, requirement-pressure
@@ -626,10 +690,30 @@ dependency-free (bash + python3 + git):
   other remains correct. Shared same-direction wrong behavior can still pass and remains the job
   of an independent semantic oracle and adversarial review. Older runs without the ignition field
   keep their released semantics.
-- `harness/tmux_lane.sh` + `codex_lane_session.py` + `lane_dialogue.py` +
+- `harness/tmux_lane.sh` + `lane_agent.py` + `lane_watchdog.py` + `lane_budget.py` +
+  `testing_standard.py` + `codex_lane_session.py` + `lane_dialogue.py` +
   `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
-  mode. Preflight requires a standalone repository whose Git/common directory is local and a
-  Codex CLI exposing the exact permission/session flags; the retained launch records its version.
+  mode, and the only lane launcher (control 10 states its launch controls):
+
+  ```
+  harness/tmux_lane.sh <run> <coder|tester> launch --repo <own clone> --prompt <brief>
+      [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>]
+      [--instance <name>] [--round <tag>] [--metered]
+      [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+      [--read-allowance-minutes 15] [--stall-window-minutes 20]
+  harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
+  harness/tmux_lane.sh <run> <coder|tester> freeze [--instance <name>] [--round <tag>]
+  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer ...
+  harness/lane_watchdog.py report --root <run root>
+  ```
+
+  A slot is one round of one lane (`tester`, `tester-b`, `tester-b.r2`); every slot has its own
+  prompt, launch journal, thread, log (`<slot>-lane.log`), exits journal and watcher state under
+  `tmux-lanes/`. Every lane process runs under `lane_agent.py run`, which tees its output to the
+  lane log and records its end. Only `codex` and `codex-ollama` lanes keep a resumable thread
+  for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher.
+  Preflight requires a standalone repository whose Git/common directory is local and an agent
+  CLI exposing the exact flags the launch uses; the retained launch records its version.
   Codex is launched as the agent harness with a lane-scoped permission profile that reopens the
   whole `.git` directory inside that standalone repository. The author owns that local branch and
   history; Factory claims repository isolation, not per-ref Git ACLs. Before each checkpoint the
@@ -643,11 +727,11 @@ dependency-free (bash + python3 + git):
   special entries, nested Git metadata, portable-name collisions, privileged modes and ceiling
   violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
   checkpoints, never promotion evidence.
-  Each lane needs its own repository copy; a launch on a copy the other lane already uses (or one
+  Each lane needs its own repository copy; a launch on a copy another lane already uses (or one
   nested in it) is refused. `harness/lane_kindex.py` gives the lane `kindex-lite --repo <copy>`
   (Kindex >= 0.48.0; SOFTWARE-FACTORY §6, Memory is scoped by role), bound to the copy's
   `.kin/local/kindex` store. Before launch, under a private home in
-  `tmux-lanes/<role>-kindex-home/`, the store is loaded from approved inputs only: the copy's
+  `tmux-lanes/<slot>-kindex-home/`, the store is loaded from approved inputs only: the copy's
   `.kin/knowledge.jsonl` (or `.json`), the run's shared `lane-seed.jsonl` (each node tagged
   `lane-seed`, so `list_nodes(tags="lane-seed")` returns it), and the copy's `.kin/events`
   Kinbase evidence (verified with `kin kinbase sync --mode raw`, no Kinbase binary). A copy that
@@ -658,7 +742,9 @@ dependency-free (bash + python3 + git):
   must load the same seed. A failed attempt removes what it created; a lane's home is bound only
   after a successful launch, and a relaunch keeps its store. The launch row records the server,
   version, tools, store, digests and Kinbase counts, and a resumed lane gets the same server. The
-  freeze leaves `.kin/local` and `.kin/events` out of the snapshot.
+  freeze leaves `.kin/local` and `.kin/events` out of the snapshot. The scoped server reaches
+  Codex lanes through their `-c mcp_servers.kindex=...` override; `cursor-agent` takes no such
+  flag, so a Cursor lane runs without the scoped Kindex and its brief must carry what it needs.
 - `harness/orchestrator_wake.sh` — verifies external resume, freezes a closed bounded exception
   projection plus capsule, and runs a sandboxed frozen-projection audit in a fresh empty directory.
   It refuses any run without a resident Orchestrator and never substitutes for one.

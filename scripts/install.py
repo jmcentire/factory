@@ -333,9 +333,12 @@ def _profile_checks(layout: Layout, path_env: str, ollama_timeout: float) -> lis
     checks = [Check("ok", "profile", f"{profile.name} (default) in {layout.profiles}")]
     for role in profiles_module.ROLES:
         bound = profile.roles[role]
-        needed = {"codex-ollama": ("codex", "ollama"), "ollama": ("ollama", "codex")}.get(
-            bound.agent, (bound.agent,)
-        )
+        needed = {
+            "codex-ollama": ("codex", "ollama"),
+            "ollama": ("ollama", "codex"),
+            "codex-interactive": ("codex",),
+            "cursor-agent": ("agent",),
+        }.get(bound.agent, (bound.agent,))
         missing = [tool for tool in needed if shutil.which(tool, path=path_env) is None]
         if missing:
             checks.append(Check("warn", role, f"{bound.agent}:{bound.model} needs "

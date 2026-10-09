@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Signal-deadline watchdog (remediation plan §0.4c).
 
+This watches the run. Each tmux author lane has its own progress watchdog,
+``harness/lane_watchdog.py`` (stall stop, cap stop, completion wake); it lives
+apart because its inputs are files and processes, which this module, reading no
+ambient environment, deliberately does not import ``os`` to reach.
+
 The founder's criterion made live: by the end of pass ``signal_pass_deadline`` a
 NO-relevant signal or a terminal disposition must exist, or the host stops the
 run itself — the NO arrives early or the machinery refuses to keep burning. Two

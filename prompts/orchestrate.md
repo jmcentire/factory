@@ -115,12 +115,38 @@ deterministic dispatcher and each agent has its own window:
     tmux new-session -d -s <run> -n orchestrator 'agy --prompt-interactive "..."'
     tmux new-window -t <run> -n validator 'codex "..."'
     tmux new-window -t <run> -n ctl       'python3 harness/dispatcher.py ...'
-    # Optional unqualified authoring lanes use harness/tmux_lane.sh; qualified lanes
-    # continue to use harness/dispatch_lane.sh and do not live in tmux.
+    # Unqualified authoring lanes launch only through harness/tmux_lane.sh, which opens the
+    # lane window <lane> and its watcher window watch-<lane>; qualified lanes continue to use
+    # harness/dispatch_lane.sh and do not live in tmux. A run-local launcher is a policy
+    # violation, never a convenience.
+
+**Lanes launch through the harness or not at all.** `harness/tmux_lane.sh` is the only lane
+launcher; a lane started any other way runs with no sign-in preflight, no spend cap, no
+watchdog and no testing standard, and you report it to the Validator as a finding. What the
+launcher does:
+
+    harness/tmux_lane.sh <run> <coder|tester> launch --repo <own clone> --prompt <brief> \
+      [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>] \
+      [--instance <name>] [--round <tag>] \
+      [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+    harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> ...
+    harness/lane_watchdog.py report --root <run root>
+
+- It refuses an agent that is signed out or would wait at a login prompt (exit 77, with the
+  exact command that fixes it), and a metered agent with no spend cap, outside the run's
+  budget, or with no passing qualification probe for the role.
+- Its watcher (`watch-<lane>`) stops a lane with no commit within its window (default 20
+  minutes after a 15-minute read allowance) or at its cap, and wakes the operator when the lane
+  prints `__LANE_DONE__` or exits: a row in `tmux-lanes/wake.jsonl` and in `events.jsonl`. A
+  stall stop or cap stop is a refusal event you read like any other.
+- `lane_watchdog.py report` gives each lane's commits, wall time, spend and commits per
+  dollar. Recommend cutting a lane whose output per dollar falls below the run's threshold.
+- Parallel instances (`--instance b`) each have their own clone, never a git worktree.
 
 **You do not type free-form prose into a pane you judge.** A `tmux send-keys` injection from you
 into the Validator, Coder, or Tester window is **refused** by Gate F. To resolve liveness, run
-`harness/tmux_lane_message.sh <run> orchestrator <coder|tester> status`; the script generates the
+`harness/tmux_lane_message.sh <run> orchestrator <slot> status` (the slot as `tmux_lane.sh`
+printed it: `coder`, `tester-b`, `tester.r2`); the script generates the
 question and queues or resumes the exact Codex thread. It cannot carry your own prose and cannot
 answer a specification question. The dispatcher writes notifications only into your pane, while
 your durable `block|halt|no-op` report is consumed out of band. The pane is a human-observable
@@ -391,7 +417,7 @@ parsing is only an idempotent notification fallback. Treat the pending question 
 block, not as lane failure. You may ask whether the lane is responsive; you may not answer it.
 The Validator obtains human ratification or cites an already ratified specification, then uses:
 
-    harness/tmux_lane_message.sh <run> validator <coder|tester> answer \
+    harness/tmux_lane_message.sh <run> validator <slot> answer \
       --question-id <Q-id> --answer-file <exact-answer> \
       --basis <retained-source> --authority <human-answer|ratified-spec>
 

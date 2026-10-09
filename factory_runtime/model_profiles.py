@@ -41,8 +41,8 @@ ROLES: tuple[str, ...] = ("validator", "orchestrator", "coder", "tester")
 LAUNCHABLE: Mapping[str, tuple[str, ...]] = {
     "validator": ("claude", "codex", "ollama"),
     "orchestrator": ("agy", "codex"),
-    "coder": ("codex", "codex-ollama"),
-    "tester": ("codex", "codex-ollama"),
+    "coder": ("codex", "codex-interactive", "codex-ollama", "cursor-agent"),
+    "tester": ("codex", "codex-interactive", "codex-ollama", "cursor-agent"),
 }
 
 # Agents whose CLI takes no model argument. The profile still names the model; the run records
@@ -51,6 +51,11 @@ MODEL_SET_IN_AGENT = frozenset({"agy"})
 
 # Agents backed by a local Ollama model, which must already be on the machine.
 OLLAMA_AGENTS = frozenset({"ollama", "codex-ollama"})
+
+# Agents that bill per use whatever the profile says: a lane on one refuses to launch without a
+# per-round spend cap (harness/tmux_lane.sh). A profile marks any other binding metered with
+# ``"metered": true``; nothing here can mark a metered agent unmetered.
+METERED_AGENTS = frozenset({"codex-ollama"})
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # The model charset harness/model_availability.sh accepts. Lane commands splice the model into
@@ -66,6 +71,20 @@ class ProfileError(ValueError):
 class Binding:
     agent: str
     model: str
+    # The operator's statement that this binding bills per use (a hosted model on a metered
+    # plan). METERED_AGENTS are metered regardless; see ``is_metered``.
+    metered: bool = False
+
+    @property
+    def is_metered(self) -> bool:
+        return self.metered or self.agent in METERED_AGENTS
+
+    def document(self) -> dict[str, object]:
+        # ``metered`` is written only when set, so a profile that never used it keeps its digest.
+        body: dict[str, object] = {"agent": self.agent, "model": self.model}
+        if self.metered:
+            body["metered"] = True
+        return body
 
 
 @dataclass(frozen=True)
@@ -76,10 +95,7 @@ class Profile:
 
     def document(self) -> dict[str, object]:
         body: dict[str, object] = {
-            "roles": {
-                role: {"agent": self.roles[role].agent, "model": self.roles[role].model}
-                for role in ROLES
-            }
+            "roles": {role: self.roles[role].document() for role in ROLES}
         }
         if self.description:
             body["description"] = self.description
@@ -125,7 +141,7 @@ def validate_name(name: str) -> str:
     return name
 
 
-def _validate_binding(role: str, agent: str, model: str) -> Binding:
+def _validate_binding(role: str, agent: str, model: str, metered: bool = False) -> Binding:
     """One role's binding, refused unless the harness can launch it with a named model."""
 
     if role not in LAUNCHABLE:
@@ -140,7 +156,7 @@ def _validate_binding(role: str, agent: str, model: str) -> Binding:
             f"{role}: model {model!r} must be named, 1-128 characters of letters, digits "
             "and . _ : / -; the factory never picks one"
         )
-    return Binding(agent, model)
+    return Binding(agent, model, metered)
 
 
 def parse_binding(role: str, text: str) -> Binding:
@@ -165,13 +181,21 @@ def _profile(name: str, raw: object) -> Profile:
     bindings = {}
     for role in ROLES:
         entry = roles[role]
-        if not isinstance(entry, dict) or set(entry) != {"agent", "model"}:
-            raise ProfileError(f"profile {name!r}: {role} needs exactly 'agent' and 'model'")
+        if not isinstance(entry, dict) or not (
+            {"agent", "model"} <= set(entry) <= {"agent", "model", "metered"}
+        ):
+            raise ProfileError(
+                f"profile {name!r}: {role} needs exactly 'agent' and 'model' "
+                "(and optionally 'metered')"
+            )
         agent, model = entry["agent"], entry["model"]
         if not isinstance(agent, str) or not isinstance(model, str):
             raise ProfileError(f"profile {name!r}: {role} agent and model must be strings")
+        metered = entry.get("metered", False)
+        if not isinstance(metered, bool):
+            raise ProfileError(f"profile {name!r}: {role} metered must be true or false")
         try:
-            bindings[role] = _validate_binding(role, agent, model)
+            bindings[role] = _validate_binding(role, agent, model, metered)
         except ProfileError as error:
             raise ProfileError(f"profile {name!r}: {error}") from None
     return Profile(name, description, bindings)
@@ -267,8 +291,7 @@ def _snapshot(profile: Profile, source: Path) -> dict[str, object]:
         "source": str(source),
         "roles": {
             role: {
-                "agent": profile.roles[role].agent,
-                "model": profile.roles[role].model,
+                **profile.roles[role].document(),
                 "model_passing": (
                     "set-in-agent"
                     if profile.roles[role].agent in MODEL_SET_IN_AGENT
@@ -308,7 +331,12 @@ def read_snapshot(path: Path) -> dict[str, Binding] | None:
         entry = document["roles"][role]
         if not isinstance(entry, dict):
             raise ProfileError(f"{path}: {role} binding is malformed")
-        bindings[role] = _validate_binding(role, str(entry.get("agent")), str(entry.get("model")))
+        metered = entry.get("metered", False)
+        if not isinstance(metered, bool):
+            raise ProfileError(f"{path}: {role} metered flag is malformed")
+        bindings[role] = _validate_binding(
+            role, str(entry.get("agent")), str(entry.get("model")), metered
+        )
     return bindings
 
 

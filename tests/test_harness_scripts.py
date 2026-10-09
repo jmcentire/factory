@@ -9276,6 +9276,21 @@ def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
     return log
 
 
+def record_passing_qualification(runs_root: Path, role: str, agent: str, model: str) -> None:
+    """The row lane_watchdog.py appends when a qualification probe passes; a metered launch
+    requires one for its role, agent and model."""
+
+    with (runs_root / "lane-qualifications.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "schema_version": "factory-lane-qualification/1", "role": role, "agent": agent,
+            "model": model, "verdict": "pass", "reasons": [],
+        }) + "\n")
+
+
+# A metered round's caps: the spend cap and the rate it bills at (the wall-clock proxy).
+METERED_CAPS = ("--spend-cap-usd", "5", "--usd-per-hour", "2")
+
+
 def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     """The operator names the model and must already have it. A codex-ollama launch with no
     model, or with a model this machine lacks, is refused before Codex's --oss mode could pull
@@ -9285,7 +9300,8 @@ def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
     ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent),
+         "--budget", "50"],
         operator,
         env,
     )
@@ -9297,7 +9313,9 @@ def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     launch = [
         "bash", str(HARNESS / "tmux_lane.sh"), "r1", "coder", "launch", "--repo", str(lane),
         "--prompt", str(prompt), "--runs", str(root.parent), "--agent", "codex-ollama",
+        *METERED_CAPS,
     ]
+    record_passing_qualification(root.parent, "coder", "codex-ollama", "glm-test:cloud")
     stub_dir = Path(env["PATH"].split(os.pathsep)[0])
 
     unnamed = run(launch, operator, env)
@@ -9360,7 +9378,8 @@ def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> 
                     coder="codex:gpt-coder", tester="codex-ollama:glm-test:cloud")
     env = {**env, "FACTORY_PROFILES": str(profiles)}
     ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent),
+         "--budget", "50"],
         operator,
         env,
     )
@@ -9401,7 +9420,8 @@ def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> 
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
     assert " -m gpt-coder " in coder_call and "--oss" not in coder_call
     assert read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]["model"] == "gpt-coder"
-    assert launch("tester").returncode == 0
+    record_passing_qualification(root.parent, "tester", "codex-ollama", "glm-test:cloud")
+    assert launch("tester", *METERED_CAPS).returncode == 0
     tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
     assert "--oss --local-provider ollama -m glm-test:cloud" in tester_call
 

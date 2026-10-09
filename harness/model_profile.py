@@ -11,8 +11,9 @@ the form the scripts read with ``read -d ''``.
   snapshot   record how the run was started, refused if that changed since ``resolve``:
              ``--expect-digest none`` records an explicit no-profile snapshot.
   binding    from a run's snapshot: ``none`` when it was started without a profile, else
-             ``profile`` then one role's agent and model. A missing or malformed snapshot is
-             refused, so a lane never guesses how its run began.
+             ``profile`` then one role's agent, model, and ``metered`` or ``unmetered`` (the
+             profile marked it, or its agent bills per use by construction). A missing or
+             malformed snapshot is refused, so a lane never guesses how its run began.
 """
 
 from __future__ import annotations
@@ -58,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
                 _nul("none")
                 return 0
             bound: Binding = recorded[arguments.role]
-            _nul("profile", bound.agent, bound.model)
+            _nul("profile", bound.agent, bound.model,
+                 "metered" if bound.is_metered else "unmetered")
             return 0
         path = (
             pathlib.Path(arguments.profiles).expanduser()
