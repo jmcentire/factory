@@ -913,8 +913,13 @@ def inject(
     return run(args, tmp, env)
 
 
-def inject_live(tmp_path: Path, pane_command: str, msg: str) -> tuple[subprocess.CompletedProcess[str], Path]:
-    """Real (non-dry) inject.sh against a tmux stub whose only window, validator, runs pane_command."""
+def inject_live(
+    tmp_path: Path, pane_command: str, msg: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Real (non-dry) inject.sh against a tmux stub.
+
+    The stub's only window, validator, runs pane_command.
+    """
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir(exist_ok=True)
     calls = tmp_path / "tmux-calls.log"
@@ -1637,7 +1642,8 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = has-session ]; then exit 1; fi\n'
-        'if [ "$1" = list-windows ]; then printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
+        'if [ "$1" = list-windows ]; then '
+        'printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
         'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
@@ -1768,7 +1774,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
 
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
     """Execute the command a seat window was given, as tmux would, with stale server env."""
-    line = next(l for l in tmux_log.read_text().splitlines() if f"-n {window} " in l)
+    line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
     command = line.split(" -c ", 1)[1].split(" ", 1)[1]
     dump = tmp_path / f"{window}.env"
     result = subprocess.run(
@@ -1795,10 +1801,14 @@ def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_conte
     stub = tmp_path / "factory-bin" / "codex"
     stub.write_text(stub.read_text().replace(
         'exit 0\n', '[ -n "${SEAT_DUMP:-}" ] && env > "$SEAT_DUMP"\nexit 0\n'))
-    stale = {"PATH": env["PATH"], "FACTORY_CONTROL_ROOT": "/stale/run-b", "FACTORY_WORKDIR": "/stale"}
+    stale = {
+        "PATH": env["PATH"],
+        "FACTORY_CONTROL_ROOT": "/stale/run-b",
+        "FACTORY_WORKDIR": "/stale",
+    }
     seated, dump = run_seat_command(tmux_log, "validator", tmp_path, stale)
     assert seated.returncode == 0, seated.stderr
-    seat = dict(l.split("=", 1) for l in dump.read_text().splitlines() if "=" in l)
+    seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
     assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
     assert seat["HARNESS_RUN_ROOT"] == str(root)
     for name in ("FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",

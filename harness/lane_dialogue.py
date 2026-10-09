@@ -526,7 +526,9 @@ def main() -> int:
     plan.add_argument("--root", type=pathlib.Path, required=True)
     plan.add_argument("--sender", choices=sorted(_SENDERS), required=True)
     plan.add_argument("--lane", choices=sorted(_LANES), required=True)
-    plan.add_argument("--kind", choices=("status-probe", "spec-answer", "ruling-notice"), required=True)
+    plan.add_argument(
+        "--kind", choices=("status-probe", "spec-answer", "ruling-notice"), required=True
+    )
     plan.add_argument("--message-file", type=pathlib.Path, required=True)
     plan.add_argument("--basis", required=True)
     plan.add_argument("--authority", choices=sorted(_AUTHORITIES), required=True)
