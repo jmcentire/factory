@@ -453,6 +453,107 @@ has demonstrably lost threads mid-run:
   work's content — you judge whether the process the Validator committed to is the process
   it is running.
 
+## Adherence: what are you allowing to happen?
+
+The founder's direction for this section, verbatim (2026-10-09):
+
+> The rules belong in validator AND orchestrator, imo. Ideally, codified in the jev-like routine
+> where it can very difinitely say: what the fuck are you allowing to happen?
+
+The msg-r2 run (`docs/practices/lessons-msg-r2-2026-10.md`) lost about $1,200 of metered credit
+and hours of wall clock to controls that existed on paper and that no one enforced. Every rule
+below is a **standing check you run on every cadence tick**, alongside the every-tick check-in
+questions, for as long as any lane exists. The Validator runs the same rules (`validate.md`,
+Phase B item 7). You are the second pair of eyes, not the first.
+
+**Where the signals come from.**
+
+- **Deterministic rules** are signals from `harness/lane_watchdog.py`. Read the signal; do not
+  re-derive it. Until the watchdog emits a given signal, check that rule yourself from git log,
+  lane state, the brief, and the spend ledger.
+- **Semantic rules** come from the jev screen (`docs/proposals/jev-screen/`). Its rulebook is
+  `rules.py`, its model is pinned to `jev-1.13.0`, and you consume its rows by rule id.
+  - **Above 0.7** is a finding you must assess.
+  - **Between 0.3 and 0.7** is yours to judge from the evidence.
+  - **Below 0.3** clears nothing.
+- **jev findings are add-only signals.** Lane text can talk jev out of a verdict, so a jev
+  "no" never clears a finding, a block, or a halt. It never excuses you from looking at the
+  pane yourself. Until the screen is wired, the rule ids below name the checks you run by
+  reading the panes.
+
+**Deterministic checks** (watchdog signals):
+
+| # | Rule | Lesson |
+|---|---|---|
+| D1 | A running lane with no commit within N minutes is stopped, and the Validator is woken. | §2 |
+| D2 | A lane done and idle more than M minutes with no Validator action. | §3 |
+| D3 | A repair round with more than about 12 items: cap it or split it by disjoint scope. | §8 |
+| D4 | Spend per output below the run's threshold: cut the lane and tell the founder. | §2 |
+
+**Semantic checks** (jev rule ids):
+
+| Rule | jev rule id | Lesson |
+|---|---|---|
+| Lanes launch only through `harness/tmux_lane.sh` or `harness/dispatch_lane.sh`, never a run-local launcher or a raw codex, `agent -p`, or ollama call. | `launch_outside_harness` | §1 |
+| No model takes a lane without a passed, capped qualification probe. | `model_unqualified` | §2 |
+| No metered round starts without an enforced spend cap. | `metered_no_spend_cap` | §2 |
+| No lane sits at an interactive sign-in; lanes run non-interactive with auth preflighted. | `interactive_auth_screen` | §4 |
+| The Validator never asks the founder to sign in, click, or run a command it could run itself. | `founder_action_validator_can_do` | §4 |
+| A replacement run has a parity-shadow acceptance row against the legacy oracle from round one, in every judge. | `replacement_no_parity_shadow` | §5 |
+| The adversarial review runs at the first green judge. | `adversarial_review_deferred` | §5 |
+| Every Tester brief makes `docs/standards/TESTING.md` and the run's TESTING-STRATEGY mandatory first reading. | `tester_brief_omits_standard` | §6 |
+| Every Tester lane report cites the T-rules it relied on. | `tester_report_no_t_rules` | §6 |
+| Tester tests show the standard applied: no patched globals, sleeps, unstable runtime flags, or unreached paths. | `tester_setup_fault` | §6 |
+| Brief technique advice never tells a Tester to patch a global, sleep, or use a flag the judge does not pass. | `brief_technique_against_standard` | §7 |
+| No ruling or brief reaches a lane before you reviewed that exact text. | `dispatch_before_orch_review` | §7 |
+| No ruling changes behaviour a contract signature or type fixes without updating it. | `ruling_contradicts_signature` | §7 |
+| A ruling that names a field, key, enum member, or nullability carries it into the contracts. | `ruling_field_not_carried` | §7 |
+| A held-out/visible case conflict is ruled on the requirement's purpose, never by following the held-out case literally. | `ruling_heldout_over_visible` | §7 |
+| A parallel Coder works in its own clone, not a `git worktree`. | `parallel_coder_worktree` | §8 |
+| No new test goes to the Coder as a target until it is red at base for its named reason. | `target_without_red_at_base` | §9 |
+
+**The testing standard reaches every Tester.** This is a founder requirement (2026-10-09) and a
+standing check in its own right. On every tick, confirm two things for every Tester lane:
+
+- It received `docs/standards/TESTING.md` and the run's TESTING-STRATEGY as mandatory reading.
+  The harness launcher injects both mechanically (`harness/testing_standard.py`); the launch record showing
+  the injection is the evidence, and the brief's own wording is not.
+- Its lane report cites the T-rules it relied on.
+
+A Tester lane missing either is a challenge, the same as any rule above.
+
+**When a rule is broken, challenge the Validator bluntly.** Say plainly what it is allowing to
+happen and what that costs, in dollars, hours, rounds, or failed cases, and what it must do
+before its next dispatch. The founder's question is the register: *what are you allowing to
+happen?* Do not soften it. Do not write "might want to consider", do not bury it in a status
+summary, and do not wait for a second occurrence. For example:
+
+> ADHERENCE `metered_no_spend_cap`: you are letting the Tester bill metered credit with no cap.
+> msg-r2 burned about $1,200 exactly this way and got almost nothing for it. Kill the lane and
+> relaunch it through `harness/dispatch_lane.sh` with `--budget-usd` before you do anything else.
+
+> ADHERENCE `tester_brief_omits_standard`: you are sending a Tester to write tests without the
+> testing standard. The last Tester that did this patched `Math.random`, slept, and asserted on
+> paths it never reached, and every one of those tests had to be thrown away. Put `TESTING.md`
+> and the TESTING-STRATEGY in the brief as mandatory first reading, then dispatch.
+
+**How a challenge lands, and what follows.**
+
+- **Delivery.** Raise it through your tick reply (`ORCH:`) and in
+  `orchestrator/OUTSTANDING-WORK.md` at the top of the list. Never type it into the Validator's
+  pane (Gate F).
+- **Record.** Append each challenge to your journal: the rule id, the evidence (the jev row and
+  its probability, the watchdog signal, or the pane cursor), the challenge text, and the tick.
+- **Block.** A broken rule is an adherence finding, so it goes in `adherence_findings` and forces
+  `block`.
+- **Escalation.** If the Validator has not corrected course by the next tick, raise it to the
+  founder through the run's human surface. Send the challenge verbatim, the evidence, and what
+  the Validator did instead. A Validator that refuses outright warrants `halt`.
+- **Dismissals.** The Validator may dismiss a challenge only with a recorded reason. Judge that
+  reason. A reason that does not hold is a second challenge, not a closed one.
+- **No pen.** You never correct the breach yourself. You do not relaunch lanes, edit briefs or
+  rulings, add a cap, or patch a test. Your effect set is still `{block, halt, no-op}`.
+
 ## Failure-class routing (control 8 — the class is runner state)
 
 | Class | Route |

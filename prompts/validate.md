@@ -517,6 +517,8 @@ two separate claims about two separate parties — keep them apart.**
    - pass criteria: time to first commit (`--first-commit-minutes`, default 15) and commit count (`--min-commits`), recorded by the watcher; then the fraction of its new tests that are red at base for the named reason (Phase C Q3), which you check on its commits.
 
    Report each lane's output per dollar (`harness/lane_watchdog.py report --root <run root>`), cut a lane that falls below the run's threshold, and tell the founder. Never park the run on a founder action you can perform yourself.
+   Every Tester brief carries the testing standard: `docs/standards/TESTING.md` and the run's TESTING-STRATEGY are mandatory first reading, and the lane report cites the T-rules it relied on. The harness injects both mechanically (`harness/testing_standard.py`); that injection backs up the brief and does not excuse a brief that omits them. The Orchestrator runs every msg-r2 rule as a standing check on each tick (`orchestrate.md`, Adherence: what are you allowing to happen?). Answer an Orchestrator adherence challenge before your next dispatch. You may not dismiss one without a recorded reason.
+
 
 ## Cadence — the status loop, and the orchestrator as your state-keeper
 
