@@ -1868,6 +1868,8 @@ def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_conte
         assert seat["HARNESS_RUN_ROOT"] == str(root)
         for name in SEAT_AUTHORITY:
             assert seat.get(name), (window, name)
+        # No predicted "approval" ghost text in a seat's input line (dogfood #53).
+        assert seat["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] == "false", window
         if window == "orchestrator":
             assert "FACTORY_KEYS_DIR" not in seat
 

@@ -330,6 +330,10 @@ factory_seat_env() {
   done
   printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
     "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
+  # Claude Code's prompt suggestions draw a predicted next message ("approved, go ahead") in
+  # the seat's input line. The dispatcher's pane captures cannot tell it from typed text, and
+  # the Orchestrator once classified one as operator input, so seats run with them off.
+  printf ' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false'
   # The trust anchors and tools a ground or dispatch from the seat needs, named explicitly so a
   # seat started under `env -i` (the Orchestrator) carries the same authority as the others.
   # FACTORY_KEYS_DIR is left out: the Orchestrator signs nothing, and ground needs only the
