@@ -610,6 +610,8 @@ dependency-free (bash + python3 + git):
   requires exactly one durable producer receipt plus a typed disposition, retains and hashes the
   run-owned evidence bytes, and fsyncs the receipt plus its parent before durably releasing the
   dispatch gate. Unrelated malformed legacy event rows are ignored and grant no authority.
+  The subject is the whole file (one disposition for every pending event) or one event's
+  canonical digest (that event alone is receipted and removed; the rest stay pending).
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
   a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.
