@@ -32,6 +32,7 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
+from engagement_route import _send as send_to_question_channel  # noqa: E402
 from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
@@ -58,6 +59,15 @@ TRIGGER_PATTERNS: dict[str, str] = {
     ),
     "spec_defect": r"spec-defect|specification defect",
     "contamination": r"contaminat",
+}
+# A seat that needs a human and is otherwise silent: a dialog sitting in its pane. Matched on the
+# pane's last lines only, and paged only once it has stayed there (attention_persist_s).
+SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
+    # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
+    "usage_limit": re.compile(
+        r"usage limit|limit reached|quota (?:reached|exceeded)|resets? in \d+\s*[hm]",
+        re.IGNORECASE,
+    ),
 }
 HEALTHY_IDLE = "idle-awaiting-handoff"
 FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
@@ -208,6 +218,9 @@ class Dispatcher:
         self.quiet_since: dict[str, float] = {}
         self.notified: set[str] = set()
         self.live_windows: set[str] = set()
+        self.attention_persist_s = 120.0
+        self.attention_since: dict[tuple[str, str], float] = {}
+        self.paged: set[tuple[str, str]] = set()
         self.harness = pathlib.Path(__file__).resolve().parent
         self.halted = False
         # validator-failure-mode state
@@ -348,7 +361,8 @@ class Dispatcher:
     # -- observe --------------------------------------------------------------
     def windows(self) -> list[str]:
         out = sh(["tmux", "list-windows", "-t", self.run, "-F", "#{window_name}"])
-        return [w for w in out.splitlines() if w in ("validator", "coder", "tester")]
+        seats = ("validator", "coder", "tester", "orchestrator")
+        return [w for w in out.splitlines() if w in seats]
 
     def capture(self, window: str) -> str:
         return sh(["tmux", "capture-pane", "-pt", f"{self.run}:{window}", "-S", "-60"])
@@ -490,6 +504,41 @@ class Dispatcher:
                 f"written; consume lanes/{window}.blocking before new work"
             )
         return changed
+
+    def check_seat_attention(self, window: str, tail: str) -> None:
+        """Page the human when a seat sits on a dialog only a human can clear.
+
+        A usage-limit dialog in run c's Validator stalled the whole run ~3h and nothing alerted
+        anyone. The pane's last lines are matched, and a match pages once it has persisted for
+        attention_persist_s, so a dialog answered at once never pages; it re-arms once cleared.
+        """
+        lines = tail.splitlines()[-15:]
+        current = time.monotonic()
+        for kind, pattern in SEAT_ATTENTION_PATTERNS.items():
+            key = (window, kind)
+            hit = next((line.strip() for line in lines if pattern.search(line)), None)
+            if hit is None:
+                self.attention_since.pop(key, None)
+                self.paged.discard(key)
+                continue
+            first = self.attention_since.setdefault(key, current)
+            if current - first < self.attention_persist_s or key in self.paged:
+                continue
+            self.paged.add(key)
+            self.page_operator(
+                kind, f"{window} has shown this for {(current - first) / 60:.0f}m: {hit[:200]}",
+                wake=window != "orchestrator",
+            )
+
+    def page_operator(self, kind: str, detail: str, *, wake: bool) -> None:
+        """Reach the human, not only the Orchestrator: the run's question channel and a banner."""
+        try:
+            outcome = send_to_question_channel(self.root, f"[factory {self.run}] {kind}: {detail}")
+        except OSError as exc:
+            outcome = {"sent": False, "reason": f"channel failed: {exc}"}
+        how = "paged via question_channel" if outcome["sent"] else str(outcome["reason"])
+        self.event("operator_page", f"{kind}: {detail} ({how})"[:500], wake=wake)
+        self._banner(f"ATTENTION — {kind}: {detail[:160]}")
 
     def notify_validator(self, notice: str) -> None:
         """Wake the Validator with one line when a lane waits on it (a question, a DONE).
@@ -867,6 +916,9 @@ class Dispatcher:
             self.live_windows = set(windows)
             for w in windows:
                 tail = self.capture(w)
+                self.check_seat_attention(w, tail)
+                if w == "orchestrator":
+                    continue  # watched for dialogs only; the Orchestrator does not journal itself
                 changed = self.check_window(w, tail)
                 if self.orchestrator_mode == "resident-monitoring" and changed:
                     try:

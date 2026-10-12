@@ -4803,6 +4803,52 @@ def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
     assert kinds.count("orchestrator_unresponsive") == 1
 
 
+def paging_dispatcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[object, object, Path, Path]:
+    """A resident-run dispatcher whose question channel appends each page to pages.txt."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    pages = tmp_path / "pages.txt"
+    channel = tmp_path / "channel.sh"
+    channel.write_text(f'#!/bin/sh\ncat >> "{pages}"; echo >> "{pages}"\n', encoding="utf-8")
+    channel.chmod(0o755)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}))
+    (root / "harness.json").write_text(json.dumps({
+        "orchestrator_mode": "resident-monitoring", "audit_interval_min": 15,
+        "question_channel": str(channel),
+    }))
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    d.attention_persist_s = 0  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    return mod, d, root, pages
+
+
+def page_events(root: Path) -> list[dict[str, object]]:
+    rows = [json.loads(ln) for ln in (root / "events.jsonl").read_text().splitlines()]
+    return [row for row in rows if row["kind"] == "operator_page"]
+
+
+def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#49: run c's Validator sat ~3h on a provider limit dialog and nothing alerted anyone."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    limited = "working...\n You've hit your usage limit · resets 3pm (America/New_York)\n"
+
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    assert pages.read_text().count("usage_limit") == 1
+    assert "[factory r1] usage_limit: validator" in pages.read_text()
+    (page,) = page_events(root)
+    assert page["wake"] is True and "paged via question_channel" in str(page["detail"])
+
+    d.check_seat_attention("validator", "resumed; all clear\n")  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    assert len(page_events(root)) == 2  # a new occurrence pages again
+
+
 def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
     """How much of the human a run gets is set once, at ignition, and retained.
     The default is scheduled: all back-and-forth up front, nothing blocking
