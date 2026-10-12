@@ -716,3 +716,68 @@ def test_tester_refuses_unusable_strategy_without_waiting_for_input(
     )
     assert result.returncode == 70 and "testing strategy" in result.stderr
     assert not (tmp_path / "injected.md").exists()
+
+
+# -- 8. the dependency cache and runtime reach the lane's commands (dogfood #31/#61) ---------
+
+
+def _read_only_dir(path: Path) -> Path:
+    path.mkdir(parents=True)
+    path.chmod(0o555)
+    return path
+
+
+def _policy(call: str) -> str:
+    import shlex
+
+    [policy] = [word for word in shlex.split(call)
+                if word.startswith("shell_environment_policy=")]
+    return policy
+
+
+def test_a_lanes_commands_get_the_cache_and_runtime_on_launch_and_resume(tmp_path: Path) -> None:
+    """Codex runs lane commands under inherit="core", so a DENO_DIR in Codex's own env never
+    reaches `deno`: the variable must be in the shell policy, on launch and on every resume."""
+
+    lanes = Lanes(tmp_path / "run")
+    store = _read_only_dir(tmp_path / "dep-cache" / "deno-dir")
+    runtime = _read_only_dir(tmp_path / "deno-2.7.14" / "bin")
+    launched = lanes.lane("coder", "--cache-env", f"DENO_DIR={store}",
+                          "--runtime-dir", str(runtime))
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    [call] = lanes.windows("coder")
+    expected = ('shell_environment_policy={inherit="core",ignore_default_excludes=false,'
+                f'set={{DENO_DIR="{store}"}}}}')
+    assert _policy(call) == expected
+    assert f"PATH={runtime}{os.pathsep}" in call
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["lane_env"] == {"cache_env": {"DENO_DIR": str(store)},
+                               "runtime_dirs": [str(runtime)]}
+    prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text()
+    assert f"DENO_DIR={store} is set for your commands" in prompt
+
+    (lanes.root / "tmux-lanes" / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8")
+    resumed = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+         "--runs", str(lanes.root.parent)],
+        lanes.operator, lanes.env,
+    )
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    respawn = next(line for line in lanes.tmux_log.read_text().splitlines()
+                   if "respawn-pane" in line)
+    assert _policy(respawn) == expected
+    assert f"PATH={runtime}{os.pathsep}" in respawn
+
+
+def test_a_writable_or_reserved_lane_environment_is_refused(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    writable = tmp_path / "writable-cache"
+    writable.mkdir()
+    refused = lanes.lane("coder", "--cache-env", f"DENO_DIR={writable}")
+    assert refused.returncode == 64 and "writable" in refused.stderr
+    store = _read_only_dir(tmp_path / "store")
+    reserved = lanes.lane("coder", "--cache-env", f"HOME={store}")
+    assert reserved.returncode == 64 and "reserved" in reserved.stderr
+    assert lanes.windows("coder") == []

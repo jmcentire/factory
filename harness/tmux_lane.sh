@@ -26,6 +26,7 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
                   [--instance <name>] [--round <tag>] [--metered]
                   [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
+                  [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
   all             [--runs <runs dir>]'
@@ -51,6 +52,7 @@ READ_ALLOWANCE_MINUTES=15
 STALL_WINDOW_MINUTES=20
 FIRST_COMMIT_MINUTES=""
 MIN_COMMITS=1
+LANE_ENV_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -68,6 +70,8 @@ while [ "$#" -gt 0 ]; do
     --stall-window-minutes) STALL_WINDOW_MINUTES="$2"; shift 2 ;;
     --first-commit-minutes) FIRST_COMMIT_MINUTES="$2"; shift 2 ;;
     --min-commits) MIN_COMMITS="$2"; shift 2 ;;
+    --cache-env) LANE_ENV_ARGS+=(--cache-env "$2"); shift 2 ;;
+    --runtime-dir) LANE_ENV_ARGS+=(--runtime-dir "$2"); shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -339,6 +343,23 @@ PY
   fi
   [ -n "$MODEL_SOURCE" ] || MODEL_SOURCE=agent
 
+  # The dependency cache and runtime the lane's own commands use (dogfood #31/#61): set in the
+  # Codex shell policy, because inherit="core" drops anything else, and recorded in the launch so
+  # every resume sets the same.
+  ENV_OUT="$(mktemp "${TMPDIR:-/tmp}/factory-lane-env.XXXXXX")"
+  ENV_ERROR=$("$FACTORY_PYTHON" "$D/lane_agent.py" environment --path "$SAFE_PATH" \
+    ${LANE_ENV_ARGS[@]+"${LANE_ENV_ARGS[@]}"} 2>&1 >"$ENV_OUT") || {
+    rm -f "$ENV_OUT"
+    refuse 64 "lane environment refused: ${ENV_ERROR#lane-agent: }" \
+      "pass --cache-env NAME=<read-only store dir> and --runtime-dir <read-only bin dir>"
+  }
+  { IFS= read -r -d '' SHELL_POLICY && IFS= read -r -d '' LANE_PATH &&
+    IFS= read -r -d '' LANE_ENV_RECORD && IFS= read -r -d '' LANE_ENV_NOTICE &&
+    IFS= read -r -d '' LANE_ENV_ASSIGN; } < "$ENV_OUT" || {
+    rm -f "$ENV_OUT"; exit 70;
+  }
+  rm -f "$ENV_OUT"
+
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on
   # a login screen; it is refused here with the exact command that fixes it.
@@ -454,11 +475,12 @@ PY
   ) || exit $?
 
   PROMPT="$TMUX_ROOT/$SLOT-prompt.txt"
-  PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" <<'PY'
+  PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+    "$LANE_ENV_NOTICE" <<'PY'
 import hashlib, os, pathlib, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-role, slot, standard = sys.argv[3:]
+role, slot, standard, environment = sys.argv[3:]
 task = source.read_bytes()
 protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - You are a real author agent, not a prompt printer. Work the task and use tools.
@@ -479,8 +501,10 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
   __LANE_DONE__ {slot} commits=<the number of commits you made>
 - A turn ending is not the run ending. The Validator alone judges and Gate L alone
   closes the run.
-""".encode("utf-8")
-raw = protocol
+"""
+if environment:
+    protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
+raw = protocol.encode("utf-8")
 if standard:
     raw += b"\n" + pathlib.Path(standard).read_bytes()
 raw += b"\nVERBATIM LANE TASK\n" + task
@@ -537,7 +561,6 @@ if (seed.get("digest") or "") != sys.argv[1]:
     'import json,sys; print(json.load(sys.stdin)["mcp_override"])')
 
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
-  SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
@@ -547,7 +570,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
-    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$MODEL_SOURCE" \
+    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
@@ -556,9 +579,9 @@ import datetime, json, sys
     lane, slot, instance, round_tag, action, metered, prompt_via, tty,
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
-    standard, lane_log, lane_exits, qualifications, model_source,
-) = sys.argv[1:36]
-model_config = sys.argv[36:]
+    standard, lane_log, lane_exits, qualifications, lane_env, model_source,
+) = sys.argv[1:37]
+model_config = sys.argv[37:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -603,6 +626,7 @@ print(json.dumps({
     "tmux_target": f"{run}:{lane}",
     "watch_target": f"{run}:watch-{lane}",
     "kindex": json.loads(kindex),
+    "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
     "prompt_digest": prompt_digest,
@@ -633,8 +657,10 @@ PY
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
-    "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+    "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
+  ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   # Every lane process runs under lane_agent.py run: it tees output to the lane log and records
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \

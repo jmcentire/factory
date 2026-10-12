@@ -91,7 +91,8 @@ active = [
 if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
-          (active[0].get("kindex") or {}).get("mcp_override", ""))
+          (active[0].get("kindex") or {}).get("mcp_override", ""),
+          json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])))
 # The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -114,6 +115,9 @@ IFS= read -r -d '' MODEL <&3 || {
 }
 IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
   echo "lane-message: retained Kindex scope is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
+  echo "lane-message: retained lane environment is missing or malformed" >&2; exit 70;
 }
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
@@ -294,13 +298,24 @@ if [ "$PANE_DEAD" = "0" ]; then
   exit 0
 elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
-  SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
+  # The resumed turn's commands get the same dependency cache and runtime as the launch
+  # (dogfood #31/#61), re-validated: a store made writable since launch is refused.
+  exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" environment --path "$SAFE_PATH" \
+    --record "$LANE_ENV_RECORD")
+  { IFS= read -r -d '' SHELL_POLICY <&4 && IFS= read -r -d '' LANE_PATH <&4 &&
+    IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
+    IFS= read -r -d '' LANE_ENV_ASSIGN <&4; } || {
+    echo "lane-message: the launch's lane environment no longer holds (see lane-agent above)" >&2
+    exit 70
+  }
+  exec 4<&-
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
-    "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+    "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \

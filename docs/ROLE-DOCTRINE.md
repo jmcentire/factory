@@ -611,8 +611,11 @@ two separate claims about two separate parties — keep them apart.**
    After Phase A ratification and before the first dispatch, fetch exactly the dependencies the
    ratified Architecture and Testing Strategy declare (names and versions as written there, no
    more) into a store outside both lane repositories, then make it read-only
-   (`chmod -R a-w`) and point each lane's package-manager cache or vendor path at it
-   (`DENO_DIR`, `npm_config_cache`, `CARGO_HOME` or the stack's equivalent). Lanes may read the
+   (`chmod -R a-w`) and point each lane's package-manager cache or vendor path at it with
+   `tmux_lane.sh ... --cache-env DENO_DIR=<store>` (or `npm_config_cache`, `CARGO_HOME`, the
+   stack's equivalent), and name the runtime the lane must use with `--runtime-dir <its bin
+   dir>`, never a shim that writes outside the lane. A variable exported only in your own shell
+   does not reach the lane's commands. Lanes may read the
    store and may not write it. Verify the
    store offline with `deno run --cached-only` (or the stack's offline flag). Deno 2.7 rejects
    `--cached-only` on `check`, `info`, `cache`, `lint` and `fmt`, so a documented check must be a

@@ -391,6 +391,13 @@ machine, before the agent starts and while it runs:
   `cursor-agent` run their CLI's own configured default. Each launch row records the `model`,
   its `model_source` (`operator`, `codex-config` or `agent`) and the `model_config` overrides,
   and `tmux_lane_message.sh` resumes a lane on the same selection.
+- **Dependency cache and runtime.** `--cache-env NAME=<dir>` (for example
+  `DENO_DIR=<run>/dep-cache/deno-dir`) and `--runtime-dir <bin dir>` give the lane's own shell
+  commands the pre-fetched store and a real runtime binary. Codex runs those commands under
+  `shell_environment_policy.inherit="core"`, which drops every other variable, so the cache
+  variables are set in the policy itself and the runtime directory goes first on PATH; both are
+  recorded in the launch row (`lane_env`) and re-applied on every resume. Each directory must
+  exist and be read-only to the lane, or the launch is refused.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a
@@ -706,6 +713,7 @@ dependency-free (bash + python3 + git):
       [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>]
       [--instance <name>] [--round <tag>] [--metered]
       [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+      [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
       [--read-allowance-minutes 15] [--stall-window-minutes 20]
   harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
   harness/tmux_lane.sh <run> <coder|tester> freeze [--instance <name>] [--round <tag>]

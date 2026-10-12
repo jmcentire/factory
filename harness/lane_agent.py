@@ -20,6 +20,10 @@ that finished sat idle because nothing recorded that they had ended
              ``key=value`` override per field. Lanes run with ``--ignore-user-config`` so the
              operator's MCP servers, sandbox and approval settings stay out of them, and without
              this a lane would run Codex's built-in default instead of the operator's model.
+  environment  the lane's dependency-cache variables and runtime directories, validated, as
+             NUL-terminated fields for tmux_lane.sh and tmux_lane_message.sh: the Codex shell
+             policy that sets them, the lane PATH, the launch record, the prompt notice and
+             the shell-quoted NAME=VALUE assignments.
   run        run one lane process. It tees the output to the lane log (a terminal agent keeps
              the terminal instead), and when the process ends, including when the watchdog
              stops it with SIGTERM, appends one exit record to the lane's exits journal.
@@ -371,6 +375,73 @@ def run_lane(
     return rc
 
 
+# -- lane environment ----------------------------------------------------------------------------
+
+# Codex runs lane shell commands under shell_environment_policy inherit="core", which keeps only
+# HOME, PATH, USER and the like: a DENO_DIR in Codex's own environment never reaches `deno`
+# (dogfood #31/#61). The cache variables are therefore set in the policy itself, on launch and on
+# every resume, and the runtime directories go first on PATH. Every value is an existing
+# directory the lane cannot write: a read-only store, never a credential.
+CORE_SHELL_POLICY = 'shell_environment_policy={inherit="core",ignore_default_excludes=false}'
+RESERVED_ENV = frozenset({"HOME", "USER", "PATH", "TMPDIR", "TERM", "SHELL", "LANG", "CODEX_HOME",
+                          "FACTORY_RUNS_DIR", "HARNESS_RUN_ROOT"})
+
+
+@dataclass(frozen=True)
+class LaneEnvironment:
+    cache_env: dict[str, str]
+    runtime_dirs: tuple[str, ...]
+
+    def shell_policy(self) -> str:
+        if not self.cache_env:
+            return CORE_SHELL_POLICY
+        pairs = ",".join(f"{name}={json.dumps(value, ensure_ascii=False)}"
+                         for name, value in sorted(self.cache_env.items()))
+        return CORE_SHELL_POLICY[:-1] + f",set={{{pairs}}}}}"
+
+    def path(self, base: str) -> str:
+        return os.pathsep.join([*self.runtime_dirs, base]) if self.runtime_dirs else base
+
+    def record(self) -> dict[str, object]:
+        return {"cache_env": dict(sorted(self.cache_env.items())),
+                "runtime_dirs": list(self.runtime_dirs)}
+
+    def assignments(self) -> str:
+        return " ".join(shlex.quote(f"{name}={value}")
+                        for name, value in sorted(self.cache_env.items()))
+
+    def notice(self) -> str:
+        lines = [f"- {name}={value} is set for your commands; it is a read-only, pre-fetched "
+                 "store: resolve dependencies from it offline (for Deno, --cached-only)."
+                 for name, value in sorted(self.cache_env.items())]
+        lines += [f"- {directory} is first on PATH: use the runtime there, not a shim."
+                  for directory in self.runtime_dirs]
+        return "\n".join(lines)
+
+
+def _read_only_directory(value: str, label: str) -> str:
+    if not os.path.isabs(value) or os.pathsep in value or any(ord(c) < 32 for c in value):
+        raise ValueError(f"{label} must be an absolute path without {os.pathsep!r}: {value!r}")
+    if not os.path.isdir(value):
+        raise ValueError(f"{label} is not an existing directory: {value}")
+    if os.access(value, os.W_OK):
+        raise ValueError(f"{label} is writable; make the store read-only (chmod -R a-w): {value}")
+    return value
+
+
+def lane_environment(cache_env: Sequence[str], runtime_dirs: Sequence[str]) -> LaneEnvironment:
+    variables: dict[str, str] = {}
+    for item in cache_env:
+        name, separator, value = item.partition("=")
+        if not separator or not name.isidentifier() or not name.isascii():
+            raise ValueError(f"--cache-env must be NAME=DIR: {item!r}")
+        if name in RESERVED_ENV or name in variables:
+            raise ValueError(f"--cache-env may not set {name} (reserved or repeated)")
+        variables[name] = _read_only_directory(value, f"--cache-env {name}")
+    directories = tuple(_read_only_directory(value, "--runtime-dir") for value in runtime_dirs)
+    return LaneEnvironment(variables, directories)
+
+
 # -- CLI -----------------------------------------------------------------------------------------
 
 
@@ -388,6 +459,11 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("preflight")
     check.add_argument("--agent", required=True)
     check.add_argument("--timeout", type=float, default=20.0)
+    environment = commands.add_parser("environment")
+    environment.add_argument("--path", required=True)
+    environment.add_argument("--cache-env", action="append", default=[])
+    environment.add_argument("--runtime-dir", action="append", default=[])
+    environment.add_argument("--record", help="a launch's lane_env record, for a resume")
     runner = commands.add_parser("run")
     runner.add_argument("--slot", required=True)
     runner.add_argument("--log", type=pathlib.Path, required=True)
@@ -410,6 +486,17 @@ def main(argv: list[str] | None = None) -> int:
             model, overrides = codex_model_selection(arguments.codex_home)
             _nul(model, *overrides)
             return 0
+        if arguments.command == "environment":
+            cache_env, runtime_dirs = arguments.cache_env, arguments.runtime_dir
+            if arguments.record:
+                record = json.loads(arguments.record)
+                cache_env = [f"{name}={value}" for name, value in record["cache_env"].items()]
+                runtime_dirs = record["runtime_dirs"]
+            lane = lane_environment(cache_env, runtime_dirs)
+            _nul(lane.shell_policy(), lane.path(arguments.path),
+                 json.dumps(lane.record(), sort_keys=True, separators=(",", ":")), lane.notice(),
+                 lane.assignments())
+            return 0
         if arguments.command == "preflight":
             how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout)
             print(how)
@@ -426,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"lane-agent: {refused}", file=sys.stderr)
         print(f"lane-agent: remediation: {refused.remediation}", file=sys.stderr)
         return REFUSED
-    except (OSError, ValueError, UnicodeDecodeError) as error:
+    except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError) as error:
         print(f"lane-agent: {error}", file=sys.stderr)
         return 70
 
