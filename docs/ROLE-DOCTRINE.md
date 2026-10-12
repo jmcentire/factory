@@ -576,6 +576,11 @@ two separate claims about two separate parties — keep them apart.**
   running the lanes, on every run, because a reviewer is cheap to add. In batch0 a reviewer from a
   different family found a requirement surface the Coder, the Tester and the Validator had all read
   identically and all missed.
+- **Run every non-interactive reviewer call bounded.** Launch `codex exec`, `claude -p` and the
+  like through `harness/agent_exec.py --timeout-minutes <n> [--stdin-file <prompt>] --log <file>
+  -- <command>`: stdin is closed, so the CLI cannot sit on "Reading additional input from stdin",
+  and the call is stopped at its cap (exit 124). Report a review as running only after its log
+  shows output.
 - **Lanes — conditional.** Running the Coder and the Tester in *different* families is worth taking
   **where the option exists**; it is the stronger rung of the independence ladder you name in the
   verdict (see Phase B, and `<rung used>` in the mode statement above). It is an argument for a
