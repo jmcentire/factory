@@ -87,7 +87,9 @@ _FALSE_CLOSE = re.compile(
     r"(?:closed|complete|completed|done|finished)\b",
     re.IGNORECASE,
 )
-_MAX_JOURNAL_BYTES = 32 * 1024 * 1024
+# ponytail: a raised ceiling (run e passed 32 MiB); rotate reports.jsonl or validate from the
+# last accepted cursor when a run outgrows it.
+_MAX_JOURNAL_BYTES = 128 * 1024 * 1024
 _MAX_ACTIVITY_BYTES = 64 * 1024
 _MAX_REPORT_BYTES = 64 * 1024
 
