@@ -77,9 +77,11 @@ def render_loader(layout: Layout, name: str, source: str) -> str:
     title = canonical.read_text(encoding="utf-8").splitlines()[0]
     body = (
         f"{title}\n\n"
-        f"Read `{canonical}` and follow it as this command's complete instructions, with\n"
-        f"`$FACTORY_HOME` = `{layout.root}`. That file is the canonical source; this file is a\n"
-        "thin loader so canonical edits propagate without fan-out.\n\n"
+        f"Read `$FACTORY_HOME/{source}` and follow it as this command's complete instructions.\n"
+        "When the `FACTORY_HOME` environment variable is set (a factory seat sets it to the\n"
+        "checkout that ignited its run), use that value; otherwise `$FACTORY_HOME` =\n"
+        f"`{layout.root}`, so this command reads `{canonical}`. That file is the canonical\n"
+        "source; this file is a thin loader so canonical edits propagate without fan-out.\n\n"
         "Written by `make install` in that checkout. Add machine-local bindings (auth, target\n"
         "labels) below; once this file is edited, reinstalling keeps it as it is.\n\n"
     )

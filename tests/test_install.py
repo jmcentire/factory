@@ -124,6 +124,19 @@ def test_doctor_fails_when_launcher_is_off_path_or_shadowed(tmp_path: Path) -> N
     assert "PATH" in _failing(shadowed)
 
 
+def test_loader_defers_to_the_seats_factory_home_over_the_installing_checkout(
+    tmp_path: Path,
+) -> None:
+    """A run ignited from another checkout sets FACTORY_HOME in its seats; an installed /command
+    must read that checkout's prompt, not the one that happened to run `make install` (#48)."""
+
+    loader = inst.render_loader(_layout(tmp_path), "validate", "prompts/validate.md")
+    instruction = loader.split("\n\n")[1]
+    assert instruction.startswith("Read `$FACTORY_HOME/prompts/validate.md`")
+    assert "`FACTORY_HOME` environment variable is set" in instruction
+    assert f"otherwise `$FACTORY_HOME` =\n`{REPO}`" in instruction
+
+
 def test_doctor_flags_a_loader_from_another_checkout(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     inst.install(layout)

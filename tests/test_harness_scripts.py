@@ -1772,6 +1772,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert "--disable-slash-commands" not in tmux_calls
     assert "agy -p" not in tmux_calls and "agy --print" not in tmux_calls
     assert "-n validator" in tmux_calls and "-n ctl" in tmux_calls
+    # The Validator reads this checkout's prompts, whatever an installed /validate names (#48).
+    validator_line = next(ln for ln in tmux_calls.splitlines() if "-n validator " in ln)
+    checkout = HARNESS.parent.resolve()
+    assert f" FACTORY_HOME={checkout} " in validator_line
+    assert f"{checkout}/prompts/validate.md" in validator_line
     orchestrator_bin = root / "orchestrator" / "bin"
     assert {path.name for path in orchestrator_bin.iterdir()} == {
         "agreement_contract.py",
