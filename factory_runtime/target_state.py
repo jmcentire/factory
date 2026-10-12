@@ -119,7 +119,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _DEPENDENCY = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def verify_contract_sources(workdir: Path) -> None:
+def _verify_contract_sources(workdir: Path) -> None:
     """Refuse a target whose contracts/SOURCES.md and vendored files disagree, in either direction.
 
     A row's dependency is the first word of its first cell; its files are contracts/<name>/**.
@@ -635,7 +635,7 @@ class TargetResolver:
             )
             if head != resolved_commit or dirt:
                 raise TargetResolutionError("target-state-diverged", str(source_root))
-            verify_contract_sources(resolved_workdir)
+            _verify_contract_sources(resolved_workdir)
             self._append_resource(
                 resource_id=source_id,
                 resource_type="source-worktree",
