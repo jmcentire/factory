@@ -195,8 +195,10 @@ closed enrolled union cannot masquerade as whole-run semantic completeness.
 A tmux author that cannot proceed without guessing emits `FACTORY_QUESTION:`. The dispatcher
 retains an occurrence-specific question ID. Only the Validator can bind a human answer or already
 ratified specification to that ID; the Orchestrator can issue only a generated status probe. Both
-travel through `codex queue` or `codex exec resume` to the exact retained thread, never through raw
-terminal input. Planned and delivered records are separate, cross-lane answers and conflicting
+travel to the exact retained thread, never through raw terminal input: an answer by `codex exec
+resume` once the lane is idle (a lane mid-turn refuses it, exit 75), a status probe also by
+`codex queue`, which is reported as not delivered and never receipted. Planned and delivered
+records are separate, cross-lane answers and conflicting
 second answers refuse, and neither author's work is projected into the other lane.
 
 There is **no one-shot orchestrator mode**. `orchestrator_wake.sh` remains as a frozen-projection

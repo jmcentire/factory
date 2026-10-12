@@ -153,3 +153,42 @@ def test_freeze_does_not_mistake_the_active_pane_for_a_gone_lane(tmp_path: Path)
     )
     assert "not quiescent" not in frozen.stderr
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
+
+
+def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path: Path) -> None:
+    """dogfood #68: a queued message reaches the lane only at its next turn boundary, so it is
+    never recorded as delivered. Specification input to a busy lane is refused for retry at idle;
+    a status probe may queue, reported as not delivered."""
+
+    operator, root, env, tmux_log = lane_fixture(tmp_path, pane_dead="0")
+    question, _ = record_question(root, "tester", "Is cancellation idempotent?")
+    reply = tmp_path / "answer.txt"
+    reply.write_text("Yes.\n", encoding="utf-8")
+    args = (
+        "--question-id", str(question["question_id"]), "--answer-file", str(reply),
+        "--basis", "ratified requirement R-4", "--authority", "ratified-spec",
+    )
+
+    busy = answer(operator, root, env, "tester", *args)
+    assert busy.returncode == 75, busy.stdout + busy.stderr
+    assert "NOT delivered" in busy.stderr and "idle" in busy.stderr
+    probe = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "orchestrator", "tester", "status",
+         "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert "NOT delivered" in probe.stdout
+    journal = read_chain(root / "dialogue" / "journal.jsonl")
+    assert "message-delivered" not in [row["record_type"] for row in journal]
+
+    # Once the turn ends, the same planned answer is delivered by resume, with its receipt.
+    tmux = tmp_path / "factory-bin" / "tmux"
+    tmux.write_text(tmux.read_text().replace('printf "0\\n"', 'printf "1\\n"'))
+    delivered = answer(operator, root, env, "tester", *args)
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    journal = read_chain(root / "dialogue" / "journal.jsonl")
+    receipts = [row for row in journal if row["record_type"] == "message-delivered"]
+    assert [row["transport"] for row in receipts] == ["resume"]
+    assert receipts[0]["message_id"] == journal[1]["message_id"]

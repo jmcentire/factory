@@ -635,8 +635,11 @@ two separate claims about two separate parties — keep them apart.**
    require `FACTORY_QUESTION: <one concrete question>` before the model guesses. The dispatcher
    assigns an occurrence-specific ID. Obtain the human answer or cite the ratified artifact, then
    deliver it with `tmux_lane_message.sh ... validator ... answer --question-id ...`; the channel
-   binds lane, question, authority basis, exact bytes, and the resumed Codex thread. You are the
-   only seat allowed to answer; the Orchestrator may issue only the generated status probe.
+   binds lane, question, authority basis, exact bytes, and the resumed Codex thread. A lane
+   mid-turn refuses the answer (exit 75, planned but not delivered) because a queued message has
+   no delivery receipt; wait until `tmux_lane_message.sh <run> validator <slot> idle` reports idle
+   and send it again. You are the only seat allowed to answer; the Orchestrator may issue only the
+   generated status probe.
 
 5. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most

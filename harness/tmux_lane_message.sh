@@ -277,12 +277,21 @@ for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
 done
 PANE_DEAD=$(lane_pane_state)
 if [ "$PANE_DEAD" = "0" ]; then
+  # A queued message waits for the lane's next turn boundary (observed: up to ~55 min, and once
+  # never), and nothing reports when it is consumed. So a queue is never a delivery receipt (#68).
+  if [ "$MESSAGE_KIND" != "status-probe" ]; then
+    echo "lane-message: $MESSAGE_ID planned but NOT delivered: $RUN:$SLOT is mid-turn, and a queued" >&2
+    echo "message has no delivery receipt. Retry when '$0 $RUN $SENDER $SLOT idle' reports idle;" >&2
+    echo "the retry reuses this planned message." >&2
+    exit 75
+  fi
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.
   env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR" \
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME" \
     codex $LOCAL_ARGS queue --thread "$THREAD_ID" --message "$MESSAGE" >/dev/null
-  TRANSPORT="queue"
+  echo "lane-message: queued $MESSAGE_ID to $RUN:$SLOT, NOT delivered: it reaches the lane at its next turn boundary, with no receipt"
+  exit 0
 elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
   SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'

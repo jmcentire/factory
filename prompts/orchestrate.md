@@ -421,7 +421,8 @@ The Validator obtains human ratification or cites an already ratified specificat
       --basis <retained-source> --authority <human-answer|ratified-spec>
 
 The channel records planned and delivered states separately, binds the answer to that lane and
-question, and queues or resumes the same Codex thread. It cannot answer the other lane's question,
+question, and resumes the same Codex thread; a lane mid-turn refuses an answer until it is idle,
+because a queued message has no delivery receipt (a queued status probe is reported as not delivered). It cannot answer the other lane's question,
 cannot deliver a second conflicting answer, and does not expose either author's work to the other.
 
 ## State-keeper for the Validator
