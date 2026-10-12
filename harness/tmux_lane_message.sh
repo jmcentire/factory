@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Deliver one typed status probe or specification answer to a resumable tmux Codex lane.
+# Deliver one typed status probe, or specification answer to a resumable tmux Codex lane,
+# or report whether the lane is idle (no live turn: a delivery now resumes it).
 # Raw Orchestrator prose remains forbidden: it can ask only the generated status question.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer> [options]}"
+RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer|idle> [options]}"
 SENDER="${2:?sender}"
 SLOT="${3:?slot}"
-KIND="${4:?status|answer}"
+KIND="${4:?status|answer|idle}"
 shift 4
 case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
 # A slot names one launched round of a lane exactly as tmux_lane.sh printed it: the role, an
@@ -18,7 +19,17 @@ case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid send
 }
 LANE="${BASH_REMATCH[1]}"
 WINDOW="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-case "$KIND" in status|answer) ;; *) echo "lane-message: kind must be status|answer" >&2; exit 64 ;; esac
+case "$KIND" in status|answer|idle) ;; *) echo "lane-message: kind must be status|answer|idle" >&2; exit 64 ;; esac
+
+# The lane's pane, found by exact window name first: tmux resolves a missing "$RUN:$WINDOW" to
+# the session's active pane, which reads as a live lane and queues to nobody (#29, #69).
+lane_pane_state() {
+  if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$WINDOW" >/dev/null; then
+    tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown
+  else
+    echo missing
+  fi
+}
 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 QUESTION_ID=""
@@ -35,6 +46,15 @@ while [ "$#" -gt 0 ]; do
     *) echo "lane-message: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
+if [ "$KIND" = "idle" ]; then
+  # The signal a supervisor waits on before delivering: idle means a delivery now resumes the lane.
+  case "$(lane_pane_state)" in
+    missing) echo "lane-message: $RUN:$SLOT idle (window gone)"; exit 0 ;;
+    1) echo "lane-message: $RUN:$SLOT idle (pane dead)"; exit 0 ;;
+    0) echo "lane-message: $RUN:$SLOT busy (a turn is running)"; exit 75 ;;
+    *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
+  esac
+fi
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
@@ -255,13 +275,7 @@ for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
   printf -v QUOTED -- '-c %q' "$OVERRIDE"
   RESUME_ARGS="${RESUME_ARGS:+$RESUME_ARGS }$QUOTED"
 done
-# A missing window must not be probed by target: tmux resolves "$RUN:$WINDOW" to the session's
-# active pane when no such window exists, which reads as a live lane and queues to nobody.
-if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$WINDOW" >/dev/null; then
-  PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
-else
-  PANE_DEAD=missing
-fi
+PANE_DEAD=$(lane_pane_state)
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.

@@ -117,3 +117,39 @@ def test_a_large_coder_answer_is_leak_guarded_on_its_file_bytes(tmp_path: Path) 
     )
     assert refused.returncode == 80, refused.stdout + refused.stderr
     assert not (root / "tmux-lanes" / "coder-inputs").exists()
+
+
+def test_idle_reads_the_lane_window_by_exact_name(tmp_path: Path) -> None:
+    """dogfood #69: the Validator can ask whether a lane is idle. A lane whose window is gone is
+    idle even while the session's active pane (the Validator's) is alive; a live lane is busy."""
+
+    operator, root, env, _ = lane_fixture(tmp_path, pane_dead="0")
+
+    def idle(windows: str) -> subprocess.CompletedProcess[str]:
+        return run(
+            ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "tester", "idle",
+             "--runs", str(root.parent)],
+            operator,
+            {**env, "TMUX_STUB_WINDOWS": windows},
+        )
+
+    gone = idle("validator")
+    assert gone.returncode == 0, gone.stdout + gone.stderr
+    assert "idle (window gone)" in gone.stdout
+    busy = idle("validator\ntester")
+    assert busy.returncode == 75, busy.stdout + busy.stderr
+    assert "busy" in busy.stdout
+
+
+def test_freeze_does_not_mistake_the_active_pane_for_a_gone_lane(tmp_path: Path) -> None:
+    """dogfood #69: with the lane window gone, freeze must not probe the session's active pane."""
+
+    operator, root, env, _ = lane_fixture(tmp_path, pane_dead="0")
+    frozen = run(
+        ["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze", "--runs",
+         str(root.parent)],
+        operator,
+        {**env, "TMUX_STUB_WINDOWS": "validator"},
+    )
+    assert "not quiescent" not in frozen.stderr
+    assert frozen.returncode == 0, frozen.stdout + frozen.stderr

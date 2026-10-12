@@ -713,7 +713,12 @@ PY
   echo "tmux-lane: unanswered $ROLE question must be answered before freeze" >&2
   exit 70
 }
-PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || true)
+# By exact window name: a missing window resolves to the session's active pane (#69).
+if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$LANE" >/dev/null; then
+  PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || true)
+else
+  PANE_DEAD=1
+fi
 [ "$PANE_DEAD" = "1" ] || {
   echo "tmux-lane: $RUN:$LANE is not quiescent; stop the agent before freezing" >&2
   exit 70

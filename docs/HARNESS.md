@@ -701,7 +701,7 @@ dependency-free (bash + python3 + git):
       [--read-allowance-minutes 15] [--stall-window-minutes 20]
   harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
   harness/tmux_lane.sh <run> <coder|tester> freeze [--instance <name>] [--round <tag>]
-  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer ...
+  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer|ruling|idle ...
   harness/lane_watchdog.py report --root <run root>
   ```
 
@@ -709,7 +709,9 @@ dependency-free (bash + python3 + git):
   prompt, launch journal, thread, log (`<slot>-lane.log`), exits journal and watcher state under
   `tmux-lanes/`. Every lane process runs under `lane_agent.py run`, which tees its output to the
   lane log and records its end. Only `codex` and `codex-ollama` lanes keep a resumable thread
-  for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher.
+  for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher. `idle` reports
+  whether a slot has no live turn (window gone or pane dead: exit 0) or is mid-turn (exit 75),
+  reading the lane window by exact name; freeze reads it the same way.
   An answer or ruling notice over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
   at `tmux-lanes/<slot>-inputs/<sha256>.txt` with a `FACTORY_RELAY file=… sha256=…` pointer;
   the coder leak guard judges the file's bytes before the file is placed.
