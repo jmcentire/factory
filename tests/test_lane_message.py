@@ -145,6 +145,9 @@ def test_freeze_does_not_mistake_the_active_pane_for_a_gone_lane(tmp_path: Path)
     """dogfood #69: with the lane window gone, freeze must not probe the session's active pane."""
 
     operator, root, env, _ = lane_fixture(tmp_path, pane_dead="0")
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("# Testing strategy\nExercise the real seam.\n")
     frozen = run(
         ["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze", "--runs",
          str(root.parent)],
@@ -192,3 +195,17 @@ def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path
     receipts = [row for row in journal if row["record_type"] == "message-delivered"]
     assert [row["transport"] for row in receipts] == ["resume"]
     assert receipts[0]["message_id"] == journal[1]["message_id"]
+
+
+def test_an_orchestrator_status_probe_to_an_idle_lane_exits_cleanly(tmp_path: Path) -> None:
+    """The Orchestrator's own delivery is not echoed into its activity feed, which refuses it as a source."""
+
+    operator, root, env, _ = lane_fixture(tmp_path)
+    probe = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "orchestrator", "tester", "status",
+         "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert "delivered" in probe.stdout

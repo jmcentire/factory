@@ -346,7 +346,10 @@ fi
 
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
-"$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
-  --kind phase_transition --source "$SENDER" \
-  --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
+# The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
+if [ "$SENDER" != orchestrator ]; then
+  "$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
+    --kind phase_transition --source "$SENDER" \
+    --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
+fi
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via Codex $TRANSPORT"
