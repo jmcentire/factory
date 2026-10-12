@@ -4870,6 +4870,26 @@ def test_a_seat_waiting_on_a_host_permission_prompt_pages_the_human(
     assert "permission_prompt" in pages.read_text()
 
 
+def test_an_orchestrator_that_stops_assessing_pages_the_human_not_only_the_validator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#81: run e's Orchestrator sat 10h on an unanswered request_user_input; the block it
+    earned went to the Validator's queue and reached no human."""
+    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: 2900)
+    monkeypatch.setattr(mod, "assessed_through", lambda _root: 2873)
+    d.last_assessed = 2873  # type: ignore[attr-defined]
+    d.assessed_progress_at -= 31 * 60  # type: ignore[attr-defined]
+
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+
+    assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
+    assert pages.read_text().count("[factory r1] orchestrator_unresponsive") == 1
+    (page,) = page_events(root)
+    assert page["wake"] is False
+
+
 def test_a_quota_dead_orchestrator_is_paged_and_no_longer_fed_every_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

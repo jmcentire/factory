@@ -649,7 +649,13 @@ class Dispatcher:
         )
         self.event("orchestrator_unresponsive", detail, wake=False)
         self._block("validator", "orchestrator_unresponsive", detail[:200])
-        self._banner(f"INCIDENT — {detail[:160]}")
+        # The block alone reached nobody in run e: the Orchestrator sat 10h on an unanswered
+        # request_user_input, while the Validator and every watcher looked only at lane state.
+        self.page_operator(
+            "orchestrator_unresponsive",
+            f"{detail}; check its pane for a question or prompt waiting on a human",
+            wake=False,
+        )
 
     def _record_orchestrator_transport_failure(self, detail: str) -> None:
         key = f"orchestrator-transport:{hashlib.sha256(detail.encode()).hexdigest()}"
