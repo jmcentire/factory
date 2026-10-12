@@ -191,7 +191,8 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/strategy_plan.py \
 		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
-		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
+		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
+		harness/with_secret.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
@@ -204,7 +205,8 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/strategy_plan.py \
 		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
-		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
+		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
+		harness/with_secret.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py

@@ -1090,6 +1090,41 @@ def test_relay_guard_refuses_a_large_leak_despite_pipefail(tmp_path: Path, attem
     assert r.returncode == 80 and "oracle-leak refusal" in r.stderr, (attempt, r.returncode)
 
 
+def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path) -> None:
+    """A dummy value, as every new credential use is proven first (#15)."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    dummy = "dummy-npm-token-0123456789"
+    (secrets / "GH_PACKAGES_TOKEN").write_text(dummy + "\n", encoding="utf-8")
+    name = "npm_config_//npm.pkg.example/:_authToken"  # no shell can assign this name
+    child = (
+        "import os, sys\n"
+        f"value = os.environ[{name!r}]\n"
+        "print('stdout', value)\n"
+        "print('error:', value, 'is not a command', file=sys.stderr)\n"
+        "sys.exit(3 if value == " + repr(dummy) + " else 9)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets),
+         f"{name}=GH_PACKAGES_TOKEN", "--", sys.executable, "-c", child],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 3, result.stderr  # the child saw the exact value
+    assert dummy not in result.stdout + result.stderr
+    assert result.stdout == f"stdout [REDACTED:{name}]\n"
+    assert f"error: [REDACTED:{name}] is not a command" in result.stderr
+    assert name not in os.environ
+
+    missing = subprocess.run(
+        [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets),
+         "OTHER_TOKEN", "--", "true"],
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode == 78 and "OTHER_TOKEN" in missing.stderr
+
+
 def test_relay_file_refuses_binary_content(tmp_path: Path) -> None:
     """$(cat) drops NULs, so the guards would judge different bytes than the seat receives."""
     plain = Path(tempfile.mkdtemp(prefix="relay-"))
