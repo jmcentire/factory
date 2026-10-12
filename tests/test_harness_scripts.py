@@ -1667,6 +1667,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         'if [ "$1" = list-windows ]; then '
         'printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
         'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
+        'if [ "$1" = "${TMUX_STUB_FAIL-}" ]; then exit 1; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
         encoding="utf-8",
@@ -2163,6 +2164,49 @@ def test_factory_task_mismatch_has_zero_tmux_or_harness_mutation(tmp_path: Path)
     assert not (root / "TASK.md").exists()
     assert not tmux_log.exists()
     assert "tmux-session" not in ResourceLedger(root, "r1").latest()
+
+
+IGNITION_FILES = ("harness.json", "TASK.md")
+
+
+def test_failed_ignition_leaves_nothing_that_refuses_a_retry(tmp_path: Path) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _ = factory_ignition_env(tmp_path, root)
+    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+
+    failed = run(ignite, operator, {**env, "TMUX_STUB_FAIL": "new-session"})
+    assert failed.returncode == 70, failed.stdout + failed.stderr
+    assert not [name for name in IGNITION_FILES if (root / name).exists()]
+    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
+
+    retried = run(ignite, operator, env)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert all((root / name).exists() for name in IGNITION_FILES)
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["tmux-session-2"]["status"] == "active"
+
+
+def test_ignition_refuses_while_another_ignition_of_the_run_holds_the_lock(
+    tmp_path: Path,
+) -> None:
+    import fcntl
+
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    # The concurrent winner's file: a losing attempt must neither refuse past it nor remove it.
+    (root / "TASK.md").write_text("winner\n", encoding="utf-8")
+    with open(root / "ignition.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = run(
+            ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+            operator,
+            env,
+        )
+    assert result.returncode == 75, result.stdout + result.stderr
+    assert (root / "TASK.md").read_text() == "winner\n"
+    assert not (root / "harness.json").exists() and not tmux_log.exists()
 
 
 # --------------------------------------------------------------------------

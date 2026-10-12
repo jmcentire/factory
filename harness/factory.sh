@@ -85,6 +85,15 @@ case "$FACTORY_RUN_STATE" in
     echo "factory: run $RUN is $FACTORY_RUN_STATE and cannot be ignited" >&2
     exit 66 ;;
 esac
+# One ignition per run at a time. The lock is on fd 9's open file description, so it is held
+# until this shell exits (a crash included) and never outlives it; tmux is started with fd 9
+# closed so the tmux server cannot inherit it. Every check and write below happens under it,
+# so the cleanup on a failed attempt can only ever remove this attempt's own files.
+exec 9>>"$ROOT/ignition.lock"
+python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null || {
+  echo "factory: another ignition of $RUN is in progress" >&2
+  exit 75
+}
 [ ! -e "$FACTORY_HARNESS_META" ] && [ ! -L "$FACTORY_HARNESS_META" ] || {
   echo "factory: harness metadata already exists for $RUN" >&2
   exit 65
@@ -92,6 +101,28 @@ esac
 tmux has-session -t "$RUN" 2>/dev/null && {
   echo "factory: tmux session '$RUN' already exists; it is not adopted" >&2
   exit 65
+}
+# Each attempt records its own tmux-session resource: a terminal record cannot return to
+# planned, so a retry after an attempt that removed its session (abandoned, residue=false)
+# takes the next id. Any other earlier status is unresolved residue and is refused.
+SESSION_RESOURCE=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" |
+  python3 -c '
+import json, sys
+attempts = {
+    rid: r.get("status") for rid, r in json.load(sys.stdin).get("resources", {}).items()
+    if r.get("resource_type") == "tmux-session"
+}
+open_ = sorted(f"{rid}={status}" for rid, status in attempts.items() if status != "abandoned")
+if open_:
+    raise SystemExit("factory: an earlier ignition left " + ", ".join(open_) +
+                     "; disposition it before retrying")
+print("tmux-session" if not attempts else f"tmux-session-{len(attempts) + 1}")
+') || exit 65
+IGNITION_FILES=""
+cleanup_ignition() {
+  rm -f "$TASK_TMP"
+  # A failed attempt leaves nothing that refuses the next one (exit 65 "already exists").
+  [ -z "$IGNITION_FILES" ] || rm -f "$ROOT/harness.json" "$ROOT/TASK.md"
 }
 
 REQUEST="$ROOT/evidence/intake/execution-request.json"
@@ -101,7 +132,7 @@ REQUEST="$ROOT/evidence/intake/execution-request.json"
 }
 
 TASK_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-task.XXXXXX")"
-trap 'rm -f "$TASK_TMP"' EXIT
+trap cleanup_ignition EXIT
 if [ -f "$TASK_IN" ]; then
   cp "$TASK_IN" "$TASK_TMP"
 else
@@ -173,6 +204,9 @@ case "$ORCHESTRATOR_AGENT" in
     ;;
 esac
 
+# No harness metadata exists yet, so a file here can only be left by an ignition that
+# failed, and is replaced.
+IGNITION_FILES=1
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
@@ -299,7 +333,7 @@ FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
 
 resource_event() {
   factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
-    --resource-id tmux-session --resource-type tmux-session --identifier "$RUN" \
+    --resource-id "$SESSION_RESOURCE" --resource-type tmux-session --identifier "$RUN" \
     --creator-action harness-ignition --ownership run-owned \
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \
     --evidence-json "{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\"}" \
@@ -367,9 +401,10 @@ esac
 mkdir -p "$ROOT/orchestrator"
 chmod 700 "$ROOT/orchestrator"
 mkdir -p "$ROOT/orchestrator/bin"
-cp "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
-cp "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
-cp "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
+# -f: a failed earlier attempt left these read-only; the retry replaces them.
+cp -f "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
+cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
+cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
@@ -392,7 +427,7 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py"
-if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD"; then
+if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2
   exit 70
@@ -421,6 +456,7 @@ if ! tmux new-window -t "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
   echo "factory: dispatcher window failed; created tmux session was terminally accounted" >&2
   exit 70
 fi
+IGNITION_FILES=""
 tmux select-window -t "$RUN:validator" 2>/dev/null || true
 resource_event '{}' active
 
