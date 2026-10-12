@@ -4849,6 +4849,27 @@ def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
     assert len(page_events(root)) == 2  # a new occurrence pages again
 
 
+@pytest.mark.parametrize(
+    ("window", "dialog"),
+    [
+        ("validator", "Bash command\n  TaskStop monitor-1\nDo you want to proceed?\n❯ 1. Yes\n"
+                      "  2. No, and tell Claude what to do differently (esc)\n"),
+        ("orchestrator", "Would you like to run the following command?\n  $ rm -f x\n"
+                         "› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n"),
+    ],
+)
+def test_a_seat_waiting_on_a_host_permission_prompt_pages_the_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str
+) -> None:
+    """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    d.check_seat_attention(window, "earlier output\n" + dialog)  # type: ignore[attr-defined]
+    (page,) = page_events(root)
+    assert str(page["detail"]).startswith(f"permission_prompt: {window} has shown this")
+    assert page["wake"] is (window != "orchestrator")
+    assert "permission_prompt" in pages.read_text()
+
+
 def test_a_quota_dead_orchestrator_is_paged_and_no_longer_fed_every_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

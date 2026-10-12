@@ -63,6 +63,14 @@ TRIGGER_PATTERNS: dict[str, str] = {
 # A seat that needs a human and is otherwise silent: a dialog sitting in its pane. Matched on the
 # pane's last lines only, and paged only once it has stayed there (attention_persist_s).
 SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
+    # A host permission dialog: Claude Code's (a PreToolUse "ask" hook raises the same one) or
+    # Codex's approval prompt. Nobody watches a seat's pane; run e's Validator sat 14 min on one.
+    "permission_prompt": re.compile(
+        r"Do you want to (?:proceed|make this edit|create|allow)\b|"
+        r"tell (?:Claude|Codex) what to do differently|"
+        r"Would you like to (?:run the following command|make the following edits)|"
+        r"Allow command\?"
+    ),
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     "usage_limit": re.compile(
         r"usage limit|limit reached|quota (?:reached|exceeded)|resets? in \d+\s*[hm]",
