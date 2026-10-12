@@ -122,8 +122,14 @@ say "## run-owned lanes"
 for role in coder tester; do
   workspace="$ROOT/workspaces/$role"
   if [ ! -d "$workspace" ]; then say "  $role: not dispatched"; continue; fi
-  count=$(git -C "$workspace" rev-list --count HEAD 2>/dev/null || echo 0)
-  head=$(git -C "$workspace" log --oneline -1 2>/dev/null | cut -c1-64)
+  # The lane's .git is agent-written: read its reflog file, never run host git there.
+  commits=$(python3 "$D/lane_watchdog.py" commits --repository "$workspace" 2>/dev/null) || \
+    commits='{"count":"unreadable","latest":null}'
+  count=$(printf '%s' "$commits" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')
+  head=$(printf '%s' "$commits" | python3 -c '
+import json, sys
+latest = json.load(sys.stdin)["latest"]
+print("" if latest is None else (latest["sha"][:12] + " " + latest["subject"])[:64])')
   live=$(tmux display -p -t "$RUN:$role" '#{pane_current_command}' 2>/dev/null || echo gone)
   state=$(head -1 "$ROOT/lanes/$role.state" 2>/dev/null || true)
   say "  $role: $count commits | $live | ${state:-no-state}"

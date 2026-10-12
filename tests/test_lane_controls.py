@@ -314,6 +314,34 @@ def _commit(repo: Path, at: float, name: str) -> None:
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", name], check=True, env=env)
 
 
+def test_status_counts_lane_commits_without_running_host_git(tmp_path: Path) -> None:
+    """A lane's .git is agent-written, so status reads its reflog file. A planted fsmonitor or
+    signature program never runs, because no git process starts at all."""
+
+    repo = tmp_path / "lane"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _commit(repo, T0, "first")
+    _commit(repo, T0 + 60, "second")
+    marker = tmp_path / "git-ran"
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    _stub(stubs, "git", f'touch "{marker}"\nexit 1\n')
+    env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}
+
+    shown = subprocess.run(
+        [sys.executable, str(HARNESS / "lane_watchdog.py"), "commits", "--repository", str(repo)],
+        capture_output=True, text=True, check=True, env=env,
+    )
+
+    summary = json.loads(shown.stdout)
+    assert summary["count"] == 2
+    assert summary["latest"]["subject"].endswith("second")
+    assert not marker.exists()
+    status = (HARNESS / "status.sh").read_text(encoding="utf-8")
+    assert 'git -C "$workspace"' not in status
+    assert '"$D/lane_watchdog.py" commits --repository "$workspace"' in status
+
+
 class Watched:
     def __init__(self, tmp_path: Path, *, caps: dict[str, object] | None = None,
                  qualify: dict[str, object] | None = None) -> None:

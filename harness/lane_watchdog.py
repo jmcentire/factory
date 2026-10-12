@@ -529,10 +529,21 @@ def main(argv: list[str] | None = None) -> int:
                       help="a resumed lane turn: carry totals, watch only what follows")
     report = commands.add_parser("report", help="each lane's commits, wall time and spend")
     report.add_argument("--root", type=pathlib.Path, required=True)
+    commits = commands.add_parser(
+        "commits",
+        help="a lane repository's commit count and latest commit, read from its reflog file; "
+        "status.sh uses this because host git there would run the agent's configuration",
+    )
+    commits.add_argument("--repository", type=pathlib.Path, required=True)
     arguments = parser.parse_args(argv)
     if arguments.command == "report":
         for row in lane_report(arguments.root):
             print(json.dumps(row, sort_keys=True))
+        return 0
+    if arguments.command == "commits":
+        made = read_commits(arguments.repository, 0)
+        latest = made[-1] if made else None
+        print(json.dumps({"count": len(made), "latest": latest}, sort_keys=True))
         return 0
     try:
         verdict = LaneWatch(root=arguments.root, slot=arguments.slot).run(
