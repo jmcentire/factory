@@ -608,9 +608,11 @@ two separate claims about two separate parties — keep them apart.**
    more) into a store outside both lane repositories, then make it read-only
    (`chmod -R a-w`) and point each lane's package-manager cache or vendor path at it
    (`DENO_DIR`, `npm_config_cache`, `CARGO_HOME` or the stack's equivalent). Lanes may read the
-   store and may not write it. Verify it by resolving each declared dependency with the network
-   off. Declare a dependency the Architecture omitted by amending the Architecture, not by
-   adding it to the store.
+   store and may not write it. Verify the
+   store offline with `deno run --cached-only` (or the stack's offline flag). Deno 2.7 rejects
+   `--cached-only` on `check`, `info`, `cache`, `lint` and `fmt`, so a documented check must be a
+   command you ran on the run's pinned runtime. Declare a dependency the Architecture omitted by
+   amending the Architecture, not by adding it to the store.
 
 3. **Dispatch the Coder and the Tester with no channel between them.** Both read the same
    signed artifacts and contracts; neither can see or reach the other's work.

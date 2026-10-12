@@ -29,3 +29,10 @@ def test_declared_dependencies_are_cached_read_only_before_dispatch() -> None:
     cache = phase_b.index("Cache the declared dependencies")
     assert phase_b.index("Sign the run tool policy") < cache < phase_b.index("Dispatch the Coder")
     assert "read-only" in phase_b[cache:phase_b.index("Dispatch the Coder")]
+
+
+def test_procedure_names_projection_for_both_lanes_and_the_offline_check() -> None:
+    assert "refuses projection for **both** lanes" in PROCEDURE
+    assert "deno run --cached-only" in PROCEDURE
+    # Deno 2.7 rejects --cached-only on check (dogfood #57).
+    assert "deno check --cached-only" not in PROCEDURE
