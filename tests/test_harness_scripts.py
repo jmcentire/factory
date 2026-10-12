@@ -9,6 +9,7 @@ the repository's own .harness/ or DIRECTIVES/.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -1088,6 +1089,41 @@ def test_relay_guard_refuses_a_large_leak_despite_pipefail(tmp_path: Path, attem
     )
     shutil.rmtree(plain)
     assert r.returncode == 80 and "oracle-leak refusal" in r.stderr, (attempt, r.returncode)
+
+
+def test_spawn_ledger_signals_only_a_recorded_live_process(tmp_path: Path) -> None:
+    """#70: the target of a signal comes from the spawn record, never a process-table search."""
+    spawn = [sys.executable, str(HARNESS / "spawn.py")]
+    root = ["--root", str(tmp_path)]
+
+    def call(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([*spawn, *args], capture_output=True, text=True)
+
+    started = call("start", *root, "--name", "probe", "--", "sleep", "30")
+    assert started.returncode == 0, started.stderr
+    pid = int(started.stdout)
+    try:
+        unknown = call("signal", *root, "--name", "deno-run-frozen")
+        assert unknown.returncode == 66  # not recorded: nothing is searched for, nothing signalled
+
+        ledger = tmp_path / "spawns.jsonl"
+        recorded = ledger.read_text()
+        ledger.write_text(recorded.replace('"started":"', '"started":"reused '))
+        reused = call("signal", *root, "--name", "probe")
+        assert reused.returncode == 75 and "refused" in reused.stdout
+        os.kill(pid, 0)  # a pid that no longer matches its record is left alone
+
+        ledger.write_text(recorded)
+        signalled = call("signal", *root, "--name", "probe")
+        assert signalled.returncode == 0 and "signalled" in signalled.stdout
+        for _ in range(50):
+            if not subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode:
+                time.sleep(0.1)
+        assert subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode != 0
+        assert "probe: exited" in call("sweep", *root).stdout
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path) -> None:
