@@ -97,3 +97,34 @@ def test_the_gate_is_a_receipt_cursor_not_an_empty_file(tmp_path: Path) -> None:
     admitted = admission(tmp_path, root)
     assert admitted.returncode == 0, admitted.stdout + admitted.stderr
     assert blocking.read_text() == ""
+
+
+def test_a_consumed_blocking_event_can_be_reopened(tmp_path: Path) -> None:
+    """dogfood #72: a consumed event comes back only as a new reopen event citing its digest,
+    with its own write receipt, so the gate shuts again until it is dispositioned."""
+
+    root = tmp_path / ".harness" / "runs" / "r1"
+    append_blockers(root, "validator", BLOCK)
+
+    def reopen(digest: str) -> subprocess.CompletedProcess[str]:
+        return run(
+            [
+                sys.executable, str(HARNESS / "attention_gate.py"), "reopen", "--root", str(root),
+                "--lane", "validator", "--event-digest", digest,
+                "--reason", "the narrowed consume did not cover this subject",
+            ],
+            tmp_path,
+        )
+
+    pending = reopen(event_digest(BLOCK))
+    assert pending.returncode == 70 and "consumed" in pending.stderr
+    assert consume(tmp_path, root, "narrow", event_digest(BLOCK)).returncode == 0
+    assert admission(tmp_path, root).returncode == 0
+
+    reopened = reopen(event_digest(BLOCK))
+    assert reopened.returncode == 0, reopened.stdout + reopened.stderr
+    event = json.loads(reopened.stdout)
+    assert event["class"] == "blocking_reopened" and event["reopens"] == event_digest(BLOCK)
+    assert admission(tmp_path, root).returncode == 81
+    assert consume(tmp_path, root, "resolve", event_digest(event)).returncode == 0
+    assert admission(tmp_path, root).returncode == 0

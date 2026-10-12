@@ -608,6 +608,8 @@ dependency-free (bash + python3 + git):
   repeats admission rather than becoming authority. Admission is a cursor over the receipts:
   every event with a `blocking_written` receipt needs its own `blocking_consumed` receipt, so
   emptying the file opens nothing, and a receipted event missing from the file is restored.
+  `attention_gate.py reopen --root <run> --lane <lane> --event-digest <d> --reason <text>`
+  reopens a consumed event as a new `blocking_reopened` event citing it, with its own receipt.
 - `harness/consume_block.sh` — locks the exact pending subject, rejects malformed producer events,
   requires exactly one durable producer receipt plus a typed disposition, retains and hashes the
   run-owned evidence bytes, and fsyncs the receipt plus its parent before durably releasing the

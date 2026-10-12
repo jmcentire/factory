@@ -146,6 +146,13 @@ def validate_blocking_event(event: object) -> dict[str, object]:
             raise AttentionGateError("orchestrator response has unknown or missing fields")
         _bounded_text(event["response"], field="response")
         _bounded_text(event["wake"], field="wake")
+    elif cls == "blocking_reopened":
+        # A consumed event cannot come back by itself; a reopen is a new event naming it (#72).
+        if set(event) != {"ts", "class", "reopens", "evidence"} or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(event["reopens"])
+        ):
+            raise AttentionGateError("blocking reopen has unknown or missing fields")
+        _bounded_text(event["evidence"], field="evidence")
     elif cls == "orchestrator_dead":
         expected = {
             "ts",
@@ -605,6 +612,31 @@ def _lane_pending(root: pathlib.Path, lane: str) -> bool:
     return _file_has_bytes(path)
 
 
+def reopen_blocking_event(
+    root: pathlib.Path, lane: str, event_digest: str, reason: str
+) -> dict[str, object]:
+    """Reopen one consumed blocking event as a new pending event that cites it (#72)."""
+
+    root = pathlib.Path(root)
+    if lane not in _LANES:
+        raise AttentionGateError("invalid blocking lane")
+    lock_fd = acquire_attention_lock(root)
+    try:
+        written, consumed = _lane_receipts(root / "events.jsonl", lane)
+    finally:
+        os.close(lock_fd)
+    if event_digest not in written or event_digest not in consumed:
+        raise AttentionGateError("only a receipted, consumed blocking event can be reopened")
+    event: dict[str, object] = {
+        "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "class": "blocking_reopened",
+        "reopens": event_digest,
+        "evidence": reason,
+    }
+    append_blocking_event(root, lane, event)
+    return event
+
+
 def _pending_paths(root: pathlib.Path, lanes: tuple[str, ...]) -> tuple[pathlib.Path, ...]:
     return tuple(
         root / "lanes" / f"{lane}.blocking"
@@ -717,6 +749,11 @@ def main() -> int:
     check = subparsers.add_parser("check")
     check.add_argument("--root", type=pathlib.Path, required=True)
     check.add_argument("--lane", choices=sorted(_LANES), required=True)
+    reopen = subparsers.add_parser("reopen")
+    reopen.add_argument("--root", type=pathlib.Path, required=True)
+    reopen.add_argument("--lane", choices=sorted(_LANES), required=True)
+    reopen.add_argument("--event-digest", required=True)
+    reopen.add_argument("--reason", required=True)
     refusal = subparsers.add_parser("refusal-event")
     refusal.add_argument("--root", type=pathlib.Path, required=True)
     refusal.add_argument("--kind", required=True)
@@ -725,7 +762,16 @@ def main() -> int:
     refusal.add_argument("--exit-code", type=int, default=70)
     arguments = parser.parse_args()
     try:
-        if arguments.command == "refusal-event":
+        if arguments.command == "reopen":
+            print(
+                json.dumps(
+                    reopen_blocking_event(
+                        arguments.root, arguments.lane, arguments.event_digest, arguments.reason
+                    ),
+                    sort_keys=True,
+                )
+            )
+        elif arguments.command == "refusal-event":
             append_refusal_event(
                 arguments.root,
                 kind=arguments.kind,
