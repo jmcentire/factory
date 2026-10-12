@@ -198,7 +198,7 @@ def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path
 
 
 def test_an_orchestrator_status_probe_to_an_idle_lane_exits_cleanly(tmp_path: Path) -> None:
-    """The Orchestrator's own delivery is not echoed into its activity feed, which refuses it as a source."""
+    """An Orchestrator delivery is not echoed into its own activity feed."""
 
     operator, root, env, _ = lane_fixture(tmp_path)
     probe = run(
