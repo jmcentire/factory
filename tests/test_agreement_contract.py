@@ -360,6 +360,33 @@ def run_probe(
     return json.loads(completed.stdout)
 
 
+def test_probe_judges_the_candidate_commit_not_what_its_repository_planted(
+    tmp_path: Path,
+) -> None:
+    """The candidate repository is agent-written. Its own attributes cannot hide the agreement
+    oracle from the probe, and its filter driver never runs on the host."""
+
+    root, _artifacts = agreement_fixture(
+        tmp_path,
+        [("R1.1", ["hold", "quote"], "Quote and hold agree.")],
+    )
+    candidate, sha = create_probe_candidate(tmp_path)
+    marker = tmp_path / "smudge-ran"
+    (candidate / ".git" / "info" / "attributes").write_text(
+        "agreement_test.py export-ignore\n* filter=plant\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "config", "filter.plant.smudge", f"sh -c 'touch {marker}; cat'"],
+        cwd=candidate,
+        check=True,
+    )
+
+    producer = run_probe(tmp_path, root, candidate, sha, "producer")
+
+    assert producer["agreement_oracle_digest"]
+    assert not marker.exists()
+
+
 def test_two_direction_probe_evidence_binds_candidate_and_oracles(tmp_path: Path) -> None:
     root, artifacts = agreement_fixture(
         tmp_path,

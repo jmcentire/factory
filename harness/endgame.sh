@@ -85,13 +85,14 @@ if not path.is_dir():
     raise SystemExit("endgame: candidate resource path is invalid")
 print(path)
 ' "$CANDIDATE_RESOURCE") || { rc=$?; refusal_event "candidate resource resolution refused" "$rc"; exit "$rc"; }
-git -C "$CANDIDATE" cat-file -e "$SHA^{commit}" 2>/dev/null || {
-  refusal_event "final SHA is not a commit in the candidate resource"
-  echo "endgame: $SHA is not a commit in run resource $CANDIDATE_RESOURCE" >&2
+# The candidate resource may be a lane repository, whose .git (config, hooks, attributes,
+# replace refs) the agent wrote. Every Git read of it goes through host_git.py: nothing it
+# planted runs on the host, and the bytes judged are exactly $SHA's (factory_runtime/host_git.py).
+python3 "$D/host_git.py" resolve --repository "$CANDIDATE" --commit "$SHA" >/dev/null || {
+  refusal_event "final SHA is not exactly a commit in the candidate resource"
+  echo "endgame: $SHA is not exactly a commit in run resource $CANDIDATE_RESOURCE" >&2
   exit 70
 }
-RESOLVED=$(git -C "$CANDIDATE" rev-parse --verify "$SHA^{commit}")
-[ "$RESOLVED" = "$SHA" ] || { refusal_event "final SHA did not resolve exactly"; echo "endgame: final SHA did not resolve exactly" >&2; exit 70; }
 
 # A green local suite is not evidence that producer/consumer paths agree. The
 # Phase-A agreement register names every cross-path obligation; Phase C must now
@@ -130,15 +131,21 @@ resource_event() {
     --actor endgame-validator >/dev/null
 }
 resource_event '{}' planned
-mkdir -p "$FRESH"
-if ! git -C "$CANDIDATE" archive "$SHA" | tar -x -C "$FRESH"; then
-  resource_event '{"reason":"candidate archive failed","residue":true}' failed || true
-  refusal_event "candidate archive failed"
+mkdir -p "$(dirname "$FRESH")"
+if ! python3 "$D/host_git.py" materialize --repository "$CANDIDATE" --commit "$SHA" \
+  --destination "$FRESH" --admit-symlinks >/dev/null; then
+  resource_event '{"reason":"candidate materialization failed","residue":true}' failed || true
+  refusal_event "candidate materialization failed"
   exit 70
 fi
-( cd "$FRESH" && git init --quiet -b endgame/subject && git add -A && \
-  git -c user.name=harness -c user.email=harness@local \
-    commit --quiet -m "endgame subject $SHA" )
+fresh_git() { python3 "$D/host_git.py" run --repository "$FRESH" -- "$@"; }
+if ! { fresh_git init --quiet -b endgame/subject >/dev/null && fresh_git add -A && \
+  fresh_git -c user.name=harness -c user.email=harness@local \
+    commit --quiet -m "endgame subject $SHA" >/dev/null; }; then
+  resource_event '{"reason":"endgame checkout could not be recorded","residue":true}' failed || true
+  refusal_event "endgame checkout could not be recorded"
+  exit 70
+fi
 resource_event '{}' active
 
 FAILED=0
@@ -190,7 +197,12 @@ fi
 
 say "== exact-subject and run-owned-resource hygiene =="
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || FAILED=1
-if [ -n "$(git -C "$FRESH" status --porcelain --untracked-files=all)" ]; then
+# The gates above ran candidate code inside $FRESH, so its .git is no longer the host's either.
+# A status that could not be read is not a clean status.
+if ! FRESH_STATUS=$(fresh_git status --porcelain --untracked-files=all); then
+  say "   endgame checkout status could not be read; evidence no longer names one subject"
+  FAILED=1
+elif [ -n "$FRESH_STATUS" ]; then
   say "   endgame checkout changed while judging; evidence no longer names one subject"
   FAILED=1
 fi

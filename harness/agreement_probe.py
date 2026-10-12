@@ -18,17 +18,19 @@ import pathlib
 import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 from collections.abc import Sequence
 from typing import Any
 
 from agreement_contract import WITNESS_SCHEMA
 
+from factory_runtime.host_git import HostGitError, materialize_commit, resolve_commit_tree
+
 MAX_COMMAND_BYTES = 256 * 1024
 MAX_PATCH_BYTES = 32 * 1024 * 1024
 MAX_SELECTED_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_CANDIDATE_FILES = 200_000
 
 
 class ProbeError(RuntimeError):
@@ -110,53 +112,23 @@ def load_command(path: pathlib.Path, label: str) -> tuple[list[str], str]:
     return value, address(raw)
 
 
-def git(
-    repo: pathlib.Path, *arguments: str, capture: bool = True
-) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *arguments],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-
-
 def extract_candidate(repo: pathlib.Path, candidate_sha: str, destination: pathlib.Path) -> None:
-    archive = destination.parent / "candidate.tar"
-    with archive.open("wb") as stream:
-        completed = subprocess.run(
-            ["git", "-C", str(repo), "archive", "--format=tar", candidate_sha],
-            stdin=subprocess.DEVNULL,
-            stdout=stream,
-            stderr=subprocess.PIPE,
-            check=False,
+    """Write exactly the candidate commit's regular files from raw objects.
+
+    The candidate repository is agent-written; ``git archive`` there would run its smudge
+    filters and honor its ``export-ignore`` and replace refs (factory_runtime/host_git.py)."""
+
+    try:
+        materialize_commit(
+            repo,
+            candidate_sha,
+            destination,
+            admit_symlinks=False,
+            max_files=MAX_CANDIDATE_FILES,
+            max_total_bytes=MAX_ARCHIVE_BYTES,
         )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", errors="replace")[-2000:]
-        raise ProbeError(f"cannot archive candidate: {detail}")
-    if archive.stat().st_size > MAX_ARCHIVE_BYTES:
-        raise ProbeError("candidate archive exceeds its byte ceiling")
-    destination.mkdir()
-    with tarfile.open(archive, "r:") as bundle:
-        members = bundle.getmembers()
-        for member in members:
-            relative = safe_relative(member.name.rstrip("/"), "candidate archive member")
-            if not (member.isdir() or member.isfile()):
-                raise ProbeError(f"candidate archive contains a non-file member: {member.name}")
-            target = destination.joinpath(*relative.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if member.isdir():
-                target.mkdir(exist_ok=True)
-                continue
-            source = bundle.extractfile(member)
-            if source is None:
-                raise ProbeError(f"cannot extract candidate member: {member.name}")
-            raw = source.read(MAX_SELECTED_BYTES + 1)
-            if len(raw) > MAX_SELECTED_BYTES:
-                raise ProbeError(f"candidate member exceeds its byte ceiling: {member.name}")
-            target.write_bytes(raw)
-            os.chmod(target, member.mode & 0o777)
+    except HostGitError as exc:
+        raise ProbeError(f"cannot extract candidate: {exc}") from exc
 
 
 def file_manifest(root: pathlib.Path, paths: Sequence[str]) -> tuple[str, int]:
@@ -259,9 +231,12 @@ def probe(arguments: argparse.Namespace) -> dict[str, Any]:
         char in "0123456789abcdef" for char in arguments.candidate_sha
     ):
         raise ProbeError("candidate SHA must be a lowercase hexadecimal object id")
-    resolved = git(repo, "rev-parse", "--verify", f"{arguments.candidate_sha}^{{commit}}")
-    if resolved.returncode != 0 or resolved.stdout.decode().strip() != arguments.candidate_sha:
-        raise ProbeError("candidate SHA does not resolve exactly in the candidate repository")
+    try:
+        resolve_commit_tree(repo, arguments.candidate_sha)
+    except HostGitError as exc:
+        raise ProbeError(
+            f"candidate SHA does not resolve exactly in the candidate repository: {exc}"
+        ) from exc
     local_command, local_command_digest = load_command(arguments.local_command, "local command")
     agreement_command, agreement_command_digest = load_command(
         arguments.agreement_command, "agreement command"
@@ -398,7 +373,7 @@ def main() -> int:
         parser.error("--timeout must be between 1 and 3600 seconds")
     try:
         print(json.dumps(probe(arguments), sort_keys=True))
-    except (ProbeError, OSError, tarfile.TarError) as exc:
+    except (ProbeError, OSError) as exc:
         print(f"agreement probe refused: {exc}", file=sys.stderr)
         return 71
     return 0

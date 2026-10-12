@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -8850,9 +8851,18 @@ _MASKING_MUTATIONS = [
     (
         "endgame.sh",
         _ENDGAME_EXIT_RE,
-        '  refusal_event "final SHA is not a commit in the candidate resource"\n',
+        '  refusal_event "final SHA is not exactly a commit in the candidate resource"\n',
     ),
-    ("endgame.sh", _ENDGAME_EXIT_RE, 'refusal_event "final SHA did not resolve exactly"; '),
+    (
+        "endgame.sh",
+        _ENDGAME_EXIT_RE,
+        '  refusal_event "candidate materialization failed"\n',
+    ),
+    (
+        "endgame.sh",
+        _ENDGAME_EXIT_RE,
+        '  refusal_event "endgame checkout could not be recorded"\n',
+    ),
 ]
 
 
@@ -9225,28 +9235,33 @@ def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> No
     assert len(chain.read_text().splitlines()) == 1  # no row appended
 
 
-def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
+def test_endgame_materialization_failure_site_is_driven_and_leaves_its_signal(
     tmp_path: Path,
 ) -> None:
-    """Round-8 (GLM #94 item 2): endgame.sh:100's ``candidate archive failed``
-    refusal was an UNDRIVEN guard — a control that looks live but no test made
-    its ``git archive | tar -x`` pipeline fail. It is a genuine environmental
-    degrade-never-wedge site (archive/extract I/O failure), so per the rule it
-    earns a DRIVING test rather than deletion. ``tar`` is used only at that line,
-    so a PATH-shadowed failing ``tar`` drives the guard true without disturbing
-    the real git steps before it, and the site must leave exactly one registered
-    refusal event and exit 70."""
+    """Endgame's ``candidate materialization failed`` refusal is a genuine environmental
+    degrade-never-wedge site (the candidate's objects cannot be read), so it earns a DRIVING
+    test (Round-8, GLM #94 item 2: it replaced the ``git archive | tar -x`` site). Only the
+    materializer asks ``git cat-file --batch-check``, so a PATH-shadowed ``git`` that fails that
+    one request drives the guard without disturbing the real Git steps before it, and the site
+    must leave exactly one registered refusal event and exit 70."""
     operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
     sha = str(target_state["resolved_commit"])
+    real_git = shutil.which("git")
+    assert real_git is not None
 
-    stub_dir = tmp_path / "failtar-bin"
+    stub_dir = tmp_path / "failgit-bin"
     stub_dir.mkdir()
-    tar_stub = stub_dir / "tar"
-    tar_stub.write_text(
-        "#!/usr/bin/env bash\necho 'stub tar: refusing to extract' >&2\nexit 1\n",
+    git_stub = stub_dir / "git"
+    git_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'for a in "$@"; do\n'
+        '  if [ "$a" = --batch-check ]; then echo "stub git: object store unreadable" >&2; '
+        "exit 1; fi\n"
+        "done\n"
+        f'exec {shlex.quote(real_git)} "$@"\n',
         encoding="utf-8",
     )
-    tar_stub.chmod(0o755)
+    git_stub.chmod(0o755)
     install_resident_orchestrator_stub(stub_dir, root)
 
     env = _factory_cli_env()
@@ -9267,7 +9282,70 @@ def test_endgame_archive_failure_site_is_driven_and_leaves_its_signal(
     assert r.returncode == 70, (r.returncode, r.stdout, r.stderr)
     rows = _refusal_events(root)
     assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
-    assert "candidate archive failed" in str(rows[0]["detail"])
+    assert "candidate materialization failed" in str(rows[0]["detail"])
+
+
+def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_planted(
+    tmp_path: Path,
+) -> None:
+    """Gate HGT end to end: the candidate's own Git attributes and filter config are agent
+    writable. Endgame's judged checkout still holds every path of the named commit (no
+    ``export-ignore`` hides the tests), no planted smudge filter runs on the host, and the
+    hygiene status reads the checkout cleanly. ``make`` is stubbed red so the run stops at the
+    verdict without running the synthetic target's gates."""
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    sha = str(target_state["resolved_commit"])
+    source = Path(str(target_state["source_root"]))
+    git_directory = Path(
+        subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    marker = tmp_path / "smudge-ran"
+    (git_directory / "info").mkdir(exist_ok=True)
+    (git_directory / "info" / "attributes").write_text(
+        "tests export-ignore\ntests/** export-ignore\n* filter=plant\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "filter.plant.smudge",
+         f"sh -c 'touch {marker}; cat'"],
+        check=True,
+    )
+    stub_dir = tmp_path / "redmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+
+    r = run(
+        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        tmp_path,
+        env,
+    )
+
+    assert "endgame verdict: RED" in r.stdout, (r.returncode, r.stdout, r.stderr)
+    assert "evidence no longer names one subject" not in r.stdout
+    assert not marker.exists()
+    (judged,) = (root / "endgame").glob("endgame-checkout-*")
+    listed = subprocess.run(
+        ["git", "-C", str(source), "ls-tree", "-r", "--name-only", sha],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert any(name.startswith("tests/") for name in listed)
+    for name in listed:
+        assert (judged / name).read_bytes() == subprocess.run(
+            ["git", "-C", str(source), "cat-file", "blob", f"{sha}:{name}"],
+            check=True,
+            capture_output=True,
+        ).stdout
 
 
 def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
