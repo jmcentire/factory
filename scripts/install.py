@@ -260,11 +260,22 @@ def _kindex_check(path_env: str) -> Check:
     return Check("ok", "kindex", f"kindex-lite {match.group(0)} at {lite}")
 
 
+def _timeout_check(path_env: str) -> Check:
+    """mutate.sh and flake.sh refuse without GNU `timeout`, which macOS does not ship."""
+
+    found = shutil.which("timeout", path=path_env) or shutil.which("gtimeout", path=path_env)
+    if found is None:
+        return Check("warn", "timeout", "GNU timeout not found; mutate.sh and flake.sh refuse. "
+                     "Fix: brew install coreutils")
+    return Check("ok", "timeout", found)
+
+
 def doctor(layout: Layout, path_env: str) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
     checks.append(_kindex_check(path_env))
+    checks.append(_timeout_check(path_env))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "
                             "(https://claude.com/claude-code)"))

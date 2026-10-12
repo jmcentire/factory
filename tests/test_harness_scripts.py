@@ -512,7 +512,7 @@ def read_chain(path: Path) -> list[dict[str, object]]:
 def dl(tmp: Path, *args: str) -> subprocess.CompletedProcess[str]:
     ledger = tmp / "DIRECTIVES" / "ledger.jsonl"
     return run(
-        ["python3", str(HARNESS / "directive.py"), *args],
+        [sys.executable, str(HARNESS / "directive.py"), *args],
         cwd=tmp,
         env_extra={"DIRECTIVE_LEDGER": str(ledger)},
     )
@@ -2575,7 +2575,7 @@ def test_postmortem_refuses_to_invent(tmp_path: Path) -> None:
             }
         )
     )
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path)
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path)
     assert r.returncode == 0, r.stderr
     text = (root / "postmortem.md").read_text()
     assert "UNDERIVED (endgame never ran)" in text
@@ -7099,7 +7099,7 @@ def test_postmortem_reports_silent_clears(tmp_path: Path) -> None:
     )
     (tmp_path / ".harness" / "receipts").mkdir(parents=True)
     (tmp_path / ".harness" / "receipts" / "chain.jsonl").write_text("")
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
     assert r.returncode == 0, r.stderr
     pm = (root / "postmortem.md").read_text()
     assert "SILENT CLEARS" in pm, pm
@@ -7124,7 +7124,7 @@ def test_postmortem_clean_when_all_consumed(tmp_path: Path) -> None:
     )
     (tmp_path / ".harness" / "receipts").mkdir(parents=True)
     (tmp_path / ".harness" / "receipts" / "chain.jsonl").write_text("")
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
     assert r.returncode == 0, r.stderr
     pm = (root / "postmortem.md").read_text()
     assert "no silent clears" in pm, pm

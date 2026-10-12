@@ -155,3 +155,10 @@ def test_make_doctor_judges_the_callers_path_not_makes(tmp_path: Path) -> None:
     )
     path_line = next(line for line in done.stdout.splitlines() if "PATH" in line.split()[:2])
     assert path_line.split()[0] == "ok", done.stdout
+
+
+def test_doctor_warns_without_gnu_timeout(tmp_path: Path) -> None:
+    assert inst._timeout_check(str(tmp_path)).status == "warn"
+    (tmp_path / "gtimeout").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "gtimeout").chmod(0o755)
+    assert inst._timeout_check(str(tmp_path)).status == "ok"

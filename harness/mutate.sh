@@ -130,6 +130,7 @@ if [ -z "${TEST_CMD:-}" ]; then
   echo "  the target's build.test_command declares it, or the Validator selects one." >&2
   exit 64
 fi
+TIMEOUT=$(command -v timeout || command -v gtimeout) || { echo "mutate: needs GNU timeout (macOS: brew install coreutils)" >&2; exit 69; }
 verdict() { ORACLE_VERDICT="$*"; printf '%s: %s\n' "$NAME" "$*"; }
 
 # --- GATE 1: the code under test must load FROM THIS TREE --------------------
@@ -163,7 +164,7 @@ esac
 # slipped past the grep, and was accepted as green. The mutation was then falsely reported
 # KILLED: the exact v8 false-red this gate exists to prevent. The line-146 premise ("GATE 2
 # already proved the clean tree exits 0") is only true now that GATE 2 sees pytest's exit.
-clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
+clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
 clean_out=$(printf '%s' "$clean_full" | tail -3)
 # The kill condition is pytest's EXIT CODE alone — not a grep for "N failed/error" in the
 # summary. The grep was added to catch a collection crash that prints no summary line, but a
@@ -228,7 +229,7 @@ fi
 # manufacture false confidence: in v8 a mutation "survived" the oracle it was aimed
 # at and was killed by a different one, because at zero elapsed interval the
 # mutated fold was mathematically the identity and observable only elsewhere.
-out=$(cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
+out=$(cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
 # A conftest.py SyntaxError (or any collection-time crash) exits non-zero with NO
 # "N failed/error" summary line — pytest prints "ImportError while loading conftest"
 # and a traceback, then stops. The kill condition is the EXIT CODE alone: a collection

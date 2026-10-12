@@ -47,6 +47,7 @@ if [ -z "${TEST_CMD:-}" ]; then
   echo "  the target's build.test_command declares it, or the Validator selects one." >&2
   exit 64
 fi
+TIMEOUT=$(command -v timeout || command -v gtimeout) || { echo "flake: needs GNU timeout (macOS: brew install coreutils)" >&2; exit 69; }
 verdict() { printf '%s: %s\n' "$NAME" "$*"; }
 
 # --- GATE 1: the code under test must load FROM THIS TREE (same rationale as mutate.sh) ---
@@ -71,7 +72,7 @@ esac
 # A red baseline makes every dissenting run look like a flake when it is the same
 # pre-existing red. Establish green once, then vary only the run.
 clean_rc=0
-( cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || clean_rc=$?
+( cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || clean_rc=$?
 if [ "$clean_rc" -ne 0 ]; then
   verdict "INVALID (baseline is not green — a red baseline manufactures false flakes)"
   exit 3
@@ -87,7 +88,7 @@ fi
 exits=()
 for i in $(seq 1 "$RUNS"); do
   rc=0
-  ( cd "$WORK" && PYTHONPATH="$WORK/src" timeout "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || rc=$?
+  ( cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || rc=$?
   exits+=("$rc")
 done
 pass_count=0; fail_count=0
