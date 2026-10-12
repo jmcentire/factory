@@ -799,6 +799,12 @@ The Orchestrator's authority runs over you. You do not own the run.
 
 **You** run the tests. Neither author does.
 
+Before the first test run, integrate the two frozen trees and prove the runner sees the Tester's
+suite: `harness/discovery_check.py --root <run> --tree <integrated tree> --pattern <the Tester's
+test-module glob> -- <the runner's listing command, e.g. deno test --no-run>`. The Coder never
+saw the tests, so its configuration can hide them (an `exclude` that drops `tests/`); a refusal
+is an integration edit you make and record, never a reason to run a subset.
+
 **Gates prove the absence of regression; adversaries find the defects** — batch0 is the worked
 case, stated in `$FACTORY_HOME/docs/practices/oracle-quality.md` (*Gates prevent regression;
 adversaries find defects*). Run every gate; never read a clean gate as a clean bill of health.
