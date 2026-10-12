@@ -31,6 +31,9 @@ MAX_PATCH_BYTES = 32 * 1024 * 1024
 MAX_SELECTED_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_CANDIDATE_FILES = 200_000
+# Probe commands run offline against a pre-fetched dependency store; these name where it is. They
+# are paths, not credentials, and pass through only when the caller set them (dogfood #58).
+DEPENDENCY_CACHE_ENV = ("DENO_DIR", "npm_config_cache", "CARGO_HOME", "GOMODCACHE")
 
 
 class ProbeError(RuntimeError):
@@ -179,6 +182,9 @@ def run_command(
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "CI": "1",
     }
+    environment.update(
+        {name: os.environ[name] for name in DEPENDENCY_CACHE_ENV if name in os.environ}
+    )
     try:
         completed = subprocess.run(
             list(command),
