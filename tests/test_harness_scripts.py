@@ -1320,6 +1320,37 @@ def test_tester_projection_is_interface_only(tmp_path: Path) -> None:
     assert "SECRET-CONTEXT" not in log
 
 
+def test_projection_refuses_when_the_source_status_cannot_be_read(tmp_path: Path) -> None:
+    """An unreadable ``git status`` is not an unchanged checkout. A ``git`` that answers every
+    other question but fails ``status`` must stop the projection, not read as clean."""
+    src = projection_fixture(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    real_git = shutil.which("git")
+    assert real_git is not None
+    stubs = tmp_path / "statusless-bin"
+    stubs.mkdir()
+    (stubs / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        'for a in "$@"; do [ "$a" = status ] && { echo "index unreadable" >&2; exit 128; }; done\n'
+        f'exec {shlex.quote(real_git)} "$@"\n',
+        encoding="utf-8",
+    )
+    (stubs / "git").chmod(0o755)
+    dest = tmp_path / "ws"
+
+    result = run(
+        ["bash", str(HARNESS / "projection.sh"), "coder", str(src), sha, str(dest)],
+        tmp_path,
+        {"PATH": f"{stubs}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
+    )
+
+    assert result.returncode == 67, (result.stdout, result.stderr)
+    assert "status could not be read" in result.stderr
+    assert not dest.exists()
+
+
 def test_projection_refuses_config_outside_immutable_source(tmp_path: Path) -> None:
     src = projection_fixture(tmp_path)
     sha = subprocess.run(
