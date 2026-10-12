@@ -54,14 +54,22 @@ fi
 # The bare-outcome rule is a rule the Validator must remember at compose time, and
 # in run v8 the Validator broke it twice from memory while actively editing the
 # document that states it. A rule an executor must recall is not a control; this
-# makes it one. Blocks test-file paths, test function names, pytest vocabulary and
-# assertion text on the way to the implementation lane. There is no ambient
+# makes it one. Blocks test-file paths and names, test function names, test-runner
+# vocabulary and assertion text on the way to the implementation lane. It matches test
+# DETAIL, never the bare words "test" or "oracle": those blocked a ratified Architecture
+# naming the `test` task and the Coder's own `.factory/spec/oracle-inputs` path (dogfood #66,
+# #80), while `assert balance == 31337` went through. There is no ambient
 # override: an environment variable is not authority, and a bypass a signature
 # never covered is how a guard becomes theater. A genuine false positive is a
 # defect in the filter pattern, repaired through a ratified change — never
 # stepped around at delivery time.
+W='(^|[^A-Za-z0-9_])'
+LEAK_PATTERN="${W}test_[a-z0-9_]+|tests?/[A-Za-z0-9_./-]*\.(py|ts|tsx|js|jsx|mjs|go|rs|rb|java|kt)($|[^A-Za-z0-9_])"
+LEAK_PATTERN+="|[A-Za-z0-9_-]+[._](test|spec)\.[a-z]{1,4}($|[^A-Za-z0-9_])|pytest|conftest|traceback|fixture"
+LEAK_PATTERN+="|assertion|::[A-Za-z_]|${W}assert[A-Za-z]*[[:space:]]*\(|${W}expect[[:space:]]*\("
+LEAK_PATTERN+="|${W}assert[[:space:]]+[^[:space:]]+[[:space:]]*(==|!=|<|>)|Deno\.test"
 if [ "$TO" = "coder" ]; then
-  if printf '%s' "$MSG" | grep -iE 'tests?/[A-Za-z0-9_]+\.py|test_[a-z0-9_]+|(^|[^a-z])tests?($|[^a-z])|pytest|assertion|traceback|fixture|conftest|oracle|::[A-Za-z_]' >/dev/null; then
+  if printf '%s' "$MSG" | grep -iE "$LEAK_PATTERN" >/dev/null; then
     echo "oracle-leak refusal: coder-bound message names a test, fixture, or assertion." >&2
     echo "The Coder never learns how the oracle is built. Report WHAT failed by" >&2
     echo "requirement id, or an observation of the implementation's own behavior." >&2

@@ -8847,6 +8847,36 @@ def test_inject_oracle_leak_refusal_identical_without_override(tmp_path: Path) -
     assert not (tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl").exists()
 
 
+@pytest.mark.parametrize(
+    ("message", "refused"),
+    [
+        # Test detail stays blocked, including the assertion text the old regex let through.
+        ("assert balance == 31337", True),
+        ("assertEquals(total, 3) fails", True),
+        ("expect(res.status).toBe(200) is red", True),
+        ("the case in src/booking_test.ts", True),
+        ("tests/booking.ts covers it", True),
+        ('Deno.test("refunds") is red', True),
+        # Ratified text and the Coder's own paths are deliverable (dogfood #66, #80).
+        ("Basis: the Oracle Contract, section 3, as ratified.", False),
+        ("Read .factory/spec/oracle-inputs/site-route.yaml before routing.", False),
+        ("A8: `deno task test` runs the full suite; keep the task name.", False),
+        ("Requirement R3.1 is violated: the export sends the body twice.", False),
+    ],
+)
+def test_inject_oracle_leak_guard_matches_test_detail_not_words(
+    tmp_path: Path, message: str, refused: bool
+) -> None:
+    plain = Path(tempfile.mkdtemp(prefix="leak-"))
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "coder", message],
+        tmp_path,
+        {"INJECT_VALIDATE_ONLY": "1", "HARNESS_RUN_ROOT": str(plain / "run")},
+    )
+    shutil.rmtree(plain)
+    assert (r.returncode == 80) is refused, (message, r.returncode, r.stderr)
+
+
 def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None:
     """A target pane running a plain shell is never an injection target (exit 77):
     INJECT_ALLOW_SHELL is not read, and nothing is delivered (no send-keys)."""
