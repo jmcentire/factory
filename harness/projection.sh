@@ -23,7 +23,17 @@ EXPECTED=$(git -C "$SRC" rev-parse --verify "$SHA^{commit}" 2>/dev/null) || {
 }
 [ "$EXPECTED" = "$SHA" ] || { echo "refusing: commit did not resolve exactly" >&2; exit 66; }
 TREE=$(git -C "$SRC" rev-parse --verify "$SHA^{tree}")
-[ -z "$(git -C "$SRC" status --porcelain --untracked-files=all)" ] || {
+# A status that could not be read is not a clean status: `[ -z "$(git status)" ]` alone reads a
+# failed git as an unchanged checkout.
+source_is_clean() {
+  local status
+  status=$(git -C "$SRC" status --porcelain --untracked-files=all) || {
+    echo "refusing: source checkout status could not be read" >&2
+    return 1
+  }
+  [ -z "$status" ]
+}
+source_is_clean || {
   echo "refusing: immutable source checkout diverged before projection" >&2
   exit 67
 }
@@ -93,8 +103,7 @@ fi
 
 # Prove the source was unchanged across the copy window; a projection receipt over a moving
 # baseline is not evidence of any one subject.
-[ "$TREE" = "$(git -C "$SRC" rev-parse --verify "$SHA^{tree}")" ] && \
-  [ -z "$(git -C "$SRC" status --porcelain --untracked-files=all)" ] || {
+[ "$TREE" = "$(git -C "$SRC" rev-parse --verify "$SHA^{tree}")" ] && source_is_clean || {
     echo "refusing: immutable source checkout diverged during projection" >&2
     exit 67
   }

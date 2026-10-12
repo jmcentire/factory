@@ -723,6 +723,11 @@ dependency-free (bash + python3 + git):
   so question blocking does not depend on lossy pane sampling and typed status probes or answers
   can queue or resume that conversation. From agent start onward
   the whole repository—including Git hooks and config—is untrusted and host Git is forbidden.
+  Where the harness must still read a commit from such a repository (endgame's candidate, the
+  agreement probe), it goes through `harness/host_git.py` (`factory_runtime/host_git.py`, gate
+  HGT): a closed environment whose `GIT_CONFIG_COUNT` overrides outrank the repository's config
+  (hooks, fsmonitor and every transport off), no replace objects, and a tree written from raw
+  objects, so no planted filter, attribute or replace ref changes what is judged.
   After the pane is dead, a descriptor-relative bounded walk excludes root `.git`, rejects links,
   special entries, nested Git metadata, portable-name collisions, privileged modes and ceiling
   violations, then publishes a content-addressed regular-file snapshot. Commits are useful author
