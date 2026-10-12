@@ -710,6 +710,9 @@ dependency-free (bash + python3 + git):
   `tmux-lanes/`. Every lane process runs under `lane_agent.py run`, which tees its output to the
   lane log and records its end. Only `codex` and `codex-ollama` lanes keep a resumable thread
   for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher.
+  An answer or ruling notice over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
+  at `tmux-lanes/<slot>-inputs/<sha256>.txt` with a `FACTORY_RELAY file=… sha256=…` pointer;
+  the coder leak guard judges the file's bytes before the file is placed.
   Preflight requires a standalone repository whose Git/common directory is local and an agent
   CLI exposing the exact flags the launch uses; the retained launch records its version.
   Codex is launched as the agent harness with a lane-scoped permission profile that reopens the

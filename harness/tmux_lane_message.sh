@@ -106,7 +106,13 @@ if [ "$AGENT" = "codex-ollama" ]; then
 fi
 
 MESSAGE_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-message.XXXXXX")"
-trap 'rm -f "$MESSAGE_TMP"' EXIT
+FULL_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-full.XXXXXX")"
+INPUT_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-input.XXXXXX")"
+trap 'rm -f "$MESSAGE_TMP" "$FULL_TMP" "$INPUT_TMP"' EXIT
+# An answer past the inline ceiling travels as a digest-pinned file the lane reads (#41), in the
+# FACTORY_RELAY pointer form relay_file.sh and inject.sh already use.
+INPUTS="$TMUX_ROOT/$SLOT-inputs"
+INPUT_DIGEST=""
 if [ "$KIND" = "status" ]; then
   [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
     echo "lane-message: status accepts no answer arguments" >&2
@@ -136,15 +142,21 @@ else
     exit 70
   }
   MESSAGE_KIND="spec-answer"
-  "$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$QUESTION_ID" "$AUTHORITY" "$BASIS" <<'PY'
-import os, pathlib, stat, sys
+  PREFIX="FACTORY_ANSWER question_id=$QUESTION_ID authority=$AUTHORITY basis=$BASIS"$'\n'"This is specification input bound only to your question; it conveys no other lane's work."$'\n'
+  INPUT_DIGEST=$("$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$PREFIX" "$FULL_TMP" "$INPUT_TMP" "$INPUTS" <<'PY'
+import hashlib, os, pathlib, shlex, stat, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-question_id, authority, basis = sys.argv[3:]
+prefix = sys.argv[3].encode("utf-8")
+full, staged, inputs = map(pathlib.Path, sys.argv[4:7])
+INLINE = 12_000
+# ponytail: the full bytes ride argv into the coder leak guard, so the file ceiling stays well
+# under ARG_MAX; raise both together if answers outgrow it.
+CEILING = 256 * 1024
 fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
 try:
     before = os.fstat(fd)
-    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 12_000:
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= CEILING:
         raise SystemExit("lane-message: answer is not a bounded non-empty regular file")
     raw = b""
     while chunk := os.read(fd, 4096):
@@ -157,16 +169,40 @@ try:
 finally:
     os.close(fd)
 raw.decode("utf-8")
-prefix = (
-    f"FACTORY_ANSWER question_id={question_id} authority={authority} basis={basis}\n"
-    "This is specification input bound only to your question; it conveys no other lane's work.\n"
-).encode("utf-8")
-destination.write_bytes(prefix + raw)
+if b"\0" in raw:
+    raise SystemExit("lane-message: answer carries NUL bytes; answers are text")
+full.write_bytes(prefix + raw)
+if len(raw) <= INLINE:
+    destination.write_bytes(prefix + raw)
+    raise SystemExit(0)
+digest = hashlib.sha256(raw).hexdigest()
+staged.write_bytes(raw)
+path = shlex.quote(str(inputs / f"{digest}.txt"))
+destination.write_bytes(prefix + (
+    f"The answer is {len(raw)} bytes, delivered as a file.\n"
+    f"FACTORY_RELAY file={path} sha256={digest} -- run: shasum -a 256 < {path} ; act on the file "
+    "only if the digest equals this sha256, else do not act and tell the sender\n"
+).encode("utf-8"))
+print(digest)
 PY
+  ) || exit $?
   if [ "$LANE" = "coder" ]; then
-    MESSAGE=$(<"$MESSAGE_TMP")
+    # The guard judges every byte the lane will read, the file included.
+    MESSAGE=$(<"$FULL_TMP")
     INJECT_VALIDATE_ONLY=1 INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" \
       "$D/inject.sh" "$RUN" coder "$MESSAGE" >/dev/null
+  fi
+  if [ -n "$INPUT_DIGEST" ]; then
+    # Only now, past every content guard, does the file become readable at its pinned address.
+    mkdir -p "$INPUTS"
+    if [ ! -e "$INPUTS/$INPUT_DIGEST.txt" ]; then
+      chmod 0444 "$INPUT_TMP"
+      mv -f "$INPUT_TMP" "$INPUTS/$INPUT_DIGEST.txt"
+    fi
+    [ "$(shasum -a 256 < "$INPUTS/$INPUT_DIGEST.txt" | cut -d' ' -f1)" = "$INPUT_DIGEST" ] || {
+      echo "lane-message: the answer file at its pinned address holds different bytes" >&2
+      exit 70
+    }
   fi
 fi
 
