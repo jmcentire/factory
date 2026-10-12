@@ -261,6 +261,7 @@ class Dispatcher:
         self.promise_window_min = int(cfg.get("promise_window_min") or 10)
         self.orchestrator_mode = str(cfg.get("orchestrator_mode") or "")
         self.last_delivered_cursor = 0
+        self.last_delivery_at = float("-inf")
         self.last_delivered_screen_cursor: int | None = None
         # Plan §0.4c: the signal-deadline watchdog rides this seam. Knobs come
         # only from the frozen generation blob via the CLI door; passes only
@@ -525,10 +526,10 @@ class Dispatcher:
             if current - first < self.attention_persist_s or key in self.paged:
                 continue
             self.paged.add(key)
-            self.page_operator(
-                kind, f"{window} has shown this for {(current - first) / 60:.0f}m: {hit[:200]}",
-                wake=window != "orchestrator",
-            )
+            detail = f"{window} has shown this for {(current - first) / 60:.0f}m: {hit[:200]}"
+            if key == ("orchestrator", "usage_limit"):
+                detail += "; activity now goes to it once per check-in until the limit clears"
+            self.page_operator(kind, detail, wake=window != "orchestrator")
 
     def page_operator(self, kind: str, detail: str, *, wake: bool) -> None:
         """Reach the human, not only the Orchestrator: the run's question channel and a banner."""
@@ -665,6 +666,13 @@ class Dispatcher:
         if (cursor <= self.last_delivered_cursor
                 and screen_cursor == self.last_delivered_screen_cursor):
             return
+        # A quota-dead Orchestrator answers every notice with its limit message and nothing
+        # else (run e: agy, "Individual quota reached ... Resets in 154h", 51 notices). While its
+        # pane shows the limit it gets one notice per check-in interval, enough to notice the
+        # reset, instead of one per pass.
+        if (("orchestrator", "usage_limit") in self.paged
+                and time.monotonic() - self.last_delivery_at < self.audit_interval_min * 60):
+            return
         start = min(self.last_delivered_cursor + 1, cursor)
         report = f"orchestrator/assessment-{cursor}.json"
         # The factory's own interpreter, by absolute path: a bare `python3` in the seat's shell
@@ -705,6 +713,7 @@ class Dispatcher:
             return
         self.last_delivered_cursor = cursor
         self.last_delivered_screen_cursor = screen_cursor
+        self.last_delivery_at = time.monotonic()
         self.event(
             "orchestrator_activity_delivered",
             f"delivered every activity record through cursor {cursor}",

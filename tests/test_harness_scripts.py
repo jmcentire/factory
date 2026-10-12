@@ -4849,6 +4849,41 @@ def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
     assert len(page_events(root)) == 2  # a new occurrence pages again
 
 
+def test_a_quota_dead_orchestrator_is_paged_and_no_longer_fed_every_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#50: run e's agy Orchestrator answered 51 notices with its quota message and looked alive."""
+    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    cursor = {"value": 5}
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: cursor["value"])
+    monkeypatch.setattr(mod, "screen_pending", lambda _root: None)
+    delivered: list[str] = []
+
+    def inject(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        delivered.append(command[3])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    real_run = subprocess.run
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda command, **kw: inject(command) if command[0].endswith("inject.sh")
+        else real_run(command, **kw),  # the question channel still runs
+    )
+    dead = "> FACTORY_ACTIVITY cursors=4..5\nIndividual quota reached. Resets in 154h.\n"
+    d.check_seat_attention("orchestrator", dead)  # type: ignore[attr-defined]
+    (page,) = page_events(root)
+    assert page["wake"] is False and "quota" in pages.read_text()
+
+    d.deliver_pending_activity()  # type: ignore[attr-defined]  # one notice: notices a reset
+    cursor["value"] = 6
+    d.deliver_pending_activity()  # type: ignore[attr-defined]  # withheld until next check-in
+    assert len(delivered) == 1
+
+    d.check_seat_attention("orchestrator", "assessment-6 submitted\n")  # type: ignore[attr-defined]
+    d.deliver_pending_activity()  # type: ignore[attr-defined]
+    assert len(delivered) == 2 and "cursors=6..6" in delivered[1]
+
+
 def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
     """How much of the human a run gets is set once, at ignition, and retained.
     The default is scheduled: all back-and-forth up front, nothing blocking
