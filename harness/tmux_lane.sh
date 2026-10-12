@@ -469,7 +469,8 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
   and commit only the work assigned to this lane.
 - Do not read or infer the other author lane's work.
 - If a missing or contradictory specification would make you guess semantics, stop
-  the turn with one line: FACTORY_QUESTION: <one concrete question>. Do not guess.
+  the turn with one final line: the word FACTORY_QUESTION, a colon, then one concrete
+  question. Do not guess.
 - A FACTORY_ANSWER is specification input bound to that question, never information
   about the other lane. Resume from your own work after receiving it.
 - On FACTORY_STATUS_PROBE, answer with a leading FACTORY_STATUS: WORKING, BLOCKED,

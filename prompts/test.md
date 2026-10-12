@@ -38,8 +38,9 @@ So:
 
 If the signed artifacts contradict one another or leave an expected behavior genuinely
 undetermined, end the tmux Codex turn with one exact, standalone final line:
-
-`FACTORY_QUESTION: <one concrete question>`
+the marker word FACTORY_QUESTION, a colon, then one concrete question. The
+format is described rather than shown, so this prompt's own text can never be registered
+as a question.
 
 Record the blocked item and finish the work the question does not block; end the round with the
 question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in

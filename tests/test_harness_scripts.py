@@ -2436,10 +2436,33 @@ def test_lane_roles_require_typed_question_before_guessing() -> None:
 
     for role_prompt in ("engineer.md", "test.md"):
         text = (HARNESS.parent / "prompts" / role_prompt).read_text(encoding="utf-8")
-        assert "FACTORY_QUESTION: <one concrete question>" in text
+        assert "the marker word FACTORY_QUESTION, a colon, then one concrete question" in text
         assert "Ask one question at a time and stop" in text
         assert "same Codex thread" in text
         assert "guess" in text.lower()
+
+
+def test_lane_bound_text_carries_no_parseable_question_marker() -> None:
+    """dogfood #37: a lane echoing its own prompt must not register the template as a question.
+
+    The marker is described, never written as a parseable line, in every text a lane receives:
+    both role prompts, the tmux lane protocol, and the generated status probe.
+    """
+
+    dispatcher = load_dispatcher()
+    from harness.codex_lane_session import _FACTORY_QUESTION
+
+    for path in (
+        HARNESS.parent / "prompts" / "engineer.md",
+        HARNESS.parent / "prompts" / "test.md",
+        HARNESS / "tmux_lane.sh",
+        HARNESS / "tmux_lane_message.sh",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "FACTORY_QUESTION" in text, path
+        assert _FACTORY_QUESTION.search(text) is None, path
+        for line in text.splitlines():
+            assert dispatcher.FACTORY_QUESTION_RE.search(line) is None, (path, line)  # type: ignore[attr-defined]
 
 
 def test_dispatcher_does_not_reopen_answered_question_from_unchanged_scrollback(

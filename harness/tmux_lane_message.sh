@@ -117,7 +117,7 @@ if [ "$KIND" = "status" ]; then
   AUTHORITY="runtime-protocol"
   MESSAGE_KIND="status-probe"
   printf '%s\n' \
-    "FACTORY_STATUS_PROBE: Reply with FACTORY_STATUS: WORKING|BLOCKED|QUESTION|DONE and one concise factual sentence. If specification is missing or contradictory, emit FACTORY_QUESTION: <one concrete question> and stop guessing. Otherwise continue your assigned work." \
+    "FACTORY_STATUS_PROBE: Reply with FACTORY_STATUS: WORKING|BLOCKED|QUESTION|DONE and one concise factual sentence. If specification is missing or contradictory, end with one line made of the word FACTORY_QUESTION, a colon, and one concrete question, and stop guessing. Otherwise continue your assigned work." \
     > "$MESSAGE_TMP"
 else
   [ "$SENDER" = "validator" ] || {

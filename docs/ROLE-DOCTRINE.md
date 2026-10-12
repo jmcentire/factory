@@ -1081,9 +1081,9 @@ guess): a **question**, a **failure report**, and a **specification defect**. Wh
 not do is negotiate a verdict.
 
 In a tmux Codex lane, raise an otherwise-undeterminable specification question as one exact,
-standalone final line:
-
-`FACTORY_QUESTION: <one concrete question>`
+standalone final line: the marker word FACTORY_QUESTION, a colon, then one concrete question. The
+format is described rather than shown, so this prompt's own text can never be registered
+as a question.
 
 Record the blocked item and finish the work the question does not block; end the round with the
 question. Ask one question at a time and stop the turn; do not implement a guessed answer. The host retains
@@ -1370,8 +1370,9 @@ So:
 
 If the signed artifacts contradict one another or leave an expected behavior genuinely
 undetermined, end the tmux Codex turn with one exact, standalone final line:
-
-`FACTORY_QUESTION: <one concrete question>`
+the marker word FACTORY_QUESTION, a colon, then one concrete question. The
+format is described rather than shown, so this prompt's own text can never be registered
+as a question.
 
 Record the blocked item and finish the work the question does not block; end the round with the
 question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
