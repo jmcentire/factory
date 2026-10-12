@@ -398,6 +398,9 @@ machine, before the agent starts and while it runs:
   variables are set in the policy itself and the runtime directory goes first on PATH; both are
   recorded in the launch row (`lane_env`) and re-applied on every resume. Each directory must
   exist and be read-only to the lane, or the launch is refused.
+- **Oracle inputs.** A Tester launch reads the Strategy's `oracle-input: <path> sha256:<digest>`
+  lines (`harness/strategy_plan.py oracle-inputs`) and is refused when its tree lacks a cited
+  input or holds bytes other than the pinned upstream digest.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a

@@ -781,3 +781,21 @@ def test_a_writable_or_reserved_lane_environment_is_refused(tmp_path: Path) -> N
     reserved = lanes.lane("coder", "--cache-env", f"HOME={store}")
     assert reserved.returncode == 64 and "reserved" in reserved.stderr
     assert lanes.windows("coder") == []
+
+
+# -- 9. the Tester lane against the agreed Strategy (dogfood #36, #65, #73) ----------------
+
+
+def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    upstream = b"route: /site\n"
+    strategy = lanes.root / "artifacts" / "testing-strategy.md"
+    strategy.write_text(strategy.read_text() + "oracle-input: tools/site-route.yaml sha256:"
+                        + hashlib.sha256(upstream).hexdigest() + "\n")
+    refused = lanes.lane("tester")
+    assert refused.returncode == 70 and "tools/site-route.yaml (absent)" in refused.stderr
+    assert lanes.windows("tester") == []
+    (lanes.clone("tester") / "tools").mkdir()
+    (lanes.clone("tester") / "tools" / "site-route.yaml").write_bytes(upstream)
+    launched = lanes.lane("tester")
+    assert launched.returncode == 0, launched.stdout + launched.stderr

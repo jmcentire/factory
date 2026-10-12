@@ -456,6 +456,12 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    dependency tree such as `node_modules`, which the lane freeze would otherwise refuse as symlinks)
    and every contract file the Tester's includes name, vendored in-tree. If
    not, commit them and re-resolve the target before Phase A.
+   Every oracle input the Testing Strategy relies on (a preserved manifest, an upstream route
+   table, a vendored contract) is also in the Tester's projection, and the Strategy binds each
+   with a line `oracle-input: <path in the Tester's tree> sha256:<digest>`, the digest taken from
+   the pinned upstream bytes (`git show <pin>:<path> | shasum -a 256`), never from a copy. Keep
+   formatters and linters off those paths. `tmux_lane.sh` refuses a Tester whose tree lacks one or
+   holds other bytes.
 
 ### Phase A — The frame (nothing is built until the human has agreed it)
 

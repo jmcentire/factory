@@ -434,6 +434,12 @@ PY
       --factory-home "$REPO_ROOT" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
       refuse 70 "TESTING STANDARD: $STANDARD_RECEIPT" \
         "restore docs/standards/TESTING.md and prompts/test.md in $REPO_ROOT, and make the run's artifacts/testing-strategy.md a regular file"
+    # Every oracle input the Strategy cites is in the Tester's tree as its pinned bytes
+    # (dogfood #36, #65): found mid-build it costs a round, reformatted it silently governs.
+    ORACLE_INPUTS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" oracle-inputs \
+      --strategy "$ROOT/artifacts/testing-strategy.md" --repo "$REPOSITORY" 2>&1) || \
+      refuse 70 "ORACLE INPUTS: ${ORACLE_INPUTS#strategy-plan: }" \
+        "project each cited input into the Tester's tree from its pinned upstream commit (git show <pin>:<path>), byte for byte, and keep formatters off it"
   fi
 
   TASK_COPY="$TMUX_ROOT/$SLOT-task.txt"
