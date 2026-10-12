@@ -582,11 +582,14 @@ class Dispatcher:
             return
         start = min(self.last_delivered_cursor + 1, cursor)
         report = f"orchestrator/assessment-{cursor}.json"
+        # The factory's own interpreter, by absolute path: a bare `python3` in the seat's shell
+        # can be one without the factory's dependencies (run e: Homebrew 3.14, no jsonschema).
+        python = shlex.quote(os.environ.get("FACTORY_PYTHON") or sys.executable)
         message = (
             f"# FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
             "in that range from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's "
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
-            f"assessment/3 to {report}, then submit: python3 "
+            f"assessment/3 to {report}, then submit: {python} "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
             "Review orchestrator/jev.jsonl when jev_screen is enabled; use assessment/4 "
             f"(screen cursor={screen_cursor}); consume its completed prefix. "

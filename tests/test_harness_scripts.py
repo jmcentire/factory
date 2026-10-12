@@ -2359,6 +2359,7 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
         return subprocess.CompletedProcess(command, 0, "delivered", "")
 
     monkeypatch.setattr(mod.subprocess, "run", delivered)
+    monkeypatch.setenv("FACTORY_PYTHON", "/opt/factory venv/bin/python")
     dispatcher.deliver_pending_activity()  # type: ignore[attr-defined]
 
     activity = read_chain(root / "orchestrator" / "activity.jsonl")
@@ -2369,6 +2370,9 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     assert "cursors=1..2" in command[3]
     assert "Consume EVERY unassessed record" in command[3]
     assert "orchestrator/ROLE.md" in command[3]
+    # Submitted with the factory's interpreter, never whichever python3 the seat finds (#82).
+    assert "submit: '/opt/factory venv/bin/python' orchestrator/bin/" in command[3]
+    assert "python3" not in command[3]
     assert str(root) not in command[3]
     assert len(command[3]) < 1_000
     assert command[3].startswith("# ") and "\n" not in command[3]
