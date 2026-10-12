@@ -18,6 +18,7 @@ from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 
 from factory_core.manifest import digest_obj
 from factory_core.target import TargetManifest
+from factory_runtime.excerpt import bounded_excerpt
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
 from factory_runtime.schema import DocumentValidationError, validate_document
 
@@ -658,7 +659,8 @@ def verify_target_state(
         )
         if result.returncode != 0:
             raise TargetResolutionError(
-                "target-state-git-failed", (result.stderr or result.stdout).strip()[:1000]
+                "target-state-git-failed",
+                bounded_excerpt((result.stderr or result.stdout).strip(), 1000),
             )
         return result.stdout.strip()
 

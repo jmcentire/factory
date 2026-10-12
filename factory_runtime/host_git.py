@@ -37,6 +37,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from factory_runtime.excerpt import bounded_excerpt
+
 _TRANSPORTS = ("ext", "fd", "file", "git", "ssh", "http", "https")
 
 # Each override is a (key, value) pair Git reads as if given with ``-c``. Values are chosen so
@@ -54,6 +56,7 @@ _OVERRIDES: tuple[tuple[str, str], ...] = (
     ("log.showSignature", "false"),
 )
 
+_MAX_ERROR_DETAIL_BYTES = 2000
 _OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _REGULAR_MODES = {"100644": 0o644, "100755": 0o755}
 _SYMLINK_MODE = "120000"
@@ -123,7 +126,9 @@ def run_host_git(
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HostGitError(f"git {_verb(arguments)} could not run: {exc}") from exc
     if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        detail = bounded_excerpt(
+            result.stderr.decode("utf-8", errors="replace").strip(), _MAX_ERROR_DETAIL_BYTES
+        )
         raise HostGitError(
             f"git {_verb(arguments)} failed in {repository}: "
             f"{detail or f'exited {result.returncode} with no output'}"

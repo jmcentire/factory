@@ -855,7 +855,9 @@ def test_output_limited_invocation_classifies_without_exposing_output(tmp_path: 
     error = raised.value
     diagnostic = json.loads(error.diagnostic_path.read_text(encoding="utf-8"))
     assert error.failure_capsule.code == "runner-invocation-output-limit"
-    assert diagnostic["stderr"].endswith("[TRUNCATED]")
+    assert diagnostic["stderr"].startswith("private oracle details")
+    assert "bytes omitted" in diagnostic["stderr"]
+    assert diagnostic["stderr"].endswith("x" * 100)
     assert len(diagnostic["stderr"].encode("utf-8")) <= 16_384
     assert "private oracle details" not in json.dumps(error.failure_capsule.document())
 

@@ -24,6 +24,7 @@ import jsonschema
 from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_runtime.durability import fsync_directory
+from factory_runtime.excerpt import bounded_excerpt
 from factory_runtime.failure_classification import FailureCapsule, classify_terminal_failure
 from factory_runtime.instruction_control import validate_directive_readback
 from factory_runtime.runner_termination import COMPLETED, SUPERVISOR_ERROR
@@ -496,20 +497,16 @@ def _write_once(path: Path, content: bytes) -> None:
 
 
 def _redact_diagnostic_stream(value: str, secret_values: Sequence[str]) -> str:
-    """Bound and redact a private stream before writing Validator evidence."""
+    """Redact, then bound, a private stream before writing Validator evidence.
+
+    Redaction comes first so a cut can never split a secret past it; the bound keeps both
+    ends, because the reason a process failed is usually its last line."""
 
     redacted = value
     for secret in secret_values:
         if secret:
             redacted = redacted.replace(secret, "[REDACTED]")
-    marker = "[TRUNCATED]"
-    raw = redacted.encode("utf-8")
-    if len(raw) <= _MAX_DIAGNOSTIC_STREAM_BYTES:
-        return redacted
-    clipped = raw[: _MAX_DIAGNOSTIC_STREAM_BYTES - len(marker)].decode(
-        "utf-8", errors="ignore"
-    )
-    return f"{clipped}{marker}"
+    return bounded_excerpt(redacted, _MAX_DIAGNOSTIC_STREAM_BYTES)
 
 
 def _cost(manifest: RunnerManifest, input_tokens: int, output_tokens: int) -> int | None:
