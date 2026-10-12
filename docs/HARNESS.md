@@ -400,7 +400,10 @@ machine, before the agent starts and while it runs:
   exist and be read-only to the lane, or the launch is refused.
 - **Oracle inputs.** A Tester launch reads the Strategy's `oracle-input: <path> sha256:<digest>`
   lines (`harness/strategy_plan.py oracle-inputs`) and is refused when its tree lacks a cited
-  input or holds bytes other than the pinned upstream digest.
+  input or holds bytes other than the pinned upstream digest. A Tester freeze reads its
+  `planned-case: <id> [class]` lines (`strategy_plan.py coverage`) and is refused, leaving the
+  lane open, while a Critical case id appears in none of the frozen files; other gaps are
+  recorded in the freeze row's `plan_gaps`.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a

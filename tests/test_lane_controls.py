@@ -799,3 +799,24 @@ def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: 
     (lanes.clone("tester") / "tools" / "site-route.yaml").write_bytes(upstream)
     launched = lanes.lane("tester")
     assert launched.returncode == 0, launched.stdout + launched.stderr
+
+
+def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    strategy = lanes.root / "artifacts" / "testing-strategy.md"
+    strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n")
+    assert lanes.lane("tester").returncode == 0
+    clone = lanes.clone("tester")
+    (clone / "cap_test.ts").write_text('Deno.test("request cap", () => {});\n')
+
+    def freeze() -> subprocess.CompletedProcess[str]:
+        return run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
+                    "--runs", str(lanes.root.parent)], lanes.operator, lanes.env)
+
+    refused = freeze()
+    assert refused.returncode == 70 and "R16.11-a" in refused.stderr
+    (clone / "cap_test.ts").write_text('Deno.test("R16.11-a: request cap", () => {});\n')
+    frozen = freeze()
+    assert frozen.returncode == 0, frozen.stdout + frozen.stderr
+    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+    assert row["plan_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}

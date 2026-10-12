@@ -759,10 +759,24 @@ fi
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
-FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" <<'PY'
+# A Tester freezes only when every Critical planned case of the Strategy has a test (dogfood #73);
+# refused, the lane stays open to write them.
+PLAN_GAPS=null
+if [ "$ROLE" = tester ]; then
+  TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \
+    'import json,sys; print(json.load(sys.stdin)["files_directory"])')
+  PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" coverage \
+    --strategy "$ROOT/artifacts/testing-strategy.md" --files "$TESTER_FILES" 2>"$TMUX_ROOT/$SLOT-plan.err") || \
+    refuse 70 "PLAN: $(sed 's/^strategy-plan: //' "$TMUX_ROOT/$SLOT-plan.err")" \
+      "send the gaps back to the Tester (status or a ruling notice) and freeze again when they are written"
+  PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
+    'import json,sys; print(json.dumps(json.load(sys.stdin)["plan_gaps"]))')
+fi
+FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" <<'PY'
 import datetime, json, sys
-run, role, export, slot = sys.argv[1:]
+run, role, export, slot, plan_gaps = sys.argv[1:]
 print(json.dumps({
+    "plan_gaps": json.loads(plan_gaps),
     "schema_version": "factory-tmux-lane-freeze/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "run_id": run,

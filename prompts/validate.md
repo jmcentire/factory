@@ -322,7 +322,11 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    with a line `oracle-input: <path in the Tester's tree> sha256:<digest>`, the digest taken from
    the pinned upstream bytes (`git show <pin>:<path> | shasum -a 256`), never from a copy. Keep
    formatters and linters off those paths. `tmux_lane.sh` refuses a Tester whose tree lacks one or
-   holds other bytes.
+   holds other bytes. Name each planned test case in the Strategy on a line
+   `planned-case: <case id> [Critical|Standard|Cosmetic]` (no class is Critical), with an id that
+   names the scenario, not only the requirement; the Tester's freeze is refused while any Critical
+   case id appears in none of its files, so the gap goes back to the Tester while it can still
+   write the test.
 
 ## Phase A — The frame (nothing is built until the human has agreed it)
 

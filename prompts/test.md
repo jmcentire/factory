@@ -220,7 +220,9 @@ blocked, and ask at the end of the round.
    registers, are silent, or are ambiguous, reported as spec-defects with the exact items in
    tension. **Report, do not resolve.**
 7. **What you did not write, and why** — every planned Strategy row you could not realize,
-   named as a gap. Do not silently drop a row or substitute a cheaper test for a high-value
+   named as a gap. Name each `planned-case:` id of the Strategy in the test that realizes it (its
+   name or a comment beside it): the freeze is refused while a Critical case id appears in none
+   of your files. Do not silently drop a row or substitute a cheaper test for a high-value
    one; that reopens approval.
 
 ### The oracle self-check — run it before you emit `__DONE__`

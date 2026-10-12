@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """strategy_plan — what the agreed Testing Strategy binds the Tester lane to, checked by machine.
 
+Two invariants, each found by hand mid-run when nothing checked them:
+
 - **The Tester starts with every oracle input the Strategy cites, byte for byte** (dogfood #36,
   #65). The Strategy named oracle inputs its Tester projection never carried, and three of seven
   copies that it did carry had been reformatted by a formatter. A Strategy line
   ``oracle-input: <path in the Tester's tree> sha256:<digest of the pinned upstream bytes>``
   binds one input; ``oracle-inputs`` refuses a Tester repository where the file is missing, not
   a regular file, or holds other bytes.
+- **The Tester freezes only when every Critical planned case has a test** (dogfood #73). A
+  Tester declared DONE with 12 Critical planned cases unimplemented. A Strategy line
+  ``planned-case: <case id> [Critical|Standard|Cosmetic]`` (no class means Critical: an
+  unclassified surface is Critical) names one case; ``coverage`` refuses a frozen Tester
+  export that names no Critical case id in any file, and reports every other gap.
 
 Lines may sit in a Markdown list (``- oracle-input: ...``). Stdlib only, no package imports.
 """
@@ -23,7 +30,11 @@ import sys
 ORACLE_INPUT = re.compile(
     r"^\s*(?:[-*]\s+)?oracle-input:\s*(?P<path>\S+)\s+sha256:(?P<digest>[0-9a-f]{64})\s*$"
 )
+PLANNED_CASE = re.compile(
+    r"^\s*(?:[-*]\s+)?planned-case:\s*(?P<id>\S+)(?:\s+(?P<class>Critical|Standard|Cosmetic))?\s*$"
+)
 ORACLE_INPUT_LINE = re.compile(r"^\s*(?:[-*]\s+)?oracle-input:")
+PLANNED_CASE_LINE = re.compile(r"^\s*(?:[-*]\s+)?planned-case:")
 
 
 class PlanError(RuntimeError):
@@ -54,6 +65,18 @@ def oracle_inputs(lines: list[str]) -> dict[str, str]:
     return inputs
 
 
+def planned_cases(lines: list[str]) -> dict[str, str]:
+    cases: dict[str, str] = {}
+    for number, line in enumerate(lines, 1):
+        found = PLANNED_CASE.match(line)
+        if found is None:
+            if PLANNED_CASE_LINE.match(line):
+                raise PlanError(f"strategy line {number} is not 'planned-case: <id> [class]'")
+            continue
+        cases[found["id"]] = found["class"] or "Critical"
+    return cases
+
+
 def missing_oracle_inputs(inputs: dict[str, str], repo: pathlib.Path) -> list[str]:
     missing = []
     for relative, digest in sorted(inputs.items()):
@@ -65,22 +88,48 @@ def missing_oracle_inputs(inputs: dict[str, str], repo: pathlib.Path) -> list[st
     return missing
 
 
+def uncovered(cases: dict[str, str], files: pathlib.Path) -> dict[str, list[str]]:
+    # A copy of the Strategy in the Tester's tree names every case; it is not a test.
+    # ponytail: any other file naming a case id counts as covering it; a declared test-module
+    # glob would tighten this if a spec copy starts masking gaps.
+    texts = (path.read_text(encoding="utf-8", errors="replace")
+             for path in sorted(files.rglob("*")) if path.is_file() and not path.is_symlink())
+    corpus = "\n".join(text for text in texts
+                       if not any(PLANNED_CASE_LINE.match(line) for line in text.splitlines()))
+    gaps: dict[str, list[str]] = {"Critical": [], "Standard": [], "Cosmetic": []}
+    for case, criticality in cases.items():
+        if not re.search(rf"(?<![\w.-]){re.escape(case)}(?![\w-])(?!\.\w)", corpus):
+            gaps[criticality].append(case)
+    return gaps
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="check the Tester lane against the Strategy")
     commands = parser.add_subparsers(dest="command", required=True)
     inputs = commands.add_parser("oracle-inputs")
     inputs.add_argument("--strategy", type=pathlib.Path, required=True)
     inputs.add_argument("--repo", type=pathlib.Path, required=True)
+    coverage = commands.add_parser("coverage")
+    coverage.add_argument("--strategy", type=pathlib.Path, required=True)
+    coverage.add_argument("--files", type=pathlib.Path, required=True)
     arguments = parser.parse_args(argv)
     try:
         lines = _lines(arguments.strategy)
-        cited = oracle_inputs(lines)
-        missing = missing_oracle_inputs(cited, arguments.repo)
-        if missing:
-            print("strategy-plan: the Tester's tree lacks the authentic bytes of oracle "
-                  f"inputs the Strategy cites: {'; '.join(missing)}", file=sys.stderr)
+        if arguments.command == "oracle-inputs":
+            cited = oracle_inputs(lines)
+            missing = missing_oracle_inputs(cited, arguments.repo)
+            if missing:
+                print("strategy-plan: the Tester's tree lacks the authentic bytes of oracle "
+                      f"inputs the Strategy cites: {'; '.join(missing)}", file=sys.stderr)
+                return 70
+            print(json.dumps({"oracle_inputs": cited}, sort_keys=True, separators=(",", ":")))
+            return 0
+        gaps = uncovered(planned_cases(lines), arguments.files)
+        print(json.dumps({"plan_gaps": gaps}, sort_keys=True, separators=(",", ":")))
+        if gaps["Critical"]:
+            print("strategy-plan: no test names these Critical planned cases: "
+                  f"{', '.join(gaps['Critical'])}", file=sys.stderr)
             return 70
-        print(json.dumps({"oracle_inputs": cited}, sort_keys=True, separators=(",", ":")))
         return 0
     except PlanError as error:
         print(f"strategy-plan: {error}", file=sys.stderr)
