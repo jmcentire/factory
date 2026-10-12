@@ -605,7 +605,9 @@ dependency-free (bash + python3 + git):
 - `harness/attention_gate.py` — validates the closed producer-event shapes and owns the shared
   run-local lock that orders blocking-event production, disposition, and dispatch admission;
   exact retries repair only unterminated blocker tails, and an inherited dispatch descriptor
-  repeats admission rather than becoming authority.
+  repeats admission rather than becoming authority. Admission is a cursor over the receipts:
+  every event with a `blocking_written` receipt needs its own `blocking_consumed` receipt, so
+  emptying the file opens nothing, and a receipted event missing from the file is restored.
 - `harness/consume_block.sh` — locks the exact pending subject, rejects malformed producer events,
   requires exactly one durable producer receipt plus a typed disposition, retains and hashes the
   run-owned evidence bytes, and fsyncs the receipt plus its parent before durably releasing the

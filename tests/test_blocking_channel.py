@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from tests.test_harness_scripts import HARNESS, append_blockers, read_chain, run
@@ -66,3 +67,33 @@ def test_each_pending_event_takes_its_own_disposition(tmp_path: Path) -> None:
         if row["kind"] == "blocking_consumed"
     }
     assert consumed == {event_digest(STALL): "refute", event_digest(BLOCK): "escalate"}
+
+
+def admission(tmp_path: Path, root: Path) -> subprocess.CompletedProcess[str]:
+    return run(
+        [
+            sys.executable, str(HARNESS / "attention_gate.py"), "check", "--root", str(root),
+            "--lane", "validator",
+        ],
+        tmp_path,
+    )
+
+
+def test_the_gate_is_a_receipt_cursor_not_an_empty_file(tmp_path: Path) -> None:
+    """dogfood #75: emptying validator.blocking does not open the gate. Every receipted event
+    needs its own consumption receipt; one that left the file without it (a hand-clear, a sweep
+    that raced a new arrival) is restored from its write receipt and must be dispositioned."""
+
+    root = tmp_path / ".harness" / "runs" / "r1"
+    blocking = append_blockers(root, "validator", STALL, BLOCK)
+    assert consume(tmp_path, root, "refute", event_digest(STALL)).returncode == 0
+    blocking.write_text("", encoding="utf-8")  # the racy clear-then-act
+
+    refused = admission(tmp_path, root)
+    assert refused.returncode == 81, refused.stdout + refused.stderr
+    assert [json.loads(line) for line in blocking.read_text().splitlines()] == [BLOCK]
+
+    assert consume(tmp_path, root, "escalate", event_digest(BLOCK)).returncode == 0
+    admitted = admission(tmp_path, root)
+    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
+    assert blocking.read_text() == ""
