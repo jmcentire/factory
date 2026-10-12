@@ -61,6 +61,7 @@ TRIGGER_PATTERNS: dict[str, str] = {
 }
 HEALTHY_IDLE = "idle-awaiting-handoff"
 FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
+LANE_DONE_RE = re.compile(r"\bFACTORY_STATUS:\s*DONE\b")
 
 # Validator failure modes the Orchestrator audits (founder, 2026-08-09): announces
 # work and doesn't do it; forgets the role separation and codes itself; misattributes
@@ -206,6 +207,7 @@ class Dispatcher:
         self.tails: dict[str, str] = {}
         self.quiet_since: dict[str, float] = {}
         self.notified: set[str] = set()
+        self.live_windows: set[str] = set()
         self.harness = pathlib.Path(__file__).resolve().parent
         self.halted = False
         # validator-failure-mode state
@@ -410,6 +412,18 @@ class Dispatcher:
                         f"{question['question_id']} from {window}: {question['text']}",
                         wake=True,
                     )
+                    self.notify_validator(
+                        f"FACTORY_QUESTION_PENDING {question['question_id']} from {window}: "
+                        "answer it through lane_dialogue"
+                    )
+            for line in fresh.splitlines()[-25:]:
+                key = f"{window}:done:{hashlib.sha256(line.encode()).hexdigest()[:12]}"
+                if LANE_DONE_RE.search(line) and key not in self.notified:
+                    self.notified.add(key)
+                    self.event("lane_done", f"{window}: {line.strip()[:200]}", wake=True)
+                    self.notify_validator(
+                        f"FACTORY_LANE_DONE {window}: the lane reported DONE; evaluate it"
+                    )
 
         for kind, pat in TRIGGER_PATTERNS.items():
             # The Validator answers questions; its own "BLOCKED" status lines are not one (#46).
@@ -476,6 +490,28 @@ class Dispatcher:
                 f"written; consume lanes/{window}.blocking before new work"
             )
         return changed
+
+    def notify_validator(self, notice: str) -> None:
+        """Wake the Validator with one line when a lane waits on it (a question, a DONE).
+
+        Without this a lane question sat until the Validator's next check-in (Q-0043 ~6 min,
+        Q-0046 ~11 min, a Tester DONE ~20 min) while both lanes idled. Only a live Validator
+        window is woken; the Orchestrator gets the same signal either way.
+        """
+        if "validator" not in self.live_windows:
+            return
+        environment = dict(os.environ)
+        environment.update({"INJECT_FROM": "dispatcher", "HARNESS_RUN_ROOT": str(self.root)})
+        try:
+            sent = subprocess.run(
+                [str(self.harness / "inject.sh"), self.run, "validator", notice],
+                capture_output=True, text=True, timeout=15, env=environment,
+            )
+            failure = "" if sent.returncode == 0 else (sent.stderr or sent.stdout).strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            failure = str(exc)
+        if failure:
+            self.event("validator_notice_failed", f"{notice}: {failure}"[:300], wake=False)
 
     def record_pane_delta(self, window: str, tail: str) -> None:
         """Retain every changed pane snapshot; split only for transport ceilings.
@@ -827,7 +863,9 @@ class Dispatcher:
                 self.event("dispatcher_stop", "harness.json unreadable — refusing to babysit")
                 return
             self.check_halt()
-            for w in self.windows():
+            windows = self.windows()
+            self.live_windows = set(windows)
+            for w in windows:
                 tail = self.capture(w)
                 changed = self.check_window(w, tail)
                 if self.orchestrator_mode == "resident-monitoring" and changed:

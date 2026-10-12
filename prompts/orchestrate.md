@@ -211,7 +211,8 @@ Then ask, before judging the next action:
    `aside`, `intensity-change`, or `refinement`? Recency alone does not decide; context does.
    An input is a message the human submitted, as the seat's transcript shows it. Text sitting
    unsubmitted in a seat's input line (after `❯`) is never input: it can be the agent's own
-   predicted suggestion, which a pane snapshot shows exactly like typed text.
+   predicted suggestion, which a pane snapshot shows exactly like typed text. A
+   `FACTORY_QUESTION_PENDING` or `FACTORY_LANE_DONE` line is the dispatcher's notice, not input.
 2. Is the current action and overall direction a path to that goal, in spirit as well as letter?
 3. If this continues, what concretely happens? What implications and side effects follow? Are
    they desirable, aligned, and actually advancing the goal?

@@ -660,6 +660,9 @@ two separate claims about two separate parties — keep them apart.**
    no delivery receipt; wait until `tmux_lane_message.sh <run> validator <slot> idle` reports idle
    and send it again. You are the only seat allowed to answer; the Orchestrator may issue only the
    generated status probe.
+   The dispatcher types one line into your pane when a lane waits on you:
+   `FACTORY_QUESTION_PENDING <id> from <lane>` or `FACTORY_LANE_DONE <lane>`. Act on it at once;
+   it is a harness notice, never the human's words.
 
 5. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most
