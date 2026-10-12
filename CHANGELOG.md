@@ -3,6 +3,29 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.14] - 2026-10-12
+
+Host Git over agent-written repositories, and reads that fail stop instead of reading as clean.
+
+### Fixed
+
+- **Endgame judges the named commit's bytes, and nothing the candidate repository planted runs
+  on the host** (gate HGT). Endgame and the agreement probe used `git archive` on a repository
+  whose `.git` the agent wrote: a smudge filter in its config ran on the host, `export-ignore`
+  in `.git/info/attributes` could drop the tests from the judged tree, and `refs/replace` could
+  substitute another commit. `factory_runtime/host_git.py` (CLI `harness/host_git.py`) runs Git
+  in a closed environment whose `GIT_CONFIG_COUNT` overrides outrank repository config (hooks,
+  fsmonitor and every transport off, including a repository-level `protocol.ext.allow`), with
+  no replace objects, and writes a commit from raw objects. Submodules are refused.
+- **`status.sh` reads lane commits from the reflog file** (`lane_watchdog.py commits`), never
+  by running host git in a lane workspace.
+- **An unreadable `git status` is not a clean one** in endgame's hygiene check and in
+  `projection.sh`'s before/after source checks.
+- **Bounded diagnostics keep the end of the output.** `factory_runtime/excerpt.py` keeps a
+  third of the byte budget from the head and the rest from the tail, around a marker naming
+  the bytes omitted, in UTF-8 bytes. Used by the runner's Validator diagnostic, target-state
+  Git failures and host-git errors.
+
 ## [0.8.13] - 2026-10-09
 
 - Refuse every tmux Tester launch and qualification without the run testing strategy.
