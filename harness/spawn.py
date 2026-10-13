@@ -47,29 +47,29 @@ def _ledger(root: pathlib.Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
-def _append(root: pathlib.Path, row: dict[str, object]) -> None:
-    with open(root / "spawns.jsonl", "a", encoding="utf-8") as stream:
+def start(root: pathlib.Path, name: str, command: list[str]) -> int:
+    (root / "spawns").mkdir(exist_ok=True)
+    # The label check, the launch and the ledger row happen under one lock, so two concurrent
+    # starts cannot both pass the check and record two groups under one label.
+    with open(root / "spawns.jsonl", "a+", encoding="utf-8") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
-        stream.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+        stream.seek(0)
+        if any(json.loads(line)["name"] == name for line in stream.read().splitlines()
+               if line.strip()):
+            print(f"spawn: {name} is already recorded; choose a new label", file=sys.stderr)
+            return 65
+        with open(root / "spawns" / f"{name}.log", "ab") as log:
+            child = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        stream.write(json.dumps({
+            "name": name, "pid": child.pid, "pgid": child.pid, "argv": command,
+            "started": _started(child.pid),
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        }, sort_keys=True, separators=(",", ":")) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
-
-
-def start(root: pathlib.Path, name: str, command: list[str]) -> int:
-    if any(row["name"] == name for row in _ledger(root)):
-        print(f"spawn: {name} is already recorded; choose a new label", file=sys.stderr)
-        return 65
-    (root / "spawns").mkdir(exist_ok=True)
-    with open(root / "spawns" / f"{name}.log", "ab") as log:
-        child = subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    _append(root, {
-        "name": name, "pid": child.pid, "pgid": child.pid, "argv": command,
-        "started": _started(child.pid),
-        "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
-    })
     print(child.pid)
     return 0
 

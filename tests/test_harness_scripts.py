@@ -1126,6 +1126,28 @@ def test_spawn_ledger_signals_only_a_recorded_live_process(tmp_path: Path) -> No
             os.kill(pid, signal.SIGKILL)
 
 
+def test_spawn_reserves_a_label_under_the_ledger_lock(tmp_path: Path) -> None:
+    """Review of #70: a start that raced another start of the same label never launches."""
+    import fcntl
+
+    ledger = tmp_path / "spawns.jsonl"
+    marker = tmp_path / "launched"
+    with open(ledger, "a+", encoding="utf-8") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        racer = subprocess.Popen(
+            [sys.executable, str(HARNESS / "spawn.py"), "start", "--root", str(tmp_path),
+             "--name", "probe", "--", "touch", str(marker)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(1.0)  # the racer has read the label check by now unless it waits on the lock
+        held.write(json.dumps({"name": "probe", "pid": 1, "pgid": 1, "started": None}) + "\n")
+        held.flush()
+    _, err = racer.communicate(timeout=30)
+    assert racer.returncode == 65, err
+    assert not marker.exists()
+    assert len(ledger.read_text().splitlines()) == 1
+
+
 def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path) -> None:
     """A dummy value, as every new credential use is proven first (#15)."""
     secrets = tmp_path / "secrets"
