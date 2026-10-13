@@ -351,7 +351,9 @@ resource_event() {
     --creator-action harness-ignition --ownership run-owned \
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \
     --evidence-json "{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\"}" \
-    --status "$2" --actor harness-ignition >/dev/null
+    --status "$2" --actor harness-ignition >/dev/null || return $?
+  # Callers use `|| true`, which suspends set -e in here, so a failed write must not mark the
+  # state recorded; the EXIT trap then still closes a planned attempt.
   RESOURCE_STATE="$2"
 }
 resource_event '{}' planned
