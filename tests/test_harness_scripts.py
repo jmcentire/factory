@@ -883,6 +883,19 @@ def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
     assert r.returncode == 2, r.stdout + r.stderr
 
 
+def test_ground_tripwire_honors_claude_config_dir(tmp_path: Path) -> None:
+    env = ground_fixture(tmp_path)
+    del env["TRANSCRIPTS"]
+    config = tmp_path / "claude-config"
+    seat = config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
+    seat.mkdir(parents=True)
+    (seat / "t.jsonl").write_text("-----BEGIN " + "PRIVATE KEY-----\n")
+    env["CLAUDE_CONFIG_DIR"] = str(config)
+
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
     env = ground_fixture(tmp_path)
     rec = tmp_path / ".harness" / "reconcile.d"

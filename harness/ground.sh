@@ -60,7 +60,7 @@ echo "== 4/6 tripwire =="
 # Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both "-repo-x-lane"),
 # so a sibling workdir like /repo/x-other is also scanned for /repo/x; set TRANSCRIPTS to pin the scan.
 if [ -z "${TRANSCRIPTS:-}" ]; then
-  SEAT_PREFIX="$HOME/.claude/projects/$(printf '%s' "$WORKDIR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  SEAT_PREFIX="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$WORKDIR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   for seat_dir in "$SEAT_PREFIX" "$SEAT_PREFIX"-*; do
     [ -d "$seat_dir" ] && TRANSCRIPTS="${TRANSCRIPTS:+$TRANSCRIPTS }$seat_dir"
   done
