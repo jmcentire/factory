@@ -287,7 +287,7 @@ def _vendor_contracts(source: Path, *, pinned: str | None) -> None:
     digest = pinned or hashlib.sha256(body).hexdigest()
     (source / "contracts" / "SOURCES.md").write_text(
         "| Dependency | Kind | Source | sha256 |\n|---|---|---|---|\n"
-        f"| property | RESTATED | pin | {digest} |\n"
+        f"| property | RESTATED | property/restated-contract.md | {digest} |\n"
         f"| ghost | RESTATED | pin | {'1' * 64} |\n"
         "| Ref | Full SHA |\n| api | " + "2" * 40 + " |\n",
         encoding="utf-8",
@@ -321,7 +321,7 @@ def test_contract_sources_digest_mismatch_is_refused_with_the_list(tmp_path: Pat
         )
 
     assert raised.value.code == "contract-digest-mismatch"
-    assert "property: pinned cccccccc" in str(raised.value)
+    assert "property/restated-contract.md: pinned cccccccc" in str(raised.value)
 
 
 def test_stale_restated_file_beside_a_matching_one_is_refused_run_c_shape(tmp_path: Path) -> None:
@@ -335,8 +335,9 @@ def test_stale_restated_file_beside_a_matching_one_is_refused_run_c_shape(tmp_pa
     (folder / "restated-contract.md").write_text("edited after pinning\n", encoding="utf-8")
     (source / "contracts" / "SOURCES.md").write_text(
         "| Dependency | Kind | Source | sha256 |\n|---|---|---|---|\n"
-        f"| site-infra | RESTATED | pin | {'b' * 64} |\n"
-        f"| site-infra schema | RESTATED | pin | {hashlib.sha256(schema).hexdigest()} |\n",
+        f"| site-infra | RESTATED | site-infra/restated-contract.md | {'b' * 64} |\n"
+        f"| site-infra schema | RESTATED | site-infra/openapi.json | "
+        f"{hashlib.sha256(schema).hexdigest()} |\n",
         encoding="utf-8",
     )
     _git("-C", str(source), "add", "contracts")
@@ -351,6 +352,60 @@ def test_stale_restated_file_beside_a_matching_one_is_refused_run_c_shape(tmp_pa
     assert raised.value.code == "contract-digest-mismatch"
     assert "restated-contract.md" in str(raised.value)
     assert "openapi.json" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "unpinned",
+    ["unpinned.md", "property/nested/deeper.md"],
+)
+def test_an_unpinned_vendored_file_at_any_depth_is_refused(tmp_path: Path, unpinned: str) -> None:
+    """dogfood #35 (review): a root-level or nested file no row names is never accepted."""
+
+    source = _source(tmp_path)
+    _vendor_contracts(source, pinned=None)
+    extra = source / "contracts" / unpinned
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_text("vendored but never pinned\n", encoding="utf-8")
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "unpinned contract file")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.warns(UserWarning), pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert raised.value.code == "contract-digest-mismatch"
+    assert f"{unpinned} (" in str(raised.value)
+
+
+def test_a_pin_binds_its_exact_path_not_any_file_with_that_digest(tmp_path: Path) -> None:
+    """A row pinning a.md does not cover b.md even when both hold the pinned bytes."""
+
+    import hashlib
+
+    source = _source(tmp_path)
+    folder = source / "contracts" / "property"
+    folder.mkdir(parents=True)
+    body = b"same bytes\n"
+    (folder / "a.md").write_bytes(body)
+    (folder / "b.md").write_bytes(body)
+    (source / "contracts" / "SOURCES.md").write_text(
+        f"| Dependency | Path | sha256 |\n|---|---|---|\n"
+        f"| property | property/a.md | {hashlib.sha256(body).hexdigest()} |\n",
+        encoding="utf-8",
+    )
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "two files, one pin")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    with pytest.raises(TargetResolutionError) as raised:
+        _resolver(tmp_path).resolve(
+            manifest=manifest, request=_request(manifest), object_source=source
+        )
+
+    assert "property/b.md (" in str(raised.value)
+    assert "property/a.md" not in str(raised.value)
 
 
 def test_a_linked_contracts_directory_is_refused(tmp_path: Path) -> None:
@@ -392,7 +447,7 @@ def test_a_vendored_dependency_with_no_pinned_rows_is_refused(tmp_path: Path) ->
         )
 
     assert raised.value.code == "contract-digest-mismatch"
-    assert "authz: contract.md" in str(raised.value)
+    assert "authz/contract.md" in str(raised.value)
 
 
 @pytest.mark.parametrize("replacement", ["deleted", "directory"])

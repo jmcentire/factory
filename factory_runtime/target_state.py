@@ -116,15 +116,26 @@ def _manifest_subpath(manifest: TargetManifest) -> str:
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_DEPENDENCY = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _pinned_path(cell: str, vendored: Mapping[str, str]) -> str | None:
+    """The contracts/-relative file a row cell names: a vendored file's path, or any path written
+    with a ``contracts/`` prefix (so a row whose file was deleted still refuses)."""
+
+    text = cell.strip().strip("`")
+    if text.startswith("contracts/"):
+        return text[len("contracts/") :]
+    return text if text in vendored else None
 
 
 def _verify_contract_sources(workdir: Path) -> None:
     """Refuse a target whose contracts/SOURCES.md and vendored files disagree, in either direction.
 
-    A row's dependency is the first word of its first cell; its files are contracts/<name>/**.
-    Every pinned sha256 must equal some file there, and every file there must be pinned by some
-    row for that dependency. Rows that map to no directory are warned about, not guessed at.
+    Every regular file under contracts/ (any depth, root level included) other than SOURCES.md
+    must be named by a pinned row, and the row's sha256 must be that exact file's digest. A row
+    names its file in a cell holding its path relative to contracts/ (``property/contract.md``)
+    or prefixed with ``contracts/``. A pinned row naming no path binds nothing and is warned
+    about; a ``contracts/`` path that is not a vendored file refuses.
     """
 
     contracts = workdir / "contracts"
@@ -136,11 +147,15 @@ def _verify_contract_sources(workdir: Path) -> None:
         raise TargetResolutionError(
             "contract-source-link", "contracts/ and contracts/SOURCES.md must not be links"
         )
-    vendored = contracts.is_dir() and any(
-        entry != sources and (entry.is_file() or entry.is_symlink())
-        for entry in contracts.rglob("*")
-    )
-    if not vendored and not sources.is_file():
+    actual: dict[str, str] = {}
+    if contracts.is_dir():
+        for path in sorted(contracts.rglob("*")):
+            relative = path.relative_to(contracts).as_posix()
+            if path.is_symlink():
+                raise TargetResolutionError("contract-source-link", f"contracts/{relative} is a link")
+            if path.is_file() and path != sources:
+                actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if not actual and not sources.is_file():
         return
     if not sources.is_file():
         # Deleting or replacing the pin list must not skip the check of what it pinned.
@@ -155,42 +170,24 @@ def _verify_contract_sources(workdir: Path) -> None:
         found = [cell for cell in cells if _SHA256.fullmatch(cell)]
         if not line.lstrip().startswith("|") or not found:
             continue
-        name = cells[0].split()[0] if cells[0] else ""
-        folder = contracts / name
-        if not _DEPENDENCY.fullmatch(name) or folder.is_symlink() or not folder.is_dir():
+        paths = [path for cell in cells if (path := _pinned_path(cell, actual)) is not None]
+        if not paths:
             unidentified.append(cells[0])
             continue
-        pins.setdefault(name, set()).add(found[-1])
-    mismatches: list[str] = []
-    # Every vendored dependency folder is checked, pinned or not, so dropping a dependency's rows
-    # cannot drop its files from verification.
-    for folder in sorted(e for e in contracts.iterdir() if e.name != "SOURCES.md"):
-        if folder.is_symlink():
-            raise TargetResolutionError(
-                "contract-source-link", f"contracts/{folder.name} is a link"
+        pins.setdefault(paths[0], set()).add(found[-1])
+    mismatches = [
+        f"{path}: pinned {', '.join(d[:8] for d in sorted(digests))} is not a vendored file"
+        for path, digests in sorted(pins.items())
+        if path not in actual
+    ]
+    for path, digest in actual.items():
+        if path not in pins:
+            mismatches.append(f"{path} ({digest[:8]}) is matched by no pinned row")
+        elif pins[path] != {digest}:
+            mismatches.append(
+                f"{path}: pinned {', '.join(d[:8] for d in sorted(pins[path]))} "
+                f"but the file is {digest[:8]}"
             )
-        if not folder.is_dir():
-            continue
-        name, pinned = folder.name, pins.get(folder.name, set())
-        actual: dict[str, str] = {}
-        for path in sorted(folder.rglob("*")):
-            if path.is_symlink():
-                raise TargetResolutionError(
-                    "contract-source-link", f"{path.relative_to(contracts).as_posix()} is a link"
-                )
-            if path.is_file():
-                actual[path.relative_to(folder).as_posix()] = hashlib.sha256(
-                    path.read_bytes()
-                ).hexdigest()
-        mismatches += [
-            f"{name}: pinned {digest[:8]} matches no vendored file"
-            for digest in sorted(pinned - set(actual.values()))
-        ]
-        mismatches += [
-            f"{name}: {file} ({digest[:8]}) is matched by no pinned row"
-            for file, digest in actual.items()
-            if digest not in pinned
-        ]
     if unidentified:
         warnings.warn(
             "contracts/SOURCES.md rows with no identifiable vendored files: "
