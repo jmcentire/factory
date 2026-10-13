@@ -66,6 +66,22 @@ def _load_json(path: pathlib.Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def _journal_has_active_life(journal: pathlib.Path) -> bool:
+    """A lane launch journal recorded a real launch: planned and launch-failed rows do not."""
+    try:
+        lines = journal.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("status") == "active":
+            return True
+    return False
+
+
 class SignalWatchdog:
     def __init__(
         self,
@@ -156,6 +172,10 @@ class SignalWatchdog:
 
     # -- the check ------------------------------------------------------------
 
+    def _a_lane_launched(self) -> bool:
+        journals = (self.root / "tmux-lanes").glob("*-launch.jsonl")
+        return any(map(_journal_has_active_life, journals))
+
     def check(
         self,
         emit: Callable[..., None],
@@ -175,7 +195,7 @@ class SignalWatchdog:
                 # create one (dogfood #44), so waiting on it would silently end
                 # monitoring: escalate once per run instead.
                 self._knobs = None
-                if not any((self.root / "tmux-lanes").glob("*-launch.jsonl")):
+                if not self._a_lane_launched():
                     return "awaiting-generation"
                 state = _load_json(self.state_path)
                 if not state.get("unobservable_escalated"):

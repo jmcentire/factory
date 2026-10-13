@@ -338,7 +338,12 @@ def test_lanes_launched_without_generation_escalates_once(tmp_path: Path) -> Non
     assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
     assert recorder.events == []
     (root / "tmux-lanes").mkdir()
-    (root / "tmux-lanes" / "coder-launch.jsonl").write_text("{}\n", encoding="utf-8")
+    journal = root / "tmux-lanes" / "coder-launch.jsonl"
+    # Review of #44: a planned or launch-failed life is not a dispatched lane.
+    journal.write_text('{"status":"planned"}\n{"status":"launch-failed"}\n', encoding="utf-8")
+    assert watchdog.check(recorder.emit, recorder.block) == "awaiting-generation"
+    assert recorder.events == []
+    journal.write_text(journal.read_text() + '{"status":"active"}\n', encoding="utf-8")
     for _ in range(3):
         assert watchdog.check(recorder.emit, recorder.block) == "unobservable"
     assert recorder.kinds() == ["watchdog_unobservable"]
