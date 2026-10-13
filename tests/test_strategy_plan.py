@@ -32,6 +32,25 @@ def test_a_cited_oracle_input_must_be_in_the_testers_tree_as_its_pinned_bytes(
     assert strategy_plan.main(check) == 0
 
 
+def test_an_oracle_input_reached_through_a_linked_ancestor_is_refused(tmp_path: Path) -> None:
+    """Review of #36/#65: a linked directory on the path escapes the Tester's projection even
+    when the bytes outside currently match."""
+
+    strategy = _strategy(tmp_path, f"oracle-input: tools/gateway/site-route.yaml sha256:{DIGEST}")
+    outside = tmp_path / "outside" / "gateway"
+    outside.mkdir(parents=True)
+    (outside / "site-route.yaml").write_bytes(UPSTREAM)
+    repo = tmp_path / "tester"
+    repo.mkdir()
+    (repo / "tools").symlink_to(tmp_path / "outside")
+    check = ["oracle-inputs", "--strategy", str(strategy), "--repo", str(repo)]
+    assert strategy_plan.main(check) == 70
+    (repo / "tools").unlink()
+    (repo / "tools" / "gateway").mkdir(parents=True)
+    (repo / "tools" / "gateway" / "site-route.yaml").symlink_to(outside / "site-route.yaml")
+    assert strategy_plan.main(check) == 70
+
+
 def test_a_malformed_binding_line_is_refused_not_skipped(tmp_path: Path) -> None:
     strategy = _strategy(tmp_path, "oracle-input: tools/gateway/site-route.yaml")
     assert strategy_plan.main(["oracle-inputs", "--strategy", str(strategy),

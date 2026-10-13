@@ -23,8 +23,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
+import stat
 import sys
 
 ORACLE_INPUT = re.compile(
@@ -77,13 +79,40 @@ def planned_cases(lines: list[str]) -> dict[str, str]:
     return cases
 
 
+_NOFOLLOW = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _contained_digest(repo: pathlib.Path, relative: str) -> str | None:
+    """sha256 of the regular file at ``relative`` inside ``repo``, opened one component at a time
+    with no-follow, so a linked ancestor cannot point outside the projection; None if absent."""
+
+    parts = pathlib.PurePosixPath(relative).parts
+    descriptors = [os.open(repo, _NOFOLLOW | os.O_DIRECTORY)]
+    try:
+        for part in parts[:-1]:
+            descriptors.append(os.open(part, _NOFOLLOW | os.O_DIRECTORY, dir_fd=descriptors[-1]))
+        descriptors.append(os.open(parts[-1], _NOFOLLOW, dir_fd=descriptors[-1]))
+        if not stat.S_ISREG(os.fstat(descriptors[-1]).st_mode):
+            return None
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptors[-1], 1 << 16):
+            digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        # ELOOP/ENOTDIR on a link, ENOENT when missing: neither is the Tester's own file.
+        return None
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
 def missing_oracle_inputs(inputs: dict[str, str], repo: pathlib.Path) -> list[str]:
     missing = []
     for relative, digest in sorted(inputs.items()):
-        path = repo / relative
-        if path.is_symlink() or not path.is_file():
-            missing.append(f"{relative} (absent)")
-        elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        actual = _contained_digest(repo, relative)
+        if actual is None:
+            missing.append(f"{relative} (absent)")  # or reached through a link
+        elif actual != digest:
             missing.append(f"{relative} (bytes differ from the pinned sha256:{digest[:12]})")
     return missing
 
