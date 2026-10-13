@@ -4972,6 +4972,30 @@ def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
     assert len(page_events(root)) == 2  # a new occurrence pages again
 
 
+def test_a_dialog_above_a_fresh_panes_empty_rows_still_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live drill: capture-pane keeps a fresh pane's empty rows, which pushed a dialog near the
+    top out of the 15 lines the attention check reads (dogfood #49, #79)."""
+    _, d, _, pages = paging_dispatcher(tmp_path, monkeypatch)
+    pane = " You've hit your usage limit · resets 3pm (America/New_York)\n" + "\n" * 40
+    d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
+    assert pages.read_text().count("usage_limit") == 1
+
+
+def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live drill: an 80-column wrap split a trigger word, so capture joins wrapped rows (-J)."""
+    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    seen: list[list[str]] = []
+    monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: seen.append(argv) or "")
+    d.capture("validator")  # type: ignore[attr-defined]
+    (argv,) = seen
+    assert argv[:2] == ["tmux", "capture-pane"] and "J" in argv[2]
+
+
 @pytest.mark.parametrize(
     ("window", "dialog"),
     [

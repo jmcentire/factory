@@ -389,7 +389,8 @@ class Dispatcher:
         return [w for w in out.splitlines() if w in seats]
 
     def capture(self, window: str) -> str:
-        return sh(["tmux", "capture-pane", "-pt", f"{self.run}:{window}", "-S", "-60"])
+        # -J joins rows the pane wrapped, so a trigger split at the column edge still matches.
+        return sh(["tmux", "capture-pane", "-pJt", f"{self.run}:{window}", "-S", "-60"])
 
     def lane_state(self, window: str) -> str:
         f = self.root / "lanes" / f"{window}.state"
@@ -537,7 +538,10 @@ class Dispatcher:
         anyone. The pane's last lines are matched, and a match pages once it has persisted for
         attention_persist_s, so a dialog answered at once never pages; it re-arms once cleared.
         """
-        lines = tail.splitlines()[-15:]
+        lines = tail.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()  # capture-pane keeps a fresh pane's empty rows below the text
+        lines = lines[-15:]
         current = time.monotonic()
         for kind, pattern in SEAT_ATTENTION_PATTERNS.items():
             key = (window, kind)
