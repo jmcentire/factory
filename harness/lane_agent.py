@@ -424,8 +424,23 @@ def _read_only_directory(value: str, label: str) -> str:
         raise ValueError(f"{label} must be an absolute path without {os.pathsep!r}: {value!r}")
     if not os.path.isdir(value):
         raise ValueError(f"{label} is not an existing directory: {value}")
-    if os.access(value, os.W_OK):
-        raise ValueError(f"{label} is writable; make the store read-only (chmod -R a-w): {value}")
+    # A link anywhere on the path, or inside the store, lets the bytes change after admission.
+    prefix = os.sep
+    for part in pathlib.PurePath(value).parts[1:]:
+        prefix = os.path.join(prefix, part)
+        if os.path.islink(prefix):
+            raise ValueError(f"{label} path has a symlink at {prefix}; give its real path: {value}")
+    # ponytail: a same-user lane can still chmod the store back; this proves the state at launch
+    # and resume only. A content manifest bound across launch and resume would close that.
+    for directory, names, files in os.walk(value, followlinks=False):
+        for entry in [directory, *(os.path.join(directory, name) for name in names + files)]:
+            mode = os.lstat(entry).st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"{label} holds a symlink, {entry}; vendor real files: {value}")
+            if mode & 0o222:
+                raise ValueError(
+                    f"{label} is writable at {entry}; make the store read-only (chmod -R a-w)"
+                )
     return value
 
 

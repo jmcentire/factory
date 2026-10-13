@@ -783,6 +783,42 @@ def test_a_writable_or_reserved_lane_environment_is_refused(tmp_path: Path) -> N
     assert lanes.windows("coder") == []
 
 
+
+@pytest.mark.parametrize("shape", ["linked-store", "linked-ancestor", "writable-file",
+                                   "writable-subdir", "inner-link"])
+def test_a_store_that_can_change_after_admission_is_refused(tmp_path: Path, shape: str) -> None:
+    """Review of #31/#61: the read-only check covers every path component and every entry."""
+
+    lanes = Lanes(tmp_path / "run")
+    real = tmp_path / "real" / "deno-dir"
+    (real / "deps").mkdir(parents=True)
+    (real / "deps" / "mod.ts").write_text("export {};\n")
+    store = real
+    if shape == "linked-store":
+        store = tmp_path / "store-link"
+        store.symlink_to(real)
+    elif shape == "linked-ancestor":
+        (tmp_path / "parent-link").symlink_to(tmp_path / "real")
+        store = tmp_path / "parent-link" / "deno-dir"
+    elif shape == "inner-link":
+        (real / "deps" / "outside").symlink_to(tmp_path)
+    for path in [real / "deps" / "mod.ts", real / "deps", real]:
+        path.chmod(0o444 if path.is_file() else 0o555)
+    if shape == "writable-file":
+        (real / "deps").chmod(0o755)
+        (real / "deps" / "mod.ts").chmod(0o644)
+        (real / "deps").chmod(0o555)
+    elif shape == "writable-subdir":
+        (real / "deps").chmod(0o755)
+    try:
+        refused = lanes.lane("coder", "--cache-env", f"DENO_DIR={store}")
+    finally:
+        for path in [real, real / "deps"]:
+            path.chmod(0o755)
+    assert refused.returncode == 64, refused.stdout + refused.stderr
+    assert ("symlink" if "link" in shape else "writable") in refused.stderr
+    assert lanes.windows("coder") == []
+
 # -- 9. the Tester lane against the agreed Strategy (dogfood #36, #65, #73) ----------------
 
 
