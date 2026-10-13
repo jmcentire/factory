@@ -2499,6 +2499,30 @@ def test_promise_detection_catches_announced_intent() -> None:
     assert any("open the PR" in p for p in promises)
 
 
+def test_a_parallel_lane_instances_pane_delta_reaches_the_activity_journal(tmp_path: Path) -> None:
+    """Codex review: the dispatcher discovers tester-b, but the activity journal accepted only
+    coder/tester, so its first pane delta failed and left the Orchestrator blind to it (#39)."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "audit_interval_min": 45,
+                    "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.record_pane_delta("tester-b", "tester-b is writing the parity case.")  # type: ignore[attr-defined]
+    activity = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert [(row["kind"], row["source"]) for row in activity] == [("pane_delta", "tester-b")]
+
+    from harness.orchestrator_channel import OrchestratorChannelError, append_activity
+
+    for bad in ("tester_b", "auditor", "tester-", "coder-B"):
+        with pytest.raises(OrchestratorChannelError):
+            append_activity(root, kind="pane_delta", source=bad, detail="x")
+
+
 def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filtering(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -67,6 +67,14 @@ _ACTIVITY_KINDS = frozenset(
     }
 )
 _ACTIVITY_SOURCES = frozenset({"dispatcher", "validator", "coder", "tester", "founder"})
+# A parallel lane instance (tester-b) reports under its own identity, like lane_dialogue._LANE.
+_LANE_INSTANCE_SOURCE = re.compile(r"^(?:coder|tester)-[a-z0-9][a-z0-9-]{0,15}$")
+
+
+def _activity_source(source: object) -> bool:
+    return isinstance(source, str) and (
+        source in _ACTIVITY_SOURCES or _LANE_INSTANCE_SOURCE.fullmatch(source) is not None
+    )
 _LATEST_INPUT_CLASSES = frozenset({"override", "aside", "intensity-change", "refinement", "none"})
 _PLANNING_MODES = frozenset({"direct", "clarify", "decompose", "deep"})
 _COMPLEXITY_LEVELS = frozenset({"low", "medium", "high"})
@@ -334,7 +342,7 @@ def _validate_activity_rows(rows: Sequence[Mapping[str, object]]) -> int:
             raise OrchestratorChannelError("activity journal has a malformed row")
         if row.get("cursor") != expected_cursor:
             raise OrchestratorChannelError("activity journal cursor is not contiguous")
-        if row.get("kind") not in _ACTIVITY_KINDS or row.get("source") not in _ACTIVITY_SOURCES:
+        if row.get("kind") not in _ACTIVITY_KINDS or not _activity_source(row.get("source")):
             raise OrchestratorChannelError("activity journal has an invalid kind or source")
         detail = _bounded_text(row.get("detail"), field="activity detail", maximum=8192)
         snapshot = row.get("snapshot")
@@ -359,7 +367,7 @@ def append_activity(
 
     if kind not in _ACTIVITY_KINDS:
         raise OrchestratorChannelError(f"invalid activity kind: {kind}")
-    if source not in _ACTIVITY_SOURCES:
+    if not _activity_source(source):
         raise OrchestratorChannelError(f"invalid activity source: {source}")
     detail = _bounded_text(detail, field="activity detail", maximum=8192)
     if not isinstance(snapshot, str) or len(snapshot.encode("utf-8")) > _MAX_ACTIVITY_BYTES:
@@ -1046,7 +1054,7 @@ def main() -> int:
     append = subparsers.add_parser("append")
     append.add_argument("--root", type=pathlib.Path, required=True)
     append.add_argument("--kind", choices=sorted(_ACTIVITY_KINDS), required=True)
-    append.add_argument("--source", choices=sorted(_ACTIVITY_SOURCES), required=True)
+    append.add_argument("--source", required=True, help="dispatcher, validator, founder, or a lane id")
     append.add_argument("--detail", required=True)
     append.add_argument("--snapshot-file", type=pathlib.Path)
     report = subparsers.add_parser("report")
