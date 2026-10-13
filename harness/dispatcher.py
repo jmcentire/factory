@@ -374,8 +374,8 @@ class Dispatcher:
         lanes = {"coder", "tester"}
         for journal in (self.root / "tmux-lanes").glob("*-launch.jsonl"):
             try:
-                rows = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()
-                        if line.strip()]
+                lines = journal.read_text(encoding="utf-8").splitlines()
+                rows = [json.loads(line) for line in lines if line.strip()]
             except (OSError, ValueError):
                 continue
             lanes |= {row["lane"] for row in rows

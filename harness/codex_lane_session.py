@@ -152,7 +152,8 @@ def run_turn(
 ) -> int:
     if (root is None) != (role is None):
         raise SessionError("run root and role must be supplied together")
-    if role is not None and not re.fullmatch(r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?", role):
+    lane_id = r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?"
+    if role is not None and not re.fullmatch(lane_id, role):
         raise SessionError("lane must be coder or tester[-instance]")
     prompt = _read_regular(prompt_path)
     if not command or command[0] == "--":

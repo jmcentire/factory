@@ -2663,7 +2663,8 @@ def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal
 
     def fake(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:2] == ["tmux", "list-windows"]:
-            return subprocess.CompletedProcess(command, 0, "validator\ntester-b\nwatch-tester-b\n", "")
+            windows = "validator\ntester-b\nwatch-tester-b\n"
+            return subprocess.CompletedProcess(command, 0, windows, "")
         sent.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 

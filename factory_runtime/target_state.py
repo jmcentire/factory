@@ -152,7 +152,9 @@ def _verify_contract_sources(workdir: Path) -> None:
         for path in sorted(contracts.rglob("*")):
             relative = path.relative_to(contracts).as_posix()
             if path.is_symlink():
-                raise TargetResolutionError("contract-source-link", f"contracts/{relative} is a link")
+                raise TargetResolutionError(
+                    "contract-source-link", f"contracts/{relative} is a link"
+                )
             if path.is_file() and path != sources:
                 actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
     if not actual and not sources.is_file():
@@ -170,22 +172,22 @@ def _verify_contract_sources(workdir: Path) -> None:
         found = [cell for cell in cells if _SHA256.fullmatch(cell)]
         if not line.lstrip().startswith("|") or not found:
             continue
-        paths = [path for cell in cells if (path := _pinned_path(cell, actual)) is not None]
-        if not paths:
+        named = [name for cell in cells if (name := _pinned_path(cell, actual)) is not None]
+        if not named:
             unidentified.append(cells[0])
             continue
-        pins.setdefault(paths[0], set()).add(found[-1])
+        pins.setdefault(named[0], set()).add(found[-1])
     mismatches = [
-        f"{path}: pinned {', '.join(d[:8] for d in sorted(digests))} is not a vendored file"
-        for path, digests in sorted(pins.items())
-        if path not in actual
+        f"{name}: pinned {', '.join(d[:8] for d in sorted(digests))} is not a vendored file"
+        for name, digests in sorted(pins.items())
+        if name not in actual
     ]
-    for path, digest in actual.items():
-        if path not in pins:
-            mismatches.append(f"{path} ({digest[:8]}) is matched by no pinned row")
-        elif pins[path] != {digest}:
+    for name, digest in actual.items():
+        if name not in pins:
+            mismatches.append(f"{name} ({digest[:8]}) is matched by no pinned row")
+        elif pins[name] != {digest}:
             mismatches.append(
-                f"{path}: pinned {', '.join(d[:8] for d in sorted(pins[path]))} "
+                f"{name}: pinned {', '.join(d[:8] for d in sorted(pins[name]))} "
                 f"but the file is {digest[:8]}"
             )
     if unidentified:
