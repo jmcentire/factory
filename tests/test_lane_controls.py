@@ -857,3 +857,14 @@ def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_pat
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
     assert row["plan_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}
+
+
+def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -> None:
+    """Live drill: tmux 3.7 ignores the session-level remain-on-exit, so a finished lane's
+    window vanished (the "window gone" family behind dogfood #29 and #69)."""
+    lanes = Lanes(tmp_path)
+    launched = lanes.lane("coder")
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    calls = lanes.tmux_log.read_text().splitlines()
+    assert any("set-option -w -t r1:coder remain-on-exit on" in call for call in calls), calls
+    assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)

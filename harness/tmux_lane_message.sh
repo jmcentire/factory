@@ -328,6 +328,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
   if [ "$PANE_DEAD" = "missing" ]; then
     tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux set-option -w -t "$RUN:$WINDOW" remain-on-exit on >/dev/null 2>&1 || true
   else
     tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
   fi

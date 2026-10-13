@@ -696,7 +696,6 @@ row["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="sec
 print(json.dumps(row, sort_keys=True, separators=(",", ":")))
 PY
   }
-  tmux set-option -t "$RUN" remain-on-exit on >/dev/null
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
     tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
@@ -708,6 +707,8 @@ PY
     append_event "$(mark launch-failed)"
     refuse 70 "failed to launch $RUN:$LANE"
   fi
+  # A window option: a finished lane's window stays, dead, so its last output can be read.
+  tmux set-option -w -t "$RUN:$LANE" remain-on-exit on >/dev/null 2>&1 || true
   if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
     tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
