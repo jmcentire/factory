@@ -38,8 +38,24 @@ def test_a_tree_whose_runner_misses_the_testers_modules_is_refused(
     tree.mkdir()
     assert _check(root, tree, "'No test modules found'") == 70
     assert "tests/export_test.ts" in capsys.readouterr().err
-    assert _check(root, tree, "'Check file:///x/tests/export_test.ts'") == 0
+    assert _check(root, tree, f"'Check file://{tree.resolve()}/tests/export_test.ts'") == 0
     assert json.loads(capsys.readouterr().out)["modules"] == ["tests/export_test.ts"]
+
+
+def test_a_failing_runner_or_prose_that_names_every_module_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review of #42: exit status counts, and a mention inside a diagnostic is not a listing."""
+
+    root, tree = _frozen_tester(tmp_path), tmp_path / "integrated"
+    tree.mkdir()
+    failing = ["--", "sh", "-c", "echo tests/export_test.ts; echo 'error: config' >&2; exit 1"]
+    assert discovery_check.main(["--root", str(root), "--tree", str(tree),
+                                 "--pattern", "tests/*_test.ts", *failing]) == 70
+    assert "exited 1" in capsys.readouterr().err
+    assert _check(root, tree, "'error: excluded by deno.json: tests/export_test.ts'") == 70
+    assert _check(root, tree, "'tests/export_test.ts.bak'") == 70
+    assert _check(root, tree, "'./tests/export_test.ts'") == 0
 
 
 def test_the_check_cannot_pass_vacuously_or_before_freeze(tmp_path: Path) -> None:
@@ -48,5 +64,5 @@ def test_the_check_cannot_pass_vacuously_or_before_freeze(tmp_path: Path) -> Non
     assert _check(root, tree, "anything", pattern="spec/*_test.ts") == 70
     journal = root / "tmux-lanes" / "tester-launch.jsonl"
     journal.write_text(journal.read_text() + json.dumps(
-        {"schema_version": "factory-tmux-lane-unfreeze/1"}) + "\n")
+        {"status": "active", "role": "tester"}) + "\n")
     assert _check(root, tree, "'tests/export_test.ts'") == 70

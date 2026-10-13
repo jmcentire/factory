@@ -5,8 +5,10 @@ The invariant: **Phase C does not start on a tree whose runner cannot see the Te
 In run c the Coder's projection hid tests/, so the Coder excluded tests/ in deno.json; the
 integrated tree's ``deno test`` then reported "No test modules found" at Phase C, and the shipped
 repository's own test task would have too (dogfood #42). After both lanes are frozen and the
-tree is integrated, this runs the runner's own listing command in that tree and refuses when any
-test module in the Tester's latest freeze is missing from its output.
+tree is integrated, this runs the runner's own listing command in that tree and refuses when it
+exits non-zero or when any test module in the Tester's latest freeze is not on a listing line of
+its own (the path alone, or after one word such as deno's ``Check``; ``file://`` and absolute
+paths are normalized to the tree).
 
   discovery_check.py --root <run> --tree <integrated tree> --pattern <glob> [--slot tester]
                      [--timeout-minutes 10] -- <listing command, e.g. deno test --no-run>
@@ -23,6 +25,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -56,14 +59,38 @@ def test_modules(files: pathlib.Path, pattern: str) -> list[str]:
     return modules
 
 
-def listing(tree: pathlib.Path, command: list[str], timeout_s: float) -> str:
+def listed_modules(tree: pathlib.Path, output: str) -> set[str]:
+    """Tree-relative paths the runner listed: a line that is exactly one path, optionally after
+    one leading word (deno's ``Check file:///...``). Prose that mentions a path lists nothing."""
+
+    base = os.path.realpath(tree)
+    listed = set()
+    for line in output.splitlines():
+        words = line.split()
+        if not 1 <= len(words) <= 2:
+            continue
+        path = words[-1].removeprefix("file://")
+        if os.path.isabs(path):
+            path = os.path.relpath(os.path.realpath(path), base)
+        path = pathlib.PurePosixPath(path).as_posix()
+        if not path.startswith("../"):
+            listed.add(path.removeprefix("./"))
+    return listed
+
+
+def listing(tree: pathlib.Path, command: list[str], timeout_s: float) -> set[str]:
     try:
         completed = subprocess.run(command, cwd=tree, stdin=subprocess.DEVNULL,
                                    capture_output=True, text=True, timeout=timeout_s,
                                    check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DiscoveryError(f"the listing command did not complete: {error}") from None
-    return completed.stdout + completed.stderr
+    if completed.returncode != 0:
+        # A failing runner's diagnostics can name every module; only a clean listing counts.
+        raise DiscoveryError(f"the listing command exited {completed.returncode}: "
+                             f"{(completed.stderr or completed.stdout).strip()[-400:]}")
+    # deno prints its Check lines on stderr, so both streams are read line by line.
+    return listed_modules(tree, completed.stdout + "\n" + completed.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,11 +107,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("needs the runner's listing command after --")
     try:
         modules = test_modules(frozen_files(arguments.root, arguments.slot), arguments.pattern)
-        output = listing(arguments.tree, command, arguments.timeout_minutes * 60)
+        listed = listing(arguments.tree, command, arguments.timeout_minutes * 60)
     except DiscoveryError as error:
         print(f"discovery-check: {error}", file=sys.stderr)
         return 70
-    missing = [module for module in modules if module not in output]
+    missing = [module for module in modules if module not in listed]
     if missing:
         print(f"discovery-check: the runner does not list {len(missing)} of the Tester's "
               f"{len(modules)} modules: {', '.join(missing)}. Fix the integrated tree's test "
