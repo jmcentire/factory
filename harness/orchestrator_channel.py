@@ -1054,7 +1054,9 @@ def main() -> int:
     append = subparsers.add_parser("append")
     append.add_argument("--root", type=pathlib.Path, required=True)
     append.add_argument("--kind", choices=sorted(_ACTIVITY_KINDS), required=True)
-    append.add_argument("--source", required=True, help="dispatcher, validator, founder, or a lane id")
+    append.add_argument(
+        "--source", required=True, help="dispatcher, validator, founder, or a lane id"
+    )
     append.add_argument("--detail", required=True)
     append.add_argument("--snapshot-file", type=pathlib.Path)
     report = subparsers.add_parser("report")
