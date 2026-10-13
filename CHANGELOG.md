@@ -3,6 +3,42 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.15] - 2026-10-12
+
+Model profiles are gone. The operator picks models at run time, by telling the AI or with an
+optional flag, and the factory names none.
+
+### Removed
+
+- **Model profiles** (added in 0.8.11): `factory_runtime/model_profiles.py`,
+  `harness/model_profile.py`, `factory profile create|list|show|use|delete`, the profile prompt
+  in `make install`, the profile check in `make doctor`, `factory.sh --profile` and
+  `$FACTORY_PROFILE`, and the run's `model-profile.json`. Lanes no longer need that file to
+  launch or resume, and a per-seat variable or `--agent` is no longer checked against a profile.
+- **cursor-agent no longer requires `--model`.** With none, it runs its own default.
+
+### Changed
+
+- **Models are optional and named at run time.** `FACTORY_VALIDATOR_MODEL` and
+  `FACTORY_ORCHESTRATOR_MODEL` pass `--model` to a Codex or Claude Validator and a Codex
+  Orchestrator. agy has no model flag, so naming one for it is refused. `tmux_lane.sh --model`
+  names a lane's model. With nothing named, each agent runs its own configured default. Ollama
+  seats still need a named model that is already on the machine.
+- **A codex lane with no `--model` runs the model in the operator's Codex config.** Lanes run
+  `codex exec --ignore-user-config` so the operator's MCP servers, sandbox and approval settings
+  stay out of them. That flag also dropped the operator's model, so the lane ran Codex's
+  built-in one. `lane_agent.py codex-model` now reads only the model keys (`model`,
+  `model_provider` and its provider entry, `model_reasoning_effort`, `model_reasoning_summary`,
+  `model_verbosity`, and a legacy `profile`'s overrides of them) and passes them as `-c`
+  overrides. Nothing else from the config reaches the lane.
+- **Each lane's launch record states the model it ran**: `model`, `model_source` (`operator`,
+  `codex-config` or `agent`) and `model_config` (the overrides). `tmux_lane_message.sh` resumes
+  the lane on the same model.
+- `--metered` (or the agent being `codex-ollama`) is now the only way a lane is metered. It
+  still needs a spend cap, a budget reservation and a passed qualification probe.
+- SOFTWARE-FACTORY.md §6, HARNESS.md, README, `prompts/validate.md`, `prompts/orchestrate.md`
+  and the regenerated ROLE-DOCTRINE.md no longer mention profiles.
+
 ## [0.8.14] - 2026-10-12
 
 Host Git over agent-written repositories, and reads that fail stop instead of reading as clean.

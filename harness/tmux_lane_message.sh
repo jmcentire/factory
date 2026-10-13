@@ -72,6 +72,11 @@ if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
           (active[0].get("kindex") or {}).get("mcp_override", ""))
+# The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
+config = active[0].get("model_config") or []
+if not isinstance(config, list):
+    raise SystemExit("lane-message: retained launch fields are malformed")
+values += tuple(config)
 if any(not isinstance(value, str) or "\0" in value for value in values):
     raise SystemExit("lane-message: retained launch fields are malformed")
 for value in values:
@@ -90,6 +95,8 @@ IFS= read -r -d '' MODEL <&3 || {
 IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
   echo "lane-message: retained Kindex scope is missing or malformed" >&2; exit 70;
 }
+MODEL_CONFIG=()
+while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
 case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: a $AGENT lane has no resumable Codex thread; launch a new --round instead" >&2; exit 70 ;; esac
 if [ "$AGENT" = "codex-ollama" ]; then
@@ -195,17 +202,23 @@ SAFE_TERM="${TERM:-xterm-256color}"
 SAFE_SHELL="${SHELL:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
+# Resume on the model the lane launched with: the Codex config overrides that selected it when
+# the launch carried over the operator's Codex config, else the model the operator named. The
+# model is spliced into an argument list, so it must be one word of the charset tmux_lane.sh admits.
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
-elif [ -n "$MODEL" ]; then
-  # A model-profile launch: resume on the model it launched with. The model is spliced into an
-  # argument list, so it must be one word of the charset model_profiles.py admits.
+elif [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   case "$MODEL" in
     *[!A-Za-z0-9._:/-]*) echo "lane-message: retained model is malformed" >&2; exit 70 ;;
   esac
   LOCAL_ARGS="-m $MODEL"
 fi
+RESUME_ARGS="$LOCAL_ARGS"
+for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
+  printf -v QUOTED -- '-c %q' "$OVERRIDE"
+  RESUME_ARGS="${RESUME_ARGS:+$RESUME_ARGS }$QUOTED"
+done
 PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
 if [ "$PANE_DEAD" = "0" ]; then
   MESSAGE=$(<"$RETAINED_MESSAGE")
@@ -228,7 +241,7 @@ elif [ "$PANE_DEAD" = "1" ]; then
   printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$RESUME_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"

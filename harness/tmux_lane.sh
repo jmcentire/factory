@@ -4,7 +4,9 @@
 # coordination/unqualified: promotion still requires the qualified Factory path.
 #
 # This script is the only lane launcher (prompts/validate.md Phase B item 7). Every launch:
-#   - binds the agent and model from the run's model profile (or --agent/--model without one);
+#   - runs the agent and model the operator names (--agent, --model); the factory names none, so
+#     with no --model a codex lane runs the model the operator's own Codex config selects and any
+#     other agent runs its CLI's own default, and the launch record says which it was;
 #   - preflights the agent's sign-in non-interactively and refuses, with the exact fix, an agent
 #     that would sit on a login screen (harness/lane_agent.py);
 #   - refuses a metered agent without a per-round spend cap and a declared rate, reserves the
@@ -108,86 +110,36 @@ refuse() {
   exit "$code"
 }
 
-# The run's model-profile.json, which factory.sh writes for every run, says how it was started.
-# With a profile, it binds this lane's agent and model, and --agent, --model or
-# FACTORY_LANE_OLLAMA_MODEL is refused if it disagrees, never silently preferred. With an
-# explicit none, they keep their earlier meaning. A qualify probe exists to try a candidate the
-# profile does not bind yet, so it may name another agent and model.
-MODEL=""
-PROFILE_METERED=""
-PROFILE_SNAPSHOT="$ROOT/model-profile.json"
-PROFILE_STATE=""
-if [ "$ACTION" != "freeze" ]; then
-  # factory.sh records how every run was started. Without that record the lane cannot tell a run
-  # started with no profile from one whose record was lost, so it refuses rather than guess.
-  [ -e "$PROFILE_SNAPSHOT" ] || [ -L "$PROFILE_SNAPSHOT" ] || {
-    echo "tmux-lane: $PROFILE_SNAPSHOT is missing. factory.sh records every run's model profile (an explicit none when it used none), so this run was ignited before 0.8.11 or the record was lost; ignite a new run with harness/factory.sh" >&2
+# The operator names the lane's agent (--agent, default codex) and, optionally, its model
+# (--model). The factory names no model. MODEL_SOURCE records where the model came from:
+# "operator" when named, "codex-config" when a codex lane carries over the model the operator's
+# own Codex config selects (resolved below, once CODEX_HOME is known), and "agent" when the
+# agent's CLI chooses for itself. codex-ollama alone needs a named model: Ollama must already
+# have it, and Codex's --oss mode would otherwise pick and pull one.
+MODEL="$MODEL_ARG"
+MODEL_SOURCE=""
+MODEL_CONFIG=()
+[ -z "$MODEL" ] || MODEL_SOURCE=operator
+if [ "$ACTION" != "freeze" ] && [ "$AGENT" = "codex-ollama" ]; then
+  [ -z "$MODEL" ] || [ -z "${FACTORY_LANE_OLLAMA_MODEL:-}" ] || \
+    [ "$MODEL" = "$FACTORY_LANE_OLLAMA_MODEL" ] || {
+    echo "tmux-lane: --model $MODEL contradicts FACTORY_LANE_OLLAMA_MODEL=$FACTORY_LANE_OLLAMA_MODEL" >&2
     exit 64
   }
-  exec 3< <("$FACTORY_PYTHON" "$D/model_profile.py" binding \
-    --snapshot "$PROFILE_SNAPSHOT" --role "$ROLE")
-  IFS= read -r -d '' PROFILE_STATE <&3 || exit 64
-  case "$PROFILE_STATE" in
-    profile|none) ;;
-    *) echo "tmux-lane: the run's model profile record is malformed" >&2; exit 70 ;;
-  esac
-fi
-if [ "$PROFILE_STATE" = "profile" ]; then
-  { IFS= read -r -d '' PROFILE_AGENT <&3 && IFS= read -r -d '' PROFILE_MODEL <&3 &&
-    IFS= read -r -d '' PROFILE_METERED <&3; } || exit 70
-  exec 3<&-
-  if [ "$ACTION" = "qualify" ] && [ -n "$AGENT_ARG$MODEL_ARG" ]; then
-    MODEL="${MODEL_ARG:-$PROFILE_MODEL}"
-    [ -n "$AGENT_ARG" ] || AGENT="$PROFILE_AGENT"
-    # The profile's metered mark describes its own binding, not a candidate's.
-    [ "$AGENT" = "$PROFILE_AGENT" ] && [ "$MODEL" = "$PROFILE_MODEL" ] || PROFILE_METERED=""
-  else
-    [ -z "$AGENT_ARG" ] || [ "$AGENT_ARG" = "$PROFILE_AGENT" ] || {
-      echo "tmux-lane: --agent $AGENT_ARG contradicts the run's model profile ($ROLE: $PROFILE_AGENT)" >&2
-      exit 64
-    }
-    [ -z "$MODEL_ARG" ] || [ "$MODEL_ARG" = "$PROFILE_MODEL" ] || {
-      echo "tmux-lane: --model $MODEL_ARG contradicts the run's model profile ($ROLE: $PROFILE_MODEL)" >&2
-      exit 64
-    }
-    AGENT="$PROFILE_AGENT"
-    MODEL="$PROFILE_MODEL"
-  fi
-  if [ "$AGENT" = "codex-ollama" ]; then
-    [ -z "${FACTORY_LANE_OLLAMA_MODEL:-}" ] || [ "$FACTORY_LANE_OLLAMA_MODEL" = "$MODEL" ] || {
-      echo "tmux-lane: FACTORY_LANE_OLLAMA_MODEL=$FACTORY_LANE_OLLAMA_MODEL contradicts the run's model profile ($ROLE: $MODEL)" >&2
-      exit 64
-    }
-    factory_require_ollama_model tmux-lane "the $ROLE model in the run's model profile" "$MODEL" || exit $?
-  fi
-elif [ "$PROFILE_STATE" = "none" ]; then
-  exec 3<&-
-  # Started without a profile: --agent, --model and FACTORY_LANE_OLLAMA_MODEL name the binding.
-  MODEL="$MODEL_ARG"
-  if [ "$AGENT" = "codex-ollama" ]; then
-    [ -z "$MODEL" ] || [ -z "${FACTORY_LANE_OLLAMA_MODEL:-}" ] || \
-      [ "$MODEL" = "$FACTORY_LANE_OLLAMA_MODEL" ] || {
-      echo "tmux-lane: --model $MODEL contradicts FACTORY_LANE_OLLAMA_MODEL=$FACTORY_LANE_OLLAMA_MODEL" >&2
-      exit 64
-    }
-    MODEL="${MODEL:-${FACTORY_LANE_OLLAMA_MODEL:-}}"
-    factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
-  fi
+  MODEL="${MODEL:-${FACTORY_LANE_OLLAMA_MODEL:-}}"
+  factory_require_ollama_model tmux-lane FACTORY_LANE_OLLAMA_MODEL "$MODEL" || exit $?
+  MODEL_SOURCE=operator
 fi
 if [ "$ACTION" != "freeze" ]; then
   case "$MODEL" in
     *[!A-Za-z0-9._:/-]*) echo "tmux-lane: model is not one word of [A-Za-z0-9._:/-]: $MODEL" >&2; exit 64 ;;
   esac
-  [ "$AGENT" != "cursor-agent" ] || [ -n "$MODEL" ] || {
-    echo "tmux-lane: cursor-agent needs a named model (the run's model profile, or --model); the factory never picks one" >&2
-    exit 64
-  }
   exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" describe --agent "$AGENT")
   { IFS= read -r -d '' AGENT_EXECUTABLE <&4 && IFS= read -r -d '' PROMPT_VIA <&4 &&
     IFS= read -r -d '' AGENT_TTY <&4 && IFS= read -r -d '' AGENT_METERED <&4; } || exit 70
   exec 4<&-
   METERED=false
-  if [ "$AGENT_METERED" = metered ] || [ "$PROFILE_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
+  if [ "$AGENT_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
     METERED=true
   fi
 fi
@@ -372,6 +324,20 @@ PY
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME")
+
+  # A codex lane runs with --ignore-user-config, which keeps the operator's MCP servers, sandbox
+  # and approval settings out of it, and would also drop their model for Codex's built-in one.
+  # So with no --model, the model keys of the operator's Codex config are carried over: the lane
+  # runs what their own `codex` would. A config that names no model leaves Codex's own default.
+  if [ "$AGENT" = codex ] && [ -z "$MODEL" ]; then
+    exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" codex-model --codex-home "$SAFE_CODEX_HOME")
+    IFS= read -r -d '' MODEL <&4 || refuse 70 "the model in $SAFE_CODEX_HOME/config.toml could not be read" \
+      "fix $SAFE_CODEX_HOME/config.toml, or name the model with --model"
+    while IFS= read -r -d '' OVERRIDE <&4; do MODEL_CONFIG+=("$OVERRIDE"); done
+    exec 4<&-
+    [ "${#MODEL_CONFIG[@]}" -eq 0 ] || MODEL_SOURCE=codex-config
+  fi
+  [ -n "$MODEL_SOURCE" ] || MODEL_SOURCE=agent
 
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on
@@ -580,7 +546,8 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
-    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" <<'PY'
+    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$MODEL_SOURCE" \
+    ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
@@ -588,8 +555,9 @@ import datetime, json, sys
     lane, slot, instance, round_tag, action, metered, prompt_via, tty,
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
-    standard, lane_log, lane_exits, qualifications,
-) = sys.argv[1:]
+    standard, lane_log, lane_exits, qualifications, model_source,
+) = sys.argv[1:36]
+model_config = sys.argv[36:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -602,7 +570,11 @@ print(json.dumps({
     "round": round_tag or None,
     "mode": action,
     "agent": agent,
+    # What the lane actually ran, for provenance: the model, where it came from (operator,
+    # codex-config or agent), and the config overrides that selected it, which a resume reuses.
     "model": model,
+    "model_source": model_source,
+    "model_config": model_config,
     "terminal": tty == "terminal",
     "prompt_via": prompt_via,
     "auth_preflight": auth.strip(),
@@ -648,11 +620,15 @@ PY
   LOCAL_ARGS=""
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
-  elif [ -n "$MODEL" ] && [ "$AGENT" != "cursor-agent" ]; then
-    # A profile's model. Lanes run with --ignore-user-config, so without it Codex would fall
-    # back to its built-in default: a model nobody named.
+  elif [ "$MODEL_SOURCE" = operator ] && [ "$AGENT" != "cursor-agent" ]; then
     LOCAL_ARGS="-m $MODEL"
   fi
+  for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
+    printf -v QUOTED -- '-c %q' "$OVERRIDE"
+    LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$QUOTED"
+  done
+  CURSOR_MODEL_ARGS=""
+  [ -z "$MODEL" ] || printf -v CURSOR_MODEL_ARGS -- '--model %q' "$MODEL"
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
@@ -673,8 +649,8 @@ PY
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent)
-      printf -v LANE_CMD '%s %s --prompt-arg %q -- agent -p --model %q --force --trust --workspace %q' \
-        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$MODEL" "$REPOSITORY" ;;
+      printf -v LANE_CMD '%s %s --prompt-arg %q -- agent -p %s --force --trust --workspace %q' \
+        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CURSOR_MODEL_ARGS" "$REPOSITORY" ;;
   esac
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"

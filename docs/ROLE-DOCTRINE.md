@@ -552,10 +552,10 @@ two separate claims about two separate parties — keep them apart.**
   operator has configured (an API, Hugging Face, Vast, Ollama, local or cloud). Never pick a model
   the operator did not name, and never download, pull, install or rent one, not even to satisfy
   the cross-family reviewer. If no configured model is from another family, ask the human which
-  provider and model to use; that is their decision, not a setup task for you. When the run was
-  ignited with a model profile, `<run>/model-profile.json` names each seat's agent and model:
-  write runner manifests from it, and read the operator's other profiles with
-  `factory profile list`.
+  provider and model to use; that is their decision, not a setup task for you. Pass the model
+  the operator named to the launcher (`tmux_lane.sh --model`, the runner manifest); with none
+  named, a lane runs its agent's own configured default, and its launch record states the model
+  it ran.
 
 ---
 
