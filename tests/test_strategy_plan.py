@@ -61,7 +61,7 @@ def test_the_tester_freezes_only_when_every_critical_planned_case_has_a_test(
     tmp_path: Path,
 ) -> None:
     strategy = _strategy(tmp_path, "planned-case: R16.11-a", "planned-case: R7.1 Critical",
-                         "- planned-case: N13 Standard")
+                         "- planned-case: N13 Standard", "test-modules: tests/*_test.ts")
     files = tmp_path / "files"
     (files / "tests").mkdir(parents=True)
     test = files / "tests" / "cap_test.ts"
@@ -73,6 +73,30 @@ def test_the_tester_freezes_only_when_every_critical_planned_case_has_a_test(
     assert strategy_plan.main(check) == 70
     test.write_text(test.read_text() + 'Deno.test("R7.1: 413 over the cap", () => {});\n')
     assert strategy_plan.main(check) == 0
+    lines = strategy.read_text().splitlines()
     assert strategy_plan.uncovered(
-        strategy_plan.planned_cases(strategy.read_text().splitlines()), files
+        strategy_plan.planned_cases(lines), files, strategy_plan.test_module_globs(lines)
     ) == {"Critical": [], "Standard": ["N13"], "Cosmetic": []}
+
+
+def test_a_case_named_only_outside_a_test_module_is_not_covered(tmp_path: Path) -> None:
+    """Review of #73: a README, an inventory or a comment naming every case is not a test."""
+
+    strategy = _strategy(tmp_path, "planned-case: R7.1", "test-modules: tests/*_test.ts")
+    files = tmp_path / "files"
+    (files / "tests").mkdir(parents=True)
+    (files / "README.md").write_text("Covers R7.1.\n")
+    (files / "tests" / "COVERAGE.txt").write_text("R7.1: done\n")
+    test = files / "tests" / "cap_test.ts"
+    test.write_text("// R7.1: todo\n  # R7.1\nDeno.test(\"request cap\", () => {});\n")
+    check = ["coverage", "--strategy", str(strategy), "--files", str(files)]
+    assert strategy_plan.main(check) == 70
+    test.write_text(test.read_text() + 'Deno.test("R7.1: 413 over the cap", () => {});\n')
+    assert strategy_plan.main(check) == 0
+
+
+def test_planned_cases_without_a_test_module_glob_are_refused(tmp_path: Path) -> None:
+    strategy = _strategy(tmp_path, "planned-case: R7.1")
+    (tmp_path / "files").mkdir()
+    assert strategy_plan.main(["coverage", "--strategy", str(strategy),
+                               "--files", str(tmp_path / "files")]) == 70

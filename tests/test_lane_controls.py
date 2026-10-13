@@ -840,7 +840,8 @@ def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: 
 def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path / "run")
     strategy = lanes.root / "artifacts" / "testing-strategy.md"
-    strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n")
+    strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n"
+                        "test-modules: *_test.ts\n")
     assert lanes.lane("tester").returncode == 0
     clone = lanes.clone("tester")
     (clone / "cap_test.ts").write_text('Deno.test("request cap", () => {});\n')

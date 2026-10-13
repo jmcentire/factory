@@ -324,9 +324,11 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    formatters and linters off those paths. `tmux_lane.sh` refuses a Tester whose tree lacks one or
    holds other bytes. Name each planned test case in the Strategy on a line
    `planned-case: <case id> [Critical|Standard|Cosmetic]` (no class is Critical), with an id that
-   names the scenario, not only the requirement; the Tester's freeze is refused while any Critical
-   case id appears in none of its files, so the gap goes back to the Tester while it can still
-   write the test.
+   names the scenario, not only the requirement, and name the Tester's test modules on a line
+   `test-modules: <glob>` (the same glob `discovery_check.py --pattern` takes). The Tester's
+   freeze is refused while any Critical case id appears in no test module (a README, inventory
+   or comment does not count), so the gap goes back to the Tester while it can still write the
+   test.
 
 ## Phase A — The frame (nothing is built until the human has agreed it)
 
@@ -674,8 +676,8 @@ The Orchestrator's authority runs over you. You do not own the run.
 **You** run the tests. Neither author does.
 
 Before the first test run, integrate the two frozen trees and prove the runner sees the Tester's
-suite: `harness/discovery_check.py --root <run> --tree <integrated tree> --pattern <the Tester's
-test-module glob> -- <the runner's listing command, e.g. deno test --no-run>`. The Coder never
+suite: `harness/discovery_check.py --root <run> --tree <integrated tree> --pattern <the Strategy's
+test-modules glob> -- <the runner's listing command, e.g. deno test --no-run>`. The Coder never
 saw the tests, so its configuration can hide them (an `exclude` that drops `tests/`); a refusal
 is an integration edit you make and record, never a reason to run a subset.
 

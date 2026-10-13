@@ -12,8 +12,11 @@ Two invariants, each found by hand mid-run when nothing checked them:
 - **The Tester freezes only when every Critical planned case has a test** (dogfood #73). A
   Tester declared DONE with 12 Critical planned cases unimplemented. A Strategy line
   ``planned-case: <case id> [Critical|Standard|Cosmetic]`` (no class means Critical: an
-  unclassified surface is Critical) names one case; ``coverage`` refuses a frozen Tester
-  export that names no Critical case id in any file, and reports every other gap.
+  unclassified surface is Critical) names one case, and ``test-modules: <glob>`` (repeatable;
+  ``fnmatch``, ``*`` crosses ``/``; the same glob ``discovery_check.py --pattern`` proves the
+  runner lists) names the Tester's test modules. ``coverage`` refuses a frozen Tester export in
+  which a Critical case id appears in no test module outside a full-line comment, and reports
+  every other gap. A README, inventory or comment naming a case covers nothing.
 
 Lines may sit in a Markdown list (``- oracle-input: ...``). Stdlib only, no package imports.
 """
@@ -21,6 +24,7 @@ Lines may sit in a Markdown list (``- oracle-input: ...``). Stdlib only, no pack
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -37,6 +41,8 @@ PLANNED_CASE = re.compile(
 )
 ORACLE_INPUT_LINE = re.compile(r"^\s*(?:[-*]\s+)?oracle-input:")
 PLANNED_CASE_LINE = re.compile(r"^\s*(?:[-*]\s+)?planned-case:")
+TEST_MODULES = re.compile(r"^\s*(?:[-*]\s+)?test-modules:\s*(?P<glob>\S+)\s*$")
+COMMENT_LINE = re.compile(r"^\s*(?://|#|/?\*|--|;|<!--)")
 
 
 class PlanError(RuntimeError):
@@ -117,14 +123,23 @@ def missing_oracle_inputs(inputs: dict[str, str], repo: pathlib.Path) -> list[st
     return missing
 
 
-def uncovered(cases: dict[str, str], files: pathlib.Path) -> dict[str, list[str]]:
-    # A copy of the Strategy in the Tester's tree names every case; it is not a test.
-    # ponytail: any other file naming a case id counts as covering it; a declared test-module
-    # glob would tighten this if a spec copy starts masking gaps.
-    texts = (path.read_text(encoding="utf-8", errors="replace")
-             for path in sorted(files.rglob("*")) if path.is_file() and not path.is_symlink())
-    corpus = "\n".join(text for text in texts
-                       if not any(PLANNED_CASE_LINE.match(line) for line in text.splitlines()))
+def test_module_globs(lines: list[str]) -> list[str]:
+    return [found["glob"] for line in lines if (found := TEST_MODULES.match(line))]
+
+
+def uncovered(cases: dict[str, str], files: pathlib.Path,
+              globs: list[str]) -> dict[str, list[str]]:
+    if cases and not globs:
+        raise PlanError("the strategy names planned cases but no 'test-modules: <glob>' line, "
+                        "so no file can be told to be a test")
+    modules = [path for path in sorted(files.rglob("*"))
+               if path.is_file() and not path.is_symlink()
+               and any(fnmatch.fnmatch(path.relative_to(files).as_posix(), g) for g in globs)]
+    # ponytail: full-line comments are dropped by their leading marker; a trailing comment on a
+    # code line still counts. A per-language tokenizer would close that if it masks gaps.
+    corpus = "\n".join(line for path in modules
+                       for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                       if not COMMENT_LINE.match(line))
     gaps: dict[str, list[str]] = {"Critical": [], "Standard": [], "Cosmetic": []}
     for case, criticality in cases.items():
         if not re.search(rf"(?<![\w.-]){re.escape(case)}(?![\w-])(?!\.\w)", corpus):
@@ -153,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 70
             print(json.dumps({"oracle_inputs": cited}, sort_keys=True, separators=(",", ":")))
             return 0
-        gaps = uncovered(planned_cases(lines), arguments.files)
+        gaps = uncovered(planned_cases(lines), arguments.files, test_module_globs(lines))
         print(json.dumps({"plan_gaps": gaps}, sort_keys=True, separators=(",", ":")))
         if gaps["Critical"]:
             print("strategy-plan: no test names these Critical planned cases: "
