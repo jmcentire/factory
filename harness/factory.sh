@@ -123,7 +123,17 @@ if open_:
 print("tmux-session" if not attempts else f"tmux-session-{len(attempts) + 1}")
 ') || exit 65
 IGNITION_FILES=""
+RESOURCE_STATE=""
 cleanup_ignition() {
+  # An attempt that failed anywhere between planning its session and settling it is closed
+  # here, so its resource row never refuses the next retry as still planned.
+  if [ "$RESOURCE_STATE" = planned ]; then
+    if tmux has-session -t "$RUN" 2>/dev/null; then
+      resource_event '{"reason":"ignition failed after the session was created","residue":true}' failed || true
+    else
+      resource_event '{"reason":"ignition failed before the session was created","residue":false}' abandoned || true
+    fi
+  fi
   rm -f "$TASK_TMP"
   # A failed attempt leaves nothing that refuses the next one (exit 65 "already exists").
   [ -z "$IGNITION_FILES" ] || rm -f "$ROOT/harness.json" "$ROOT/TASK.md"
@@ -342,6 +352,7 @@ resource_event() {
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \
     --evidence-json "{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\"}" \
     --status "$2" --actor harness-ignition >/dev/null
+  RESOURCE_STATE="$2"
 }
 resource_event '{}' planned
 

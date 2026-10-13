@@ -2338,6 +2338,29 @@ def test_failed_ignition_leaves_nothing_that_refuses_a_retry(tmp_path: Path) -> 
     assert resources["tmux-session-2"]["status"] == "active"
 
 
+def test_an_ignition_failing_before_the_session_is_abandoned_not_left_planned(
+    tmp_path: Path,
+) -> None:
+    """Codex review: a set -e failure between planning the session and creating it left
+    tmux-session=planned, and every retry was refused as an open earlier ignition."""
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _ = factory_ignition_env(tmp_path, root)
+    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+    blocker = root / "orchestrator"
+    blocker.write_text("not a directory\n", encoding="utf-8")
+
+    failed = run(ignite, operator, env)
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
+    assert not [name for name in IGNITION_FILES if (root / name).exists()]
+
+    blocker.unlink()
+    retried = run(ignite, operator, env)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert ResourceLedger(root, "r1").latest()["tmux-session-2"]["status"] == "active"
+
+
 def test_ignition_refuses_while_another_ignition_of_the_run_holds_the_lock(
     tmp_path: Path,
 ) -> None:
