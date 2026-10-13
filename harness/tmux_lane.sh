@@ -768,7 +768,7 @@ if [ "$ROLE" = tester ]; then
   PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" coverage \
     --strategy "$ROOT/artifacts/testing-strategy.md" --files "$TESTER_FILES" 2>"$TMUX_ROOT/$SLOT-plan.err") || \
     refuse 70 "PLAN: $(sed 's/^strategy-plan: //' "$TMUX_ROOT/$SLOT-plan.err")" \
-      "send the gaps back to the Tester (status or a ruling notice) and freeze again when they are written"
+      "send the gaps back to the Tester and freeze again when they are written"
   PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.dumps(json.load(sys.stdin)["plan_gaps"]))')
 fi

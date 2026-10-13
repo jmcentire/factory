@@ -397,13 +397,15 @@ machine, before the agent starts and while it runs:
   `shell_environment_policy.inherit="core"`, which drops every other variable, so the cache
   variables are set in the policy itself and the runtime directory goes first on PATH; both are
   recorded in the launch row (`lane_env`) and re-applied on every resume. Each directory must
-  exist and be read-only to the lane, or the launch is refused.
+  exist, have no symlink on its path or inside it, and hold no entry with a write bit, or the
+  launch is refused.
 - **Oracle inputs.** A Tester launch reads the Strategy's `oracle-input: <path> sha256:<digest>`
   lines (`harness/strategy_plan.py oracle-inputs`) and is refused when its tree lacks a cited
-  input or holds bytes other than the pinned upstream digest. A Tester freeze reads its
-  `planned-case: <id> [class]` lines (`strategy_plan.py coverage`) and is refused, leaving the
-  lane open, while a Critical case id appears in none of the frozen files; other gaps are
-  recorded in the freeze row's `plan_gaps`.
+  input, reaches it through a linked directory, or holds bytes other than the pinned upstream
+  digest. A Tester freeze reads its `planned-case: <id> [class]` and `test-modules: <glob>` lines
+  (`strategy_plan.py coverage`) and is refused, leaving the lane open, while a Critical case id
+  appears in no frozen test module outside a full-line comment; other gaps are recorded in the
+  freeze row's `plan_gaps`.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a
@@ -723,7 +725,7 @@ dependency-free (bash + python3 + git):
       [--read-allowance-minutes 15] [--stall-window-minutes 20]
   harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
   harness/tmux_lane.sh <run> <coder|tester> freeze [--instance <name>] [--round <tag>]
-  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer|ruling|idle ...
+  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer|idle ...
   harness/lane_watchdog.py report --root <run root>
   ```
 
@@ -734,7 +736,7 @@ dependency-free (bash + python3 + git):
   for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher. `idle` reports
   whether a slot has no live turn (window gone or pane dead: exit 0) or is mid-turn (exit 75),
   reading the lane window by exact name; freeze reads it the same way.
-  An answer or ruling notice over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
+  An answer over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
   at `tmux-lanes/<slot>-inputs/<sha256>.txt` with a `FACTORY_RELAY file=… sha256=…` pointer;
   the coder leak guard judges the file's bytes before the file is placed.
   Preflight requires a standalone repository whose Git/common directory is local and an agent

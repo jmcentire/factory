@@ -221,8 +221,9 @@ blocked, and ask at the end of the round.
    tension. **Report, do not resolve.**
 7. **What you did not write, and why** — every planned Strategy row you could not realize,
    named as a gap. Name each `planned-case:` id of the Strategy in the test that realizes it (its
-   name or a comment beside it): the freeze is refused while a Critical case id appears in none
-   of your files. Do not silently drop a row or substitute a cheaper test for a high-value
+   name or its code, in a file the Strategy's `test-modules:` glob matches): the freeze is refused
+   while a Critical case id appears in no test module, and a README, inventory or comment line
+   naming it does not count. Do not silently drop a row or substitute a cheaper test for a high-value
    one; that reopens approval.
 
 ### The oracle self-check — run it before you emit `__DONE__`
