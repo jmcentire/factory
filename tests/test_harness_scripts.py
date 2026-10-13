@@ -55,9 +55,9 @@ def run(
         # would, so a fixture that pins PATH to system directories does not leave the harness
         # without one. Resolution itself is tested by clearing this (tests/test_factory_python.py).
         "FACTORY_PYTHON": sys.executable,
-        # The operator's own model profiles must never reach a fixture. Tests of profiles name
-        # a file of their own.
-        "FACTORY_PROFILES": str(cwd / ".no-model-profiles.json"),
+        # The operator's own Codex config (and the model it selects) must never reach a fixture.
+        # A test of it names a CODEX_HOME of its own. Short, so an interactive lane's socket fits.
+        "CODEX_HOME": "/nonexistent/factory-codex",
     }
     if env_extra:
         env.update(env_extra)
@@ -9475,82 +9475,9 @@ def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> No
     assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
 
 
-def _write_profiles(path: Path, **roles: str) -> None:
-    """A profiles file holding one default profile, "team", with the given AGENT:MODEL roles."""
-
-    from factory_runtime import model_profiles as mp
-
-    profile = mp.Profile("team", "", {r: mp.parse_binding(r, roles[r]) for r in mp.ROLES})
-    mp.save(path, mp.Profiles("team", {"team": profile}))
-
-
-def test_model_profile_names_every_seat_and_the_run_keeps_it(tmp_path: Path) -> None:
-    """With a profile, each seat runs the agent and model the operator named: the Validator and a
-    Codex Orchestrator get --model, the profile is snapshotted into the run, and every lane
-    launched later in that run follows the snapshot rather than the operator's file or flags."""
-
-    task = "Run every seat on the operator's named models."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    profiles = tmp_path / "profiles.json"
-    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="codex:gpt-orch",
-                    coder="codex:gpt-coder", tester="codex-ollama:glm-test:cloud")
-    env = {**env, "FACTORY_PROFILES": str(profiles)}
-    ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent),
-         "--budget", "50"],
-        operator,
-        env,
-    )
-    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
-    strategy = root / "artifacts" / "testing-strategy.md"
-    strategy.parent.mkdir(exist_ok=True)
-    strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
-    assert "model profile: team sha256:" in ignited.stdout
-    calls = tmux_log.read_text().splitlines()
-    validator = next(line for line in calls if "codex --sandbox workspace-write --model" in line)
-    assert "--model gpt-val " in validator
-    assert any("--no-alt-screen --model gpt-orch " in line for line in calls)
-    snapshot = json.loads((root / "model-profile.json").read_text(encoding="utf-8"))
-    assert snapshot["name"] == "team"
-    assert snapshot["roles"]["tester"] == {
-        "agent": "codex-ollama", "model": "glm-test:cloud", "model_passing": "command-line"
-    }
-
-    # The operator edits their file after ignition; the run keeps what it was ignited with.
-    _write_profiles(profiles, validator="claude:other", orchestrator="agy:other",
-                    coder="codex-ollama:other", tester="codex:other")
-    prompt = tmp_path / "prompt.txt"
-    prompt.write_text("Do the lane's work.\n")
-    stub_dir = Path(env["PATH"].split(os.pathsep)[0])
-    _ollama_stub(stub_dir, available=True)
-
-    def launch(role: str, *extra: str) -> subprocess.CompletedProcess[str]:
-        lane = tmp_path / f"standalone-{role}"
-        if not lane.exists():
-            subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
-        return run(
-            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(lane),
-             "--prompt", str(prompt), "--runs", str(root.parent), *extra],
-            operator,
-            env,
-        )
-
-    refused = launch("coder", "--agent", "codex-ollama")
-    assert refused.returncode == 64 and "contradicts the run's model profile" in refused.stderr
-    assert launch("coder").returncode == 0
-    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
-    assert " -m gpt-coder " in coder_call and "--oss" not in coder_call
-    assert read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]["model"] == "gpt-coder"
-    record_passing_qualification(root.parent, "tester", "codex-ollama", "glm-test:cloud")
-    assert launch("tester", *METERED_CAPS).returncode == 0
-    tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
-    assert "--oss --local-provider ollama -m glm-test:cloud" in tester_call
-
-
 def _ignite_and_launcher(
     tmp_path: Path, task: str, env_extra: dict[str, str] | None = None
-) -> tuple[Path, Path, Path, Callable[[str], subprocess.CompletedProcess[str]]]:
+) -> tuple[Path, Path, Path, Callable[..., subprocess.CompletedProcess[str]]]:
     operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
     env = {**env, **(env_extra or {})}
@@ -9566,12 +9493,12 @@ def _ignite_and_launcher(
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Do the lane's work.\n")
 
-    def launch(role: str) -> subprocess.CompletedProcess[str]:
+    def launch(role: str, *extra: str) -> subprocess.CompletedProcess[str]:
         lane = tmp_path / f"standalone-{role}"
         subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
         return run(
             ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(lane),
-             "--prompt", str(prompt), "--runs", str(root.parent)],
+             "--prompt", str(prompt), "--runs", str(root.parent), *extra],
             operator,
             env,
         )
@@ -9579,41 +9506,95 @@ def _ignite_and_launcher(
     return root, operator, tmux_log, launch
 
 
-def test_a_lane_refuses_a_run_whose_model_profile_record_is_missing(tmp_path: Path) -> None:
-    """A run ignited with a profile loses its record. "No file" cannot tell "started without a
-    profile" from "record lost", so the lane refuses rather than guess and launch on Codex's
-    built-in default: the unnamed model profiles exist to stop."""
+def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
+    """Models are optional and come from the operator at run time: a named Validator and Codex
+    Orchestrator model goes on their command lines, a lane's --model on its own, and the lane's
+    launch record states the model and that the operator named it. Nothing is written for a
+    profile, and no model is required."""
 
-    profiles = tmp_path / "profiles.json"
-    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="agy:gemini-test",
-                    coder="codex:gpt-coder", tester="codex:gpt-tester")
     root, _, tmux_log, launch = _ignite_and_launcher(
-        tmp_path, "Refuse a run that lost its model profile record.",
-        {"FACTORY_PROFILES": str(profiles)},
+        tmp_path, "Run each seat on a model the operator named.",
+        {"FACTORY_VALIDATOR_MODEL": "gpt-val", "FACTORY_ORCHESTRATOR_AGENT": "codex",
+         "FACTORY_ORCHESTRATOR_MODEL": "gpt-orch"},
     )
-    (root / "model-profile.json").unlink()
-    refused = launch("tester")
-    assert refused.returncode == 64, refused.stdout + refused.stderr
-    assert "model-profile.json is missing" in refused.stderr
-    assert not any("-n tester" in line for line in tmux_log.read_text().splitlines())
+    calls = tmux_log.read_text().splitlines()
+    assert any("codex --sandbox workspace-write --model gpt-val " in line for line in calls)
+    assert any("--no-alt-screen --model gpt-orch " in line for line in calls)
+    assert not (root / "model-profile.json").exists()
+
+    assert launch("coder", "--model", "gpt-coder").returncode == 0
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    assert " exec -m gpt-coder --ignore-user-config" in coder_call
+    row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert (row["model"], row["model_source"], row["model_config"]) == ("gpt-coder", "operator", [])
 
 
-def test_a_run_without_a_profile_records_an_explicit_none(tmp_path: Path) -> None:
-    """With no profile the run still states how it began, and its lanes keep the pre-profile
-    launch: Codex with no model flag."""
+def test_with_no_model_named_each_agent_runs_its_own_default(tmp_path: Path) -> None:
+    """The factory names no model. With none named and no model in the operator's Codex config,
+    no seat gets a model flag, and the lane records that its agent chose."""
 
-    root, _, tmux_log, launch = _ignite_and_launcher(tmp_path, "Start without a profile.")
-    assert json.loads((root / "model-profile.json").read_text(encoding="utf-8")) == {
-        "schema_version": "factory-model-profile/1", "profile": None
-    }
+    root, _, tmux_log, launch = _ignite_and_launcher(tmp_path, "Start without naming a model.")
+    calls = tmux_log.read_text().splitlines()
+    validator = next(line for line in calls if "codex --sandbox workspace-write" in line)
+    assert "--model" not in validator
     assert launch("coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
     assert " -m " not in coder_call and " exec  --ignore-user-config" in coder_call
+    assert "-c model=" not in coder_call
+    row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert (row["model"], row["model_source"], row["model_config"]) == ("", "agent", [])
+
+
+def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path: Path) -> None:
+    """A codex lane runs with --ignore-user-config so the operator's MCP servers, sandbox and
+    approvals stay out of it. That must not also drop their model for Codex's built-in one: with
+    no --model, the lane carries over only the model keys of their config, and records them."""
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model = "gpt-mine"\nmodel_reasoning_effort = "high"\nsandbox_mode = "danger-full-access"\n'
+        '[mcp_servers.personal]\ncommand = "personal-mcp"\n',
+        encoding="utf-8",
+    )
+    root, _, tmux_log, launch = _ignite_and_launcher(
+        tmp_path, "Run the operator's own Codex model.", {"CODEX_HOME": str(codex_home)}
+    )
+    assert launch("coder").returncode == 0
+    coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
+    assert f" exec {carried_args} --ignore-user-config" in coder_call
+    assert "personal-mcp" not in coder_call and "danger-full-access" not in coder_call
+    row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["model"] == "gpt-mine" and row["model_source"] == "codex-config"
+    assert row["model_config"] == ['model="gpt-mine"', 'model_reasoning_effort="high"']
+
+    # A named model wins over the config; the config's keys are then not carried over.
+    assert launch("tester", "--model", "gpt-named").returncode == 0
+    tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
+    assert " exec -m gpt-named --ignore-user-config" in tester_call
+    assert "gpt-mine" not in tester_call
+
+
+def test_an_agy_orchestrator_refuses_a_model_it_cannot_be_given(tmp_path: Path) -> None:
+    """agy has no model flag: a named Orchestrator model for it is refused, not silently dropped."""
+
+    task = "Name a model agy cannot take."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    refused = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        {**env, "FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
+    )
+    assert refused.returncode == 64 and "select the model inside agy" in refused.stderr
+    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
 
 
 def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:
-    """A Codex lane launched on a profile's model resumes on that model, not on Codex's built-in
-    default; a retained model that is not one shell word is refused."""
+    """A Codex lane resumes on the selection it launched with, not on Codex's built-in default:
+    the named model, or the Codex config overrides it carried over. A retained model that is not
+    one shell word is refused."""
 
     operator, root, _ = execution_truth_fixture(
         tmp_path, task="Resume on the launch model.", harness_status="open"
@@ -9627,9 +9608,11 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
         "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
     )
 
-    def probe(model: str) -> subprocess.CompletedProcess[str]:
+    def probe(model: str, config: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
                "role": "coder", "agent": "codex", "model": model, "repository": str(lane)}
+        if config is not None:
+            row["model_config"] = config
         (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
         return run(
             ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
@@ -9645,30 +9628,13 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert " codex -m gpt-coder --ask-for-approval never " in respawn
 
-
-def test_a_seat_variable_that_contradicts_the_profile_is_refused(tmp_path: Path) -> None:
-    """A stale FACTORY_VALIDATOR_AGENT in the shell must not silently override the profile, and
-    a profile that does not exist is refused rather than replaced by a default."""
-
-    task = "Refuse a contradicted profile."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    profiles = tmp_path / "profiles.json"
-    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="agy:gemini-test",
-                    coder="codex:gpt-coder", tester="codex:gpt-tester")
-    env = {**env, "FACTORY_PROFILES": str(profiles)}
-    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
-    contradicted = run(ignite, operator, {**env, "FACTORY_VALIDATOR_AGENT": "claude"})
-    assert contradicted.returncode == 64
-    assert "FACTORY_VALIDATOR_AGENT=claude contradicts model profile 'team'" in contradicted.stderr
-    unknown = run([*ignite, "--profile", "nope"], operator, env)
-    assert unknown.returncode == 64 and "no model profile named 'nope'" in unknown.stderr
-    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
-    assert not (root / "model-profile.json").exists()
-
-    agreeing = run(ignite, operator, {**env, "FACTORY_VALIDATOR_AGENT": "codex"})
-    assert agreeing.returncode == 0, agreeing.stdout + agreeing.stderr
-    assert "select gemini-test inside agy with /model" in agreeing.stdout
+    tmux_log.unlink()
+    carried = probe("gpt-mine", ['model="gpt-mine"', 'model_reasoning_effort="high"'])
+    assert carried.returncode == 0, carried.stdout + carried.stderr
+    respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
+    carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
+    assert f" codex {carried_args} --ask-for-approval" in respawn
+    assert " -m " not in respawn
 
 
 @pytest.mark.skipif(

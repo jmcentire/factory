@@ -13,6 +13,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,6 @@ from tests.test_harness_scripts import (
     METERED_CAPS,
     _dispatch_env,
     _ollama_stub,
-    _write_profiles,
     dispatch_success_fixture,
     execution_truth_fixture,
     factory_ignition_env,
@@ -76,8 +76,7 @@ def _cursor_stub(directory: Path, *, signed_in: bool) -> None:
 class Lanes:
     """One ignited run and a launcher for its lanes."""
 
-    def __init__(self, tmp_path: Path, *, budget: str | None = None,
-                 profiles: Path | None = None) -> None:
+    def __init__(self, tmp_path: Path, *, budget: str | None = None) -> None:
         task = "Exercise the lane launch controls."
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp_path
@@ -85,8 +84,6 @@ class Lanes:
             tmp_path, task=task, harness_status=None
         )
         env, self.tmux_log = factory_ignition_env(tmp_path, self.root)
-        if profiles is not None:
-            env["FACTORY_PROFILES"] = str(profiles)
         strategy = self.root / "artifacts" / "testing-strategy.md"
         strategy.parent.mkdir(exist_ok=True)
         strategy.write_text("# Testing strategy\nExercise the real seam.\n")
@@ -135,9 +132,6 @@ def test_cursor_agent_lane_runs_the_print_mode_invocation_under_the_lane_wrapper
 ) -> None:
     lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=True)
-    unnamed = lanes.lane("coder", "--agent", "cursor-agent")
-    assert unnamed.returncode == 64 and "cursor-agent needs a named model" in unnamed.stderr
-
     launched = lanes.lane("coder", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     lane = lanes.clone("coder").resolve()
@@ -161,6 +155,62 @@ def test_cursor_agent_lane_runs_the_print_mode_invocation_under_the_lane_wrapper
         lanes.operator, lanes.env,
     )
     assert message.returncode == 70 and "new --round" in message.stderr
+
+
+def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path) -> None:
+    """The factory names no model: with none named, cursor-agent gets no --model flag and the
+    launch records that the agent chose."""
+
+    lanes = Lanes(tmp_path)
+    _cursor_stub(lanes.stub, signed_in=True)
+    launched = lanes.lane("coder", "--agent", "cursor-agent")
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [call] = lanes.windows("coder")
+    assert "-- agent -p  --force --trust --workspace" in call and "--model" not in call
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert (row["model"], row["model_source"]) == ("", "agent")
+
+
+def test_every_lane_agent_is_described_once_and_only_codex_ollama_is_metered() -> None:
+    """lane_agent.py names each agent tmux_lane.sh admits, and no other; the agent metered by
+    construction is the Ollama-backed one. Any other launch is metered only when marked."""
+
+    text = (HARNESS / "tmux_lane.sh").read_text(encoding="utf-8")
+    match = re.search(r'case "\$AGENT" in ([a-z|-]+)\) ;;', text)
+    assert match is not None
+    assert set(match.group(1).split("|")) == set(lane_agent.AGENTS)
+    assert {name for name, agent in lane_agent.AGENTS.items() if agent.metered} == {
+        "codex-ollama"
+    }
+
+
+def test_codex_model_selection_carries_only_the_model_keys(tmp_path: Path) -> None:
+    """What a codex lane carries over from the operator's Codex config: the model keys, a legacy
+    profile's model keys over them, and the selected provider's definition. Nothing else, and
+    nothing at all when the config names no model or does not exist."""
+
+    assert lane_agent.codex_model_selection(tmp_path / "absent") == ("", [])
+    (tmp_path / "config.toml").write_text(
+        'model = "base"\nmodel_provider = "local"\nprofile = "fast"\n'
+        'approval_policy = "never"\n'
+        '[profiles.fast]\nmodel = "quick"\nmodel_reasoning_effort = "low"\n'
+        '[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:1234/v1"\n'
+        '[mcp_servers.personal]\ncommand = "personal-mcp"\n',
+        encoding="utf-8",
+    )
+    model, overrides = lane_agent.codex_model_selection(tmp_path)
+    assert model == "quick"
+    assert overrides == [
+        'model="quick"',
+        'model_provider="local"',
+        'model_reasoning_effort="low"',
+        'model_providers.local={"name" = "Local", "base_url" = "http://127.0.0.1:1234/v1"}',
+    ]
+    (tmp_path / "config.toml").write_text('approval_policy = "never"\n', encoding="utf-8")
+    assert lane_agent.codex_model_selection(tmp_path) == ("", [])
+    (tmp_path / "config.toml").write_text("model = \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not readable TOML"):
+        lane_agent.codex_model_selection(tmp_path)
 
 
 def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> None:
@@ -276,16 +326,11 @@ def test_a_metered_agent_refuses_to_launch_without_a_cap_budget_and_qualificatio
     assert row["caps"]["budget_reservation"] == "sha256:" + reservation["hash"]
 
 
-def test_a_binding_the_profile_marks_metered_needs_a_cap(tmp_path: Path) -> None:
-    profiles = tmp_path / "profiles.json"
-    _write_profiles(profiles, validator="codex:gpt-val", orchestrator="agy:gemini-test",
-                    coder="codex:gpt-coder", tester="cursor-agent:grok-4.7-xhigh")
-    document = json.loads(profiles.read_text())
-    document["profiles"]["team"]["roles"]["tester"]["metered"] = True
-    profiles.write_text(json.dumps(document))
-    lanes = Lanes(tmp_path, profiles=profiles)
+def test_a_launch_the_operator_marks_metered_needs_a_cap(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=True)
-    refused = lanes.lane("tester")
+    refused = lanes.lane("tester", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh",
+                         "--metered")
     assert refused.returncode == 64 and "cursor-agent:grok-4.7-xhigh is metered" in refused.stderr
     assert lanes.windows("tester") == []
 

@@ -380,16 +380,23 @@ machine, before the agent starts and while it runs:
 - **Agents.** `codex` (`codex exec`, non-interactive: the default author lane),
   `codex-interactive` (the Codex TUI with `--no-daemon`), `codex-ollama` (`codex exec --oss` on
   a model the local Ollama server already has) and `cursor-agent`
-  (`agent -p --model <model> --force --trust --workspace <lane>`). The run's model profile
-  binds each lane's agent and model exactly as before.
+  (`agent -p [--model <model>] --force --trust --workspace <lane>`). The operator names the agent
+  (`--agent`) and, optionally, the model (`--model`); the factory names no model. With none
+  named, a `codex` lane carries over only the model keys of the operator's own Codex config
+  (`model`, `model_provider`, `model_reasoning_effort`, ...; `lane_agent.py codex-model`),
+  because it runs with `--ignore-user-config` to keep their MCP servers, sandbox and approvals
+  out and would otherwise fall back to Codex's built-in model; `codex-interactive` and
+  `cursor-agent` run their CLI's own configured default. Each launch row records the `model`,
+  its `model_source` (`operator`, `codex-config` or `agent`) and the `model_config` overrides,
+  and `tmux_lane_message.sh` resumes a lane on the same selection.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a
   refusal (exit 77) that prints the command that fixes it. Codex on Ollama has no ChatGPT
   sign-in; its model must already be on the Ollama server (`ollama show`). ollama.com sign-in
   for a `:cloud` model has no non-interactive status command, so it is not checked.
-- **Spend caps.** A metered binding (`codex-ollama` always, any binding the profile marks
-  `"metered": true`, or `--metered`) refuses to launch without `--spend-cap-usd` and
+- **Spend caps.** A metered lane (`codex-ollama` always, or any launch the operator marks
+  `--metered`) refuses to launch without `--spend-cap-usd` and
   `--usd-per-hour`. The cap is reserved in the run's objective-budget ledger
   (`budget-reservations.jsonl`, the same chain `dispatch_lane.sh` writes, through
   `harness/lane_budget.py`), so a run ignited without `--budget` cannot start a metered lane,
@@ -628,20 +635,11 @@ dependency-free (bash + python3 + git):
   (`FACTORY_VALIDATOR_OLLAMA_MODEL`, `FACTORY_LANE_OLLAMA_MODEL`) and is refused unless that
   model is already available (`harness/model_availability.sh`); the factory never picks,
   pulls or installs a model.
-  **Model profiles** (`factory_runtime/model_profiles.py`, `factory profile ...`) replace those
-  per-seat variables with one named binding of every role to an agent and a model, kept in
-  `${XDG_CONFIG_HOME:-~/.config}/factory/profiles.json` (or `$FACTORY_PROFILES`). `factory.sh`
-  uses `--profile <name>`, else `$FACTORY_PROFILE`, else the default; passes each model on the
-  agent's command line (`--model` for Codex and Claude, `-m` for Codex lanes; agy takes none, so
-  its model is recorded as selected inside agy); and records how every run was started as
-  `model-profile.json`: the profile, or an explicit `"profile": null` when it used none.
-  `tmux_lane.sh` launches each lane from that record and `tmux_lane_message.sh` resumes on the
-  model the lane launched with, so an edit to the operator's file never changes a run underway.
-  A lane refuses a run with no record (ignited before 0.8.11, or the record was lost) rather
-  than guess that it had no profile. With a profile in effect, a per-seat variable or `--agent`
-  that disagrees with it is refused; with an explicit none, the variables keep their earlier
-  meaning. The qualified dispatch path takes its model from the runner manifest, which the
-  Validator writes from the profile; the two are not yet checked against each other.
+  Any other seat's model is optional and named by the operator at run time:
+  `FACTORY_VALIDATOR_MODEL` and `FACTORY_ORCHESTRATOR_MODEL` pass `--model` to a Codex or Claude
+  Validator and a Codex Orchestrator (agy takes no model flag; select its model inside agy), and
+  `tmux_lane.sh --model` names a lane's. Unset, each agent runs its own configured default. The
+  qualified dispatch path takes its model from the runner manifest.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;

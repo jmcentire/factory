@@ -20,11 +20,10 @@ make install
 `make install` sets up the virtualenv, builds the pinned Tessera, writes a `factory` launcher
 to `~/.local/bin`, and installs the Claude Code commands `/validate`, `/engineer`, `/test`,
 `/orchestrate`, `/build` and `/review` to `~/.claude/commands/`. Each command file is a short
-loader that reads its prompt from this checkout, so a `git pull` updates them all. If you have
-no model profile yet, it asks you to make one: the agent and the model for each role (see
-[Choosing models](#choosing-models)). It ends by running `make doctor`, which checks every piece
-and prints the exact fix for anything that is missing. When doctor says `READY`, you are done.
-Otherwise apply the fixes it lists and run `make doctor` again.
+loader that reads its prompt from this checkout, so a `git pull` updates them all. It ends by
+running `make doctor`, which checks every piece and prints the exact fix for anything that is
+missing. When doctor says `READY`, you are done. Otherwise apply the fixes it lists and run
+`make doctor` again.
 
 - **Change the locations** with `make install BINDIR=... CLAUDE_COMMANDS_DIR=...`.
 - **Files you already have are safe.** The installer never overwrites or removes a file it did
@@ -38,34 +37,20 @@ work, or `/validate` to start a full factory run. `factory --help` lists the CLI
 
 ### Choosing models
 
-The factory never picks a model. A **model profile** names the agent and the model for each of
-the four roles, and you can keep as many as you like:
+The factory never picks a model and ships no list of them. Tell the AI which models to use, or
+ask it to recommend some; a launch that names none runs each agent's own configured default.
 
-```bash
-factory profile create local          # asks for each role's agent and model
-factory profile create hosted \
-  --validator claude:<model> --orchestrator codex:<model> \
-  --coder codex:<model> --tester codex:<model>
-factory profile list                  # every profile and the default
-factory profile use hosted            # change the default
-```
+| Role | Agents it can run | Naming a model (optional) |
+|---|---|---|
+| Validator | `codex` (default), `claude`, `ollama` (Codex on a local Ollama model) | `FACTORY_VALIDATOR_AGENT`, `FACTORY_VALIDATOR_MODEL` (`FACTORY_VALIDATOR_OLLAMA_MODEL`, required for `ollama`) |
+| Orchestrator | `agy` (default), `codex` | `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_ORCHESTRATOR_MODEL` (codex only; select agy's model inside agy with `/model`) |
+| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`) | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
 
-| Role | Agents it can run |
-|---|---|
-| Validator | `claude`, `codex`, `ollama` (Codex on a local Ollama model) |
-| Orchestrator | `codex`, `agy` (agy has no model flag: select the model inside agy with `/model`) |
-| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`) |
-
-A binding may be marked `"metered": true` (`factory profile create ... --metered tester`);
-`codex-ollama` is metered regardless. A metered lane launches only with a per-round spend cap,
-inside the run's `--budget`, and after a passing qualification probe (`docs/HARNESS.md`,
-control 10).
-
-A run uses `harness/factory.sh --profile <name>`, else `$FACTORY_PROFILE`, else the default,
-and keeps a copy as `model-profile.json`, so later edits to your profiles never change a run
-already underway. Ollama models must already be on the machine (`ollama pull` them yourself).
-Profiles live in `~/.config/factory/profiles.json` (`$FACTORY_PROFILES` overrides) and hold no
-credentials.
+A `codex` lane with no `--model` runs the model your own Codex config selects. Each lane's launch
+record states the model it actually ran. Ollama models must already be on the machine
+(`ollama pull` them yourself). `codex-ollama` is metered, and `--metered` marks any other launch
+metered: a metered lane launches only with a per-round spend cap, inside the run's `--budget`,
+and after a passing qualification probe (`docs/HARNESS.md`, control 10).
 
 **For an AI agent asked to install this:** clone it, run `make install`, then run `make doctor`
 until it prints `READY`. Apply each listed fix as you go. Editing the user's shell profile (for
