@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -277,6 +278,29 @@ def test_repository_url_credentials_and_ambiguous_forms_are_refused(value: str) 
         normalize_repository_url(value)
 
 
+def _contract_sources_manifest() -> TargetManifest:
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    return replace(manifest, repo={**manifest.repo, "contract_sources": True})
+
+
+def test_contracts_without_sources_resolve_when_the_target_does_not_opt_in(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    (source / "contracts" / "api").mkdir(parents=True)
+    (source / "contracts" / "Token.sol").write_text("contract Token {}\n", encoding="utf-8")
+    (source / "contracts" / "api" / "openapi.yaml").write_text("openapi: 3.1.0\n", encoding="utf-8")
+    _git("-C", str(source), "add", "contracts")
+    _git("-C", str(source), "commit", "-m", "unrelated contracts/ convention")
+    manifest = load_target_manifest(SYNTHETIC_TARGET)
+
+    state = _resolver(tmp_path).resolve(
+        manifest=manifest, request=_request(manifest), object_source=source
+    )
+
+    assert state["resolved_commit"]
+
+
 def _vendor_contracts(source: Path, *, pinned: str | None) -> None:
     import hashlib
 
@@ -301,7 +325,7 @@ def test_matching_contract_sources_resolve_and_unidentified_rows_only_warn(
 ) -> None:
     source = _source(tmp_path)
     _vendor_contracts(source, pinned=None)
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.warns(UserWarning, match="ghost"):
         state = _resolver(tmp_path).resolve(
@@ -313,7 +337,7 @@ def test_matching_contract_sources_resolve_and_unidentified_rows_only_warn(
 def test_contract_sources_digest_mismatch_is_refused_with_the_list(tmp_path: Path) -> None:
     source = _source(tmp_path)
     _vendor_contracts(source, pinned="c" * 64)
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -342,7 +366,7 @@ def test_stale_restated_file_beside_a_matching_one_is_refused_run_c_shape(tmp_pa
     )
     _git("-C", str(source), "add", "contracts")
     _git("-C", str(source), "commit", "-m", "vendor site-infra")
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -368,7 +392,7 @@ def test_an_unpinned_vendored_file_at_any_depth_is_refused(tmp_path: Path, unpin
     extra.write_text("vendored but never pinned\n", encoding="utf-8")
     _git("-C", str(source), "add", "contracts")
     _git("-C", str(source), "commit", "-m", "unpinned contract file")
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.warns(UserWarning), pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -397,7 +421,7 @@ def test_a_pin_binds_its_exact_path_not_any_file_with_that_digest(tmp_path: Path
     )
     _git("-C", str(source), "add", "contracts")
     _git("-C", str(source), "commit", "-m", "two files, one pin")
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -423,7 +447,7 @@ def test_a_linked_contracts_directory_is_refused(tmp_path: Path) -> None:
     (source / "contracts").symlink_to(external.parent)
     _git("-C", str(source), "add", "contracts")
     _git("-C", str(source), "commit", "-m", "link contracts outside the checkout")
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -439,7 +463,7 @@ def test_a_vendored_dependency_with_no_pinned_rows_is_refused(tmp_path: Path) ->
     stale.mkdir(parents=True)
     (stale / "contract.md").write_text("never pinned\n", encoding="utf-8")
     _vendor_contracts(source, pinned=None)
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.warns(UserWarning), pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(
@@ -463,7 +487,7 @@ def test_vendored_contracts_without_a_regular_sources_file_are_refused(
         (sources / "README").write_text("not a pin list\n", encoding="utf-8")
     _git("-C", str(source), "add", "-A", "contracts")
     _git("-C", str(source), "commit", "-m", f"SOURCES.md {replacement}")
-    manifest = load_target_manifest(SYNTHETIC_TARGET)
+    manifest = _contract_sources_manifest()
 
     with pytest.raises(TargetResolutionError) as raised:
         _resolver(tmp_path).resolve(

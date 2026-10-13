@@ -634,7 +634,8 @@ class TargetResolver:
             )
             if head != resolved_commit or dirt:
                 raise TargetResolutionError("target-state-diverged", str(source_root))
-            _verify_contract_sources(resolved_workdir)
+            if manifest.repo.get("contract_sources") is True:
+                _verify_contract_sources(resolved_workdir)
             self._append_resource(
                 resource_id=source_id,
                 resource_type="source-worktree",
