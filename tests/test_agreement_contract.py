@@ -372,6 +372,7 @@ def test_probe_judges_the_candidate_commit_not_what_its_repository_planted(
     )
     candidate, sha = create_probe_candidate(tmp_path)
     marker = tmp_path / "smudge-ran"
+    (candidate / ".git" / "info").mkdir(exist_ok=True)  # a git template may omit info/
     (candidate / ".git" / "info" / "attributes").write_text(
         "agreement_test.py export-ignore\n* filter=plant\n", encoding="utf-8"
     )

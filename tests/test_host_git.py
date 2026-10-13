@@ -122,6 +122,7 @@ def test_the_judged_tree_keeps_paths_the_repository_marks_export_ignore(
     repository, commit = committed_repository(
         tmp_path, {"impl.py": "x = 1\n", "tests/test_impl.py": "assert False\n"}
     )
+    (repository / ".git" / "info").mkdir(exist_ok=True)  # a git template may omit info/
     (repository / ".git" / "info" / "attributes").write_text(
         "tests/** export-ignore\ntests export-ignore\n", encoding="utf-8"
     )
@@ -137,6 +138,7 @@ def test_a_planted_smudge_filter_neither_runs_nor_rewrites_the_judged_bytes(
 ) -> None:
     repository, commit = committed_repository(tmp_path, {"impl.py": "x = 1\n"})
     marker = tmp_path / "smudge-ran"
+    (repository / ".git" / "info").mkdir(exist_ok=True)  # a git template may omit info/
     (repository / ".git" / "info" / "attributes").write_text("* filter=plant\n")
     git(repository, "config", "filter.plant.smudge", f"sh -c 'touch {marker}; echo x = 2'")
     destination = tmp_path / "judged"

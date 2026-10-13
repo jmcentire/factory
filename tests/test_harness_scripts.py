@@ -10186,6 +10186,7 @@ def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_plant
     )
     marker = tmp_path / "smudge-ran"
     (git_directory / "info").mkdir(exist_ok=True)
+    (git_directory / "info").mkdir(exist_ok=True)  # a git template may omit info/
     (git_directory / "info" / "attributes").write_text(
         "tests export-ignore\ntests/** export-ignore\n* filter=plant\n", encoding="utf-8"
     )
