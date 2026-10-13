@@ -897,7 +897,9 @@ class Dispatcher:
             return
         day = datetime.date.today().isoformat()
         f = self.root / "minutes" / f"validator-{day}.log"
-        f.parent.mkdir(exist_ok=True)
+        # Nothing else creates minutes/: without this the first non-empty capture raised and
+        # killed the dispatcher, leaving the resident Orchestrator with no activity at all.
+        f.parent.mkdir(parents=True, exist_ok=True)
         if not f.exists():
             f.write_text(
                 "[INFERRED] Non-authoritative pane capture. Minutes index the "

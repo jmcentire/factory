@@ -104,6 +104,27 @@ def test_fresh_lane_loads_approved_inputs_and_binds_kindex_lite_to_its_copy(
                              "PATH": "/usr/bin:/bin"}
 
 
+def test_evidence_envelope_export_is_unwrapped_for_import(
+    tmp_path: Path, kindex: Callable[..., Path]
+) -> None:
+    """A kindex-evidence/1 `.kin/knowledge.json` reaches `kin import` as a bare node list."""
+    log = kindex()
+    lane, home = _lane(tmp_path, "tester", kin=False), tmp_path / "tester-home"
+    nodes = {"n1": {"id": "n1", "title": "one"}, "n2": {"id": "n2", "title": "two",
+                                                       "updated_at": "2026-09-22T03:59"}}
+    records = {**nodes, "project:s:n2": {"id": "n2", "title": "two (stale)",
+                                         "updated_at": "2026-09-22T03:40"}}
+    (lane / ".kin" / "knowledge.json").write_text(
+        json.dumps({"schema": "kindex-evidence/1", "records": records}), encoding="utf-8"
+    )
+    lane_kindex.prepare(lane, home, None)
+    lane, home = lane.resolve(), home.resolve()
+
+    unwrapped = home / "knowledge.import.json"
+    assert _calls(log)[0] == f"import {unwrapped} --project-path {lane}"
+    assert json.loads(unwrapped.read_text()) == list(nodes.values())
+
+
 @pytest.mark.parametrize(
     ("options", "reason"),
     [

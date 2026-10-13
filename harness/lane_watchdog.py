@@ -199,11 +199,35 @@ def _tmux(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def window_id(target: str,
+              tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux) -> str | None:
+    """The unique ``@id`` of ``run:window``, or None when no window has that exact name.
+
+    tmux resolves a window name it cannot find to the session's current window, even with an
+    exact-match ``=`` prefix, so a watcher addressing a vanished lane by name would read or stop
+    another lane's pane. Targets already given as an id or index pass through.
+    """
+    session, sep, window = target.partition(":")
+    if not sep or window.startswith("@") or window.isdigit():
+        return target
+    listed = tmux("list-windows", "-t", f"={session}", "-F", "#{window_name} #{window_id}")
+    if listed.returncode != 0:
+        return None
+    for line in listed.stdout.splitlines():
+        name, _, ident = line.partition(" ")
+        if name == window.lstrip("="):
+            return ident
+    return None
+
+
 def stop_pane(target: str, tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux) -> str:
     """SIGTERM the process group of the lane's pane; the pane stays (remain-on-exit) so the
     lane can still be frozen. Returns what was done, for the record."""
 
-    shown = tmux("display-message", "-p", "-t", target, "#{pane_pid} #{pane_dead}")
+    resolved = window_id(target, tmux)
+    if resolved is None:
+        return f"window {target} not found; nothing to stop"
+    shown = tmux("display-message", "-p", "-t", resolved, "#{pane_pid} #{pane_dead}")
     fields = shown.stdout.split()
     if shown.returncode != 0 or len(fields) != 2 or not fields[0].isdigit():
         return f"pane {target} not found; nothing to stop"
@@ -266,9 +290,10 @@ class LaneWatch:
         text = raw.decode("utf-8", errors="replace")
         if launch.get("terminal"):
             # A terminal agent keeps its pane; its output never reaches the log.
-            shown = self.tmux("capture-pane", "-p", "-t", str(launch.get("tmux_target", "")),
-                              "-S", f"-{_MAX_PANE_LINES}")
-            if shown.returncode == 0:
+            pane = window_id(str(launch.get("tmux_target", "")), self.tmux)
+            shown = None if pane is None else self.tmux(
+                "capture-pane", "-p", "-t", pane, "-S", f"-{_MAX_PANE_LINES}")
+            if shown is not None and shown.returncode == 0:
                 text += "\n" + shown.stdout
         return _done_in(text)
 

@@ -615,3 +615,31 @@ def test_real_cli_pass_count_ignores_dispatch_receipt_lines(tmp_path: Path) -> N
     start = handler.index('if arguments.command == "pass-count":')
     end = handler.index("return", start)
     assert "dispatches" not in handler[start:end]
+
+
+def test_snapshot_minutes_creates_its_directory(tmp_path: Path) -> None:
+    """Nothing else creates minutes/: the first non-empty Validator capture must not kill the
+    dispatcher (it did, leaving the resident Orchestrator with no activity for a whole run)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "dispatcher_minutes", Path(__file__).resolve().parent.parent / "harness" / "dispatcher.py"
+    )
+    assert spec is not None and spec.loader is not None
+    dispatcher_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher_module)
+    root = tmp_path / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"schema_version": "factory-harness/2", "status": "open"}),
+        encoding="utf-8",
+    )
+    d = dispatcher_module.Dispatcher("r1", root, interval=0)
+    d.capture = lambda window: "Validator: ruling J1 recorded\n"
+
+    d.snapshot_minutes()
+
+    logs = list((root / "minutes").glob("validator-*.log"))
+    assert len(logs) == 1
+    assert "ruling J1 recorded" in logs[0].read_text()

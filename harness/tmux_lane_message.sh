@@ -23,6 +23,14 @@ case "$KIND" in status|answer|idle) ;; *) echo "lane-message: kind must be statu
 
 # The lane's pane, found by exact window name first: tmux resolves a missing "$RUN:$WINDOW" to
 # the session's active pane, which reads as a live lane and queues to nobody (#29, #69).
+# tmux resolves a window name it cannot find to the session's current window, even with an
+# exact-match "=" prefix, so a kill or interrupt aimed at "$RUN:<name>" for a vanished lane hits
+# another lane. Resolve the exact name to its unique window id and act only on that id.
+window_id() {
+  tmux list-windows -t "=$RUN" -F '#{window_name} #{window_id}' 2>/dev/null |
+    awk -v name="$1" '$1 == name { print $2; exit }'
+}
+
 lane_pane_state() {
   if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$WINDOW" >/dev/null; then
     tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown
@@ -333,9 +341,10 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
   fi
   # Every running lane has a watcher: replace the finished one with a fresh life of it.
-  tmux kill-window -t "$RUN:watch-$WINDOW" >/dev/null 2>&1 || true
+  WATCH_WID=$(window_id "watch-$WINDOW")
+  [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
   tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
-    tmux send-keys -t "$RUN:$WINDOW" C-c >/dev/null 2>&1 || true
+    WID=$(window_id "$WINDOW"); [ -z "$WID" ] || tmux send-keys -t "$WID" C-c >/dev/null 2>&1 || true
     echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
     exit 70
   }

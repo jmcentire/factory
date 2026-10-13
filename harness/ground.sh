@@ -54,21 +54,33 @@ echo "== 3/6 cadence audit =="
 HARNESS_DIR="$H" "$D/sched_audit.sh"
 
 echo "== 4/6 tripwire =="
-# Scope is this run's seats only: Claude names a transcript dir after the seat's cwd with
-# every non-alphanumeric byte as "-", so match the workdir's dir and any nested lane cwds.
-# Never widen to the whole machine — an unrelated session's output must not halt this run.
-# Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both "-repo-x-lane"),
-# so a sibling workdir like /repo/x-other is also scanned for /repo/x; set TRANSCRIPTS to pin the scan.
-if [ -z "${TRANSCRIPTS:-}" ]; then
+# Scope is this run's seats and this run's leak surfaces. Seats: Claude names a transcript dir
+# after the seat's cwd with every non-alphanumeric byte as "-", so match the workdir's dir and
+# any nested lane cwds. Never widen to the whole machine — an unrelated session's output must not
+# halt this run. Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both
+# "-repo-x-lane"), so a sibling workdir like /repo/x-other is also scanned for /repo/x.
+# Leak surfaces (with --run): content that can leave the host or be shared — the run's artifacts,
+# frozen lane snapshots, the shared lane seed, and Kindex stores (the checkout's .kin and every
+# lane's kindex home). TRIPWIRE_PATHS (legacy name TRANSCRIPTS) replaces the default scope.
+TRIPWIRE_SCOPE=()
+if [ -n "${TRIPWIRE_PATHS:-${TRANSCRIPTS:-}}" ]; then
+  for path in ${TRIPWIRE_PATHS:-${TRANSCRIPTS:-}}; do TRIPWIRE_SCOPE+=("$path"); done
+else
   SEAT_PREFIX="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$WORKDIR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   for seat_dir in "$SEAT_PREFIX" "$SEAT_PREFIX"-*; do
-    [ -d "$seat_dir" ] && TRANSCRIPTS="${TRANSCRIPTS:+$TRANSCRIPTS }$seat_dir"
+    [ -d "$seat_dir" ] && TRIPWIRE_SCOPE+=("$seat_dir")
   done
+  if [ -n "$RUN" ]; then
+    for path in "$CONTROL/artifacts" "$CONTROL/tmux-lanes/snapshots" "$CONTROL/lane-seed.jsonl" \
+      "$WORKDIR/.kin" "$CONTROL"/tmux-lanes/*-kindex-home; do
+      [ -e "$path" ] && TRIPWIRE_SCOPE+=("$path")
+    done
+  fi
 fi
-if [ -n "${TRANSCRIPTS:-}" ]; then
-  HARNESS_DIR="$H" "$D/tripwire.sh" $TRANSCRIPTS
+if [ "${#TRIPWIRE_SCOPE[@]}" -gt 0 ]; then
+  HARNESS_DIR="$H" "$D/tripwire.sh" "${TRIPWIRE_SCOPE[@]}"
 else
-  echo "(no seat transcripts yet; set TRANSCRIPTS=<paths> to scan others)"
+  echo "(no seat transcripts or leak surfaces yet; set TRIPWIRE_PATHS=<paths> to scan others)"
 fi
 
 echo "== 5/6 channels =="
