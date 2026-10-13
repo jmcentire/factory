@@ -390,7 +390,13 @@ class Dispatcher:
 
     def capture(self, window: str) -> str:
         # -J joins rows the pane wrapped, so a trigger split at the column edge still matches.
-        return sh(["tmux", "capture-pane", "-pJt", f"{self.run}:{window}", "-S", "-60"])
+        text = sh(["tmux", "capture-pane", "-pJt", f"{self.run}:{window}", "-S", "-60"])
+        # A fresh pane's unused rows follow its text; dropped here, every "last N lines" reader
+        # (question, DONE, status, attention) sees the text instead of blanks.
+        lines = text.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines) + "\n" if lines else ""
 
     def lane_state(self, window: str) -> str:
         f = self.root / "lanes" / f"{window}.state"

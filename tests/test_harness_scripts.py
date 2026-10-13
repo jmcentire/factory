@@ -5031,6 +5031,19 @@ def test_a_dialog_above_a_fresh_panes_empty_rows_still_pages(
     assert pages.read_text().count("usage_limit") == 1
 
 
+def test_a_marker_above_a_fresh_panes_empty_rows_is_within_every_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex review: question and DONE detection read the last 25 raw lines, so a marker near
+    the top of a fresh 40-row pane was never seen. capture() drops the trailing empty rows."""
+    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    pane = "working\nFACTORY_STATUS: DONE - all cases written\n" + "\n" * 40
+    monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: pane)
+    captured = d.capture("tester")  # type: ignore[attr-defined]
+    assert "FACTORY_STATUS: DONE" in captured.splitlines()[-25:][-1]
+    assert captured.splitlines()[0] == "working"
+
+
 def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
