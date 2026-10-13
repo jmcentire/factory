@@ -883,7 +883,8 @@ target repo gates review by label: label `work-in-progress`; **never** add `read
   form is the denial routed around, and it is a violation even when the new form is allowed.
 - **A secret never passes through a command line or a shell.** Give a command a credential
   only through `$FACTORY_HOME/harness/with_secret.py ENV_NAME=FILE -- <command>`: it puts the
-  value in that one child's environment and redacts it from the output. Prove each new use with
+  value in that one child's environment, which carries nothing else of yours but PATH, HOME,
+  LANG, TMPDIR, TERM and each `--pass NAME`, and redacts it from the output. Prove each new use with
   a dummy value first. A shell assignment the shell rejects echoes the whole token into your
   transcript and the model API.
 - **Signal only a process the run recorded starting.** Start any process you may later stop

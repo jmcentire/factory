@@ -1161,6 +1161,39 @@ def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path)
     assert missing.returncode == 78 and "OTHER_TOKEN" in missing.stderr
 
 
+def test_with_secret_child_gets_a_built_env_and_only_owner_controlled_secret_files(
+    tmp_path: Path,
+) -> None:
+    """Review of #15: an ambient credential never reaches the child; a linked or shared secret
+    file is refused."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "NPM_TOKEN").write_text("dummy-npm\n", encoding="utf-8")
+    ambient = "dummy-ambient-openai-key-42"
+    env = {**os.environ, "OPENAI_API_KEY": ambient, "KEEP_ME": "kept", "DROP_ME": "x"}
+    child = ("import os, sys; print(sorted(k for k in os.environ if k not in "
+             "('PATH','HOME','LANG','TMPDIR','TERM','LC_CTYPE','__CF_USER_TEXT_ENCODING'))); "
+             "print(os.environ.get('OPENAI_API_KEY', 'absent'))")
+
+    def call(*specs: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets), *specs,
+             "--", sys.executable, "-c", child],
+            capture_output=True, text=True, env=env,
+        )
+
+    result = call("--pass", "KEEP_ME", "NPM_TOKEN")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "['KEEP_ME', 'NPM_TOKEN']\nabsent\n"
+    refused = call("--pass", "OPENAI_API_KEY", "NPM_TOKEN")
+    assert refused.returncode == 64 and ambient not in refused.stdout + refused.stderr
+
+    (secrets / "LINKED").symlink_to(secrets / "NPM_TOKEN")
+    assert call("LINKED").returncode == 78
+    (secrets / "NPM_TOKEN").chmod(0o666)
+    assert call("NPM_TOKEN").returncode == 78
+
+
 def test_relay_file_refuses_binary_content(tmp_path: Path) -> None:
     """$(cat) drops NULs, so the guards would judge different bytes than the seat receives."""
     plain = Path(tempfile.mkdtemp(prefix="relay-"))

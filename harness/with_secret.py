@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Run one command with secrets in its environment, and never print a secret's value.
 
-    with_secret.py [--secrets <dir>] ENV_NAME[=FILE] [...] -- <command> [args...]
+    with_secret.py [--secrets <dir>] [--pass NAME ...] ENV_NAME[=FILE] [...] -- <command> [args...]
 
 Each secret is read from ``<dir>/FILE`` (FILE defaults to ENV_NAME; ``<dir>`` defaults to
 ``$HARNESS_SECRETS`` or ``~/.harness/secrets``, the lane_env.sh convention) and set as ENV_NAME
 in that one child's environment only. ENV_NAME may be any name execve accepts, including ones
-a shell cannot assign, such as npm's ``npm_config_//host/:_authToken``.
+a shell cannot assign, such as npm's ``npm_config_//host/:_authToken``. A secret file must be a
+regular file (never followed through a link) owned by this user and writable by no one else.
+
+The child's environment is built, not inherited: PATH, HOME, LANG, TMPDIR and TERM, each named
+``--pass NAME`` copied from this environment, and the secrets. An ambient credential (an
+``OPENAI_API_KEY`` the caller happens to hold) therefore never reaches a child that was given
+only an npm token, unredacted; ``--pass`` refuses a credential-shaped name, which must be given
+as a secret so it is redacted.
 
 The failure this replaces: a token typed as a shell assignment the shell rejected was echoed back
 in full in the error, into the seat transcript and the model API. Here the value never enters
@@ -22,13 +29,32 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import threading
 from typing import IO
 
 _FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_USAGE = "usage: with_secret.py [--secrets <dir>] ENV_NAME[=FILE] ... -- <command> [args...]"
+_USAGE = ("usage: with_secret.py [--secrets <dir>] [--pass NAME ...] ENV_NAME[=FILE] ... -- "
+          "<command> [args...]")
+_BASE_ENV = ("PATH", "HOME", "LANG", "TMPDIR", "TERM")
+_CREDENTIAL = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|PRIVATE|CREDENTIAL|AUTH|SESSION|"
+                         r"COOKIE", re.IGNORECASE)
+
+
+def _read_secret(path: pathlib.Path) -> str:
+    """One owner-controlled regular file's text, opened without following a link."""
+
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise PermissionError("not an owner-controlled regular file")
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            return handle.read().decode("utf-8")
+    finally:
+        os.close(fd)
 
 
 def _fail(message: str, code: int) -> int:
@@ -52,11 +78,18 @@ def main(argv: list[str]) -> int:
     directory = pathlib.Path(
         os.environ.get("HARNESS_SECRETS") or pathlib.Path.home() / ".harness" / "secrets"
     )
-    if specs[:1] == ["--secrets"] and len(specs) > 1:
-        directory, specs = pathlib.Path(specs[1]), specs[2:]
+    passed: list[str] = []
+    while specs[:1] in (["--secrets"], ["--pass"]) and len(specs) > 1:
+        if specs[0] == "--secrets":
+            directory = pathlib.Path(specs[1])
+        elif _CREDENTIAL.search(specs[1]):
+            return _fail(f"--pass {specs[1]} looks like a credential; give it as a secret", 64)
+        else:
+            passed.append(specs[1])
+        specs = specs[2:]
     if not specs or not command:
         return _fail(_USAGE, 64)
-    environment = dict(os.environ)
+    environment = {name: os.environ[name] for name in (*_BASE_ENV, *passed) if name in os.environ}
     secrets: list[tuple[bytes, bytes]] = []
     for spec in specs:
         name, _, file = spec.partition("=")
@@ -64,9 +97,13 @@ def main(argv: list[str]) -> int:
         if not name or "\0" in name or not _FILE.fullmatch(file):
             return _fail(f"invalid secret spec for {name or '(empty)'!r}", 64)
         try:
-            value = (directory / file).read_text(encoding="utf-8").rstrip("\r\n")
+            value = _read_secret(directory / file).rstrip("\r\n")
         except (OSError, UnicodeDecodeError):
-            return _fail(f"secret {file} is missing or unreadable in {directory}", 78)
+            return _fail(
+                f"secret {file} is missing, unreadable, a link, or not owner-controlled in "
+                f"{directory}",
+                78,
+            )
         if not value or "\n" in value or "\0" in value:
             return _fail(f"secret {file} must be one non-empty line", 78)
         environment[name] = value
