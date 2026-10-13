@@ -152,8 +152,8 @@ def run_turn(
 ) -> int:
     if (root is None) != (role is None):
         raise SessionError("run root and role must be supplied together")
-    if role is not None and role not in {"coder", "tester"}:
-        raise SessionError("lane role must be coder or tester")
+    if role is not None and not re.fullmatch(r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?", role):
+        raise SessionError("lane must be coder or tester[-instance]")
     prompt = _read_regular(prompt_path)
     if not command or command[0] == "--":
         command = command[1:]
@@ -220,7 +220,8 @@ def main() -> int:
     parser.add_argument("--thread-file", type=pathlib.Path, required=True)
     parser.add_argument("--events", type=pathlib.Path, required=True)
     parser.add_argument("--root", type=pathlib.Path, required=True)
-    parser.add_argument("--role", choices=("coder", "tester"), required=True)
+    # The lane identity (tester-b for an instance), which its questions are recorded under.
+    parser.add_argument("--role", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     try:

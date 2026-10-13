@@ -2622,6 +2622,48 @@ def test_dispatcher_wakes_the_validator_once_per_lane_question_and_done(
     assert all("\n" not in command[3] for command in sent)
 
 
+def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review of #39: a question or DONE from tester-b is captured, bound to tester-b, and wakes
+    the Validator, like one from tester."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    (root / "tmux-lanes").mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    (root / "tmux-lanes" / "tester-b-launch.jsonl").write_text(
+        json.dumps({"status": "active", "role": "tester", "lane": "tester-b"}) + "\n",
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    sent: list[list[str]] = []
+
+    def fake(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["tmux", "list-windows"]:
+            return subprocess.CompletedProcess(command, 0, "validator\ntester-b\nwatch-tester-b\n", "")
+        sent.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    monkeypatch.setattr(mod, "sh", lambda command, **_: fake(command).stdout)
+    assert dispatcher.windows() == ["validator", "tester-b"]  # type: ignore[attr-defined]
+    dispatcher.live_windows = {"validator", "tester-b"}  # type: ignore[attr-defined]
+    asked = "FACTORY_QUESTION: Is an empty basket a 400?"
+    dispatcher.check_window("tester-b", asked)  # type: ignore[attr-defined]
+    dispatcher.check_window("tester-b", asked + "\nFACTORY_STATUS: DONE")  # type: ignore[attr-defined]
+
+    question = read_chain(root / "dialogue" / "journal.jsonl")[0]
+    assert question["lane"] == "tester-b"
+    assert [command[3].split(" ")[0] for command in sent] == [
+        "FACTORY_QUESTION_PENDING", "FACTORY_LANE_DONE"]
+    assert "from tester-b" in sent[0][3] and sent[1][3].startswith("FACTORY_LANE_DONE tester-b")
+
+
 def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(
     tmp_path: Path,
 ) -> None:

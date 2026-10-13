@@ -675,7 +675,7 @@ PY
     codex|codex-ollama)
       printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$ROLE" "$LOCAL_ARGS" "$REPOSITORY" \
+        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
       printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s -C %q -c %q -c %q -c %q -c %q' \
@@ -741,8 +741,8 @@ print(active[0]["repository"])
 PY
 ) || exit $?
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
-  --lane "$ROLE" >/dev/null || {
-  echo "tmux-lane: unanswered $ROLE question must be answered before freeze" >&2
+  --lane "$LANE" >/dev/null || {
+  echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
   exit 70
 }
 # By exact window name: a missing window resolves to the session's active pane (#69).

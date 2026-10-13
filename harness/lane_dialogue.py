@@ -36,7 +36,20 @@ class LaneDialogueError(RuntimeError):
 
 
 _SCHEMA = "factory-lane-dialogue/1"
-_LANES = frozenset({"coder", "tester"})
+# A lane is a role with an optional parallel instance (tester-b), as tmux_lane.sh names its
+# window; questions and answers bind to that full identity (dogfood #39).
+_LANE = re.compile(r"^(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?$")
+
+
+def _is_lane(lane: object) -> bool:
+    return isinstance(lane, str) and _LANE.fullmatch(lane) is not None
+
+
+def _lane_argument(value: str) -> str:
+    if not _is_lane(value):
+        raise argparse.ArgumentTypeError(f"invalid lane {value!r}: coder or tester[-instance]")
+    return value
+
 _SENDERS = frozenset({"validator", "orchestrator"})
 _AUTHORITIES = frozenset({"human-answer", "ratified-spec", "runtime-protocol"})
 _THREAD = re.compile(
@@ -189,7 +202,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                 "text",
                 "text_sha256",
             }
-            if set(row) != expected or row.get("lane") not in _LANES:
+            if set(row) != expected or not _is_lane(row.get("lane")):
                 raise LaneDialogueError("dialogue question row is malformed")
             value = _text(row.get("text"), "question")
             identifier = row.get("question_id")
@@ -220,7 +233,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
             lane = row.get("lane")
             kind = row.get("message_kind")
             authority = row.get("authority")
-            if sender not in _SENDERS or lane not in _LANES or authority not in _AUTHORITIES:
+            if sender not in _SENDERS or not _is_lane(lane) or authority not in _AUTHORITIES:
                 raise LaneDialogueError("dialogue planned-message principal is invalid")
             if kind == "status-probe":
                 if row.get("question_id") is not None or authority != "runtime-protocol":
@@ -286,8 +299,8 @@ def _answered_question_ids(rows: Sequence[Mapping[str, object]]) -> set[str]:
 
 
 def record_question(root: pathlib.Path, lane: str, question: str) -> tuple[dict[str, Any], bool]:
-    if lane not in _LANES:
-        raise LaneDialogueError("question lane must be coder or tester")
+    if not _is_lane(lane):
+        raise LaneDialogueError("question lane must be coder or tester[-instance]")
     question = _text(question, "question")
     with _locked(pathlib.Path(root)) as directory:
         path = directory / "journal.jsonl"
@@ -335,7 +348,7 @@ def plan_message(
         path = directory / "journal.jsonl"
         rows = _read(path)
         _validate(rows)
-        if sender not in _SENDERS or lane not in _LANES:
+        if sender not in _SENDERS or not _is_lane(lane):
             raise LaneDialogueError("message sender or lane is invalid")
         if message_kind == "status-probe":
             if question_id is not None or authority != "runtime-protocol":
@@ -448,8 +461,8 @@ def run_engagement(root: pathlib.Path) -> str:
 
 
 def pending_questions(root: pathlib.Path, lane: str | None = None) -> list[dict[str, Any]]:
-    if lane is not None and lane not in _LANES:
-        raise LaneDialogueError("pending-question lane must be coder or tester")
+    if lane is not None and not _is_lane(lane):
+        raise LaneDialogueError("pending-question lane must be coder or tester[-instance]")
     with _locked(pathlib.Path(root)) as directory:
         rows = _read(directory / "journal.jsonl")
         _validate(rows)
@@ -483,12 +496,12 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     question = commands.add_parser("question")
     question.add_argument("--root", type=pathlib.Path, required=True)
-    question.add_argument("--lane", choices=sorted(_LANES), required=True)
+    question.add_argument("--lane", type=_lane_argument, required=True)
     question.add_argument("--text", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--root", type=pathlib.Path, required=True)
     plan.add_argument("--sender", choices=sorted(_SENDERS), required=True)
-    plan.add_argument("--lane", choices=sorted(_LANES), required=True)
+    plan.add_argument("--lane", type=_lane_argument, required=True)
     plan.add_argument("--kind", choices=("status-probe", "spec-answer"), required=True)
     plan.add_argument("--message-file", type=pathlib.Path, required=True)
     plan.add_argument("--basis", required=True)
@@ -501,10 +514,10 @@ def main() -> int:
     delivered.add_argument("--transport", choices=("queue", "resume"), required=True)
     pending = commands.add_parser("pending")
     pending.add_argument("--root", type=pathlib.Path, required=True)
-    pending.add_argument("--lane", choices=sorted(_LANES))
+    pending.add_argument("--lane", type=_lane_argument)
     clear = commands.add_parser("require-clear")
     clear.add_argument("--root", type=pathlib.Path, required=True)
-    clear.add_argument("--lane", choices=sorted(_LANES))
+    clear.add_argument("--lane", type=_lane_argument)
     arguments = parser.parse_args()
     try:
         if arguments.command == "question":

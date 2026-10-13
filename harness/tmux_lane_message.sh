@@ -232,7 +232,7 @@ fi
 
 PLAN_ARGS=(
   plan --root "$ROOT"
-  --sender "$SENDER" --lane "$LANE" --kind "$MESSAGE_KIND"
+  --sender "$SENDER" --lane "$WINDOW" --kind "$MESSAGE_KIND"
   --message-file "$MESSAGE_TMP" --basis "$BASIS" --authority "$AUTHORITY"
 )
 [ -z "$QUESTION_ID" ] || PLAN_ARGS+=(--question-id "$QUESTION_ID")
@@ -321,7 +321,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$RESUME_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"

@@ -368,9 +368,24 @@ class Dispatcher:
             self._banner(f"INCIDENT — {detail[:160]}")
 
     # -- observe --------------------------------------------------------------
+    def lane_windows(self) -> set[str]:
+        """Lane windows: coder, tester, and every lane a launch journal names (tester-b), so a
+        parallel instance's question or DONE is seen like any other lane's (dogfood #39)."""
+        lanes = {"coder", "tester"}
+        for journal in (self.root / "tmux-lanes").glob("*-launch.jsonl"):
+            try:
+                rows = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()
+                        if line.strip()]
+            except (OSError, ValueError):
+                continue
+            lanes |= {row["lane"] for row in rows
+                      if isinstance(row, dict) and isinstance(row.get("lane"), str)
+                      and re.fullmatch(r"(?:coder|tester)-[a-z0-9][a-z0-9-]{0,15}", row["lane"])}
+        return lanes
+
     def windows(self) -> list[str]:
         out = sh(["tmux", "list-windows", "-t", self.run, "-F", "#{window_name}"])
-        seats = ("validator", "coder", "tester", "orchestrator")
+        seats = {"validator", "orchestrator", *self.lane_windows()}
         return [w for w in out.splitlines() if w in seats]
 
     def capture(self, window: str) -> str:
@@ -413,7 +428,8 @@ class Dispatcher:
         fresh = capture_delta(previous, tail)
         self.tails[window] = tail
 
-        if window in {"coder", "tester"}:
+        lanes = self.lane_windows()
+        if window in lanes:
             for line in fresh.splitlines()[-25:]:
                 matched = FACTORY_QUESTION_RE.search(line)
                 if matched is None:
@@ -460,7 +476,7 @@ class Dispatcher:
                         self.event(kind, f"{window}: {line.strip()}", wake=True)
 
         state = self.lane_state(window)
-        if window in {"coder", "tester"}:
+        if window in lanes:
             try:
                 waiting_on_validator = bool(pending_questions(self.root, window))
             except (LaneDialogueError, OSError) as exc:
