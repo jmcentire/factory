@@ -628,8 +628,8 @@ excellent at recognizing a described concrete behavior as wrong.
 
 So the spec is never presented as prose to approve. Before agreement in each phase, the
 Validator generates radical scenarios, edge-case states, and logical contradictions from the
-draft and presents an **interactive behavior ledger** — concrete behaviors the human accepts or
-refutes one at a time.
+draft and presents an **interactive behavior ledger** — concrete behaviors, all in one message,
+each of which the human accepts or refutes by its own row id.
 
 This converts the task from *find the absence of a behavior in dense text*, which humans do
 badly, into *is this specific described behavior right*, which humans do well. It is the only
