@@ -5110,39 +5110,76 @@ def test_an_orchestrator_that_stops_assessing_pages_the_human_not_only_the_valid
     assert page["wake"] is False
 
 
-def test_a_quota_dead_orchestrator_is_paged_and_no_longer_fed_every_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """#50: run e's agy Orchestrator answered 51 notices with its quota message and looked alive."""
-    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
-    cursor = {"value": 5}
+def _recording_injections(
+    mod: object, monkeypatch: pytest.MonkeyPatch, cursor: dict[str, int]
+) -> list[str]:
+    """Activity notices the dispatcher injects into the Orchestrator; the question channel and
+    everything else still runs for real."""
+
     monkeypatch.setattr(mod, "activity_highwater", lambda _root: cursor["value"])
     monkeypatch.setattr(mod, "screen_pending", lambda _root: None)
     delivered: list[str] = []
-
-    def inject(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        delivered.append(command[3])
-        return subprocess.CompletedProcess(command, 0, "", "")
-
     real_run = subprocess.run
-    monkeypatch.setattr(
-        mod.subprocess, "run",
-        lambda command, **kw: inject(command) if command[0].endswith("inject.sh")
-        else real_run(command, **kw),  # the question channel still runs
-    )
-    dead = "> FACTORY_ACTIVITY cursors=4..5\nIndividual quota reached. Resets in 154h.\n"
+
+    def run_or_record(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        if command[0].endswith("inject.sh"):
+            delivered.append(command[3])
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return real_run(command, **kw)  # type: ignore[call-overload,no-any-return]
+
+    monkeypatch.setattr(mod.subprocess, "run", run_or_record)  # type: ignore[attr-defined]
+    return delivered
+
+
+@pytest.mark.parametrize(
+    "dead",
+    [
+        "> FACTORY_ACTIVITY cursors=4..5\nIndividual quota reached. Resets in 154h.\n",
+        "> FACTORY_ACTIVITY cursors=4..5\n You\u2019ve hit your usage limit \u00b7 resets 3pm\n",
+        "Do you want to proceed?\n\u276f 1. Yes\n  2. No, and tell Claude what to do differently\n",
+    ],
+)
+def test_an_attention_match_never_throttles_the_orchestrators_activity_feed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead: str
+) -> None:
+    """#50 / review of #54: the resident Orchestrator is always running and sees every pass.
+    A seat dialog in its pane pages the human, and activity still reaches it on every pass that
+    has new activity, exactly as it does with no dialog showing."""
+    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    cursor = {"value": 5}
+    delivered = _recording_injections(mod, monkeypatch, cursor)
     d.check_seat_attention("orchestrator", dead)  # type: ignore[attr-defined]
     (page,) = page_events(root)
-    assert page["wake"] is False and "quota" in pages.read_text()
+    assert page["wake"] is False and "[factory r1]" in pages.read_text()
 
-    d.deliver_pending_activity()  # type: ignore[attr-defined]  # one notice: notices a reset
-    cursor["value"] = 6
-    d.deliver_pending_activity()  # type: ignore[attr-defined]  # withheld until next check-in
-    assert len(delivered) == 1
+    for value in (5, 6, 7):
+        cursor["value"] = value
+        d.deliver_pending_activity()  # type: ignore[attr-defined]
 
-    d.check_seat_attention("orchestrator", "assessment-6 submitted\n")  # type: ignore[attr-defined]
-    d.deliver_pending_activity()  # type: ignore[attr-defined]
-    assert len(delivered) == 2 and "cursors=6..6" in delivered[1]
+    assert [notice.split()[2].rstrip(".") for notice in delivered] == [
+        "cursors=1..5", "cursors=6..6", "cursors=7..7"]
+
+
+@pytest.mark.parametrize(
+    "ordinary",
+    [
+        "pytest: 3 passed; the client retries until the rate limit reached resets\n",
+        "upstream API: rate limit reached, backing off; resets in 5 m\n",
+        "the quota exceeded test now asserts a 429 with a usage limit header\n",
+        "Cache entry resets in 2h; nothing to do\n",
+    ],
+)
+def test_ordinary_text_about_rate_limits_does_not_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ordinary: str
+) -> None:
+    """Review of #54: only a provider's own usage-limit dialog pages; a seat's ordinary output
+    that mentions limits is work, not a dialog waiting on a human."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    for window in ("orchestrator", "validator"):
+        d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
+        d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
+    assert not (root / "events.jsonl").exists() or page_events(root) == []
+    assert not pages.exists() or "usage_limit" not in pages.read_text()
 
 
 def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
