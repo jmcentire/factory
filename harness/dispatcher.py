@@ -74,12 +74,13 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     # Anchored on each provider's own dialog line, never on words ordinary output also uses
     # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
-    # limit" (run c: "You've hit your usage limit · resets 3pm (America/New_York)"); older Claude
-    # Code printed "Claude usage limit reached"; agy prints "Individual quota reached. Resets in
-    # 154h." (run e).
+    # limit" (run c: "You've hit your usage limit · resets 3pm (America/New_York)"); Claude Code
+    # 2.1.299 also prints "You've hit your limit" and "Usage limit reached · <what happens next>"
+    # (both read from that release's binary, 2026-10-14; the middle dot is U+00B7); agy prints
+    # "Individual quota reached. Resets in 154h." (run e).
     "usage_limit": re.compile(
         r"\bYou(?:'|\u2019)ve hit your (?:usage )?limit\b|"
-        r"\bClaude (?:AI )?usage limit reached\b|"
+        r"\bUsage limit reached \u00b7|"
         r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
     ),
 }

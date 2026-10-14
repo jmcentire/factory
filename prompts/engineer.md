@@ -110,6 +110,17 @@ git history, or a cheap reversible experiment.
   each other, are silent, or are ambiguous; a material change to declared intent; a
   criticality call; a trust-boundary or authority decision.
 
+**A cross-boundary identifier is never yours to determine from memory.** A principal or
+service account, a database role, grant or table, a metric or resource type, a log field, a
+token audience, an environment variable, a service, topic or header name: another party must
+recognize it, so it comes from the run's boundary register (`artifacts/boundary-register.json`)
+exactly as written there. If the literal you need is not in the register, or you would need to
+presume that an account has access or that a service accepts your credential, raise it as a
+question with what you looked at. Do not invent the name, and do not write "it already has
+access" into code or a handover. Endgame re-checks every registered literal against your
+commit; a renamed side is drift and fails the verdict
+(`$FACTORY_HOME/docs/practices/boundary-identifiers.md`).
+
 The test is **determinability, not importance.** When unsure, do the determinable part
 first, then raise the residue as one specific question with your reasoning and a
 recommendation attached — never as an open request for direction.

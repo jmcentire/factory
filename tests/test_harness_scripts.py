@@ -1938,6 +1938,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert {path.name for path in orchestrator_bin.iterdir()} == {
         "agreement_contract.py",
         "attention_gate.py",
+        "boundary_register.py",
         "lane_dialogue.py",
         "jev_rules.py",
         "jev_screen.py",
@@ -5146,6 +5147,7 @@ def _recording_injections(
     [
         "> FACTORY_ACTIVITY cursors=4..5\nIndividual quota reached. Resets in 154h.\n",
         "> FACTORY_ACTIVITY cursors=4..5\n You\u2019ve hit your usage limit \u00b7 resets 3pm\n",
+        "> FACTORY_ACTIVITY cursors=4..5\n Usage limit reached \u00b7 continuing at 3pm\n",
         "Do you want to proceed?\n\u276f 1. Yes\n  2. No, and tell Claude what to do differently\n",
     ],
 )
@@ -5177,6 +5179,7 @@ def test_an_attention_match_never_throttles_the_orchestrators_activity_feed(
         "upstream API: rate limit reached, backing off; resets in 5 m\n",
         "the quota exceeded test now asserts a 429 with a usage limit header\n",
         "Cache entry resets in 2h; nothing to do\n",
+        "Usage limit reached errors are retried by the client with backoff\n",
     ],
 )
 def test_ordinary_text_about_rate_limits_does_not_page(
@@ -10784,3 +10787,132 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> No
         rows = read_chain(root / "tmux-lanes" / f"{role}-launch.jsonl")
         assert rows[-1]["kindex"]["store"] == f"{repo}/.kin/local/kindex"
         assert rows[-1]["kindex"]["kinbase_submissions_allowed"] is False
+
+
+def _mismatched_boundary_register(root: Path) -> None:
+    """Two parties name one resource type differently; both records are genuine."""
+
+    evidence = root / "artifacts" / "boundary-observations"
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "alert.txt").write_text('filter = "resource.type=\\"uptime_url\\""\n')
+    (evidence / "checks.txt").write_text('monitored_resource { type = "cloud_run_revision" }\n')
+
+    def record(name: str) -> dict[str, object]:
+        raw = (evidence / name).read_bytes()
+        return {"kind": "file", "root": "run", "path": f"artifacts/boundary-observations/{name}",
+                "line": 1, "sha256": hashlib.sha256(raw).hexdigest()}
+
+    (root / "artifacts" / "boundary-register.json").write_text(json.dumps({
+        "schema": "boundary-register/1",
+        "entries": [{
+            "id": "uptime-resource-type", "kind": "metric", "relation": "equal",
+            "description": "the alert must select the resource type the checks emit",
+            "sides": [
+                {"party": "alert", "role": "consumes", "value": "uptime_url",
+                 "records": [record("alert.txt")]},
+                {"party": "checks", "role": "defines", "value": "cloud_run_revision",
+                 "records": [record("checks.txt")]},
+            ],
+        }],
+    }))
+
+
+def test_phase1_gate_refuses_a_mismatched_boundary_identifier(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    _mismatched_boundary_register(tmp / ".factory" / "runs" / "r1")
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "boundary register is absent, unverified, stale, mismatched, or leaking" in result.stdout
+    assert "MISMATCH" in result.stdout and "cloud_run_revision" in result.stdout
+
+
+def test_phase1_gate_refuses_a_current_run_without_a_boundary_register(tmp_path: Path) -> None:
+    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
+    root = tmp / ".factory" / "runs" / "r1"
+    (root / "harness.json").write_text(
+        json.dumps({"schema_version": "factory-harness/2", "run_id": "r1",
+                    "agreement_contract_version": "factory-agreement-contract/1",
+                    "agreement_requirement_region_families": ["authored-product"]}),
+        encoding="utf-8",
+    )
+
+    result = p1(tmp)
+
+    assert result.returncode == 71
+    assert "must register every boundary identifier" in result.stdout
+
+
+def test_orchestrator_checkpoint_refuses_dispatch_across_a_mismatched_boundary(
+    tmp_path: Path,
+) -> None:
+    """The Orchestrator does not let a lane launch on an identifier its parties disagree on."""
+    _cwd, root, _dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
+    _mismatched_boundary_register(root)
+    for kind in ("pre_dispatch", "pre_verdict"):
+        result = run(
+            ["bash", str(HARNESS / "orchestrator_checkpoint.sh"), "r1", kind,
+             "before the next transition", "--runs", str(root.parent)],
+            root,
+            _dispatch_env(stub, root),
+        )
+        assert result.returncode == 71, (kind, result.stdout, result.stderr)
+        assert "the boundary register does not verify" in result.stderr
+        assert "MISMATCH" in result.stderr
+
+
+def _verified_boundary_register(root: Path) -> None:
+    evidence = root / "artifacts" / "boundary-observations"
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "writer.txt").write_text('record["severity"] = level\n')
+    (evidence / "platform.txt").write_text("structured payload field read as level: severity\n")
+    entries = []
+    for name, role in (("writer.txt", "defines"), ("platform.txt", "consumes")):
+        raw = (evidence / name).read_bytes()
+        entries.append({"party": name, "role": role, "value": "severity", "records": [{
+            "kind": "file", "root": "run", "path": f"artifacts/boundary-observations/{name}",
+            "line": 1, "sha256": hashlib.sha256(raw).hexdigest()}]})
+    (root / "artifacts" / "boundary-register.json").write_text(json.dumps({
+        "schema": "boundary-register/1",
+        "entries": [{"id": "log-severity-field", "kind": "field", "relation": "equal",
+                     "description": "the platform reads the level only from this field",
+                     "sides": entries}],
+    }))
+
+
+def _endgame_with_red_make(
+    tmp_path: Path, register: Callable[[Path], None]
+) -> subprocess.CompletedProcess[str]:
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    sha = str(target_state["resolved_commit"])
+    register(root)
+    stub_dir = tmp_path / "redmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    return run(
+        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        tmp_path,
+        env,
+    )
+
+
+def test_endgame_refuses_a_verdict_across_a_mismatched_boundary(tmp_path: Path) -> None:
+    r = _endgame_with_red_make(tmp_path, _mismatched_boundary_register)
+
+    assert r.returncode != 0
+    assert "endgame verdict: GREEN" not in r.stdout
+    assert "the boundary register does not verify" in r.stdout + r.stderr
+
+
+def test_endgame_judges_the_boundary_register_against_the_candidate(tmp_path: Path) -> None:
+    r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
+
+    assert "== boundary identifiers against the candidate ==" in r.stdout, r.stdout + r.stderr
+    assert "boundary register: GREEN" in r.stdout
+    assert "endgame verdict: RED" in r.stdout

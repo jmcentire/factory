@@ -25,9 +25,9 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
-from jev_rules import MODEL_ID, RULEBOOK, band  # noqa: E402
+from jev_rules import MODEL_ID, RULEBOOK, band, screened  # noqa: E402
 
-RULES = {r["id"]: r for r in RULEBOOK if r["source"].startswith("msg-r2")}
+RULES = {r["id"]: r for r in RULEBOOK if screened(r)}
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MAX_INPUT = 128 * 1024
 MAX_SOURCE = 16 * 1024
@@ -106,7 +106,11 @@ def project(root: pathlib.Path, activity: Mapping[str, Any]) -> dict[str, str]:
         }
     # The Validator may attach handles to exact retained artifacts at a checkpoint.
     # Pane prose is never relabelled as a contract, brief, report or test file.
-    handles = {"run_brief": "TASK.md", "testing_strategy": "artifacts/testing-strategy.md"}
+    handles = {
+        "run_brief": "TASK.md",
+        "testing_strategy": "artifacts/testing-strategy.md",
+        "register_excerpt": "artifacts/boundary-register.json",
+    }
     if activity["source"] == "validator" and activity["kind"] != "pane_delta":
         try:
             attachment = json.loads(activity["snapshot"])

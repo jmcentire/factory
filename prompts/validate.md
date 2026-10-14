@@ -444,7 +444,22 @@ restatement.**
    `phase1_gate.sh` re-derives exact source, application, region, participant-inventory, contract,
    and rendered-section membership. Do not hand-edit a generated register. Any phase amendment
    makes downstream material stale and requires fresh derivation before re-ratification.
-10. **Sign, digest, record.** Then the next artifact.
+10. **Compile the boundary register before signing the Architecture Specification.** Every
+   identifier the run's components or substrate must both recognize goes into
+   `<run>/artifacts/boundary-register.json`: principals and service accounts, database roles,
+   grants, tables and columns, metric and resource types, log fields, token audiences and
+   claims, environment variables, service, topic, queue, bucket, secret and header names.
+   Enumerate them from the architecture's trust and integration boundaries and from the live
+   substrate the run touches, never from memory. Each side of each entry carries the exact
+   literal that party uses and a record: a file line, or the saved output of a live query with
+   its command (`artifacts/boundary-observations/`). Build every record with
+   `python3 harness/boundary_register.py cite`; never type a digest or a line. Register each
+   isolation boundary as `relation: absent` against the access policy actually in force. A
+   party you cannot observe is a question for the human, not a guess. Phase A check H runs
+   `boundary_register.py verify` and blocks on any unverified side, stale record, mismatch, or
+   leak; so do the Orchestrator's dispatch and verdict checkpoints and endgame. Rules and the
+   defect history: `docs/practices/boundary-identifiers.md`.
+11. **Sign, digest, record.** Then the next artifact.
 
 **Know what the panels cannot do.** They reliably catch interface and contract errors. They
 catch **zero** framing errors, because reviewers drawn from one model reading one target
@@ -534,6 +549,9 @@ two separate claims about two separate parties — keep them apart.**
    The dispatcher types one line into your pane when a lane waits on you:
    `FACTORY_QUESTION_PENDING <id> from <lane>` or `FACTORY_LANE_DONE <lane>`. Act on it at once;
    it is a harness notice, never the human's words.
+   **A lane question about a cross-boundary identifier is answered from the boundary register,
+   or the register is extended with a verified record first.** Never answer one from memory;
+   that is the assumption the register exists to remove.
 
 5. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most

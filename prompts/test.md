@@ -91,6 +91,13 @@ handover dies with the run.
    this is the failure mode your citations exist to prevent.
 3. **Fix the expected behavior before any implementation exists or is inspected.** Author
    against the promise, not the artifact that claims to keep it.
+4. **Cross-boundary literals come from the boundary register.** When a test names something
+   another party must recognize (a role, a grant, a metric or resource type, a log field, a
+   token audience, a service or topic name), use the literal recorded in
+   `artifacts/boundary-register.json`. Where the strategy calls for an agreement test across a
+   boundary, assert both sides against that literal and, for an isolation boundary, assert the
+   refusal. A literal the register does not carry is an assumption: ask the Validator for it
+   rather than writing it.
 
 ## What you write
 

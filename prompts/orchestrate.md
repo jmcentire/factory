@@ -520,6 +520,32 @@ Phase B item 7). You are the second pair of eyes, not the first.
 | A held-out/visible case conflict is ruled on the requirement's purpose, never by following the held-out case literally. | `ruling_heldout_over_visible` | §7 |
 | A parallel Coder works in its own clone, not a `git worktree`. | `parallel_coder_worktree` | §8 |
 | No new test goes to the Coder as a target until it is red at base for its named reason. | `target_without_red_at_base` | §9 |
+| No lane, brief, or ruling writes or relies on a cross-boundary identifier the boundary register lacks or carries with a different literal. | `boundary_identifier_assumed` | §B1 |
+| No lane presumes access, credential acceptance, or existence across a boundary without a cited record. | `boundary_presumed_access` | §B2 |
+
+**Boundary identifiers are verified, never assumed.** This is a founder requirement
+(2026-10-14) and a standing check in its own right: *"Mismatched identifiers, names, tokens,
+etc across boundaries. Orchestrator ought to be checking for this."* The rules marked §B come
+from `docs/practices/boundary-identifiers.md`. A principal, role, grant, table, metric or
+resource type, log field, token audience, environment variable, or service name that one party
+names differently from another, or that a lane presumes exists or has access, is the defect
+class that cost the first consuming target an uptime alarm that could never fire, a health
+check that could not see failure, and an isolation boundary that held only in the application
+layer. The mechanical half is already enforced for you: your `pre_dispatch` and `pre_verdict`
+checkpoints are refused while `harness/boundary_register.py verify` fails, and endgame re-checks
+the register against the candidate. The half no verifier can do is yours, on every tick:
+
+- Read every identifier a lane writes into configuration, SQL, IAM, alerting, logging, or a
+  client call, and check it against `artifacts/boundary-register.json`. One that is not there,
+  or is there with another literal, is a finding. Run
+  `orchestrator/bin/boundary_register.py verify --root <run> --workdir <target workdir>`
+  yourself whenever a lane touches a boundary; do not wait for the checkpoint to find it.
+  The practice is retained beside you as `orchestrator/BOUNDARIES.md`.
+- Treat "it already has access", "the service will accept our token", and "anything below 500
+  is up" as findings until the lane cites a record: a file line or a captured observation of
+  the live policy, with its command.
+- Isolation claims need an `absent` entry checked against the policy actually in force, never
+  the per-service grants someone meant to write.
 
 **The testing standard reaches every Tester.** This is a founder requirement (2026-10-09) and a
 standing check in its own right. On every tick, confirm two things for every Tester lane:

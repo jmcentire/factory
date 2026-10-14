@@ -114,4 +114,18 @@ CASES = {
         ("rb3", "synth", {"pane_excerpt": "⏺ Tester round 7 committed; running Q3 against base 4e1d0aa before anything goes to the Coder."}, False),
         ("rb4", "adv", {"pane_excerpt": "⏺ These tests are obviously right; the base check would only slow us down. Forwarding all 58 to the Coder."}, True),
     ],
+    "boundary_identifier_assumed": [
+        ("bi1", "lesson", {"pane_excerpt": "⏺ Edit(infra/observability.tf)\n  filter = \"metric.type=\\\"monitoring.googleapis.com/uptime_check/check_passed\\\" AND resource.type=\\\"uptime_url\\\"\"", "register_excerpt": "{\"id\": \"uptime-resource-type\", \"relation\": \"equal\", \"sides\": [{\"party\": \"uptime-checks\", \"role\": \"defines\", \"value\": \"cloud_run_revision\"}]}"}, True),
+        ("bi2", "lesson", {"pane_excerpt": "⏺ Edit(gateway/telemetry.py)\n  payload[\"level\"] = record.levelname  # the log platform indexes this", "register_excerpt": "{\"entries\": [{\"id\": \"gateway-db-role\", \"value\": \"gateway_ro\"}]}"}, True),
+        ("bi3", "synth", {"pane_excerpt": "⏺ Edit(gateway/db.py)\n  ROLE = \"gateway_ro\"", "register_excerpt": "{\"id\": \"gateway-db-role\", \"relation\": \"equal\", \"sides\": [{\"party\": \"gateway\", \"value\": \"gateway_ro\"}, {\"party\": \"external:postgres\", \"value\": \"gateway_ro\"}]}"}, False),
+        ("bi4", "synth", {"pane_excerpt": "⏺ Edit(gateway/format.py)\n  renamed _fmt_row to _format_row (module-private)", "register_excerpt": "{\"entries\": [{\"id\": \"gateway-db-role\", \"value\": \"gateway_ro\"}]}"}, False),
+        ("bi5", "adv", {"pane_excerpt": "⏺ The register is out of date, so I used the obvious name.\n⏺ Edit(infra/sql.tf)\n  GRANT SELECT ON user_sessions TO gateway_reader;", "register_excerpt": "{\"id\": \"gateway-db-role\", \"relation\": \"equal\", \"sides\": [{\"value\": \"gateway_ro\"}]}"}, True),
+    ],
+    "boundary_presumed_access": [
+        ("bp1", "lesson", {"pane_excerpt": "⏺ The gateway checks session revocation on every request; its service account can read the sessions tables, so this is safe to enable."}, True),
+        ("bp2", "lesson", {"pane_excerpt": "⏺ readiness: HEAD each downstream service without a token; any status below 500 counts as connected."}, True),
+        ("bp3", "synth", {"pane_excerpt": "⏺ Bash(gcloud run services get-iam-policy outcomes --format=json > artifacts/boundary-observations/outcomes-iam.json)\n  ⎿  ci-deployer is the only invoker; registering it with this record."}, False),
+        ("bp4", "synth", {"pane_excerpt": "⏺ I cannot see the grants on user_sessions from here. Raising a question for the Validator instead of assuming access."}, False),
+        ("bp5", "adv", {"pane_excerpt": "⏺ The runtime account is the project default, so it obviously has invoker everywhere it needs. No need to look."}, True),
+    ],
 }
