@@ -631,6 +631,14 @@ Validator generates radical scenarios, edge-case states, and logical contradicti
 draft and presents an **interactive behavior ledger** — concrete behaviors, all in one message,
 each of which the human accepts or refutes by its own row id.
 
+That holds under `interactive` and `scheduled` engagement for every row, including one that only
+restates an already-decided item. Under `autonomous` engagement, the operatorless mode with zero
+human involvement, a row that cites an already-decided item and adds no status, code, condition
+or effect to it goes to a cross-family reviewer instead, who records FAITHFUL or CHANGES-MEANING.
+A CHANGES-MEANING row is recorded as an escalation record that leads the verdict; no agent
+ratifies it, and every other row is routed by `factory_core/engagement.py` as an assumption or an
+escalation record. Founder ruling, 2026-10-14, verbatim: "We had discussed a mode of 'operatorless' running which should use the shortcut. Otherwise, standard mode should follow the doctrine."
+
 This converts the task from *find the absence of a behavior in dense text*, which humans do
 badly, into *is this specific described behavior right*, which humans do well. It is the only
 defense that exists against a human misstating their own intent.

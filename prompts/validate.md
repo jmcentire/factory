@@ -386,11 +386,17 @@ restatement.**
    for approval** — a single "looks good" over forty behaviors is one unrefuted claim wearing
    the costume of forty ratifications, so a blanket accept ratifies no row. One message
    instead of a round trip per row keeps the lanes from idling on the human without letting
-   any row skip its own verdict. A row is a **restatement** only if it cites the id of an
-   already-decided item (a ruling, an answer or an accepted row) and adds no status, code,
-   condition or effect that item lacks. Restatements go to a cross-family reviewer, who records
-   FAITHFUL or CHANGES-MEANING per row, and every CHANGES-MEANING row comes back to the human.
-   A row with no citation is never a restatement. A refusal amends the *artifact*, never the row's wording, and
+   any row skip its own verdict. **Under `interactive` and `scheduled` engagement the human
+   accepts or refutes every row by id, a row that restates an already-decided item included.**
+   Only under `autonomous` engagement, the operatorless mode with no human in the run, does the
+   restatement shortcut apply (founder ruling, 2026-10-14, verbatim: "We had discussed a mode of 'operatorless' running which should use the shortcut. Otherwise, standard mode should follow the doctrine."). There, a row is
+   a **restatement** only if it cites the id of an already-decided item (a ruling, an answer or
+   an accepted row) and adds no status, code, condition or effect that item lacks. Restatements
+   go to a cross-family reviewer, who records FAITHFUL or CHANGES-MEANING per row. A FAITHFUL row
+   stands on the item it cites; a CHANGES-MEANING row is an escalation record that leads the
+   verdict, never a decision you make; every other row is routed by
+   `factory_core/engagement.py` as an assumption or an escalation record. A row with no citation
+   is never a restatement. A refusal amends the *artifact*, never the row's wording, and
    re-derives every row the amendment touches.
 
 6. **Attack the artifact before the human agrees it.** Run the refute-framed panel and the
