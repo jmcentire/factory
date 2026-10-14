@@ -406,9 +406,16 @@ machine, before the agent starts and while it runs:
   (`strategy_plan.py traceability`) and is refused, leaving the lane open, while a Critical case
   id appears in no frozen test module outside a full-line comment; other gaps are recorded in the
   freeze row's `traceability_gaps`. That is a source-reference check only. Before Phase C,
-  `discovery_check.py --strategy` reads a `factory-test-inventory/1` document from
-  `harness/test_inventory.py` (pytest, vitest or deno) and refuses while a Tester module has no
-  collected test or a Critical case id is in no collected test's name.
+  `discovery_check.py --candidate-sha <commit> --strategy` reads a `factory-test-inventory/1`
+  document from `harness/test_inventory.py` (pytest, vitest or deno) in the integrated tree,
+  which must be that commit with no change, and refuses while a Tester module has no runnable
+  collected test or a Critical case id is in no runnable test's name. A skipped or ignored test
+  (pytest `skip`/`skipif`/`xfail(run=False)`/`unittest.skip`, Deno `ignore`) is not runnable: it
+  cannot fail. A green check writes `<run>/discovery/<slot>-<commit>.json`, bound to the commit,
+  the Strategy's sha256 and the slot's latest freeze. `endgame.sh` refuses to render a verdict
+  (`discovery_check.py require`) unless every Tester slot that froze has that receipt for the
+  judged commit and the ratified Strategy's current bytes; no harness step starts Phase C
+  itself, so endgame is the earliest mechanical point that holds the check.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a

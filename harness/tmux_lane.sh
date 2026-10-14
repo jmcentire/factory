@@ -762,7 +762,8 @@ EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repo
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
 # A Tester freezes only when its modules mention every Critical planned case of the Strategy
 # (dogfood #73, traceability only); refused, the lane stays open to write them. That the cases are
-# collected tests is checked on the integrated tree by discovery_check.py --strategy.
+# runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,
+# whose receipt endgame.sh requires before any verdict.
 PLAN_GAPS=null
 if [ "$ROLE" = tester ]; then
   TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \

@@ -93,6 +93,15 @@ python3 "$D/host_git.py" resolve --repository "$CANDIDATE" --commit "$SHA" >/dev
   echo "endgame: $SHA is not exactly a commit in run resource $CANDIDATE_RESOURCE" >&2
   exit 70
 }
+# No verdict on a candidate whose runner cannot see the Tester's suite (gate LFX, dogfood #42
+# #73). Every Tester slot that froze needs a discovery receipt for exactly this commit, the
+# ratified Strategy's current bytes and that slot's latest freeze (harness/discovery_check.py).
+python3 "$D/discovery_check.py" require --root "$ROOT" --candidate-sha "$SHA" \
+  --strategy "$ROOT/artifacts/testing-strategy.md" >/dev/null || {
+  rc=$?
+  refusal_event "no discovery receipt binds the candidate, the ratified strategy and the freeze" "$rc"
+  exit "$rc"
+}
 
 # A green local suite is not evidence that producer/consumer paths agree. The
 # Phase-A agreement register names every cross-path obligation; Phase C must now

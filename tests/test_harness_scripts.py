@@ -10301,6 +10301,64 @@ def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_plant
         ).stdout
 
 
+def test_endgame_renders_no_verdict_without_a_discovery_receipt_for_the_candidate(
+    tmp_path: Path,
+) -> None:
+    """Gate LFX end to end: once a Tester slot froze, endgame refuses (exit 70, one refusal
+    event) until discovery_check.py has written a receipt for exactly the judged commit, the
+    ratified Strategy and that freeze; with the receipt it proceeds to the verdict. ``make`` is
+    stubbed red so the run stops at the verdict without running the synthetic target's gates."""
+    from harness import discovery_check
+
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    sha = str(target_state["resolved_commit"])
+    source = Path(str(target_state["source_root"]))
+    files = tmp_path / "tester-freeze" / "files"
+    (files / "tests").mkdir(parents=True)
+    (files / "tests" / "cap_test.py").write_text("def test_cap_R1(): pass\n", encoding="utf-8")
+    (root / "tmux-lanes").mkdir(exist_ok=True)
+    (root / "tmux-lanes" / "tester-launch.jsonl").write_text(
+        json.dumps({"schema_version": discovery_check.FREEZE_SCHEMA,
+                    "export": {"files_directory": str(files)}}) + "\n", encoding="utf-8")
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("planned-case: R1\ntest-modules: tests/*_test.py\n", encoding="utf-8")
+    (strategy.parent / "testing-strategy.md.digest").write_text("ratified\n", encoding="utf-8")
+    stub_dir = tmp_path / "redmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    endgame = ["bash", str(HARNESS / "endgame.sh"), "r1", sha,
+               "--candidate-resource", "target-source"]
+
+    refused = run(endgame, tmp_path, env)
+
+    assert refused.returncode == 70, (refused.returncode, refused.stdout, refused.stderr)
+    assert "endgame verdict" not in refused.stdout
+    assert "no discovery receipt for tester" in refused.stderr
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
+    assert "no discovery receipt binds the candidate" in str(rows[0]["detail"])
+
+    inventory = json.dumps({"schema_version": discovery_check.INVENTORY_SCHEMA,
+                            "tests": [{"module": "tests/cap_test.py", "name": "test_cap[R1]"}]})
+    (tmp_path / "inventory.json").write_text(inventory, encoding="utf-8")
+    assert discovery_check.main([
+        "--root", str(root), "--tree", str(source), "--candidate-sha", sha,
+        "--pattern", "tests/*_test.py", "--strategy", str(strategy),
+        "--", "cat", str(tmp_path / "inventory.json")]) == 0
+
+    judged = run(endgame, tmp_path, env)
+
+    assert "endgame verdict: RED" in judged.stdout, (judged.returncode, judged.stdout,
+                                                      judged.stderr)
+    assert len(_refusal_events(root)) == 1
+
+
 def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
     """An `ollama` that logs every call; `show` succeeds only when the model is available."""
 

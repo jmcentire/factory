@@ -469,7 +469,7 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    Tester's freeze is refused while any Critical case id appears in no test module (a README or
    full-line comment does not count), so the gap goes back to the Tester while it can still
    write the test. That freeze check is traceability only; the Phase C discovery check is what
-   proves each Critical case is a collected test.
+   proves each Critical case is a runnable collected test.
 
 ### Phase A — The frame (nothing is built until the human has agreed it)
 
@@ -817,10 +817,14 @@ The Orchestrator's authority runs over you. You do not own the run.
 **You** run the tests. Neither author does.
 
 Before the first test run, integrate the two frozen trees and prove the runner sees the Tester's
-suite: `harness/discovery_check.py --root <run> --tree <integrated tree> --pattern <the Strategy's
-test-modules glob> --strategy <run>/artifacts/testing-strategy.md -- "$FACTORY_PYTHON"
-harness/test_inventory.py <pytest|vitest|deno> [-- <runner command>]`. It refuses when a Tester
-module has no collected test or a Critical planned case is in no collected test's name. The Coder
+suite: commit the integrated tree, then run `harness/discovery_check.py --root <run> --tree
+<integrated tree> --candidate-sha <that commit> --pattern <the Strategy's test-modules glob>
+--strategy <run>/artifacts/testing-strategy.md -- "$FACTORY_PYTHON" harness/test_inventory.py
+<pytest|vitest|deno> [-- <runner command>]`. It refuses when the tree is not exactly that commit,
+a Tester module has no runnable collected test, or a Critical planned case is in no runnable
+test's name; a skipped or ignored test is not runnable, because it cannot fail. Its receipt is
+bound to that commit, the ratified Strategy and the Tester's latest freeze, and `endgame.sh`
+renders no verdict without it, so a new candidate commit needs the check again. The Coder
 never saw the tests, so its configuration can hide them (an `exclude` that drops `tests/`); that
 refusal is an integration edit you make and record, never a reason to run a subset. A Critical
 case with no test goes back to the Tester.
@@ -1602,10 +1606,12 @@ blocked, and ask at the end of the round.
    registers, are silent, or are ambiguous, reported as spec-defects with the exact items in
    tension. **Report, do not resolve.**
 7. **What you did not write, and why** — every planned Strategy row you could not realize,
-   named as a gap. Name each `planned-case:` id of the Strategy in the test that realizes it (its
-   name or its code, in a file the Strategy's `test-modules:` glob matches): the freeze is refused
-   while a Critical case id appears in no test module, and a README, inventory or comment line
-   naming it does not count. Do not silently drop a row or substitute a cheaper test for a high-value
+   named as a gap. Name each `planned-case:` id of the Strategy in the test name of the test that
+   realizes it (a pytest parametrize id such as `test_cap[R7.1]`, or the Deno/vitest test title),
+   in a file the Strategy's `test-modules:` glob matches. The freeze is refused while a Critical
+   case id appears in no test module, and a README, inventory or comment line naming it does not
+   count; at Phase C only the name of a runnable collected test counts, so an id that sits only in
+   a test's code, or in a skipped or ignored test, leaves the case untested. Do not silently drop a row or substitute a cheaper test for a high-value
    one; that reopens approval.
 
 #### The oracle self-check — run it before you emit `__DONE__`

@@ -2,9 +2,8 @@
 
 from pathlib import Path
 
-PROCEDURE = (Path(__file__).resolve().parents[1] / "prompts" / "validate.md").read_text(
-    encoding="utf-8"
-)
+PROCEDURE_ROOT = Path(__file__).resolve().parents[1]
+PROCEDURE = (PROCEDURE_ROOT / "prompts" / "validate.md").read_text(encoding="utf-8")
 
 
 def test_projection_config_requirement_is_stated_before_phase_a() -> None:
@@ -36,3 +35,20 @@ def test_procedure_names_projection_for_both_lanes_and_the_offline_check() -> No
     assert "deno run --cached-only" in PROCEDURE
     # Deno 2.7 rejects --cached-only on check (dogfood #57).
     assert "deno check --cached-only" not in PROCEDURE
+
+
+def test_both_roles_put_a_planned_case_id_where_discovery_reads_it() -> None:
+    """Discovery reads only the collected test's name, so neither role may offer the test's
+    code as a place for the case id (review of #73: an id in code passed the freeze, then
+    failed Phase C)."""
+
+    from harness import strategy_plan
+
+    tester = " ".join((PROCEDURE_ROOT / "prompts" / "test.md").read_text(encoding="utf-8").split())
+    validator = " ".join(PROCEDURE.split())
+    assert "in the test name of the test that realizes it" in tester
+    assert "name or its code" not in tester
+    assert "test_cap[R7.1]" in tester and "test_cap[R7.1]" in validator
+    assert "Put each case id in the name of the test that covers it" in validator
+    assert strategy_plan.untested({"R7.1": "Critical"}, ["test_cap"])["Critical"] == ["R7.1"]
+    assert strategy_plan.untested({"R7.1": "Critical"}, ["test_cap[R7.1]"])["Critical"] == []

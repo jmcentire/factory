@@ -21,8 +21,9 @@ Two invariants, each found by hand mid-run when nothing checked them:
     in no test module outside a full-line comment. A README or inventory naming a case does not
     count, but a string constant or trailing comment does, so it proves no test exists.
   - ``untested`` (called by ``discovery_check.py --strategy`` on the integrated tree) is the
-    planned-test check: a case is tested only when its id appears in the name of a test the
-    runner collected (``test_inventory.py``) from one of the Tester's modules.
+    planned-test check: a case is tested only when its id appears in the name of a runnable
+    (not skipped or ignored) test the runner collected (``test_inventory.py``) from one of the
+    Tester's modules.
 
 Lines may sit in a Markdown list (``- oracle-input: ...``). Stdlib only, no package imports.
 """
