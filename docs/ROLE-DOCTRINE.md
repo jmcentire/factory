@@ -531,7 +531,22 @@ restatement.**
    `phase1_gate.sh` re-derives exact source, application, region, participant-inventory, contract,
    and rendered-section membership. Do not hand-edit a generated register. Any phase amendment
    makes downstream material stale and requires fresh derivation before re-ratification.
-10. **Sign, digest, record.** Then the next artifact.
+10. **Compile the boundary register before signing the Architecture Specification.** Every
+   identifier the run's components or substrate must both recognize goes into
+   `<run>/artifacts/boundary-register.json`: principals and service accounts, database roles,
+   grants, tables and columns, metric and resource types, log fields, token audiences and
+   claims, environment variables, service, topic, queue, bucket, secret and header names.
+   Enumerate them from the architecture's trust and integration boundaries and from the live
+   substrate the run touches, never from memory. Each side of each entry carries the exact
+   literal that party uses and a record: a file line, or the saved output of a live query with
+   its command (`artifacts/boundary-observations/`). Build every record with
+   `python3 harness/boundary_register.py cite`; never type a digest or a line. Register each
+   isolation boundary as `relation: absent` against the access policy actually in force. A
+   party you cannot observe is a question for the human, not a guess. Phase A check H runs
+   `boundary_register.py verify` and blocks on any unverified side, stale record, mismatch, or
+   leak; so do the Orchestrator's dispatch and verdict checkpoints and endgame. Rules and the
+   defect history: `docs/practices/boundary-identifiers.md`.
+11. **Sign, digest, record.** Then the next artifact.
 
 **Know what the panels cannot do.** They reliably catch interface and contract errors. They
 catch **zero** framing errors, because reviewers drawn from one model reading one target
@@ -594,6 +609,9 @@ two separate claims about two separate parties — keep them apart.**
    deliver it with `tmux_lane_message.sh ... validator ... answer --question-id ...`; the channel
    binds lane, question, authority basis, exact bytes, and the resumed Codex thread. You are the
    only seat allowed to answer; the Orchestrator may issue only the generated status probe.
+   **A lane question about a cross-boundary identifier is answered from the boundary register,
+   or the register is extended with a verified record first.** Never answer one from memory;
+   that is the assumption the register exists to remove.
 
 4. **Your rulings are design changes, and the party that made a ruling is never the party that
    reviews it.** When a spec defect or a conflict across artifacts is resolved by *you* — most
@@ -1109,6 +1127,17 @@ git history, or a cheap reversible experiment.
   each other, are silent, or are ambiguous; a material change to declared intent; a
   criticality call; a trust-boundary or authority decision.
 
+**A cross-boundary identifier is never yours to determine from memory.** A principal or
+service account, a database role, grant or table, a metric or resource type, a log field, a
+token audience, an environment variable, a service, topic or header name: another party must
+recognize it, so it comes from the run's boundary register (`artifacts/boundary-register.json`)
+exactly as written there. If the literal you need is not in the register, or you would need to
+presume that an account has access or that a service accepts your credential, raise it as a
+question with what you looked at. Do not invent the name, and do not write "it already has
+access" into code or a handover. Endgame re-checks every registered literal against your
+commit; a renamed side is drift and fails the verdict
+(`$FACTORY_HOME/docs/practices/boundary-identifiers.md`).
+
 The test is **determinability, not importance.** When unsure, do the determinable part
 first, then raise the residue as one specific question with your reasoning and a
 recommendation attached — never as an open request for direction.
@@ -1374,6 +1403,13 @@ handover dies with the run.
    this is the failure mode your citations exist to prevent.
 3. **Fix the expected behavior before any implementation exists or is inspected.** Author
    against the promise, not the artifact that claims to keep it.
+4. **Cross-boundary literals come from the boundary register.** When a test names something
+   another party must recognize (a role, a grant, a metric or resource type, a log field, a
+   token audience, a service or topic name), use the literal recorded in
+   `artifacts/boundary-register.json`. Where the strategy calls for an agreement test across a
+   boundary, assert both sides against that literal and, for an isolation boundary, assert the
+   refusal. A literal the register does not carry is an assumption: ask the Validator for it
+   rather than writing it.
 
 ### What you write
 

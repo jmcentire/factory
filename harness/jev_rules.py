@@ -1019,6 +1019,107 @@ TARGET_WITHOUT_RED_AT_BASE = {
 }
 
 
+# Boundary identifiers (docs/practices/boundary-identifiers.md, founder 2026-10-14). The
+# register's verifier proves registered literals agree with their records; these two rules
+# watch for the identifiers that never reached the register at all.
+BOUNDARY_IDENTIFIER_ASSUMED = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` show a lane, brief, or ruling writing or relying on a "
+            "cross-boundary identifier that `register_excerpt` does not list, or lists with a "
+            "different literal?"
+        ),
+        "compare": ["`pane_excerpt`", "`register_excerpt`"],
+        "focus": (
+            "Cross-boundary identifiers are names another party must recognize: a principal "
+            "or service account, a database role, grant, table or column, a metric or "
+            "resource type, a log field, a token audience or claim, an environment variable, "
+            "a service, topic, queue, bucket, secret or header name. Names private to one "
+            "module are not."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": (
+                "The excerpt writes or depends on such an identifier and the register lacks "
+                "it, or the register carries a different literal for it"
+            ),
+            "examples": [
+                (
+                    "pane: filter = 'resource.type=\"uptime_url\"'. register: "
+                    "uptime-resource-type equal: checks define 'cloud_run_revision'"
+                ),
+                (
+                    "pane: GRANT SELECT ON user_sessions TO gateway_reader. register: "
+                    "gateway-db-role equal: 'gateway_ro'"
+                ),
+                (
+                    "pane: record['level'] = levelname  # Cloud Logging picks this up. "
+                    "register: (no log-field entry)"
+                ),
+            ],
+        },
+        "false": {
+            "what": (
+                "Every cross-boundary identifier in the excerpt appears in the register with "
+                "the same literal, or the excerpt uses only names private to one module"
+            ),
+            "examples": [
+                (
+                    "pane: ROLE = 'gateway_ro'. register: gateway-db-role equal: 'gateway_ro' "
+                    "(both sides cited)"
+                ),
+                "pane: renamed local helper _fmt to _format_row. register: (unrelated entries)",
+            ],
+        },
+    },
+}
+
+BOUNDARY_PRESUMED_ACCESS = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` show a lane presuming that a principal holds access, that a "
+            "service accepts a credential, or that a named resource exists, without citing a "
+            "record that shows it?"
+        ),
+        "inspect": "`pane_excerpt`",
+        "focus": (
+            "A record is a cited file line or a captured live observation (the command and "
+            "its output). Reasoning, defaults, and 'it already has access' are not records."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": (
+                "The lane acts on access, credential acceptance, or existence it has not "
+                "shown from a record"
+            ),
+            "examples": [
+                "The gateway's service account can read the sessions table, so the check works.",
+                "Readiness pings each service; any status below 500 means it is up.",
+                "The deploy account presumably already has invoker on the isolated service.",
+            ],
+        },
+        "false": {
+            "what": (
+                "Each presumption is backed by a cited record, or the lane states it is "
+                "unverified and stops to obtain one"
+            ),
+            "examples": [
+                (
+                    "gcloud run services get-iam-policy outcomes (saved to "
+                    "artifacts/boundary-observations/outcomes-iam.json) lists ci-deployer as "
+                    "invoker; registering it."
+                ),
+                "I cannot see the grants on user_sessions; asking the Validator for a record.",
+            ],
+        },
+    },
+}
+
+
 # ---------------------------------------------------------------------------------------------
 # The registry. Every rule, its id, the state fields it reads, and its band in one place.
 # Band semantics (kindex 919808d7d128): above `yes_above` is a finding, below `no_below` is no
@@ -1102,6 +1203,26 @@ RULEBOOK = (
     _rule("ruling_heldout_over_visible", RULING_HELDOUT_OVER_VISIBLE, ("ruling",), "msg-r2 §7"),
     _rule("parallel_coder_worktree", PARALLEL_CODER_WORKTREE, ("pane_excerpt",), "msg-r2 §8"),
     _rule("target_without_red_at_base", TARGET_WITHOUT_RED_AT_BASE, ("pane_excerpt",), "msg-r2 §9"),
+    _rule(
+        "boundary_identifier_assumed",
+        BOUNDARY_IDENTIFIER_ASSUMED,
+        ("pane_excerpt", "register_excerpt"),
+        "boundary-identifiers §1, founder 2026-10-14",
+    ),
+    _rule(
+        "boundary_presumed_access",
+        BOUNDARY_PRESUMED_ACCESS,
+        ("pane_excerpt",),
+        "boundary-identifiers §2, founder 2026-10-14",
+    ),
 )
 
 BY_ID = {r["id"]: r for r in RULEBOOK}
+
+#: Rule sources the resident Orchestrator's screen consumes at runtime.
+SCREENED_SOURCES = ("msg-r2", "boundary-identifiers")
+
+
+def screened(entry):
+    "Whether the runtime screen consumes this rulebook entry."
+    return entry["source"].startswith(SCREENED_SOURCES)

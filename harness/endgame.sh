@@ -166,6 +166,16 @@ else
   say "   exact obligation evidence: RED"
   FAILED=1
 fi
+# The candidate may edit a file the register cites, but every registered literal
+# must still be in it: a build that renamed one side of a boundary drifted from
+# the other party, whatever its own tests say.
+say "== boundary identifiers against the candidate =="
+if python3 "$D/boundary_register.py" verify --root "$ROOT" --workdir "$FACTORY_WORKDIR" \
+  --candidate "$FRESH" | sed 's/^/   /'; then
+  say "   boundary register: GREEN"
+else
+  say "   boundary register: RED"; FAILED=1
+fi
 gate() {
   local name="$1"; shift
   say "== $name =="

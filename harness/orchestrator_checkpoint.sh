@@ -49,6 +49,22 @@ if [ "$MODE" != "resident-monitoring" ]; then
   exit 70
 fi
 
+# The Orchestrator does not let work cross a boundary on an assumed identifier.
+# Before dispatch and before a verdict, the run's boundary register must verify
+# against the base checkout: every literal present in its records, every party
+# agreeing, every isolation boundary free of the subject. A failure refuses the
+# checkpoint outright; the Validator re-derives the register, it is not waved on.
+case "$KIND" in
+  pre_dispatch|pre_verdict)
+    if ! BOUNDARY=$(python3 "$D/boundary_register.py" verify --root "$ROOT" \
+      ${FACTORY_WORKDIR:+--workdir "$FACTORY_WORKDIR"} 2>&1); then
+      printf '%s\n' "$BOUNDARY" | head -40 >&2
+      echo "orchestrator-checkpoint: $KIND refused: the boundary register does not verify" >&2
+      exit 71
+    fi
+    ;;
+esac
+
 CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
   --kind "$KIND" --source validator --detail "$DETAIL") || exit $?
 MESSAGE="# FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3, and submit it with orchestrator/bin/orchestrator_channel.py. Decide block, halt, or no-op; never grant or close."
