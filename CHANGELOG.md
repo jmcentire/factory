@@ -3,6 +3,33 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.16] - 2026-10-14
+
+Boundary identifiers are verified, never assumed. A principal, role, grant, table, metric or
+resource type, log field, token audience, environment variable or service name that two parties
+must both recognize now has to be the same literal on both sides, shown by a record, before
+lanes launch, before any dispatch or verdict, and again against the candidate at endgame.
+
+### Added
+
+- **`harness/boundary_register.py`** and the per-run `artifacts/boundary-register.json`
+  (format `boundary-register/1`, shared with Pact and Constrain). Each entry names every party,
+  the exact literal it uses, and a digest-bound record per side (a file line or a captured live
+  observation with its command). `verify` refuses an unrecorded side, a placeholder, a stale
+  digest, a literal missing from its record or found only inside a longer name, parties that
+  disagree (naming near-misses), and an isolation subject present in the policy that must
+  exclude it. `cite` builds records from the source so nobody types a digest or line.
+- **Phase-1 check H**: a current run without a verifying register does not launch lanes.
+- **Orchestrator checkpoints**: `pre_dispatch` and `pre_verdict` are refused while the register
+  fails.
+- **Endgame**: registered target literals are re-checked in the candidate checkout.
+- **Gate BND** with twelve denial probes.
+- **Orchestrator screen rules** `boundary_identifier_assumed` and `boundary_presumed_access`,
+  with evaluation cases; the screen reads the register as retained evidence.
+- **`docs/practices/boundary-identifiers.md`**: the founder's direction, the defect history,
+  the register format, and the rule per role. Validator Phase A step 10, and the Coder, Tester
+  and Orchestrator prompts, carry it.
+
 ## [0.8.15] - 2026-10-12
 
 Model profiles are gone. The operator picks models at run time, by telling the AI or with an

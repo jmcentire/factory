@@ -192,6 +192,26 @@ else
   note "  $compiler_result"
 fi
 
+# --- H. Every boundary identifier is a verified literal, never an assumption --
+# A consuming target lost weeks to one defect shape: a service presumed a role
+# had grants it never had, an alert listened for a resource type no check
+# emitted, a probe presented no credential to a service that required one, a log
+# field was written under a name the platform never reads. Every side was
+# internally consistent and every local test passed; only the two parties
+# disagreed. The register names each such identifier, the exact literal every
+# party uses, and a digest-bound record (file line or captured observation) for
+# each; the verifier re-reads every record. Current runs must carry one.
+boundary_result=$(python3 "$(cd "$(dirname "$0")" && pwd -P)/boundary_register.py" verify \
+  --root "$ROOT" ${WORKDIR:+--workdir "$WORKDIR"} 2>&1)
+if [ "$?" -eq 0 ]; then
+  pass "H: every registered boundary identifier matches its records on every side"
+  note "  $(printf '%s' "$boundary_result" | tail -1)"
+else
+  fail "H: boundary register is absent, unverified, stale, mismatched, or leaking"
+  printf '%s\n' "$boundary_result" | head -40 | sed 's/^/        /'
+  note "  cite each side from its source: harness/boundary_register.py cite"
+fi
+
 # --- report: post-ratification amendments are the adequacy measurement --------
 AMEND=$(grep -h '^## AMENDMENT' "$ART"/*.md 2>/dev/null | wc -l | tr -d ' ')
 echo

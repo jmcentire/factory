@@ -193,7 +193,7 @@ def test_response_must_bind_model_and_all_questions(tmp_path: Path, mutation: st
     assert receipts(root)[0]["body"]["results"]["model_unqualified"]["band"] == "unavailable"
 
 
-def test_all_17_rules_run_with_real_retained_evidence_handles(tmp_path: Path) -> None:
+def test_all_19_rules_run_with_real_retained_evidence_handles(tmp_path: Path) -> None:
     root = setup(tmp_path)
     artifacts = root / "artifacts"
     artifacts.mkdir()
@@ -212,7 +212,7 @@ def test_all_17_rules_run_with_real_retained_evidence_handles(tmp_path: Path) ->
     )
     seen = []
     screen.screen_pending(root, lambda p: (seen.append(p), response(p))[1])
-    assert set(seen[0]["questions"]) == set(screen.RULES) and len(screen.RULES) == 17
+    assert set(seen[0]["questions"]) == set(screen.RULES) and len(screen.RULES) == 19
     assert all(v["band"] == "no" for v in receipts(root)[0]["body"]["results"].values())
     channel.record_assessment(root, report(root))
 

@@ -37,7 +37,7 @@ def _load(name: str) -> ModuleType:
 
 RULES = _load("rules")
 CASES = _load("cases_msg_r2").CASES
-MSG_R2_IDS = [r["id"] for r in RULES.RULEBOOK if r["source"].startswith("msg-r2")]
+MSG_R2_IDS = [r["id"] for r in RULES.RULEBOOK if RULES.screened(r)]
 
 
 def _adherence_section() -> str:
@@ -139,7 +139,7 @@ def test_orchestrator_adherence_section_names_every_msg_r2_rule() -> None:
     section = _adherence_section()
     for rid in MSG_R2_IDS:
         assert f"`{rid}`" in section, f"orchestrate.md Adherence does not consume {rid}"
-    tabled = re.findall(r"\| `([a-z0-9_]+)` \| §\d \|", section)
+    tabled = re.findall(r"\| `([a-z0-9_]+)` \| §[A-Z]*\d+ \|", section)
     assert sorted(tabled) == sorted(MSG_R2_IDS), "semantic table and rulebook disagree"
     for check in ("D1", "D2", "D3", "D4"):
         assert f"| {check} |" in section, f"deterministic check {check} missing"
