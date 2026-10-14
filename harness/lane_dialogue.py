@@ -57,7 +57,7 @@ _THREAD = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _MAX_JOURNAL_BYTES = 8 * 1024 * 1024
-_MAX_TEXT_BYTES = 16 * 1024
+MAX_TEXT_BYTES = 16 * 1024  # the ceiling on one question, answer or status text
 
 
 def _now() -> str:
@@ -68,7 +68,7 @@ def _digest(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _text(value: object, field: str, maximum: int = _MAX_TEXT_BYTES) -> str:
+def _text(value: object, field: str, maximum: int = MAX_TEXT_BYTES) -> str:
     if not isinstance(value, str) or not value.strip():
         raise LaneDialogueError(f"{field} must be non-empty text")
     if len(value.encode("utf-8")) > maximum:
@@ -483,7 +483,7 @@ def _read_message_file(path: pathlib.Path) -> str:
         raw = path.read_bytes()
     except OSError as exc:
         raise LaneDialogueError(f"message input cannot be read: {exc}") from exc
-    if not raw or len(raw) > _MAX_TEXT_BYTES:
+    if not raw or len(raw) > MAX_TEXT_BYTES:
         raise LaneDialogueError("message input is empty or oversized")
     try:
         return raw.decode("utf-8")
