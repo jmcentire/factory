@@ -217,6 +217,48 @@ def test_token_match_does_not_accept_a_longer_name() -> None:
     assert contains_token("GET /health/ready", "/health/ready")
 
 
+def test_dotted_and_path_names_do_not_match_inside_a_longer_name() -> None:
+    """An isolation check must not clear a subject because a superset name matched."""
+
+    assert not contains_token("metric foo.bar.baz", "foo.bar")
+    assert not contains_token("a.foo.bar", "foo.bar")
+    assert contains_token("type=foo.bar.", "foo.bar")
+    assert not contains_token("GET /health/ready", "/health")
+    assert contains_token("GET /health HTTP/1.1", "/health")
+    assert contains_token("entry.severity = level", "severity")
+
+
+@pytest.mark.parametrize("value", ["unknown", "none", "null", "n/a"])
+def test_ordinary_enum_literals_are_not_placeholders(layout: tuple[Path, Path], value: str) -> None:
+    run, target = layout
+    (target / "gateway" / "enum.py").write_text(f'STATE = "{value}"\n')
+    (run / "artifacts" / "boundary-observations" / "enum.txt").write_text(f"state: {value}\n")
+    entry = {
+        "id": "state-enum",
+        "kind": "enum",
+        "relation": "equal",
+        "description": "the consumer must recognize the producer's state member",
+        "sides": [
+            {
+                "party": "gateway",
+                "role": "consumes",
+                "value": value,
+                "records": [file_record(target, "gateway/enum.py", 1)],
+            },
+            {
+                "party": "external:producer",
+                "role": "defines",
+                "value": value,
+                "records": [
+                    observation(run, "artifacts/boundary-observations/enum.txt", "cat enum")
+                ],
+            },
+        ],
+    }
+    write_register(run, [entry])
+    assert findings(run, target) == []
+
+
 def test_isolation_holds_when_the_subject_is_absent_from_the_policy(
     layout: tuple[Path, Path],
 ) -> None:
@@ -306,7 +348,7 @@ def test_isolation_fails_when_a_wider_grant_reaches_the_subject(
     assert any("LEAK" in item and "app-run" in item for item in out), out
 
 
-@pytest.mark.parametrize("value", ["TODO", "tbd", "<project>-sa", "???", "unknown", "assumed"])
+@pytest.mark.parametrize("value", ["TODO", "tbd", "<project>-sa", "???", "assumed", "changeme"])
 def test_a_placeholder_is_not_a_literal(layout: tuple[Path, Path], value: str) -> None:
     run, target = layout
     entry = grant_entry(run, target)

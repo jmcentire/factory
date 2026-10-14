@@ -76,8 +76,8 @@ Pact and Constrain). One entry per boundary identifier:
   of the signed Architecture Specification that decides a literal not yet written). An
   `observation` record is the saved output of a live query, with the exact command and the
   time. Every record carries the SHA-256 of the whole file.
-- A side with no record is **UNVERIFIED** and blocks. A placeholder value (`TODO`, `<project>`,
-  `unknown`, `assumed`) blocks. A run that genuinely crosses no boundary says why in
+- A side with no record is **UNVERIFIED** and blocks. A placeholder value (`TODO`, `TBD`, `<project>`,
+  `???`, `assumed`) blocks; ordinary enum members such as `unknown` or `none` are literals. A run that genuinely crosses no boundary says why in
   `no_boundary_basis`; an empty register without one blocks.
 
 Build records with `python3 harness/boundary_register.py cite`, which reads the source,
@@ -88,7 +88,8 @@ or a line number.
 
 `harness/boundary_register.py verify` re-reads every record and refuses a stale digest, a
 cited line that lacks the literal, a literal found only inside a longer name (`svc-auth` inside
-`svc-auth-runtime`), parties that disagree (naming the near-miss when they differ only in case
+`svc-auth-runtime`, or a dotted or path-shaped name
+inside a longer one: `foo.bar` inside `foo.bar.baz`), parties that disagree (naming the near-miss when they differ only in case
 or separators), and a subject present in a record that must exclude it.
 
 | Where | What it refuses |

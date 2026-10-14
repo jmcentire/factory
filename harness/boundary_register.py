@@ -92,7 +92,7 @@ _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
 _PLACEHOLDER = re.compile(
-    r"^(?:todo|tbd|tbc|unknown|assumed|placeholder|changeme|n/?a|none|null|x{3,}|\?+)$",
+    r"^(?:todo|tbd|tbc|assumed|placeholder|changeme|x{3,}|\?+)$",
     re.IGNORECASE,
 )
 _ANGLE_PLACEHOLDER = re.compile(r"<[^<>\s]+>")
@@ -135,26 +135,35 @@ def contains_token(haystack: str, value: str) -> bool:
 
     A value that begins (ends) with an identifier character must not be preceded
     (followed) by one, so ``svc-auth`` is not found inside ``svc-auth-runtime`` and
-    ``level`` is found inside ``"level":``. A value with punctuation at an edge matches
-    at that edge unconditionally, because the punctuation is itself the boundary.
+    ``level`` is found inside ``"level":``. A value that itself contains ``.`` or ``/``
+    is a dotted or path-shaped name, so the same separator followed by an identifier
+    character continues it: ``foo.bar`` is not found inside ``foo.bar.baz``, nor
+    ``/health`` inside ``/health/ready``. An undotted name still matches after an
+    attribute dot (``record.severity``). A value with punctuation at an edge matches at
+    that edge unconditionally, because the punctuation is itself the boundary.
     """
 
     if not value:
         return False
+    joiners = {char for char in "./" if char in value}
+
+    def continues(at: int, step: int) -> bool:
+        if not 0 <= at < len(haystack):
+            return False
+        char = haystack[at]
+        if char in _TOKEN_CHARS:
+            return True
+        beyond = at + step
+        return char in joiners and 0 <= beyond < len(haystack) and haystack[beyond] in _TOKEN_CHARS
+
     start = 0
     while True:
         index = haystack.find(value, start)
         if index < 0:
             return False
         end = index + len(value)
-        before = (
-            value[0] not in _TOKEN_CHARS or index == 0 or haystack[index - 1] not in _TOKEN_CHARS
-        )
-        after = (
-            value[-1] not in _TOKEN_CHARS
-            or end == len(haystack)
-            or haystack[end] not in _TOKEN_CHARS
-        )
+        before = value[0] not in _TOKEN_CHARS or not continues(index - 1, -1)
+        after = value[-1] not in _TOKEN_CHARS or not continues(end, 1)
         if before and after:
             return True
         start = index + 1
