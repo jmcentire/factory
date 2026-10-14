@@ -464,10 +464,12 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    holds other bytes. Name each planned test case in the Strategy on a line
    `planned-case: <case id> [Critical|Standard|Cosmetic]` (no class is Critical), with an id that
    names the scenario, not only the requirement, and name the Tester's test modules on a line
-   `test-modules: <glob>` (the same glob `discovery_check.py --pattern` takes). The Tester's
-   freeze is refused while any Critical case id appears in no test module (a README, inventory
-   or comment does not count), so the gap goes back to the Tester while it can still write the
-   test.
+   `test-modules: <glob>` (the same glob `discovery_check.py --pattern` takes). Put each case id
+   in the name of the test that covers it (a pytest parametrize id such as `test_cap[R7.1]`). The
+   Tester's freeze is refused while any Critical case id appears in no test module (a README or
+   full-line comment does not count), so the gap goes back to the Tester while it can still
+   write the test. That freeze check is traceability only; the Phase C discovery check is what
+   proves each Critical case is a collected test.
 
 ### Phase A — The frame (nothing is built until the human has agreed it)
 
@@ -816,9 +818,12 @@ The Orchestrator's authority runs over you. You do not own the run.
 
 Before the first test run, integrate the two frozen trees and prove the runner sees the Tester's
 suite: `harness/discovery_check.py --root <run> --tree <integrated tree> --pattern <the Strategy's
-test-modules glob> -- <the runner's listing command, e.g. deno test --no-run>`. The Coder never
-saw the tests, so its configuration can hide them (an `exclude` that drops `tests/`); a refusal
-is an integration edit you make and record, never a reason to run a subset.
+test-modules glob> --strategy <run>/artifacts/testing-strategy.md -- "$FACTORY_PYTHON"
+harness/test_inventory.py <pytest|vitest|deno> [-- <runner command>]`. It refuses when a Tester
+module has no collected test or a Critical planned case is in no collected test's name. The Coder
+never saw the tests, so its configuration can hide them (an `exclude` that drops `tests/`); that
+refusal is an integration edit you make and record, never a reason to run a subset. A Critical
+case with no test goes back to the Tester.
 
 **Gates prove the absence of regression; adversaries find the defects** — batch0 is the worked
 case, stated in `$FACTORY_HOME/docs/practices/oracle-quality.md` (*Gates prevent regression;

@@ -9,14 +9,20 @@ Two invariants, each found by hand mid-run when nothing checked them:
   ``oracle-input: <path in the Tester's tree> sha256:<digest of the pinned upstream bytes>``
   binds one input; ``oracle-inputs`` refuses a Tester repository where the file is missing, not
   a regular file, or holds other bytes.
-- **The Tester freezes only when every Critical planned case has a test** (dogfood #73). A
-  Tester declared DONE with 12 Critical planned cases unimplemented. A Strategy line
+- **Every Critical planned case has a test** (dogfood #73). A Tester declared DONE with 12
+  Critical planned cases unimplemented. A Strategy line
   ``planned-case: <case id> [Critical|Standard|Cosmetic]`` (no class means Critical: an
   unclassified surface is Critical) names one case, and ``test-modules: <glob>`` (repeatable;
-  ``fnmatch``, ``*`` crosses ``/``; the same glob ``discovery_check.py --pattern`` proves the
-  runner lists) names the Tester's test modules. ``coverage`` refuses a frozen Tester export in
-  which a Critical case id appears in no test module outside a full-line comment, and reports
-  every other gap. A README, inventory or comment naming a case covers nothing.
+  ``fnmatch``, ``*`` crosses ``/``; the same glob ``discovery_check.py --pattern`` takes) names
+  the Tester's test modules. Two checks read them:
+
+  - ``traceability`` (at the Tester's freeze, before any runner can import the tests) is a
+    source-reference check only: it refuses a frozen export in which a Critical case id appears
+    in no test module outside a full-line comment. A README or inventory naming a case does not
+    count, but a string constant or trailing comment does, so it proves no test exists.
+  - ``untested`` (called by ``discovery_check.py --strategy`` on the integrated tree) is the
+    planned-test check: a case is tested only when its id appears in the name of a test the
+    runner collected (``test_inventory.py``) from one of the Tester's modules.
 
 Lines may sit in a Markdown list (``- oracle-input: ...``). Stdlib only, no package imports.
 """
@@ -127,8 +133,28 @@ def test_module_globs(lines: list[str]) -> list[str]:
     return [found["glob"] for line in lines if (found := TEST_MODULES.match(line))]
 
 
-def uncovered(cases: dict[str, str], files: pathlib.Path,
-              globs: list[str]) -> dict[str, list[str]]:
+def names_case(case: str, text: str) -> bool:
+    """``case`` appears as a whole id: R7.1 is not named by R7.10, R7.1.2 or R7.1-b."""
+
+    return re.search(rf"(?<![\w.-]){re.escape(case)}(?![\w-])(?!\.\w)", text) is not None
+
+
+def _gaps(cases: dict[str, str], text: str) -> dict[str, list[str]]:
+    gaps: dict[str, list[str]] = {"Critical": [], "Standard": [], "Cosmetic": []}
+    for case, criticality in cases.items():
+        if not names_case(case, text):
+            gaps[criticality].append(case)
+    return gaps
+
+
+def untested(cases: dict[str, str], test_names: list[str]) -> dict[str, list[str]]:
+    """Cases whose id is in no collected test's name, by class."""
+
+    return _gaps(cases, "\n".join(test_names))
+
+
+def untraced(cases: dict[str, str], files: pathlib.Path,
+             globs: list[str]) -> dict[str, list[str]]:
     if cases and not globs:
         raise PlanError("the strategy names planned cases but no 'test-modules: <glob>' line, "
                         "so no file can be told to be a test")
@@ -140,11 +166,7 @@ def uncovered(cases: dict[str, str], files: pathlib.Path,
     corpus = "\n".join(line for path in modules
                        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
                        if not COMMENT_LINE.match(line))
-    gaps: dict[str, list[str]] = {"Critical": [], "Standard": [], "Cosmetic": []}
-    for case, criticality in cases.items():
-        if not re.search(rf"(?<![\w.-]){re.escape(case)}(?![\w-])(?!\.\w)", corpus):
-            gaps[criticality].append(case)
-    return gaps
+    return _gaps(cases, corpus)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,9 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     inputs = commands.add_parser("oracle-inputs")
     inputs.add_argument("--strategy", type=pathlib.Path, required=True)
     inputs.add_argument("--repo", type=pathlib.Path, required=True)
-    coverage = commands.add_parser("coverage")
-    coverage.add_argument("--strategy", type=pathlib.Path, required=True)
-    coverage.add_argument("--files", type=pathlib.Path, required=True)
+    traceability = commands.add_parser("traceability")
+    traceability.add_argument("--strategy", type=pathlib.Path, required=True)
+    traceability.add_argument("--files", type=pathlib.Path, required=True)
     arguments = parser.parse_args(argv)
     try:
         lines = _lines(arguments.strategy)
@@ -168,10 +190,10 @@ def main(argv: list[str] | None = None) -> int:
                 return 70
             print(json.dumps({"oracle_inputs": cited}, sort_keys=True, separators=(",", ":")))
             return 0
-        gaps = uncovered(planned_cases(lines), arguments.files, test_module_globs(lines))
-        print(json.dumps({"plan_gaps": gaps}, sort_keys=True, separators=(",", ":")))
+        gaps = untraced(planned_cases(lines), arguments.files, test_module_globs(lines))
+        print(json.dumps({"traceability_gaps": gaps}, sort_keys=True, separators=(",", ":")))
         if gaps["Critical"]:
-            print("strategy-plan: no test names these Critical planned cases: "
+            print("strategy-plan: no test module mentions these Critical planned cases: "
                   f"{', '.join(gaps['Critical'])}", file=sys.stderr)
             return 70
         return 0

@@ -403,9 +403,12 @@ machine, before the agent starts and while it runs:
   lines (`harness/strategy_plan.py oracle-inputs`) and is refused when its tree lacks a cited
   input, reaches it through a linked directory, or holds bytes other than the pinned upstream
   digest. A Tester freeze reads its `planned-case: <id> [class]` and `test-modules: <glob>` lines
-  (`strategy_plan.py coverage`) and is refused, leaving the lane open, while a Critical case id
-  appears in no frozen test module outside a full-line comment; other gaps are recorded in the
-  freeze row's `plan_gaps`.
+  (`strategy_plan.py traceability`) and is refused, leaving the lane open, while a Critical case
+  id appears in no frozen test module outside a full-line comment; other gaps are recorded in the
+  freeze row's `traceability_gaps`. That is a source-reference check only. Before Phase C,
+  `discovery_check.py --strategy` reads a `factory-test-inventory/1` document from
+  `harness/test_inventory.py` (pytest, vitest or deno) and refuses while a Tester module has no
+  collected test or a Critical case id is in no collected test's name.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a

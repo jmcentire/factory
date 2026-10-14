@@ -57,7 +57,7 @@ def test_a_malformed_binding_line_is_refused_not_skipped(tmp_path: Path) -> None
                                "--repo", str(tmp_path)]) == 70
 
 
-def test_the_tester_freezes_only_when_every_critical_planned_case_has_a_test(
+def test_the_tester_freezes_only_when_every_critical_planned_case_is_traced(
     tmp_path: Path,
 ) -> None:
     strategy = _strategy(tmp_path, "planned-case: R16.11-a", "planned-case: R7.1 Critical",
@@ -69,12 +69,12 @@ def test_the_tester_freezes_only_when_every_critical_planned_case_has_a_test(
                     "// R7.1.2 is a different case\n")
     (files / "spec").mkdir()
     (files / "spec" / "testing-strategy.md").write_text(strategy.read_text())  # not a test
-    check = ["coverage", "--strategy", str(strategy), "--files", str(files)]
+    check = ["traceability", "--strategy", str(strategy), "--files", str(files)]
     assert strategy_plan.main(check) == 70
     test.write_text(test.read_text() + 'Deno.test("R7.1: 413 over the cap", () => {});\n')
     assert strategy_plan.main(check) == 0
     lines = strategy.read_text().splitlines()
-    assert strategy_plan.uncovered(
+    assert strategy_plan.untraced(
         strategy_plan.planned_cases(lines), files, strategy_plan.test_module_globs(lines)
     ) == {"Critical": [], "Standard": ["N13"], "Cosmetic": []}
 
@@ -89,7 +89,7 @@ def test_a_case_named_only_outside_a_test_module_is_not_covered(tmp_path: Path) 
     (files / "tests" / "COVERAGE.txt").write_text("R7.1: done\n")
     test = files / "tests" / "cap_test.ts"
     test.write_text("// R7.1: todo\n  # R7.1\nDeno.test(\"request cap\", () => {});\n")
-    check = ["coverage", "--strategy", str(strategy), "--files", str(files)]
+    check = ["traceability", "--strategy", str(strategy), "--files", str(files)]
     assert strategy_plan.main(check) == 70
     test.write_text(test.read_text() + 'Deno.test("R7.1: 413 over the cap", () => {});\n')
     assert strategy_plan.main(check) == 0
@@ -98,5 +98,22 @@ def test_a_case_named_only_outside_a_test_module_is_not_covered(tmp_path: Path) 
 def test_planned_cases_without_a_test_module_glob_are_refused(tmp_path: Path) -> None:
     strategy = _strategy(tmp_path, "planned-case: R7.1")
     (tmp_path / "files").mkdir()
-    assert strategy_plan.main(["coverage", "--strategy", str(strategy),
+    assert strategy_plan.main(["traceability", "--strategy", str(strategy),
                                "--files", str(tmp_path / "files")]) == 70
+
+
+def test_traceability_is_a_source_reference_and_untested_needs_a_collected_test(
+    tmp_path: Path,
+) -> None:
+    """Review of #73: a constant or trailing comment traces a case but tests nothing."""
+
+    strategy = _strategy(tmp_path, "planned-case: R7.1", "test-modules: tests/*_test.ts")
+    files = tmp_path / "files"
+    (files / "tests").mkdir(parents=True)
+    (files / "tests" / "cap_test.ts").write_text('const planned = "R7.1"; // R7.1\n')
+    check = ["traceability", "--strategy", str(strategy), "--files", str(files)]
+    assert strategy_plan.main(check) == 0
+    cases = strategy_plan.planned_cases(strategy.read_text().splitlines())
+    assert strategy_plan.untested(cases, [])["Critical"] == ["R7.1"]
+    assert strategy_plan.untested(cases, ["cap > R7.10 is another case"])["Critical"] == ["R7.1"]
+    assert strategy_plan.untested(cases, ["cap > R7.1: 413 over the cap"])["Critical"] == []

@@ -856,7 +856,7 @@ def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_pat
     frozen = freeze()
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
-    assert row["plan_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}
+    assert row["traceability_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}
 
 
 def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -> None:

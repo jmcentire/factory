@@ -5,13 +5,19 @@ The invariant: **Phase C does not start on a tree whose runner cannot see the Te
 In run c the Coder's projection hid tests/, so the Coder excluded tests/ in deno.json; the
 integrated tree's ``deno test`` then reported "No test modules found" at Phase C, and the shipped
 repository's own test task would have too (dogfood #42). After both lanes are frozen and the
-tree is integrated, this runs the runner's own listing command in that tree and refuses when it
-exits non-zero or when any test module in the Tester's latest freeze is not on a listing line of
-its own (the path alone, or after one word such as deno's ``Check``; ``file://`` and absolute
-paths are normalized to the tree).
+tree is integrated, this runs an inventory command in that tree and refuses when it exits
+non-zero, prints anything but one ``factory-test-inventory/1`` document (``test_inventory.py``
+documents the format and holds every runner-specific parse), or when any test module in the
+Tester's latest freeze has no collected test in it. Console lines are never read: a diagnostic
+that names a module is not an inventory.
 
-  discovery_check.py --root <run> --tree <integrated tree> --pattern <glob> [--slot tester]
-                     [--timeout-minutes 10] -- <listing command, e.g. deno test --no-run>
+It also checks the planned tests (dogfood #73): every Critical ``planned-case`` id in
+``--strategy`` must appear in the name of a collected test from one of the Tester's modules.
+A module that only mentions the id (a constant, a comment) has no test that carries it.
+
+  discovery_check.py --root <run> --tree <integrated tree> --pattern <glob> --strategy <md>
+                     [--slot tester] [--timeout-minutes 10]
+                     -- <inventory command, e.g. python3 harness/test_inventory.py deno>
 
 ``--pattern`` names the Tester's test modules inside its frozen export (``fnmatch``, where
 ``*`` also crosses ``/``: ``tests/*_test.ts``). A pattern that matches nothing is refused, so the
@@ -25,12 +31,18 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
-import os
 import pathlib
 import subprocess
 import sys
 
+_HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
+if _HARNESS_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_ROOT)
+
+import strategy_plan  # noqa: E402
+
 FREEZE_SCHEMA = "factory-tmux-lane-freeze/1"
+INVENTORY_SCHEMA = "factory-test-inventory/1"
 
 
 class DiscoveryError(RuntimeError):
@@ -59,38 +71,35 @@ def test_modules(files: pathlib.Path, pattern: str) -> list[str]:
     return modules
 
 
-def listed_modules(tree: pathlib.Path, output: str) -> set[str]:
-    """Tree-relative paths the runner listed: a line that is exactly one path, optionally after
-    one leading word (deno's ``Check file:///...``). Prose that mentions a path lists nothing."""
+def inventory(output: str) -> list[dict[str, str]]:
+    """The collected tests of one ``factory-test-inventory/1`` document; anything else refuses."""
 
-    base = os.path.realpath(tree)
-    listed = set()
-    for line in output.splitlines():
-        words = line.split()
-        if not 1 <= len(words) <= 2:
-            continue
-        path = words[-1].removeprefix("file://")
-        if os.path.isabs(path):
-            path = os.path.relpath(os.path.realpath(path), base)
-        path = pathlib.PurePosixPath(path).as_posix()
-        if not path.startswith("../"):
-            listed.add(path.removeprefix("./"))
-    return listed
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError:
+        document = None
+    tests = document.get("tests") if isinstance(document, dict) else None
+    if (not isinstance(document, dict) or document.get("schema_version") != INVENTORY_SCHEMA
+            or not isinstance(tests, list)
+            or not all(isinstance(test, dict) and set(test) == {"module", "name"}
+                       and all(isinstance(value, str) for value in test.values())
+                       for test in tests)):
+        raise DiscoveryError(f"the inventory command did not print one {INVENTORY_SCHEMA} "
+                             f"document: {output.strip()[:200]!r}")
+    return tests
 
 
-def listing(tree: pathlib.Path, command: list[str], timeout_s: float) -> set[str]:
+def collected(tree: pathlib.Path, command: list[str], timeout_s: float) -> list[dict[str, str]]:
     try:
         completed = subprocess.run(command, cwd=tree, stdin=subprocess.DEVNULL,
                                    capture_output=True, text=True, timeout=timeout_s,
                                    check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise DiscoveryError(f"the listing command did not complete: {error}") from None
+        raise DiscoveryError(f"the inventory command did not complete: {error}") from None
     if completed.returncode != 0:
-        # A failing runner's diagnostics can name every module; only a clean listing counts.
-        raise DiscoveryError(f"the listing command exited {completed.returncode}: "
+        raise DiscoveryError(f"the inventory command exited {completed.returncode}: "
                              f"{(completed.stderr or completed.stdout).strip()[-400:]}")
-    # deno prints its Check lines on stderr, so both streams are read line by line.
-    return listed_modules(tree, completed.stdout + "\n" + completed.stderr)
+    return inventory(completed.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,28 +107,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=pathlib.Path, required=True)
     parser.add_argument("--tree", type=pathlib.Path, required=True)
     parser.add_argument("--pattern", required=True)
+    parser.add_argument("--strategy", type=pathlib.Path, required=True)
     parser.add_argument("--slot", default="tester")
     parser.add_argument("--timeout-minutes", type=float, default=10.0)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     command = arguments.command[1:] if arguments.command[:1] == ["--"] else arguments.command
     if not command:
-        parser.error("needs the runner's listing command after --")
+        parser.error("needs the inventory command after --")
     try:
+        cases = strategy_plan.planned_cases(strategy_plan._lines(arguments.strategy))
         modules = test_modules(frozen_files(arguments.root, arguments.slot), arguments.pattern)
-        listed = listing(arguments.tree, command, arguments.timeout_minutes * 60)
-    except DiscoveryError as error:
+        tests = collected(arguments.tree, command, arguments.timeout_minutes * 60)
+    except (DiscoveryError, strategy_plan.PlanError) as error:
         print(f"discovery-check: {error}", file=sys.stderr)
         return 70
+    listed = {test["module"] for test in tests}
     missing = [module for module in modules if module not in listed]
     if missing:
         print(f"discovery-check: the runner does not list {len(missing)} of the Tester's "
               f"{len(modules)} modules: {', '.join(missing)}. Fix the integrated tree's test "
               "configuration as an integration edit before Phase C.", file=sys.stderr)
         return 70
+    gaps = strategy_plan.untested(
+        cases, [test["name"] for test in tests if test["module"] in modules])
+    if gaps["Critical"]:
+        print("discovery-check: no collected test of the Tester's names these Critical planned "
+              f"cases: {', '.join(gaps['Critical'])}. Send them back to the Tester.",
+              file=sys.stderr)
+        return 70
     print(json.dumps({"schema_version": "factory-discovery-check/1", "slot": arguments.slot,
                       "pattern": arguments.pattern, "command": command,
-                      "modules": modules}, sort_keys=True, separators=(",", ":")))
+                      "modules": modules, "untested": gaps},
+                     sort_keys=True, separators=(",", ":")))
     return 0
 
 
