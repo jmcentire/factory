@@ -748,7 +748,11 @@ dependency-free (bash + python3 + git):
   reading the lane window by exact name; freeze reads it the same way.
   An answer over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
   at `tmux-lanes/<slot>-inputs/<sha256>.txt` with a `FACTORY_RELAY file=… sha256=…` pointer;
-  the coder leak guard judges the file's bytes before the file is placed.
+  the coder leak guard judges the file's bytes before the file is placed. These answer files, and
+  the `<run>/relay/<sha256>.txt` files `relay_file.sh` and `inject.sh` write for multi-line or
+  oversized messages, sit under the run root, which a tmux lane is not denied reading: tmux lanes
+  claim no read isolation for them. The guards judge what is delivered; nothing stops one lane
+  from reading another lane's relayed text if it goes looking.
   Preflight requires a standalone repository whose Git/common directory is local and an agent
   CLI exposing the exact flags the launch uses; the retained launch records its version.
   Codex is launched as the agent harness with a lane-scoped permission profile that reopens the

@@ -192,7 +192,12 @@ names a consuming project:
 - `--runs <path>` names the control plane. Runtime authority, retained target-state, resource
   records, harness coordination, and evidence live under `<runs>/<run>/`; source bytes do not.
 - Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
-  from the immutable target workdir after target-state verification.
+  from the immutable target workdir after target-state verification. `projection.conf` holds one
+  directive per line (`coder-exclude: <path>`, `tester-include: <path>`, and
+  `freeze-exclude: <top-level name>` for a git-ignored dependency tree such as `node_modules`
+  that the lane freeze skips unread instead of refusing its symlinks); `#` starts a comment only
+  at the start of a line, and a `freeze-exclude` value holding whitespace or `#` is refused.
+  The legacy `.harness/projection.conf` is not read.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
   360-minute default are refused), plus externally supplied
@@ -226,7 +231,7 @@ names a consuming project:
 - `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only. `ground.sh` scans only this run's seat transcripts (the workdir's Claude project dir and any `<dir>-*` nested ones); a sibling workdir such as `/repo/x-other` for `/repo/x` shares that prefix and is scanned too, because Claude's directory encoding cannot tell them apart. Set `TRANSCRIPTS=<paths>` to pin the scan.
 - `spawn.py start|signal|sweep --root <run> [--name <label>]` — the run's spawn ledger: `start` runs a command in its own process group and records pid, pgid and start time in `<run>/spawns.jsonl` (output in `<run>/spawns/<label>.log`); `signal` addresses only that recorded group and refuses a pid whose start time changed (reused); `sweep` signals every recorded group still alive. Nothing is chosen by pattern.
 - `with_secret.py [--secrets <dir>] [--pass NAME ...] ENV_NAME[=FILE] ... -- <command>` — gives one child a credential from `$HARNESS_SECRETS/FILE` (an owner-controlled regular file, never followed through a link) in a built environment (PATH, HOME, LANG, TMPDIR, TERM, each `--pass` name, the secrets; no ambient credential) only (any name execve accepts, such as `npm_config_//host/:_authToken`), never in argv or a shell, and redacts each value's exact bytes from its stdout and stderr. Errors name secrets, never values. Exit status is the child's.
-- `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting.
+- `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting. The file is not read-isolated from tmux lanes (docs/HARNESS.md).
 - `agent_exec.py --timeout-minutes <n> [--stdin-file <prompt>] [--log <file>] -- <argv>` — runs a non-interactive agent CLI (`codex exec`, `claude -p`) with stdin closed and a wall-clock cap (exit 124 when stopped), so a review call never waits on a terminal.
 - `discovery_check.py --root <run> --tree <integrated> --candidate-sha <commit> --pattern <glob> --strategy <md> -- <inventory command>` — before Phase C, refuses an integrated tree that is not exactly that commit, or whose runner collects no runnable (not skipped or ignored) test from a module in the Tester's latest freeze, or none named for a Critical planned case; a green check writes the receipt that `endgame.sh` requires (`discovery_check.py require`) before any verdict.
 - `test_inventory.py pytest|vitest|deno [-- <runner command>]` — runs the runner's collect-only mode in the current tree and prints the `factory-test-inventory/1` document `discovery_check.py` validates, with skipped or ignored tests listed apart from runnable ones; every runner-specific parse lives here.

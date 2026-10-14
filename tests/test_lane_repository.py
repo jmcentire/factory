@@ -169,6 +169,7 @@ def test_undeclared_symlink_is_refused_and_lane_gitignore_has_no_effect(tmp_path
 
 
 def test_freeze_exclude_rejects_unsafe_values(tmp_path: Path) -> None:
-    for bad in ("a/b", "..", ".git", ""):
+    # An inline comment is not syntax here: it would make the name match nothing (review #54).
+    for bad in ("a/b", "..", ".git", "", "node_modules   # deps the freeze skips", "a b"):
         with pytest.raises(LaneRepositoryError):
             read_freeze_excludes(_declared(tmp_path, f"freeze-exclude: {bad}"))

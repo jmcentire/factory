@@ -5008,6 +5008,16 @@ def paging_dispatcher(
     return mod, d, root, pages
 
 
+def test_the_dispatcher_pages_through_the_public_question_channel_send() -> None:
+    """Review of #54: the dispatcher and the engagement router share one channel sender, and
+    the dispatcher reaches it through engagement_route's public name, never a private one."""
+    mod = load_dispatcher()
+    route_module = sys.modules["engagement_route"]
+    assert mod.send_to_question_channel is route_module.send_to_question_channel  # type: ignore[attr-defined]
+    source = (HARNESS / "dispatcher.py").read_text(encoding="utf-8")
+    assert not re.search(r"from engagement_route import[^\n]*\b_\w+", source)
+
+
 def page_events(root: Path) -> list[dict[str, object]]:
     rows = [json.loads(ln) for ln in (root / "events.jsonl").read_text().splitlines()]
     return [row for row in rows if row["kind"] == "operator_page"]

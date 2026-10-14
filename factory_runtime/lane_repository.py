@@ -106,6 +106,8 @@ def read_freeze_excludes(conf: str | pathlib.Path) -> tuple[str, ...]:
     """Top-level paths a target declares unfrozen via ``freeze-exclude:`` in projection.conf.
 
     The conf is committed in the target at the pinned commit, so the lane cannot change it.
+    It has no inline comments: a value holding whitespace or ``#`` (``node_modules  # deps``) is
+    refused rather than read as a name that matches nothing, which would freeze nothing out.
     """
 
     path = pathlib.Path(conf)
@@ -116,7 +118,8 @@ def read_freeze_excludes(conf: str | pathlib.Path) -> tuple[str, ...]:
         if not line.startswith("freeze-exclude:"):
             continue
         value = line.partition(":")[2].strip()
-        if value in {"", ".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        if (value in {"", ".", ".."} or "/" in value or "\\" in value or "\x00" in value
+                or "#" in value or any(character.isspace() for character in value)):
             raise LaneRepositoryError(f"unsafe freeze-exclude on line {number}: {value!r}")
         if _portable_name(value) == ".git":
             raise LaneRepositoryError("freeze-exclude may not name .git")

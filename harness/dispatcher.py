@@ -32,7 +32,7 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
-from engagement_route import _send as send_to_question_channel  # noqa: E402
+from engagement_route import send_to_question_channel  # noqa: E402
 from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
