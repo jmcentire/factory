@@ -185,6 +185,37 @@ def _gate(discovered: dict[str, object], repo: pathlib.Path) -> None:
         raise _refuse(f"lane server's scope_info does not match this lane: {scope}")
 
 
+def _importable_export(source: pathlib.Path, scratch: pathlib.Path) -> pathlib.Path:
+    """The path `kin import` can read for a repository's knowledge export.
+
+    `kin repo-memory publish` writes `.kin/knowledge.json` as `kindex-evidence/1`: an envelope
+    whose `records` maps each node id to the node. `kin import` (0.48) reads only a bare node
+    list, so it would reject the envelope itself as a record with no id or title. Unwrap it into
+    the lane's private home; any other shape is imported exactly as it is.
+    """
+    if source.name != "knowledge.json":
+        return source
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return source
+    if not (isinstance(document, dict) and document.get("schema") == "kindex-evidence/1"
+            and isinstance(document.get("records"), dict)):
+        return source
+    # An envelope can carry one node under two keys (a bare and a qualified id) at different
+    # revisions; `kin import` refuses that as a conflict. Keep the latest revision of each id.
+    latest: dict[str, dict] = {}
+    for record in document["records"].values():
+        if not isinstance(record, dict):
+            continue
+        key = str(record.get("id") or record.get("title"))
+        held = latest.get(key)
+        if held is None or str(record.get("updated_at", "")) > str(held.get("updated_at", "")):
+            latest[key] = record
+    scratch.write_text(json.dumps(list(latest.values())), encoding="utf-8")
+    return scratch
+
+
 def prepare(
     repo: pathlib.Path, home: pathlib.Path, seed: pathlib.Path | None = None
 ) -> dict[str, object]:
@@ -247,7 +278,8 @@ def prepare(
     try:
         if not relaunch:  # a relaunched lane keeps the store it built and its own captures
             if source is not None:
-                imported = created(load(["import", str(source), "--project-path", str(repo)],
+                importable = _importable_export(source, home / "knowledge.import.json")
+                imported = created(load(["import", str(importable), "--project-path", str(repo)],
                                         source))
             # The run's shared seed: the vital context both lanes may read (research, standing
             # constraints, ratified decisions), the same file for both. Never implementation or

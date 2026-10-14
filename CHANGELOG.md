@@ -3,6 +3,22 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.18] - 2026-10-14
+
+Harness fixes from the msg-r2-pr3s run that 0.8.17 did not already cover.
+
+### Fixed
+
+- **The lane watchdog never stops or reads another lane.** It resolves a lane's window name to
+  its tmux `@window_id` before stopping or capturing it; tmux resolves a missing name, even with
+  `=`, to the current window. The lane launcher and lane messaging kill and interrupt by id too.
+- **A lane's Kindex seed imports a `kindex-evidence/1` export.** `lane_kindex.py` unwraps the
+  envelope into the node list `kin import` reads, keeping the latest revision per id.
+- **The tripwire covers the run's leak surfaces.** With `--run`, `ground.sh` also scans the
+  run's artifacts, lane snapshots, lane seed, the checkout's `.kin` and every lane's Kindex
+  home, alongside the seat-scoped transcript scan.
+- The dispatcher creates `minutes/` with its parents.
+
 ## [0.8.17] - 2026-10-14
 
 The composition dogfood fixes (PR #54): what three dogfood runs of the factory against real

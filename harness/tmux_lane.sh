@@ -102,6 +102,13 @@ source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
+# tmux resolves a window name it cannot find to the session's current window, even with an
+# exact-match "=" prefix, so acting on "$RUN:<name>" for a vanished lane hits another lane.
+# Resolve the exact name to its unique window id and act only on that id.
+window_id() {
+  tmux list-windows -t "=$RUN" -F '#{window_name} #{window_id}' 2>/dev/null |
+    awk -v name="$1" '$1 == name { print $2; exit }'
+}
 
 # Every refusal after the run root resolves leaves one events.jsonl row (refusal-tmux-lane).
 refuse() {
@@ -698,10 +705,10 @@ PY
   }
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
-    tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
+    WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
   if printf '%s\n' "$WINDOWS" | grep -q "^watch-$LANE "; then
-    tmux kill-window -t "$RUN:watch-$LANE" >/dev/null 2>&1 || true
+    WID=$(window_id "watch-$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
   if ! tmux new-window -t "$RUN" -n "$LANE" -c "$REPOSITORY" "$LANE_CMD"; then
     append_event "$(mark launch-failed)"
@@ -710,7 +717,7 @@ PY
   # A window option: a finished lane's window stays, dead, so its last output can be read.
   tmux set-option -w -t "$RUN:$LANE" remain-on-exit on >/dev/null 2>&1 || true
   if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
-    tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
+    WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"
   fi

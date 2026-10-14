@@ -874,7 +874,7 @@ def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
 
     r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "no seat transcripts yet" in r.stdout
+    assert "no seat transcripts or leak surfaces yet" in r.stdout
 
     seat = projects / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
     seat.mkdir()
@@ -894,6 +894,18 @@ def test_ground_tripwire_honors_claude_config_dir(tmp_path: Path) -> None:
 
     r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
     assert r.returncode == 2, r.stdout + r.stderr
+
+
+def test_ground_explicit_leak_path_still_halts(tmp_path: Path) -> None:
+    """Narrowing the scope must not blunt the tripwire on a real leak surface."""
+    env = ground_fixture(tmp_path)
+    leak = tmp_path / "export" / "config.env"
+    leak.parent.mkdir()
+    leak.write_text(f"AWS_KEY={fake_aws_key()}\n")
+    env["TRIPWIRE_PATHS"] = str(leak.parent)
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (tmp_path / ".harness" / "HALT").exists()
 
 
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
@@ -1876,6 +1888,67 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         },
         log,
     )
+
+
+def test_factory_ignition_reads_agy_help_from_stderr(tmp_path: Path) -> None:
+    """agy 1.3.x prints --help to stderr; the CLI contract check must still see the flags."""
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status=None,
+    )
+    env, _tmux_log = factory_ignition_env(tmp_path, root)
+    agy = tmp_path / "factory-bin" / "agy"
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.3.3-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
+        '--add-dir" >&2; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-sandbox-v1"
+
+
+def test_factory_ignition_tripwire_scans_run_kindex_not_conversations(tmp_path: Path) -> None:
+    """In run mode the default scope is the run's leak surfaces, Kindex stores included."""
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _tmux_log = factory_ignition_env(tmp_path, root)
+    env.pop("TRANSCRIPTS", None)
+    home = tmp_path / "home"
+    convo = home / ".claude" / "projects" / "p" / "s.jsonl"
+    convo.parent.mkdir(parents=True)
+    convo.write_text(fake_aws_key() + "\n")
+    env["HOME"] = str(home)
+    kin = root / "tmux-lanes" / "coder-kindex-home" / "store.jsonl"
+    kin.parent.mkdir(parents=True)
+    kin.write_text('{"text": "token ' + fake_aws_key() + '"}\n')
+
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    halt_files = list(tmp_path.rglob("HALT"))
+    assert halt_files, "a Kindex leak must set HALT"
+    report = halt_files[0].read_text()
+    assert "coder-kindex-home/store.jsonl" in report
+    assert ".claude/projects" not in report
 
 
 def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path) -> None:
