@@ -7,10 +7,12 @@ containment, and a target-state receipt. It never selects a default branch or am
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -111,6 +113,94 @@ def normalize_subpath(value: str) -> str:
 
 def _manifest_subpath(manifest: TargetManifest) -> str:
     return normalize_subpath(str(manifest.repo.get("subpath", "")))
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _pinned_path(cell: str, vendored: Mapping[str, str]) -> str | None:
+    """The contracts/-relative file a row cell names: a vendored file's path, or any path written
+    with a ``contracts/`` prefix (so a row whose file was deleted still refuses)."""
+
+    text = cell.strip().strip("`")
+    if text.startswith("contracts/"):
+        return text[len("contracts/") :]
+    return text if text in vendored else None
+
+
+def _verify_contract_sources(workdir: Path) -> None:
+    """Refuse a target whose contracts/SOURCES.md and vendored files disagree, in either direction.
+
+    Every regular file under contracts/ (any depth, root level included) other than SOURCES.md
+    must be named by a pinned row, and the row's sha256 must be that exact file's digest. A row
+    names its file in a cell holding its path relative to contracts/ (``property/contract.md``)
+    or prefixed with ``contracts/``. A pinned row naming no path binds nothing and is warned
+    about; a ``contracts/`` path that is not a vendored file refuses.
+    """
+
+    contracts = workdir / "contracts"
+    sources = contracts / "SOURCES.md"
+    # Every byte read below must be the pinned checkout's own: a linked contracts/, SOURCES.md,
+    # dependency folder or file could point outside it and change while git reports clean.
+    linked = contracts.is_symlink() or sources.is_symlink()
+    if linked or (contracts.exists() and not contracts.resolve().is_relative_to(workdir.resolve())):
+        raise TargetResolutionError(
+            "contract-source-link", "contracts/ and contracts/SOURCES.md must not be links"
+        )
+    actual: dict[str, str] = {}
+    if contracts.is_dir():
+        for path in sorted(contracts.rglob("*")):
+            relative = path.relative_to(contracts).as_posix()
+            if path.is_symlink():
+                raise TargetResolutionError(
+                    "contract-source-link", f"contracts/{relative} is a link"
+                )
+            if path.is_file() and path != sources:
+                actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if not actual and not sources.is_file():
+        return
+    if not sources.is_file():
+        # Deleting or replacing the pin list must not skip the check of what it pinned.
+        raise TargetResolutionError(
+            "contract-sources-missing",
+            "contracts/ holds vendored files but contracts/SOURCES.md is not a regular file",
+        )
+    pins: dict[str, set[str]] = {}
+    unidentified: list[str] = []
+    for line in sources.read_text(encoding="utf-8").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        found = [cell for cell in cells if _SHA256.fullmatch(cell)]
+        if not line.lstrip().startswith("|") or not found:
+            continue
+        named = [name for cell in cells if (name := _pinned_path(cell, actual)) is not None]
+        if not named:
+            unidentified.append(cells[0])
+            continue
+        pins.setdefault(named[0], set()).add(found[-1])
+    mismatches = [
+        f"{name}: pinned {', '.join(d[:8] for d in sorted(digests))} is not a vendored file"
+        for name, digests in sorted(pins.items())
+        if name not in actual
+    ]
+    for name, digest in actual.items():
+        if name not in pins:
+            mismatches.append(f"{name} ({digest[:8]}) is matched by no pinned row")
+        elif pins[name] != {digest}:
+            mismatches.append(
+                f"{name}: pinned {', '.join(d[:8] for d in sorted(pins[name]))} "
+                f"but the file is {digest[:8]}"
+            )
+    if unidentified:
+        warnings.warn(
+            "contracts/SOURCES.md rows with no identifiable vendored files: "
+            + ", ".join(unidentified),
+            stacklevel=2,
+        )
+    if mismatches:
+        detail = "; ".join(mismatches)
+        if unidentified:
+            detail += f" (unidentified rows: {', '.join(unidentified)})"
+        raise TargetResolutionError("contract-digest-mismatch", detail)
 
 
 class TargetResolver:
@@ -544,6 +634,8 @@ class TargetResolver:
             )
             if head != resolved_commit or dirt:
                 raise TargetResolutionError("target-state-diverged", str(source_root))
+            if manifest.repo.get("contract_sources") is True:
+                _verify_contract_sources(resolved_workdir)
             self._append_resource(
                 resource_id=source_id,
                 resource_type="source-worktree",

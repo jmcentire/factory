@@ -47,6 +47,10 @@
           "type": "string",
           "description": "Optional monorepo subpath the target lives under."
         },
+        "contract_sources": {
+          "type": "boolean",
+          "description": "Opt in to refusing a checkout whose contracts/SOURCES.md pins disagree with the vendored files under contracts/."
+        },
         "scope_tier": {
           "type": "string",
           "enum": [

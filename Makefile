@@ -182,25 +182,33 @@ test-tessera: check-python ## run every real-Tessera integration and denial proo
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \
-		harness/agreement_contract.py harness/agreement_probe.py harness/boundary_register.py \
+		harness/agent_exec.py harness/agreement_contract.py harness/agreement_probe.py \
+		harness/boundary_register.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
 		harness/lane_repository.py \
 		harness/orchestrator_channel.py harness/testing_standard.py \
+		harness/discovery_check.py \
+		harness/strategy_plan.py harness/test_inventory.py \
 		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
-		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
+		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
+		harness/spawn.py harness/with_secret.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
-		harness/agreement_contract.py harness/agreement_probe.py harness/boundary_register.py \
+		harness/agent_exec.py harness/agreement_contract.py harness/agreement_probe.py \
+		harness/boundary_register.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
 		harness/lane_repository.py \
 		harness/orchestrator_channel.py harness/testing_standard.py \
+		harness/discovery_check.py \
+		harness/strategy_plan.py harness/test_inventory.py \
 		harness/jev_screen.py harness/jev_rules.py \
 		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
-		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py
+		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
+		harness/spawn.py harness/with_secret.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py

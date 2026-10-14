@@ -209,6 +209,10 @@ Then ask, before judging the next action:
 
 1. What is the user's **ultimate goal** across their inputs? Is the latest input an `override`,
    `aside`, `intensity-change`, or `refinement`? Recency alone does not decide; context does.
+   An input is a message the human submitted, as the seat's transcript shows it. Text sitting
+   unsubmitted in a seat's input line (after `❯`) is never input: it can be the agent's own
+   predicted suggestion, which a pane snapshot shows exactly like typed text. A
+   `FACTORY_QUESTION_PENDING` or `FACTORY_LANE_DONE` line is the dispatcher's notice, not input.
 2. Is the current action and overall direction a path to that goal, in spirit as well as letter?
 3. If this continues, what concretely happens? What implications and side effects follow? Are
    they desirable, aligned, and actually advancing the goal?
@@ -421,7 +425,8 @@ The Validator obtains human ratification or cites an already ratified specificat
       --basis <retained-source> --authority <human-answer|ratified-spec>
 
 The channel records planned and delivered states separately, binds the answer to that lane and
-question, and queues or resumes the same Codex thread. It cannot answer the other lane's question,
+question, and resumes the same Codex thread; a lane mid-turn refuses an answer until it is idle,
+because a queued message has no delivery receipt (a queued status probe is reported as not delivered). It cannot answer the other lane's question,
 cannot deliver a second conflicting answer, and does not expose either author's work to the other.
 
 ## State-keeper for the Validator

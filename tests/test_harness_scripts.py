@@ -9,15 +9,18 @@ the repository's own .harness/ or DIRECTIVES/.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -510,7 +513,7 @@ def read_chain(path: Path) -> list[dict[str, object]]:
 def dl(tmp: Path, *args: str) -> subprocess.CompletedProcess[str]:
     ledger = tmp / "DIRECTIVES" / "ledger.jsonl"
     return run(
-        ["python3", str(HARNESS / "directive.py"), *args],
+        [sys.executable, str(HARNESS / "directive.py"), *args],
         cwd=tmp,
         env_extra={"DIRECTIVE_LEDGER": str(ledger)},
     )
@@ -859,6 +862,40 @@ def test_ground_writes_marker_on_clean_state(tmp_path: Path) -> None:
     assert "grounded @" in r.stdout
 
 
+def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
+    env = ground_fixture(tmp_path)
+    del env["TRANSCRIPTS"]
+    home = tmp_path / "home"
+    projects = home / ".claude" / "projects"
+    secret = "-----BEGIN " + "PRIVATE KEY-----\n"
+    (projects / "-unrelated-session").mkdir(parents=True)
+    (projects / "-unrelated-session" / "t.jsonl").write_text(secret)
+    env["HOME"] = str(home)
+
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no seat transcripts yet" in r.stdout
+
+    seat = projects / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
+    seat.mkdir()
+    (seat / "t.jsonl").write_text(secret)
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+def test_ground_tripwire_honors_claude_config_dir(tmp_path: Path) -> None:
+    env = ground_fixture(tmp_path)
+    del env["TRANSCRIPTS"]
+    config = tmp_path / "claude-config"
+    seat = config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
+    seat.mkdir(parents=True)
+    (seat / "t.jsonl").write_text("-----BEGIN " + "PRIVATE KEY-----\n")
+    env["CLAUDE_CONFIG_DIR"] = str(config)
+
+    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
     env = ground_fixture(tmp_path)
     rec = tmp_path / ".harness" / "reconcile.d"
@@ -890,6 +927,80 @@ def inject(
     return run(args, tmp, env)
 
 
+def inject_live(
+    tmp_path: Path, pane_command: str, msg: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Real (non-dry) inject.sh against a tmux stub.
+
+    The stub's only window, validator, runs pane_command.
+    """
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir(exist_ok=True)
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'[ "$1" = display ] && {{ echo {shlex.quote(pane_command)}; exit 0; }}\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", msg],
+        tmp_path,
+        {
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    return r, calls
+
+
+def test_inject_pane_command_allowlist_is_case_insensitive(tmp_path: Path) -> None:
+    """macOS framework Python reports its pane command as 'Python'."""
+    r, calls = inject_live(tmp_path, "Python", "hello")
+    assert r.returncode == 0, r.stderr
+    assert " -l -- hello" in calls.read_text(encoding="utf-8")
+    (tmp_path / "sh").mkdir()
+    refused, _ = inject_live(tmp_path / "sh", "bash", "hello")
+    assert refused.returncode == 77 and "not an agent" in refused.stderr
+
+
+def test_inject_checks_the_window_by_exact_name(tmp_path: Path) -> None:
+    """tmux resolves an unknown window to another one; a missing window must be refused."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo orchestrator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "hi"],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"),
+         "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
+    )
+    assert r.returncode == 76 and "no live pane" in r.stderr
+
+
+def test_multiline_injection_travels_as_a_digest_bound_relay_file(tmp_path: Path) -> None:
+    """tmux splits a multi-line paste at each newline, so the seat would act on fragments.
+    The message goes to a relay file named by its sha256; the pane gets one pointer line."""
+    message = "Refused. Three blockers:\n1. F13 --allow-sys=uid\n2. ADMISSION_CAPACITY=1\n"
+    r = inject(tmp_path, "validator", message, frm="founder")
+    assert r.returncode == 0, r.stderr
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relay.read_text(encoding="utf-8") == message
+    assert str(relay) in r.stdout
+
+
 def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "do it differently", frm="orchestrator")
     assert r.returncode == 77 and "topology refusal" in r.stderr
@@ -909,11 +1020,281 @@ def test_inject_validator_to_lane_is_receipted(tmp_path: Path) -> None:
     assert receipts and receipts[0]["to"] == "coder" and receipts[0]["from"] == "validator"
 
 
+def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path: Path) -> None:
+    """Dogfood #20/#24: multi-line text never rides tmux. It lands verbatim in a file under the
+    run, and the only thing sent is a single-line pointer carrying that file's sha256."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    tmux_stub = stub_dir / "tmux"
+    tmux_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        f'for a in "$@"; do case "$a" in display*) echo claude; exit 0;; esac; done\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(tmux_stub, 0o755)
+    text = "I ratify.\nLine two of the signing statement.\n\nLine four.\n"
+    r = subprocess.run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        input=text, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_DIR": str(tmp_path / ".harness"),
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    relayed = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
+    assert relayed.read_text(encoding="utf-8") == text
+    literal = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if " -l -- " in ln]
+    assert len(literal) == 1 and f"sha256={digest}" in literal[0]
+    assert "Line two" not in literal[0]
+
+
+def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path) -> None:
+    """The coder oracle-leak guard judges what the file says, not only the pointer line."""
+    leak = tmp_path / "leak.txt"
+    leak.write_text("Status:\nFAIL test_hidden raised AssertionError\n", encoding="utf-8")
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_DIR": str(tmp_path / ".harness"), "INJECT_DRY_RUN": "1"},
+    )
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr
+    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay"
+    assert not list(relay.glob("*.txt"))
+
+    # The pointer names the relay path, which the guard also reads: keep "pytest" out of it.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    clean = plain / "clean.txt"
+    clean.write_text("R12.5 is ruled in-scope.\nSee the ratified spec.\n", encoding="utf-8")
+    ok = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(clean)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    assert ok.returncode == 0, ok.stderr
+    digest = hashlib.sha256(clean.read_bytes()).hexdigest()
+    receipts = (plain / "run" / "injections.jsonl").read_text(encoding="utf-8")
+    assert f'"kind":"relay-file","sha256":"{digest}"' in receipts
+    shutil.rmtree(plain)
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_relay_guard_refuses_a_large_leak_despite_pipefail(tmp_path: Path, attempt: int) -> None:
+    """grep -q exits on its first match; under pipefail the SIGPIPE'd printf used to turn the
+    refusal into a pass for large inputs (65,574 bytes passed 5/5 before the fix)."""
+    head = b"FAIL test_hidden raised AssertionError\n"
+    # Keep "pytest" out of the paths: the guard also reads the pointer, which names them.
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    leak = plain / "leak.txt"
+    leak.write_bytes(head + b"lorem ipsum dolor\n" * ((65_574 - len(head)) // 18) + b"x" * (
+        (65_574 - len(head)) % 18
+    ))
+    assert leak.stat().st_size == 65_574
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(leak)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "oracle-leak refusal" in r.stderr, (attempt, r.returncode)
+
+
+def test_spawn_ledger_signals_only_a_recorded_live_process(tmp_path: Path) -> None:
+    """#70: the target of a signal comes from the spawn record, never a process-table search."""
+    spawn = [sys.executable, str(HARNESS / "spawn.py")]
+    root = ["--root", str(tmp_path)]
+
+    def call(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([*spawn, *args], capture_output=True, text=True)
+
+    started = call("start", *root, "--name", "probe", "--", "sleep", "30")
+    assert started.returncode == 0, started.stderr
+    pid = int(started.stdout)
+    try:
+        unknown = call("signal", *root, "--name", "deno-run-frozen")
+        assert unknown.returncode == 66  # not recorded: nothing is searched for, nothing signalled
+
+        ledger = tmp_path / "spawns.jsonl"
+        recorded = ledger.read_text()
+        ledger.write_text(recorded.replace('"started":"', '"started":"reused '))
+        reused = call("signal", *root, "--name", "probe")
+        assert reused.returncode == 75 and "refused" in reused.stdout
+        os.kill(pid, 0)  # a pid that no longer matches its record is left alone
+
+        ledger.write_text(recorded)
+        signalled = call("signal", *root, "--name", "probe")
+        assert signalled.returncode == 0 and "signalled" in signalled.stdout
+        for _ in range(50):
+            if not subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode:
+                time.sleep(0.1)
+        assert subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode != 0
+        assert "probe: exited" in call("sweep", *root).stdout
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_spawn_reserves_a_label_under_the_ledger_lock(tmp_path: Path) -> None:
+    """Review of #70: a start that raced another start of the same label never launches."""
+    import fcntl
+
+    ledger = tmp_path / "spawns.jsonl"
+    marker = tmp_path / "launched"
+    with open(ledger, "a+", encoding="utf-8") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        racer = subprocess.Popen(
+            [sys.executable, str(HARNESS / "spawn.py"), "start", "--root", str(tmp_path),
+             "--name", "probe", "--", "touch", str(marker)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(1.0)  # the racer has read the label check by now unless it waits on the lock
+        held.write(json.dumps({"name": "probe", "pid": 1, "pgid": 1, "started": None}) + "\n")
+        held.flush()
+    _, err = racer.communicate(timeout=30)
+    assert racer.returncode == 65, err
+    assert not marker.exists()
+    assert len(ledger.read_text().splitlines()) == 1
+
+
+def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path) -> None:
+    """A dummy value, as every new credential use is proven first (#15)."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    dummy = "dummy-npm-token-0123456789"
+    (secrets / "GH_PACKAGES_TOKEN").write_text(dummy + "\n", encoding="utf-8")
+    name = "npm_config_//npm.pkg.example/:_authToken"  # no shell can assign this name
+    child = (
+        "import os, sys\n"
+        f"value = os.environ[{name!r}]\n"
+        "print('stdout', value)\n"
+        "print('error:', value, 'is not a command', file=sys.stderr)\n"
+        "sys.exit(3 if value == " + repr(dummy) + " else 9)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets),
+         f"{name}=GH_PACKAGES_TOKEN", "--", sys.executable, "-c", child],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 3, result.stderr  # the child saw the exact value
+    assert dummy not in result.stdout + result.stderr
+    assert result.stdout == f"stdout [REDACTED:{name}]\n"
+    assert f"error: [REDACTED:{name}] is not a command" in result.stderr
+    assert name not in os.environ
+
+    missing = subprocess.run(
+        [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets),
+         "OTHER_TOKEN", "--", "true"],
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode == 78 and "OTHER_TOKEN" in missing.stderr
+
+
+def test_with_secret_child_gets_a_built_env_and_only_owner_controlled_secret_files(
+    tmp_path: Path,
+) -> None:
+    """Review of #15: an ambient credential never reaches the child; a linked or shared secret
+    file is refused."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "NPM_TOKEN").write_text("dummy-npm\n", encoding="utf-8")
+    ambient = "dummy-ambient-openai-key-42"
+    env = {**os.environ, "OPENAI_API_KEY": ambient, "KEEP_ME": "kept", "DROP_ME": "x"}
+    child = ("import os, sys; print(sorted(k for k in os.environ if k not in "
+             "('PATH','HOME','LANG','TMPDIR','TERM','LC_CTYPE','__CF_USER_TEXT_ENCODING'))); "
+             "print(os.environ.get('OPENAI_API_KEY', 'absent'))")
+
+    def call(*specs: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(HARNESS / "with_secret.py"), "--secrets", str(secrets), *specs,
+             "--", sys.executable, "-c", child],
+            capture_output=True, text=True, env=env,
+        )
+
+    result = call("--pass", "KEEP_ME", "NPM_TOKEN")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "['KEEP_ME', 'NPM_TOKEN']\nabsent\n"
+    refused = call("--pass", "OPENAI_API_KEY", "NPM_TOKEN")
+    assert refused.returncode == 64 and ambient not in refused.stdout + refused.stderr
+
+    (secrets / "LINKED").symlink_to(secrets / "NPM_TOKEN")
+    assert call("LINKED").returncode == 78
+    (secrets / "NPM_TOKEN").chmod(0o666)
+    assert call("NPM_TOKEN").returncode == 78
+
+
+def test_relay_file_refuses_binary_content(tmp_path: Path) -> None:
+    """$(cat) drops NULs, so the guards would judge different bytes than the seat receives."""
+    plain = Path(tempfile.mkdtemp(prefix="relay-"))
+    payload = plain / "payload.bin"
+    payload.write_bytes(b"type\0test\0assert balance == 31337\n" + b"x" * 70000)
+    r = run(
+        ["bash", str(HARNESS / "relay_file.sh"), "testrun", "coder", "--file", str(payload)],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
+    )
+    relayed = list((plain / "run" / "relay").glob("*.txt"))
+    shutil.rmtree(plain)
+    assert r.returncode == 80 and "binary content" in r.stderr, (r.returncode, r.stderr)
+    assert not relayed
+
+
+@pytest.mark.parametrize("via", ["relay_file", "inject"])
+def test_relay_pointer_shell_quotes_the_file_path(tmp_path: Path, via: str) -> None:
+    """A run root with a space must still yield a verification command that reads the file."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    calls = tmp_path / "tmux-calls.log"
+    (stub_dir / "tmux").write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
+        '[ "$1" = display ] && { echo claude; exit 0; }\n'
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(calls))}\n'
+        "exit 0\n"
+    )
+    os.chmod(stub_dir / "tmux", 0o755)
+    message = "Line one.\nLine two.\n"
+    args = {
+        "relay_file": ["bash", str(HARNESS / "relay_file.sh"), "testrun", "validator"],
+        "inject": ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", message],
+    }[via]
+    r = subprocess.run(
+        args, input=message, cwd=tmp_path, capture_output=True, text=True, check=False,
+        env={
+            "HARNESS_RUN_ROOT": str(tmp_path / "My Run"),
+            "INJECT_FROM": "founder",
+            "INJECT_SUBMIT_DELAY": "0",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    sent = next(ln for ln in calls.read_text().splitlines() if " -l -- " in ln)
+    command = sent.split(" -- run: ", 1)[1].split(" ; act on", 1)[0]
+    verify = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True)
+    digest = hashlib.sha256(message.encode()).hexdigest()
+    assert verify.returncode == 0 and verify.stdout.split()[0] == digest, verify.stderr
+
+
 def test_inject_verdict_filter_blocks_test_detail(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "FAIL test_foo raised AssertionError on line 12", results=True)
     assert r.returncode == 79 and "bare pass/fail only" in r.stderr
     ok = inject(tmp_path, "coder", "FAIL", results=True)
     assert ok.returncode == 0, ok.stderr
+
+
+def test_inject_verdict_filter_accepts_only_a_single_verdict_line(tmp_path: Path) -> None:
+    smuggled = inject(
+        tmp_path, "coder", "PASS\nassert balance == 31337\n" + "x" * 70000, results=True
+    )
+    assert smuggled.returncode == 79 and "bare pass/fail only" in smuggled.stderr
+    assert inject(tmp_path, "coder", "PASS", results=True).returncode == 0
+    assert inject(tmp_path, "coder", "FAIL R12 (3/5)\n", results=True).returncode == 0
 
 
 def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
@@ -1370,6 +1751,24 @@ def test_projection_refuses_config_outside_immutable_source(tmp_path: Path) -> N
     assert not (tmp_path / "ws").exists()
 
 
+@pytest.mark.parametrize("role", ["coder", "tester"])
+def test_projection_refuses_both_lanes_when_the_config_is_missing(
+    tmp_path: Path, role: str
+) -> None:
+    src = projection_fixture(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    result = run(
+        ["bash", str(HARNESS / "projection.sh"), role, str(src), sha, str(tmp_path / "ws")],
+        tmp_path,
+    )
+
+    assert result.returncode == 66 and "no projection config" in result.stderr
+    assert not (tmp_path / "ws").exists()
+
+
 # --------------------------------------------------------------------------
 # Genericity — the target is data; the factory checkout is never the implicit root
 # --------------------------------------------------------------------------
@@ -1422,7 +1821,10 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = has-session ]; then exit 1; fi\n'
+        'if [ "$1" = list-windows ]; then '
+        'printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
         'if [ "$1" = display-message ] && [ "$2" = -p ]; then printf "1\\n"; exit 0; fi\n'
+        'if [ "$1" = "${TMUX_STUB_FAIL-}" ]; then exit 1; fi\n'
         f'printf \'%s\\n\' "$*" >> "{log!s}"\n'
         "exit 0\n",
         encoding="utf-8",
@@ -1434,7 +1836,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
         'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
         'if [ "${1:-}" = "--help" ]; then '
         'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
-        '--disable-slash-commands --add-dir"; '
+        '--disable-slash-commands --add-dir" >&2; '
         "exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -1527,6 +1929,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert "--disable-slash-commands" not in tmux_calls
     assert "agy -p" not in tmux_calls and "agy --print" not in tmux_calls
     assert "-n validator" in tmux_calls and "-n ctl" in tmux_calls
+    # The Validator reads this checkout's prompts, whatever an installed /validate names (#48).
+    validator_line = next(ln for ln in tmux_calls.splitlines() if "-n validator " in ln)
+    checkout = HARNESS.parent.resolve()
+    assert f" FACTORY_HOME={checkout} " in validator_line
+    assert f"{checkout}/prompts/validate.md" in validator_line
     orchestrator_bin = root / "orchestrator" / "bin"
     assert {path.name for path in orchestrator_bin.iterdir()} == {
         "agreement_contract.py",
@@ -1551,6 +1958,83 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
+
+
+def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
+    """Execute the command a seat window was given, as tmux would, with stale server env."""
+    line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
+    command = line.split(" -c ", 1)[1].split(" ", 1)[1]
+    dump = tmp_path / f"{window}.env"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, **stale, "SEAT_DUMP": str(dump)},
+        capture_output=True,
+        text=True,
+    )
+    return result, dump
+
+
+SEAT_AUTHORITY = (
+    "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CHECKPOINT_DIGEST",
+    "FACTORY_RESUME_CONFIG_MANIFEST", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
+    "FACTORY_TESSERA_BIN", "FACTORY_CLI", "FACTORY_PYTHON", "FACTORY_HOME",
+)
+
+
+@pytest.mark.parametrize("orchestrator", ["agy", "codex"])
+def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_context(
+    tmp_path: Path, orchestrator: str
+) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    env.update({
+        "FACTORY_ORCHESTRATOR_AGENT": orchestrator,
+        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
+        "FACTORY_KEYS_DIR": str(keys),
+        "FACTORY_HOME": str(HARNESS.parent),
+    })
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Every seat, ctl and both Orchestrator variants included, names the resume anchors.
+    for window in ("validator", "ctl", "orchestrator"):
+        line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
+        for name in SEAT_AUTHORITY:
+            assert f" {name}=" in line, (window, name)
+    # The Orchestrator signs nothing, so it never learns where the role keys live.
+    orchestrator_line = next(
+        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
+    )
+    assert "FACTORY_KEYS_DIR" not in orchestrator_line
+    # The Orchestrator starts under `env -i`, so the stubs dump to a fixed path, not $SEAT_DUMP.
+    dump = tmp_path / "seat.env"
+    for agent in ("codex", "agy"):
+        stub = tmp_path / "factory-bin" / agent
+        stub.write_text(stub.read_text().replace('exit 0\n', f'env > "{dump}"\nexit 0\n'))
+    stale = {
+        "PATH": env["PATH"],
+        "FACTORY_CONTROL_ROOT": "/stale/run-b",
+        "FACTORY_WORKDIR": "/stale",
+    }
+    for window in ("validator", "orchestrator"):
+        dump.unlink(missing_ok=True)
+        seated, _ = run_seat_command(tmux_log, window, tmp_path, stale)
+        assert seated.returncode == 0, seated.stderr
+        seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
+        assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
+        assert seat["HARNESS_RUN_ROOT"] == str(root)
+        for name in SEAT_AUTHORITY:
+            assert seat.get(name), (window, name)
+        # No predicted "approval" ghost text in a seat's input line (dogfood #53).
+        assert seat["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] == "false", window
+        if window == "orchestrator":
+            assert "FACTORY_KEYS_DIR" not in seat
 
 
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
@@ -1847,6 +2331,72 @@ def test_factory_task_mismatch_has_zero_tmux_or_harness_mutation(tmp_path: Path)
     assert "tmux-session" not in ResourceLedger(root, "r1").latest()
 
 
+IGNITION_FILES = ("harness.json", "TASK.md")
+
+
+def test_failed_ignition_leaves_nothing_that_refuses_a_retry(tmp_path: Path) -> None:
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _ = factory_ignition_env(tmp_path, root)
+    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+
+    failed = run(ignite, operator, {**env, "TMUX_STUB_FAIL": "new-session"})
+    assert failed.returncode == 70, failed.stdout + failed.stderr
+    assert not [name for name in IGNITION_FILES if (root / name).exists()]
+    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
+
+    retried = run(ignite, operator, env)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert all((root / name).exists() for name in IGNITION_FILES)
+    resources = ResourceLedger(root, "r1").latest()
+    assert resources["tmux-session-2"]["status"] == "active"
+
+
+def test_an_ignition_failing_before_the_session_is_abandoned_not_left_planned(
+    tmp_path: Path,
+) -> None:
+    """Codex review: a set -e failure between planning the session and creating it left
+    tmux-session=planned, and every retry was refused as an open earlier ignition."""
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, _ = factory_ignition_env(tmp_path, root)
+    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+    blocker = root / "orchestrator"
+    blocker.write_text("not a directory\n", encoding="utf-8")
+
+    failed = run(ignite, operator, env)
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
+    assert not [name for name in IGNITION_FILES if (root / name).exists()]
+
+    blocker.unlink()
+    retried = run(ignite, operator, env)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert ResourceLedger(root, "r1").latest()["tmux-session-2"]["status"] == "active"
+
+
+def test_ignition_refuses_while_another_ignition_of_the_run_holds_the_lock(
+    tmp_path: Path,
+) -> None:
+    import fcntl
+
+    task = "Build the exact authorized behavior."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    # The concurrent winner's file: a losing attempt must neither refuse past it nor remove it.
+    (root / "TASK.md").write_text("winner\n", encoding="utf-8")
+    with open(root / "ignition.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = run(
+            ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+            operator,
+            env,
+        )
+    assert result.returncode == 75, result.stdout + result.stderr
+    assert (root / "TASK.md").read_text() == "winner\n"
+    assert not (root / "harness.json").exists() and not tmux_log.exists()
+
+
 # --------------------------------------------------------------------------
 # Proof-of-done — declared environment, receipted evidence
 # --------------------------------------------------------------------------
@@ -1963,6 +2513,30 @@ def test_promise_detection_catches_announced_intent() -> None:
     assert any("open the PR" in p for p in promises)
 
 
+def test_a_parallel_lane_instances_pane_delta_reaches_the_activity_journal(tmp_path: Path) -> None:
+    """Codex review: the dispatcher discovers tester-b, but the activity journal accepted only
+    coder/tester, so its first pane delta failed and left the Orchestrator blind to it (#39)."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "audit_interval_min": 45,
+                    "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.record_pane_delta("tester-b", "tester-b is writing the parity case.")  # type: ignore[attr-defined]
+    activity = read_chain(root / "orchestrator" / "activity.jsonl")
+    assert [(row["kind"], row["source"]) for row in activity] == [("pane_delta", "tester-b")]
+
+    from harness.orchestrator_channel import OrchestratorChannelError, append_activity
+
+    for bad in ("tester_b", "auditor", "tester-", "coder-B"):
+        with pytest.raises(OrchestratorChannelError):
+            append_activity(root, kind="pane_delta", source=bad, detail="x")
+
+
 def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filtering(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1995,6 +2569,7 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
         return subprocess.CompletedProcess(command, 0, "delivered", "")
 
     monkeypatch.setattr(mod.subprocess, "run", delivered)
+    monkeypatch.setenv("FACTORY_PYTHON", "/opt/factory venv/bin/python")
     dispatcher.deliver_pending_activity()  # type: ignore[attr-defined]
 
     activity = read_chain(root / "orchestrator" / "activity.jsonl")
@@ -2005,6 +2580,9 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     assert "cursors=1..2" in command[3]
     assert "Consume EVERY unassessed record" in command[3]
     assert "orchestrator/ROLE.md" in command[3]
+    # Submitted with the factory's interpreter, never whichever python3 the seat finds (#82).
+    assert "submit: '/opt/factory venv/bin/python' orchestrator/bin/" in command[3]
+    assert "python3" not in command[3]
     assert str(root) not in command[3]
     assert len(command[3]) < 1_000
     assert command[3].startswith("# ") and "\n" not in command[3]
@@ -2086,15 +2664,145 @@ def test_dispatcher_registers_a_lane_question_without_guessing_its_answer(
     assert dialogue[0]["question_id"] in trigger["detail"]
 
 
+def test_dispatcher_wakes_the_validator_once_per_lane_question_and_done(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#39: a lane waiting on the Validator puts one line in the Validator's pane."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    dispatcher.live_windows = {"validator", "tester"}  # type: ignore[attr-defined]
+    sent: list[list[str]] = []
+
+    def inject(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.append(command)
+        assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", inject)
+    asked = "Working.\nFACTORY_QUESTION: Are unknown stay types rejected or preserved?"
+    dispatcher.check_window("tester", asked)  # type: ignore[attr-defined]
+    dispatcher.check_window("tester", asked)  # type: ignore[attr-defined]
+    done = asked + "\n• FACTORY_STATUS: DONE through 6219c8d"
+    dispatcher.check_window("tester", done)  # type: ignore[attr-defined]
+    dispatcher.check_window("tester", done + "\nidle")  # type: ignore[attr-defined]
+
+    assert [command[1:3] for command in sent] == [["r1", "validator"]] * 2
+    question_id = read_chain(root / "dialogue" / "journal.jsonl")[0]["question_id"]
+    assert sent[0][3].startswith(f"FACTORY_QUESTION_PENDING {question_id} from tester")
+    assert sent[1][3].startswith("FACTORY_LANE_DONE tester")
+    assert all("\n" not in command[3] for command in sent)
+
+
+def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review of #39: a question or DONE from tester-b is captured, bound to tester-b, and wakes
+    the Validator, like one from tester."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    (root / "tmux-lanes").mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    (root / "tmux-lanes" / "tester-b-launch.jsonl").write_text(
+        json.dumps({"status": "active", "role": "tester", "lane": "tester-b"}) + "\n",
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    sent: list[list[str]] = []
+
+    def fake(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["tmux", "list-windows"]:
+            windows = "validator\ntester-b\nwatch-tester-b\n"
+            return subprocess.CompletedProcess(command, 0, windows, "")
+        sent.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    monkeypatch.setattr(mod, "sh", lambda command, **_: fake(command).stdout)
+    assert dispatcher.windows() == ["validator", "tester-b"]  # type: ignore[attr-defined]
+    dispatcher.live_windows = {"validator", "tester-b"}  # type: ignore[attr-defined]
+    asked = "FACTORY_QUESTION: Is an empty basket a 400?"
+    dispatcher.check_window("tester-b", asked)  # type: ignore[attr-defined]
+    dispatcher.check_window("tester-b", asked + "\nFACTORY_STATUS: DONE")  # type: ignore[attr-defined]
+
+    question = read_chain(root / "dialogue" / "journal.jsonl")[0]
+    assert question["lane"] == "tester-b"
+    assert [command[3].split(" ")[0] for command in sent] == [
+        "FACTORY_QUESTION_PENDING", "FACTORY_LANE_DONE"]
+    assert "from tester-b" in sent[0][3] and sent[1][3].startswith("FACTORY_LANE_DONE tester-b")
+
+
+def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(
+    tmp_path: Path,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}), encoding="utf-8")
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open"}),
+        encoding="utf-8",
+    )
+    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "validator", "Verdict BLOCKED on the missing oracle; awaiting the Validator."
+    )
+
+    assert not (root / "orchestrator" / "activity.jsonl").exists()
+
+    dispatcher.check_window(  # type: ignore[attr-defined]
+        "coder", "blocked on the schema; awaiting the Validator"
+    )
+
+    activity = (root / "orchestrator" / "activity.jsonl").read_text(encoding="utf-8")
+    assert "blocking_question" in activity
+
+
 def test_lane_roles_require_typed_question_before_guessing() -> None:
     """Both author seats must know the executable channel, not only their supervisors."""
 
     for role_prompt in ("engineer.md", "test.md"):
         text = (HARNESS.parent / "prompts" / role_prompt).read_text(encoding="utf-8")
-        assert "FACTORY_QUESTION: <one concrete question>" in text
+        assert "the marker word FACTORY_QUESTION, a colon, then one concrete question" in text
         assert "Ask one question at a time and stop" in text
         assert "same Codex thread" in text
         assert "guess" in text.lower()
+
+
+def test_lane_bound_text_carries_no_parseable_question_marker() -> None:
+    """dogfood #37: a lane echoing its own prompt must not register the template as a question.
+
+    The marker is described, never written as a parseable line, in every text a lane receives:
+    both role prompts, the tmux lane protocol, and the generated status probe.
+    """
+
+    dispatcher = load_dispatcher()
+    from harness.codex_lane_session import _FACTORY_QUESTION
+
+    for path in (
+        HARNESS.parent / "prompts" / "engineer.md",
+        HARNESS.parent / "prompts" / "test.md",
+        HARNESS / "tmux_lane.sh",
+        HARNESS / "tmux_lane_message.sh",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "FACTORY_QUESTION" in text, path
+        assert _FACTORY_QUESTION.search(text) is None, path
+        for line in text.splitlines():
+            assert dispatcher.FACTORY_QUESTION_RE.search(line) is None, (path, line)  # type: ignore[attr-defined]
 
 
 def test_dispatcher_does_not_reopen_answered_question_from_unchanged_scrollback(
@@ -2230,7 +2938,7 @@ def test_postmortem_refuses_to_invent(tmp_path: Path) -> None:
             }
         )
     )
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path)
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path)
     assert r.returncode == 0, r.stderr
     text = (root / "postmortem.md").read_text()
     assert "UNDERIVED (endgame never ran)" in text
@@ -2555,6 +3263,13 @@ def test_projection_receipt_does_not_gate_the_coder(tmp_path: Path) -> None:
     art.write_text("Coder reads src/pkg/config.py.\n")
     r = pr(tmp_path, "coder", art)
     assert r.returncode == 0 and "not include-listed" in r.stdout
+
+
+def test_projection_receipt_refuses_a_missing_config_for_the_coder_too(tmp_path: Path) -> None:
+    art = tmp_path / "s.md"
+    art.write_text("Coder reads src/pkg/config.py.\n")
+    r = pr(tmp_path, "coder", art)
+    assert r.returncode == 66 and "projection is undeclared" in r.stderr
 
 
 def test_projection_receipt_refuses_unsafe_include_path(tmp_path: Path) -> None:
@@ -4154,6 +4869,22 @@ def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
     assert "orchestrator_not_resident" in blocking
 
 
+def test_dispatcher_snapshot_minutes_creates_missing_minutes_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "capture", lambda _window: "validator said something\n")
+
+    d.snapshot_minutes()  # type: ignore[attr-defined]
+
+    (log,) = (root / "minutes").glob("validator-*.log")
+    assert "validator said something" in log.read_text()
+
+
 def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4254,6 +4985,214 @@ def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
     assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
     kinds = [json.loads(line)["kind"] for line in (root / "events.jsonl").read_text().splitlines()]
     assert kinds.count("orchestrator_unresponsive") == 1
+
+
+def paging_dispatcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[object, object, Path, Path]:
+    """A resident-run dispatcher whose question channel appends each page to pages.txt."""
+    mod = load_dispatcher()
+    root = tmp_path / ".harness" / "runs" / "r1"
+    root.mkdir(parents=True)
+    pages = tmp_path / "pages.txt"
+    channel = tmp_path / "channel.sh"
+    channel.write_text(f'#!/bin/sh\ncat >> "{pages}"; echo >> "{pages}"\n', encoding="utf-8")
+    channel.chmod(0o755)
+    (root / "run.json").write_text(json.dumps({"target_state": {}}))
+    (root / "harness.json").write_text(json.dumps({
+        "orchestrator_mode": "resident-monitoring", "audit_interval_min": 15,
+        "question_channel": str(channel),
+    }))
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    d.attention_persist_s = 0  # type: ignore[attr-defined]
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    return mod, d, root, pages
+
+
+def test_the_dispatcher_pages_through_the_public_question_channel_send() -> None:
+    """Review of #54: the dispatcher and the engagement router share one channel sender, and
+    the dispatcher reaches it through engagement_route's public name, never a private one."""
+    mod = load_dispatcher()
+    route_module = sys.modules["engagement_route"]
+    assert mod.send_to_question_channel is route_module.send_to_question_channel  # type: ignore[attr-defined]
+    source = (HARNESS / "dispatcher.py").read_text(encoding="utf-8")
+    assert not re.search(r"from engagement_route import[^\n]*\b_\w+", source)
+
+
+def page_events(root: Path) -> list[dict[str, object]]:
+    rows = [json.loads(ln) for ln in (root / "events.jsonl").read_text().splitlines()]
+    return [row for row in rows if row["kind"] == "operator_page"]
+
+
+def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#49: run c's Validator sat ~3h on a provider limit dialog and nothing alerted anyone."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    limited = "working...\n You've hit your usage limit · resets 3pm (America/New_York)\n"
+
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    assert pages.read_text().count("usage_limit") == 1
+    assert "[factory r1] usage_limit: validator" in pages.read_text()
+    (page,) = page_events(root)
+    assert page["wake"] is True and "paged via question_channel" in str(page["detail"])
+
+    d.check_seat_attention("validator", "resumed; all clear\n")  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
+    assert len(page_events(root)) == 2  # a new occurrence pages again
+
+
+def test_a_dialog_above_a_fresh_panes_empty_rows_still_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live drill: capture-pane keeps a fresh pane's empty rows, which pushed a dialog near the
+    top out of the 15 lines the attention check reads (dogfood #49, #79)."""
+    _, d, _, pages = paging_dispatcher(tmp_path, monkeypatch)
+    pane = " You've hit your usage limit · resets 3pm (America/New_York)\n" + "\n" * 40
+    d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
+    d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
+    assert pages.read_text().count("usage_limit") == 1
+
+
+def test_a_marker_above_a_fresh_panes_empty_rows_is_within_every_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex review: question and DONE detection read the last 25 raw lines, so a marker near
+    the top of a fresh 40-row pane was never seen. capture() drops the trailing empty rows."""
+    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    pane = "working\nFACTORY_STATUS: DONE - all cases written\n" + "\n" * 40
+    monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: pane)
+    captured = d.capture("tester")  # type: ignore[attr-defined]
+    assert "FACTORY_STATUS: DONE" in captured.splitlines()[-25:][-1]
+    assert captured.splitlines()[0] == "working"
+
+
+def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live drill: an 80-column wrap split a trigger word, so capture joins wrapped rows (-J)."""
+    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    seen: list[list[str]] = []
+    monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: seen.append(argv) or "")
+    d.capture("validator")  # type: ignore[attr-defined]
+    (argv,) = seen
+    assert argv[:2] == ["tmux", "capture-pane"] and "J" in argv[2]
+
+
+@pytest.mark.parametrize(
+    ("window", "dialog"),
+    [
+        ("validator", "Bash command\n  TaskStop monitor-1\nDo you want to proceed?\n❯ 1. Yes\n"
+                      "  2. No, and tell Claude what to do differently (esc)\n"),
+        ("orchestrator", "Would you like to run the following command?\n  $ rm -f x\n"
+                         "› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n"),
+    ],
+)
+def test_a_seat_waiting_on_a_host_permission_prompt_pages_the_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str
+) -> None:
+    """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    d.check_seat_attention(window, "earlier output\n" + dialog)  # type: ignore[attr-defined]
+    (page,) = page_events(root)
+    assert str(page["detail"]).startswith(f"permission_prompt: {window} has shown this")
+    assert page["wake"] is (window != "orchestrator")
+    assert "permission_prompt" in pages.read_text()
+
+
+def test_an_orchestrator_that_stops_assessing_pages_the_human_not_only_the_validator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#81: run e's Orchestrator sat 10h on an unanswered request_user_input; the block it
+    earned went to the Validator's queue and reached no human."""
+    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: 2900)
+    monkeypatch.setattr(mod, "assessed_through", lambda _root: 2873)
+    d.last_assessed = 2873  # type: ignore[attr-defined]
+    d.assessed_progress_at -= 31 * 60  # type: ignore[attr-defined]
+
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+    d.check_orchestrator_liveness()  # type: ignore[attr-defined]
+
+    assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
+    assert pages.read_text().count("[factory r1] orchestrator_unresponsive") == 1
+    (page,) = page_events(root)
+    assert page["wake"] is False
+
+
+def _recording_injections(
+    mod: object, monkeypatch: pytest.MonkeyPatch, cursor: dict[str, int]
+) -> list[str]:
+    """Activity notices the dispatcher injects into the Orchestrator; the question channel and
+    everything else still runs for real."""
+
+    monkeypatch.setattr(mod, "activity_highwater", lambda _root: cursor["value"])
+    monkeypatch.setattr(mod, "screen_pending", lambda _root: None)
+    delivered: list[str] = []
+    real_run = subprocess.run
+
+    def run_or_record(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        if command[0].endswith("inject.sh"):
+            delivered.append(command[3])
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return real_run(command, **kw)  # type: ignore[call-overload,no-any-return]
+
+    monkeypatch.setattr(mod.subprocess, "run", run_or_record)  # type: ignore[attr-defined]
+    return delivered
+
+
+@pytest.mark.parametrize(
+    "dead",
+    [
+        "> FACTORY_ACTIVITY cursors=4..5\nIndividual quota reached. Resets in 154h.\n",
+        "> FACTORY_ACTIVITY cursors=4..5\n You\u2019ve hit your usage limit \u00b7 resets 3pm\n",
+        "> FACTORY_ACTIVITY cursors=4..5\n Usage limit reached \u00b7 continuing at 3pm\n",
+        "Do you want to proceed?\n\u276f 1. Yes\n  2. No, and tell Claude what to do differently\n",
+    ],
+)
+def test_an_attention_match_never_throttles_the_orchestrators_activity_feed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead: str
+) -> None:
+    """#50 / review of #54: the resident Orchestrator is always running and sees every pass.
+    A seat dialog in its pane pages the human, and activity still reaches it on every pass that
+    has new activity, exactly as it does with no dialog showing."""
+    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    cursor = {"value": 5}
+    delivered = _recording_injections(mod, monkeypatch, cursor)
+    d.check_seat_attention("orchestrator", dead)  # type: ignore[attr-defined]
+    (page,) = page_events(root)
+    assert page["wake"] is False and "[factory r1]" in pages.read_text()
+
+    for value in (5, 6, 7):
+        cursor["value"] = value
+        d.deliver_pending_activity()  # type: ignore[attr-defined]
+
+    assert [notice.split()[2].rstrip(".") for notice in delivered] == [
+        "cursors=1..5", "cursors=6..6", "cursors=7..7"]
+
+
+@pytest.mark.parametrize(
+    "ordinary",
+    [
+        "pytest: 3 passed; the client retries until the rate limit reached resets\n",
+        "upstream API: rate limit reached, backing off; resets in 5 m\n",
+        "the quota exceeded test now asserts a 429 with a usage limit header\n",
+        "Cache entry resets in 2h; nothing to do\n",
+        "Usage limit reached errors are retried by the client with backoff\n",
+    ],
+)
+def test_ordinary_text_about_rate_limits_does_not_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ordinary: str
+) -> None:
+    """Review of #54: only a provider's own usage-limit dialog pages; a seat's ordinary output
+    that mentions limits is work, not a dialog waiting on a human."""
+    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    for window in ("orchestrator", "validator"):
+        d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
+        d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
+    assert not (root / "events.jsonl").exists() or page_events(root) == []
+    assert not pages.exists() or "usage_limit" not in pages.read_text()
 
 
 def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
@@ -5596,6 +6535,7 @@ def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         "  display) echo agy ;;\n"
+        "  list-windows) printf 'orchestrator\\nvalidator\\nctl\\ncoder\\ntester\\n' ;;\n"
         '  send-keys) if [ "$4" = "-l" ]; then\n'
         f'      {sys.executable} {assessor} {root} "$6" 2>>{stub / "assessor.log"}; fi ;;\n'
         "esac\n"
@@ -6737,7 +7677,7 @@ def test_postmortem_reports_silent_clears(tmp_path: Path) -> None:
     )
     (tmp_path / ".harness" / "receipts").mkdir(parents=True)
     (tmp_path / ".harness" / "receipts" / "chain.jsonl").write_text("")
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
     assert r.returncode == 0, r.stderr
     pm = (root / "postmortem.md").read_text()
     assert "SILENT CLEARS" in pm, pm
@@ -6762,7 +7702,7 @@ def test_postmortem_clean_when_all_consumed(tmp_path: Path) -> None:
     )
     (tmp_path / ".harness" / "receipts").mkdir(parents=True)
     (tmp_path / ".harness" / "receipts" / "chain.jsonl").write_text("")
-    r = run(["python3", str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
+    r = run([sys.executable, str(HARNESS / "postmortem.py"), "--root", str(root)], tmp_path, {})
     assert r.returncode == 0, r.stderr
     pm = (root / "postmortem.md").read_text()
     assert "no silent clears" in pm, pm
@@ -8462,6 +9402,36 @@ def test_inject_oracle_leak_refusal_identical_without_override(tmp_path: Path) -
     assert not (tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl").exists()
 
 
+@pytest.mark.parametrize(
+    ("message", "refused"),
+    [
+        # Test detail stays blocked, including the assertion text the old regex let through.
+        ("assert balance == 31337", True),
+        ("assertEquals(total, 3) fails", True),
+        ("expect(res.status).toBe(200) is red", True),
+        ("the case in src/booking_test.ts", True),
+        ("tests/booking.ts covers it", True),
+        ('Deno.test("refunds") is red', True),
+        # Ratified text and the Coder's own paths are deliverable (dogfood #66, #80).
+        ("Basis: the Oracle Contract, section 3, as ratified.", False),
+        ("Read .factory/spec/oracle-inputs/site-route.yaml before routing.", False),
+        ("A8: `deno task test` runs the full suite; keep the task name.", False),
+        ("Requirement R3.1 is violated: the export sends the body twice.", False),
+    ],
+)
+def test_inject_oracle_leak_guard_matches_test_detail_not_words(
+    tmp_path: Path, message: str, refused: bool
+) -> None:
+    plain = Path(tempfile.mkdtemp(prefix="leak-"))
+    r = run(
+        ["bash", str(HARNESS / "inject.sh"), "testrun", "coder", message],
+        tmp_path,
+        {"INJECT_VALIDATE_ONLY": "1", "HARNESS_RUN_ROOT": str(plain / "run")},
+    )
+    shutil.rmtree(plain)
+    assert (r.returncode == 80) is refused, (message, r.returncode, r.stderr)
+
+
 def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None:
     """A target pane running a plain shell is never an injection target (exit 77):
     INJECT_ALLOW_SHELL is not read, and nothing is delivered (no send-keys)."""
@@ -8472,6 +9442,7 @@ def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None
     tmux_stub.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$@" >> {shlex.quote(str(calls))}\n'
+        '[ "$1" = list-windows ] && { echo validator; exit 0; }\n'
         'for a in "$@"; do\n'
         '  case "$a" in display*) echo bash; exit 0;; esac\n'
         "done\n"
@@ -9380,6 +10351,64 @@ def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_plant
         ).stdout
 
 
+def test_endgame_renders_no_verdict_without_a_discovery_receipt_for_the_candidate(
+    tmp_path: Path,
+) -> None:
+    """Gate LFX end to end: once a Tester slot froze, endgame refuses (exit 70, one refusal
+    event) until discovery_check.py has written a receipt for exactly the judged commit, the
+    ratified Strategy and that freeze; with the receipt it proceeds to the verdict. ``make`` is
+    stubbed red so the run stops at the verdict without running the synthetic target's gates."""
+    from harness import discovery_check
+
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    sha = str(target_state["resolved_commit"])
+    source = Path(str(target_state["source_root"]))
+    files = tmp_path / "tester-freeze" / "files"
+    (files / "tests").mkdir(parents=True)
+    (files / "tests" / "cap_test.py").write_text("def test_cap_R1(): pass\n", encoding="utf-8")
+    (root / "tmux-lanes").mkdir(exist_ok=True)
+    (root / "tmux-lanes" / "tester-launch.jsonl").write_text(
+        json.dumps({"schema_version": discovery_check.FREEZE_SCHEMA,
+                    "export": {"files_directory": str(files)}}) + "\n", encoding="utf-8")
+    strategy = root / "artifacts" / "testing-strategy.md"
+    strategy.parent.mkdir(exist_ok=True)
+    strategy.write_text("planned-case: R1\ntest-modules: tests/*_test.py\n", encoding="utf-8")
+    (strategy.parent / "testing-strategy.md.digest").write_text("ratified\n", encoding="utf-8")
+    stub_dir = tmp_path / "redmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    endgame = ["bash", str(HARNESS / "endgame.sh"), "r1", sha,
+               "--candidate-resource", "target-source"]
+
+    refused = run(endgame, tmp_path, env)
+
+    assert refused.returncode == 70, (refused.returncode, refused.stdout, refused.stderr)
+    assert "endgame verdict" not in refused.stdout
+    assert "no discovery receipt for tester" in refused.stderr
+    rows = _refusal_events(root)
+    assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
+    assert "no discovery receipt binds the candidate" in str(rows[0]["detail"])
+
+    inventory = json.dumps({"schema_version": discovery_check.INVENTORY_SCHEMA,
+                            "tests": [{"module": "tests/cap_test.py", "name": "test_cap[R1]"}]})
+    (tmp_path / "inventory.json").write_text(inventory, encoding="utf-8")
+    assert discovery_check.main([
+        "--root", str(root), "--tree", str(source), "--candidate-sha", sha,
+        "--pattern", "tests/*_test.py", "--strategy", str(strategy),
+        "--", "cat", str(tmp_path / "inventory.json")]) == 0
+
+    judged = run(endgame, tmp_path, env)
+
+    assert "endgame verdict: RED" in judged.stdout, (judged.returncode, judged.stdout,
+                                                      judged.stderr)
+    assert len(_refusal_events(root)) == 1
+
+
 def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
     """An `ollama` that logs every call; `show` succeeds only when the model is available."""
 
@@ -9636,6 +10665,39 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
     assert f" codex {carried_args} --ask-for-approval" in respawn
     assert " -m " not in respawn
+
+
+def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_path: Path) -> None:
+    """tmux resolves a missing window target to the session's active pane, which reads as a
+    live lane; delivery to a lane with no window must resume its thread, never queue."""
+
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task="Resume a lane whose window closed.", harness_status="open"
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    env["TMUX_STUB_WINDOWS"] = "main"
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    launch_dir = root / "tmux-lanes"
+    launch_dir.mkdir()
+    (launch_dir / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
+    )
+    row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
+           "role": "coder", "agent": "codex", "model": "", "repository": str(lane)}
+    (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    probe = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+         "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert "via Codex resume" in probe.stdout
+    calls = tmux_log.read_text()
+    assert "new-window -t r1 -n coder" in calls and "exec --json resume" in calls
 
 
 @pytest.mark.skipif(

@@ -30,16 +30,16 @@ while [ $# -gt 0 ]; do case "$1" in --conf) CONF="$2"; shift 2 ;; *) shift ;; es
   exit 64
 }
 
+[ -f "$CONF" ] && [ ! -L "$CONF" ] || {
+  echo "projection-receipt: no regular non-symlink $CONF — projection is undeclared" >&2
+  exit 66
+}
 # The coder receives the full tree minus explicit exclusions, so an unreachable
 # path is not a meaningful category there. Only the include-listed roles are gated.
 if [ "$ROLE" != "tester" ]; then
   echo "projection-receipt: role '$ROLE' is not include-listed; nothing to verify"
   exit 0
 fi
-[ -f "$CONF" ] && [ ! -L "$CONF" ] || {
-  echo "projection-receipt: no regular non-symlink $CONF — projection is undeclared" >&2
-  exit 66
-}
 
 INCLUDE_TEXT=$(python3 - "$CONF" "${FACTORY_SOURCE_ROOT:-}" <<'PY'
 import pathlib, sys

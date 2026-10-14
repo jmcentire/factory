@@ -149,3 +149,19 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
             authority="ratified-spec",
             question_id=str(question["question_id"]),
         )
+
+
+def test_a_parallel_instance_question_binds_only_that_instance(tmp_path: Path) -> None:
+    """Review of #39: tester-b's question is answered for tester-b, never for tester."""
+    root = run_root(tmp_path)
+    question, _ = record_question(root, "tester-b", "Is an empty basket a 400?")
+    assert pending_questions(root, "tester") == []
+    with pytest.raises(LaneDialogueError):
+        plan_message(root, sender="validator", lane="tester", message_kind="spec-answer",
+                     text="Yes.", basis="R-9", authority="ratified-spec",
+                     question_id=str(question["question_id"]))
+    plan_message(root, sender="validator", lane="tester-b", message_kind="spec-answer",
+                 text="Yes.", basis="R-9", authority="ratified-spec",
+                 question_id=str(question["question_id"]))
+    with pytest.raises(LaneDialogueError):
+        record_question(root, "validator", "not a lane")

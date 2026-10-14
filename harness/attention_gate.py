@@ -146,6 +146,13 @@ def validate_blocking_event(event: object) -> dict[str, object]:
             raise AttentionGateError("orchestrator response has unknown or missing fields")
         _bounded_text(event["response"], field="response")
         _bounded_text(event["wake"], field="wake")
+    elif cls == "blocking_reopened":
+        # A consumed event cannot come back by itself; a reopen is a new event naming it (#72).
+        if set(event) != {"ts", "class", "reopens", "evidence"} or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(event["reopens"])
+        ):
+            raise AttentionGateError("blocking reopen has unknown or missing fields")
+        _bounded_text(event["evidence"], field="evidence")
     elif cls == "orchestrator_dead":
         expected = {
             "ts",
@@ -540,6 +547,104 @@ def _file_has_bytes(path: pathlib.Path) -> bool:
         os.close(descriptor)
 
 
+def _lane_receipts(
+    path: pathlib.Path, lane: str
+) -> tuple[dict[str, dict[str, object]], set[str]]:
+    """Every receipted write and consumption for one lane, by event digest."""
+
+    written: dict[str, dict[str, object]] = {}
+    consumed: set[str] = set()
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except FileNotFoundError:
+        return written, consumed
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise AttentionGateError(f"attention event sink is not regular: {path}")
+        fcntl.flock(stream, fcntl.LOCK_SH)
+        for raw in stream:
+            if len(raw) > _MAX_LEDGER_LINE_BYTES:
+                continue
+            try:
+                row = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(row, dict) or row.get("lane") != lane:
+                continue
+            if row.get("kind") == "blocking_written":
+                try:
+                    event = validate_blocking_event(row.get("event"))
+                except AttentionGateError:
+                    continue
+                written[_event_digest(event)] = event
+            elif row.get("kind") == "blocking_consumed":
+                consumed.add(str(row.get("event_digest", "")))
+    return written, consumed
+
+
+def _lane_pending(root: pathlib.Path, lane: str) -> bool:
+    """Is any blocking event for this lane unconsumed? Caller holds the attention lock.
+
+    The gate is a cursor over the receipts, not an emptiness test of the file (#75): every event
+    with a write receipt needs its own consumption receipt. A receipted event whose bytes left
+    the file without one (a hand-cleared file, an event swept by a racing clear) is put back,
+    from its write receipt, so it is dispositioned rather than silently lost.
+    """
+
+    path = root / "lanes" / f"{lane}.blocking"
+    written, consumed = _lane_receipts(root / "events.jsonl", lane)
+    unconsumed = {digest: event for digest, event in written.items() if digest not in consumed}
+    if unconsumed:
+        present = {
+            _event_digest(validate_blocking_event(row))
+            for row in _read_jsonl(path, maximum_bytes=_MAX_BLOCKING_BYTES)
+        }
+        for digest, event in unconsumed.items():
+            if digest not in present:
+                _append_jsonl(path, event)
+        return True
+    return _file_has_bytes(path)
+
+
+def reopen_blocking_event(
+    root: pathlib.Path, lane: str, event_digest: str, reason: str
+) -> dict[str, object]:
+    """Reopen one consumed blocking event as a new pending event that cites it (#72)."""
+
+    root = pathlib.Path(root)
+    if lane not in _LANES:
+        raise AttentionGateError("invalid blocking lane")
+    lock_fd = acquire_attention_lock(root)
+    try:
+        written, consumed = _lane_receipts(root / "events.jsonl", lane)
+    finally:
+        os.close(lock_fd)
+    if event_digest not in written or event_digest not in consumed:
+        raise AttentionGateError("only a receipted, consumed blocking event can be reopened")
+    event: dict[str, object] = {
+        "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "class": "blocking_reopened",
+        "reopens": event_digest,
+        "evidence": reason,
+    }
+    append_blocking_event(root, lane, event)
+    return event
+
+
+def _pending_paths(root: pathlib.Path, lanes: tuple[str, ...]) -> tuple[pathlib.Path, ...]:
+    return tuple(
+        root / "lanes" / f"{lane}.blocking"
+        for lane in dict.fromkeys(lanes)
+        if _lane_pending(root, lane)
+    )
+
+
 def check_lane_admission(root: pathlib.Path, lane: str) -> None:
     """Linearize a legacy lane start against the same producer/consumer lock."""
 
@@ -548,10 +653,8 @@ def check_lane_admission(root: pathlib.Path, lane: str) -> None:
         raise AttentionGateError("invalid lane admission identity")
     lock_fd = acquire_attention_lock(root)
     try:
-        candidates = [root / "lanes" / f"{lane}.blocking"]
-        if lane in _DISPATCH_ROLES:
-            candidates.insert(0, root / "lanes" / "validator.blocking")
-        pending = tuple(path for path in dict.fromkeys(candidates) if _file_has_bytes(path))
+        lanes = ("validator", lane) if lane in _DISPATCH_ROLES else (lane,)
+        pending = _pending_paths(root, lanes)
         if pending:
             raise BlockingEventPending(pending)
     finally:
@@ -592,14 +695,7 @@ def acquire_dispatch_lock(root: pathlib.Path, role: str) -> int:
         raise AttentionGateError("invalid dispatch admission identity")
     lock_fd = acquire_attention_lock(root)
     try:
-        pending = tuple(
-            path
-            for path in (
-                root / "lanes" / "validator.blocking",
-                root / "lanes" / f"{role}.blocking",
-            )
-            if _file_has_bytes(path)
-        )
+        pending = _pending_paths(root, ("validator", role))
         if pending:
             raise BlockingEventPending(pending)
         return _open_dispatch_lock(root, role)
@@ -632,14 +728,7 @@ def verify_dispatch_lock(root: pathlib.Path, role: str, descriptor: int) -> None
         raise AttentionGateError("inherited dispatch lock is not owned by this invocation") from exc
     attention_fd = acquire_attention_lock(pathlib.Path(root))
     try:
-        pending = tuple(
-            path
-            for path in (
-                pathlib.Path(root) / "lanes" / "validator.blocking",
-                pathlib.Path(root) / "lanes" / f"{role}.blocking",
-            )
-            if _file_has_bytes(path)
-        )
+        pending = _pending_paths(pathlib.Path(root), ("validator", role))
         if pending:
             raise BlockingEventPending(pending)
     finally:
@@ -660,6 +749,11 @@ def main() -> int:
     check = subparsers.add_parser("check")
     check.add_argument("--root", type=pathlib.Path, required=True)
     check.add_argument("--lane", choices=sorted(_LANES), required=True)
+    reopen = subparsers.add_parser("reopen")
+    reopen.add_argument("--root", type=pathlib.Path, required=True)
+    reopen.add_argument("--lane", choices=sorted(_LANES), required=True)
+    reopen.add_argument("--event-digest", required=True)
+    reopen.add_argument("--reason", required=True)
     refusal = subparsers.add_parser("refusal-event")
     refusal.add_argument("--root", type=pathlib.Path, required=True)
     refusal.add_argument("--kind", required=True)
@@ -668,7 +762,16 @@ def main() -> int:
     refusal.add_argument("--exit-code", type=int, default=70)
     arguments = parser.parse_args()
     try:
-        if arguments.command == "refusal-event":
+        if arguments.command == "reopen":
+            print(
+                json.dumps(
+                    reopen_blocking_event(
+                        arguments.root, arguments.lane, arguments.event_digest, arguments.reason
+                    ),
+                    sort_keys=True,
+                )
+            )
+        elif arguments.command == "refusal-event":
             append_refusal_event(
                 arguments.root,
                 kind=arguments.kind,

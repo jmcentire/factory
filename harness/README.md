@@ -38,7 +38,7 @@
 | Founder workflow step | Mechanism |
 |---|---|
 | 0. Authorize exact execution | Runtime Stage R authorizes bounded target resolution; `resolve-target` creates the exact run-owned target-state; distinct Stage E authorizes the verbatim request against that state. No tmux or lane exists yet. |
-| 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens persistent `orchestrator`, `validator`, and deterministic `ctl` windows. |
+| 1. Fire up the factory | `harness/factory.sh <run> "<verbatim-task>" --runs <runs-root>` — refuses pre-intake or mismatched task bytes, re-verifies target-state, grounds, records tmux intent, and opens persistent `orchestrator`, `validator`, and deterministic `ctl` windows. After ignition, attach (`tmux attach -t <run>`) and accept the folder-trust prompt in each seat window or the run will sit idle. |
 | 2–5. Human ↔ Validator settle spec, architecture, test plan | The `validator` window runs `/validate` (Phase A0 research first). Before decomposition it challenges explicit, implicit, and inherited requirements that disproportionately drive complexity. Retained planning/lane/review sources get two separately recorded, source-bound extraction passes. Any checkpoint-selected standards, loops, and recipes are dispositioned obligation-by-obligation and independently reviewed. `phase_compiler.py` materializes semantic union → guidance → agreement into only the proper authorities before they are settled and content-addressed. Phase A refuses an open, stale, missing, or misrouted member. |
 | 6. Advocate/Sim passes, refinement | Mechanically gated: the dispatch gate checks the receipt that the pass ran; what Sim said stays advisory (two-layer split). |
 | 7. Fire up orchestrator, engineer, tester | The strategic Orchestrator is already resident. `harness/dispatch_lane.sh <run> coder\|tester --dispatch <file>` remains the qualified path: closed dispatch, asymmetric projection, structural qualification, hard ceilings, and signed typed broker operations. `harness/tmux_lane.sh` is the explicitly unqualified dogfood/coordination alternate and the only author-lane launcher: it launches a real agent (`codex` exec by default, `codex-interactive`, `codex-ollama` or `cursor-agent`) in a standalone clone with agent-owned `.git`, then crosses only a no-Git content-addressed regular-file export. Before launch it preflights the agent's sign-in non-interactively, refuses a metered agent without a spend cap, budget reservation and passing qualification probe (`tmux_lane.sh <run> <role> qualify`), and puts the testing standard into every Tester prompt; it starts a `watch-<lane>` watcher (`lane_watchdog.py`) or does not launch. A run-local launcher is a policy violation. |
@@ -192,7 +192,12 @@ names a consuming project:
 - `--runs <path>` names the control plane. Runtime authority, retained target-state, resource
   records, harness coordination, and evidence live under `<runs>/<run>/`; source bytes do not.
 - Target-owned `.factory/` configuration (`projection.conf`, `target.conf`, reconcilers) is read
-  from the immutable target workdir after target-state verification.
+  from the immutable target workdir after target-state verification. `projection.conf` holds one
+  directive per line (`coder-exclude: <path>`, `tester-include: <path>`, and
+  `freeze-exclude: <top-level name>` for a git-ignored dependency tree such as `node_modules`
+  that the lane freeze skips unread instead of refusing its symlinks); `#` starts a comment only
+  at the start of a line, and a `freeze-exclude` value holding whitespace or `#` is refused.
+  The legacy `.harness/projection.conf` is not read.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
   360-minute default are refused), plus externally supplied
@@ -223,7 +228,13 @@ names a consuming project:
   receipts config.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
-- `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only.
+- `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only. `ground.sh` scans only this run's seat transcripts (the workdir's Claude project dir and any `<dir>-*` nested ones); a sibling workdir such as `/repo/x-other` for `/repo/x` shares that prefix and is scanned too, because Claude's directory encoding cannot tell them apart. Set `TRANSCRIPTS=<paths>` to pin the scan.
+- `spawn.py start|signal|sweep --root <run> [--name <label>]` — the run's spawn ledger: `start` runs a command in its own process group and records pid, pgid and start time in `<run>/spawns.jsonl` (output in `<run>/spawns/<label>.log`); `signal` addresses only that recorded group and refuses a pid whose start time changed (reused); `sweep` signals every recorded group still alive. Nothing is chosen by pattern.
+- `with_secret.py [--secrets <dir>] [--pass NAME ...] ENV_NAME[=FILE] ... -- <command>` — gives one child a credential from `$HARNESS_SECRETS/FILE` (an owner-controlled regular file, never followed through a link) in a built environment (PATH, HOME, LANG, TMPDIR, TERM, each `--pass` name, the secrets; no ambient credential) only (any name execve accepts, such as `npm_config_//host/:_authToken`), never in argv or a shell, and redacts each value's exact bytes from its stdout and stderr. Errors name secrets, never values. Exit status is the child's.
+- `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting. The file is not read-isolated from tmux lanes (docs/HARNESS.md).
+- `agent_exec.py --timeout-minutes <n> [--stdin-file <prompt>] [--log <file>] -- <argv>` — runs a non-interactive agent CLI (`codex exec`, `claude -p`) with stdin closed and a wall-clock cap (exit 124 when stopped), so a review call never waits on a terminal.
+- `discovery_check.py --root <run> --tree <integrated> --candidate-sha <commit> --pattern <glob> --strategy <md> -- <inventory command>` — before Phase C, refuses an integrated tree that is not exactly that commit, or whose runner collects no runnable (not skipped or ignored) test from a module in the Tester's latest freeze, or none named for a Critical planned case; a green check writes the receipt that `endgame.sh` requires (`discovery_check.py require`) before any verdict.
+- `test_inventory.py pytest|vitest|deno [-- <runner command>]` — runs the runner's collect-only mode in the current tree and prints the `factory-test-inventory/1` document `discovery_check.py` validates, with skipped or ignored tests listed apart from runnable ones; every runner-specific parse lives here.
 - `sched_audit.sh` — control 6: unregistered OS timer = hostile. (`SCHED_AUDIT_INPUT`
   is a test seam for the forced-negative drill.)
 - `ground.sh` — control 7 + 9: resume from disk; reconcilers under `.factory/reconcile.d/`.

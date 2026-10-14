@@ -26,6 +26,7 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
                   [--instance <name>] [--round <tag>] [--metered]
                   [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
+                  [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
   all             [--runs <runs dir>]'
@@ -51,6 +52,7 @@ READ_ALLOWANCE_MINUTES=15
 STALL_WINDOW_MINUTES=20
 FIRST_COMMIT_MINUTES=""
 MIN_COMMITS=1
+LANE_ENV_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -68,6 +70,8 @@ while [ "$#" -gt 0 ]; do
     --stall-window-minutes) STALL_WINDOW_MINUTES="$2"; shift 2 ;;
     --first-commit-minutes) FIRST_COMMIT_MINUTES="$2"; shift 2 ;;
     --min-commits) MIN_COMMITS="$2"; shift 2 ;;
+    --cache-env) LANE_ENV_ARGS+=(--cache-env "$2"); shift 2 ;;
+    --runtime-dir) LANE_ENV_ARGS+=(--runtime-dir "$2"); shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -339,6 +343,23 @@ PY
   fi
   [ -n "$MODEL_SOURCE" ] || MODEL_SOURCE=agent
 
+  # The dependency cache and runtime the lane's own commands use (dogfood #31/#61): set in the
+  # Codex shell policy, because inherit="core" drops anything else, and recorded in the launch so
+  # every resume sets the same.
+  ENV_OUT="$(mktemp "${TMPDIR:-/tmp}/factory-lane-env.XXXXXX")"
+  ENV_ERROR=$("$FACTORY_PYTHON" "$D/lane_agent.py" environment --path "$SAFE_PATH" \
+    ${LANE_ENV_ARGS[@]+"${LANE_ENV_ARGS[@]}"} 2>&1 >"$ENV_OUT") || {
+    rm -f "$ENV_OUT"
+    refuse 64 "lane environment refused: ${ENV_ERROR#lane-agent: }" \
+      "pass --cache-env NAME=<read-only store dir> and --runtime-dir <read-only bin dir>"
+  }
+  { IFS= read -r -d '' SHELL_POLICY && IFS= read -r -d '' LANE_PATH &&
+    IFS= read -r -d '' LANE_ENV_RECORD && IFS= read -r -d '' LANE_ENV_NOTICE &&
+    IFS= read -r -d '' LANE_ENV_ASSIGN; } < "$ENV_OUT" || {
+    rm -f "$ENV_OUT"; exit 70;
+  }
+  rm -f "$ENV_OUT"
+
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on
   # a login screen; it is refused here with the exact command that fixes it.
@@ -413,6 +434,12 @@ PY
       --factory-home "$REPO_ROOT" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
       refuse 70 "TESTING STANDARD: $STANDARD_RECEIPT" \
         "restore docs/standards/TESTING.md and prompts/test.md in $REPO_ROOT, and make the run's artifacts/testing-strategy.md a regular file"
+    # Every oracle input the Strategy cites is in the Tester's tree as its pinned bytes
+    # (dogfood #36, #65): found mid-build it costs a round, reformatted it silently governs.
+    ORACLE_INPUTS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" oracle-inputs \
+      --strategy "$ROOT/artifacts/testing-strategy.md" --repo "$REPOSITORY" 2>&1) || \
+      refuse 70 "ORACLE INPUTS: ${ORACLE_INPUTS#strategy-plan: }" \
+        "project each cited input into the Tester's tree from its pinned upstream commit (git show <pin>:<path>), byte for byte, and keep formatters off it"
   fi
 
   TASK_COPY="$TMUX_ROOT/$SLOT-task.txt"
@@ -454,11 +481,12 @@ PY
   ) || exit $?
 
   PROMPT="$TMUX_ROOT/$SLOT-prompt.txt"
-  PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" <<'PY'
+  PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+    "$LANE_ENV_NOTICE" <<'PY'
 import hashlib, os, pathlib, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-role, slot, standard = sys.argv[3:]
+role, slot, standard, environment = sys.argv[3:]
 task = source.read_bytes()
 protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - You are a real author agent, not a prompt printer. Work the task and use tools.
@@ -469,7 +497,8 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
   and commit only the work assigned to this lane.
 - Do not read or infer the other author lane's work.
 - If a missing or contradictory specification would make you guess semantics, stop
-  the turn with one line: FACTORY_QUESTION: <one concrete question>. Do not guess.
+  the turn with one final line: the word FACTORY_QUESTION, a colon, then one concrete
+  question. Do not guess.
 - A FACTORY_ANSWER is specification input bound to that question, never information
   about the other lane. Resume from your own work after receiving it.
 - On FACTORY_STATUS_PROBE, answer with a leading FACTORY_STATUS: WORKING, BLOCKED,
@@ -478,8 +507,10 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
   __LANE_DONE__ {slot} commits=<the number of commits you made>
 - A turn ending is not the run ending. The Validator alone judges and Gate L alone
   closes the run.
-""".encode("utf-8")
-raw = protocol
+"""
+if environment:
+    protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
+raw = protocol.encode("utf-8")
 if standard:
     raw += b"\n" + pathlib.Path(standard).read_bytes()
 raw += b"\nVERBATIM LANE TASK\n" + task
@@ -536,7 +567,6 @@ if (seed.get("digest") or "") != sys.argv[1]:
     'import json,sys; print(json.load(sys.stdin)["mcp_override"])')
 
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
-  SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
@@ -546,7 +576,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
-    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$MODEL_SOURCE" \
+    "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
@@ -555,9 +585,9 @@ import datetime, json, sys
     lane, slot, instance, round_tag, action, metered, prompt_via, tty,
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
-    standard, lane_log, lane_exits, qualifications, model_source,
-) = sys.argv[1:36]
-model_config = sys.argv[36:]
+    standard, lane_log, lane_exits, qualifications, lane_env, model_source,
+) = sys.argv[1:37]
+model_config = sys.argv[37:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -602,6 +632,7 @@ print(json.dumps({
     "tmux_target": f"{run}:{lane}",
     "watch_target": f"{run}:watch-{lane}",
     "kindex": json.loads(kindex),
+    "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
     "prompt_digest": prompt_digest,
@@ -632,8 +663,10 @@ PY
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
-    "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+    "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
+  ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   # Every lane process runs under lane_agent.py run: it tees output to the lane log and records
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
@@ -642,7 +675,7 @@ PY
     codex|codex-ollama)
       printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$ROLE" "$LOCAL_ARGS" "$REPOSITORY" \
+        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
       printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s -C %q -c %q -c %q -c %q -c %q' \
@@ -663,7 +696,6 @@ row["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="sec
 print(json.dumps(row, sort_keys=True, separators=(",", ":")))
 PY
   }
-  tmux set-option -t "$RUN" remain-on-exit on >/dev/null
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
     tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
@@ -675,6 +707,8 @@ PY
     append_event "$(mark launch-failed)"
     refuse 70 "failed to launch $RUN:$LANE"
   fi
+  # A window option: a finished lane's window stays, dead, so its last output can be read.
+  tmux set-option -w -t "$RUN:$LANE" remain-on-exit on >/dev/null 2>&1 || true
   if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
     tmux kill-window -t "$RUN:$LANE" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
@@ -708,22 +742,44 @@ print(active[0]["repository"])
 PY
 ) || exit $?
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
-  --lane "$ROLE" >/dev/null || {
-  echo "tmux-lane: unanswered $ROLE question must be answered before freeze" >&2
+  --lane "$LANE" >/dev/null || {
+  echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
   exit 70
 }
-PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || true)
+# By exact window name: a missing window resolves to the session's active pane (#69).
+if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$LANE" >/dev/null; then
+  PANE_DEAD=$(tmux display-message -p -t "$RUN:$LANE" '#{pane_dead}' 2>/dev/null || true)
+else
+  PANE_DEAD=1
+fi
 [ "$PANE_DEAD" = "1" ] || {
   echo "tmux-lane: $RUN:$LANE is not quiescent; stop the agent before freezing" >&2
   exit 70
 }
 
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
-  --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT") || exit $?
-FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" <<'PY'
+  --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
+  --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
+# A Tester freezes only when its modules mention every Critical planned case of the Strategy
+# (dogfood #73, traceability only); refused, the lane stays open to write them. That the cases are
+# runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,
+# whose receipt endgame.sh requires before any verdict.
+PLAN_GAPS=null
+if [ "$ROLE" = tester ]; then
+  TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \
+    'import json,sys; print(json.load(sys.stdin)["files_directory"])')
+  PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" traceability \
+    --strategy "$ROOT/artifacts/testing-strategy.md" --files "$TESTER_FILES" 2>"$TMUX_ROOT/$SLOT-plan.err") || \
+    refuse 70 "PLAN: $(sed 's/^strategy-plan: //' "$TMUX_ROOT/$SLOT-plan.err")" \
+      "send the gaps back to the Tester and freeze again when they are written"
+  PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
+    'import json,sys; print(json.dumps(json.load(sys.stdin)["traceability_gaps"]))')
+fi
+FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" <<'PY'
 import datetime, json, sys
-run, role, export, slot = sys.argv[1:]
+run, role, export, slot, traceability_gaps = sys.argv[1:]
 print(json.dumps({
+    "traceability_gaps": json.loads(traceability_gaps),
     "schema_version": "factory-tmux-lane-freeze/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "run_id": run,

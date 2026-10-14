@@ -23,6 +23,15 @@ from factory_runtime.snapshot import (
 )
 
 
+def _rename_sealed(source: Path, destination: Path) -> None:
+    """Swap a sealed directory as its owner would: macOS refuses to rename a 0o555 directory."""
+
+    mode = stat.S_IMODE(source.stat().st_mode)
+    source.chmod(mode | stat.S_IWUSR)
+    os.rename(source, destination)
+    destination.chmod(mode)
+
+
 def test_snapshot_staging_root_remains_renameable_until_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -292,7 +301,7 @@ def test_blob_publication_refuses_canonical_path_replacement_during_sealing(
         real_fchmod(descriptor, mode)
         if mode == 0o555 and stat.S_ISDIR(os.fstat(descriptor).st_mode) and not replaced:
             replaced = True
-            os.rename(destination, displaced)
+            _rename_sealed(destination, displaced)
             destination.mkdir(mode=0o700)
 
     monkeypatch.setattr(snapshot_module.os, "fchmod", replace_after_sealing)
@@ -330,7 +339,7 @@ def test_blob_publication_refuses_exact_path_replacement_after_durability_sync(
             durable_through=durable_through,
             internal_directories=internal_directories,
         )
-        os.rename(directory, displaced)
+        _rename_sealed(directory, displaced)
         shutil.copytree(displaced, directory)
 
     monkeypatch.setattr(snapshot_module, "_sync_snapshot_publication", replace_after_sync)

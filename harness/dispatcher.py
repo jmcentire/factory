@@ -32,6 +32,7 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
+from engagement_route import send_to_question_channel  # noqa: E402
 from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
@@ -59,8 +60,33 @@ TRIGGER_PATTERNS: dict[str, str] = {
     "spec_defect": r"spec-defect|specification defect",
     "contamination": r"contaminat",
 }
+# A seat that needs a human and is otherwise silent: a dialog sitting in its pane. Matched on the
+# pane's last lines only, and paged only once it has stayed there (attention_persist_s).
+SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
+    # A host permission dialog: Claude Code's (a PreToolUse "ask" hook raises the same one) or
+    # Codex's approval prompt. Nobody watches a seat's pane; run e's Validator sat 14 min on one.
+    "permission_prompt": re.compile(
+        r"Do you want to (?:proceed|make this edit|create|allow)\b|"
+        r"tell (?:Claude|Codex) what to do differently|"
+        r"Would you like to (?:run the following command|make the following edits)|"
+        r"Allow command\?"
+    ),
+    # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
+    # Anchored on each provider's own dialog line, never on words ordinary output also uses
+    # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
+    # limit" (run c: "You've hit your usage limit · resets 3pm (America/New_York)"); Claude Code
+    # 2.1.299 also prints "You've hit your limit" and "Usage limit reached · <what happens next>"
+    # (both read from that release's binary, 2026-10-14; the middle dot is U+00B7); agy prints
+    # "Individual quota reached. Resets in 154h." (run e).
+    "usage_limit": re.compile(
+        r"\bYou(?:'|\u2019)ve hit your (?:usage )?limit\b|"
+        r"\bUsage limit reached \u00b7|"
+        r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
+    ),
+}
 HEALTHY_IDLE = "idle-awaiting-handoff"
 FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
+LANE_DONE_RE = re.compile(r"\bFACTORY_STATUS:\s*DONE\b")
 
 # Validator failure modes the Orchestrator audits (founder, 2026-08-09): announces
 # work and doesn't do it; forgets the role separation and codes itself; misattributes
@@ -206,6 +232,10 @@ class Dispatcher:
         self.tails: dict[str, str] = {}
         self.quiet_since: dict[str, float] = {}
         self.notified: set[str] = set()
+        self.live_windows: set[str] = set()
+        self.attention_persist_s = 120.0
+        self.attention_since: dict[tuple[str, str], float] = {}
+        self.paged: set[tuple[str, str]] = set()
         self.harness = pathlib.Path(__file__).resolve().parent
         self.halted = False
         # validator-failure-mode state
@@ -344,12 +374,35 @@ class Dispatcher:
             self._banner(f"INCIDENT — {detail[:160]}")
 
     # -- observe --------------------------------------------------------------
+    def lane_windows(self) -> set[str]:
+        """Lane windows: coder, tester, and every lane a launch journal names (tester-b), so a
+        parallel instance's question or DONE is seen like any other lane's (dogfood #39)."""
+        lanes = {"coder", "tester"}
+        for journal in (self.root / "tmux-lanes").glob("*-launch.jsonl"):
+            try:
+                lines = journal.read_text(encoding="utf-8").splitlines()
+                rows = [json.loads(line) for line in lines if line.strip()]
+            except (OSError, ValueError):
+                continue
+            lanes |= {row["lane"] for row in rows
+                      if isinstance(row, dict) and isinstance(row.get("lane"), str)
+                      and re.fullmatch(r"(?:coder|tester)-[a-z0-9][a-z0-9-]{0,15}", row["lane"])}
+        return lanes
+
     def windows(self) -> list[str]:
         out = sh(["tmux", "list-windows", "-t", self.run, "-F", "#{window_name}"])
-        return [w for w in out.splitlines() if w in ("validator", "coder", "tester")]
+        seats = {"validator", "orchestrator", *self.lane_windows()}
+        return [w for w in out.splitlines() if w in seats]
 
     def capture(self, window: str) -> str:
-        return sh(["tmux", "capture-pane", "-pt", f"{self.run}:{window}", "-S", "-60"])
+        # -J joins rows the pane wrapped, so a trigger split at the column edge still matches.
+        text = sh(["tmux", "capture-pane", "-pJt", f"{self.run}:{window}", "-S", "-60"])
+        # A fresh pane's unused rows follow its text; dropped here, every "last N lines" reader
+        # (question, DONE, status, attention) sees the text instead of blanks.
+        lines = text.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines) + "\n" if lines else ""
 
     def lane_state(self, window: str) -> str:
         f = self.root / "lanes" / f"{window}.state"
@@ -388,7 +441,8 @@ class Dispatcher:
         fresh = capture_delta(previous, tail)
         self.tails[window] = tail
 
-        if window in {"coder", "tester"}:
+        lanes = self.lane_windows()
+        if window in lanes:
             for line in fresh.splitlines()[-25:]:
                 matched = FACTORY_QUESTION_RE.search(line)
                 if matched is None:
@@ -410,8 +464,23 @@ class Dispatcher:
                         f"{question['question_id']} from {window}: {question['text']}",
                         wake=True,
                     )
+                    self.notify_validator(
+                        f"FACTORY_QUESTION_PENDING {question['question_id']} from {window}: "
+                        "answer it through lane_dialogue"
+                    )
+            for line in fresh.splitlines()[-25:]:
+                key = f"{window}:done:{hashlib.sha256(line.encode()).hexdigest()[:12]}"
+                if LANE_DONE_RE.search(line) and key not in self.notified:
+                    self.notified.add(key)
+                    self.event("lane_done", f"{window}: {line.strip()[:200]}", wake=True)
+                    self.notify_validator(
+                        f"FACTORY_LANE_DONE {window}: the lane reported DONE; evaluate it"
+                    )
 
         for kind, pat in TRIGGER_PATTERNS.items():
+            # The Validator answers questions; its own "BLOCKED" status lines are not one (#46).
+            if kind == "blocking_question" and window == "validator":
+                continue
             for line in fresh.splitlines()[-25:]:
                 if re.search(pat, line, re.IGNORECASE):
                     key = f"{window}:{kind}:{hashlib.sha256(line.encode()).hexdigest()[:12]}"
@@ -420,7 +489,7 @@ class Dispatcher:
                         self.event(kind, f"{window}: {line.strip()}", wake=True)
 
         state = self.lane_state(window)
-        if window in {"coder", "tester"}:
+        if window in lanes:
             try:
                 waiting_on_validator = bool(pending_questions(self.root, window))
             except (LaneDialogueError, OSError) as exc:
@@ -473,6 +542,64 @@ class Dispatcher:
                 f"written; consume lanes/{window}.blocking before new work"
             )
         return changed
+
+    def check_seat_attention(self, window: str, tail: str) -> None:
+        """Page the human when a seat sits on a dialog only a human can clear.
+
+        A usage-limit dialog in run c's Validator stalled the whole run ~3h and nothing alerted
+        anyone. The pane's last lines are matched, and a match pages once it has persisted for
+        attention_persist_s, so a dialog answered at once never pages; it re-arms once cleared.
+        """
+        lines = tail.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()  # capture-pane keeps a fresh pane's empty rows below the text
+        lines = lines[-15:]
+        current = time.monotonic()
+        for kind, pattern in SEAT_ATTENTION_PATTERNS.items():
+            key = (window, kind)
+            hit = next((line.strip() for line in lines if pattern.search(line)), None)
+            if hit is None:
+                self.attention_since.pop(key, None)
+                self.paged.discard(key)
+                continue
+            first = self.attention_since.setdefault(key, current)
+            if current - first < self.attention_persist_s or key in self.paged:
+                continue
+            self.paged.add(key)
+            detail = f"{window} has shown this for {(current - first) / 60:.0f}m: {hit[:200]}"
+            self.page_operator(kind, detail, wake=window != "orchestrator")
+
+    def page_operator(self, kind: str, detail: str, *, wake: bool) -> None:
+        """Reach the human, not only the Orchestrator: the run's question channel and a banner."""
+        try:
+            outcome = send_to_question_channel(self.root, f"[factory {self.run}] {kind}: {detail}")
+        except OSError as exc:
+            outcome = {"sent": False, "reason": f"channel failed: {exc}"}
+        how = "paged via question_channel" if outcome["sent"] else str(outcome["reason"])
+        self.event("operator_page", f"{kind}: {detail} ({how})"[:500], wake=wake)
+        self._banner(f"ATTENTION — {kind}: {detail[:160]}")
+
+    def notify_validator(self, notice: str) -> None:
+        """Wake the Validator with one line when a lane waits on it (a question, a DONE).
+
+        Without this a lane question sat until the Validator's next check-in (Q-0043 ~6 min,
+        Q-0046 ~11 min, a Tester DONE ~20 min) while both lanes idled. Only a live Validator
+        window is woken; the Orchestrator gets the same signal either way.
+        """
+        if "validator" not in self.live_windows:
+            return
+        environment = dict(os.environ)
+        environment.update({"INJECT_FROM": "dispatcher", "HARNESS_RUN_ROOT": str(self.root)})
+        try:
+            sent = subprocess.run(
+                [str(self.harness / "inject.sh"), self.run, "validator", notice],
+                capture_output=True, text=True, timeout=15, env=environment,
+            )
+            failure = "" if sent.returncode == 0 else (sent.stderr or sent.stdout).strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            failure = str(exc)
+        if failure:
+            self.event("validator_notice_failed", f"{notice}: {failure}"[:300], wake=False)
 
     def record_pane_delta(self, window: str, tail: str) -> None:
         """Retain every changed pane snapshot; split only for transport ceilings.
@@ -552,7 +679,13 @@ class Dispatcher:
         )
         self.event("orchestrator_unresponsive", detail, wake=False)
         self._block("validator", "orchestrator_unresponsive", detail[:200])
-        self._banner(f"INCIDENT — {detail[:160]}")
+        # The block alone reached nobody in run e: the Orchestrator sat 10h on an unanswered
+        # request_user_input, while the Validator and every watcher looked only at lane state.
+        self.page_operator(
+            "orchestrator_unresponsive",
+            f"{detail}; check its pane for a question or prompt waiting on a human",
+            wake=False,
+        )
 
     def _record_orchestrator_transport_failure(self, detail: str) -> None:
         key = f"orchestrator-transport:{hashlib.sha256(detail.encode()).hexdigest()}"
@@ -577,13 +710,19 @@ class Dispatcher:
         if (cursor <= self.last_delivered_cursor
                 and screen_cursor == self.last_delivered_screen_cursor):
             return
+        # Never throttled by an attention match: the resident Orchestrator sees every pass's
+        # activity. A pane match is a claim, not a verdict (ordinary text can match), and a
+        # quota-dead seat is paged to the human by check_seat_attention instead.
         start = min(self.last_delivered_cursor + 1, cursor)
         report = f"orchestrator/assessment-{cursor}.json"
+        # The factory's own interpreter, by absolute path: a bare `python3` in the seat's shell
+        # can be one without the factory's dependencies (run e: Homebrew 3.14, no jsonschema).
+        python = shlex.quote(os.environ.get("FACTORY_PYTHON") or sys.executable)
         message = (
             f"# FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
             "in that range from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's "
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
-            f"assessment/3 to {report}, then submit: python3 "
+            f"assessment/3 to {report}, then submit: {python} "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
             "Review orchestrator/jev.jsonl when jev_screen is enabled; use assessment/4 "
             f"(screen cursor={screen_cursor}); consume its completed prefix. "
@@ -758,6 +897,7 @@ class Dispatcher:
             return
         day = datetime.date.today().isoformat()
         f = self.root / "minutes" / f"validator-{day}.log"
+        f.parent.mkdir(exist_ok=True)
         if not f.exists():
             f.write_text(
                 "[INFERRED] Non-authoritative pane capture. Minutes index the "
@@ -820,8 +960,13 @@ class Dispatcher:
                 self.event("dispatcher_stop", "harness.json unreadable — refusing to babysit")
                 return
             self.check_halt()
-            for w in self.windows():
+            windows = self.windows()
+            self.live_windows = set(windows)
+            for w in windows:
                 tail = self.capture(w)
+                self.check_seat_attention(w, tail)
+                if w == "orchestrator":
+                    continue  # watched for dialogs only; the Orchestrator does not journal itself
                 changed = self.check_window(w, tail)
                 if self.orchestrator_mode == "resident-monitoring" and changed:
                     try:

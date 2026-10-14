@@ -9,9 +9,11 @@
 # a control: the file only grows. This script is the consumption path.
 #
 # It reads the pending events, requires a structured consequence and its evidence,
-# receipts EACH into events.jsonl, then durably truncates the file to release the
-# dispatch gate. Reading is not a disposition; an advisory signal can only be
-# stopped, narrowed, escalated, refuted, or resolved with an evidence address.
+# receipts EACH into events.jsonl, then durably removes them from the file to release the
+# dispatch gate. The subject digest is either the whole file's (every pending event takes
+# this one disposition) or ONE event's canonical digest (only that event is dispositioned and
+# removed; the rest, including any that arrived meanwhile, stay pending) (#45).
+# Reading is not a disposition; an advisory signal can only be stopped, narrowed, escalated, refuted, or resolved with an evidence address.
 #
 #   usage: consume_block.sh <run> <lane> --disposition <kind>
 #          --reason <bounded text> --subject-digest sha256:<hex>
@@ -226,13 +228,23 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
     if len(blocking_raw) > MAX_BLOCKING_BYTES:
         raise SystemExit(f"blocking source exceeds {MAX_BLOCKING_BYTES} bytes")
     actual_subject_digest = "sha256:" + hashlib.sha256(blocking_raw).hexdigest()
-    if actual_subject_digest != subject_digest:
+
+    def line_digest(line):
+        try:
+            return "sha256:" + hashlib.sha256(canonical(json.loads(line)).encode("utf-8")).hexdigest()
+        except ValueError:
+            return None
+
+    if subject_digest != actual_subject_digest and subject_digest not in {
+        line_digest(line) for line in blocking_raw.decode("utf-8", "replace").splitlines()
+    }:
         raise SystemExit("blocking subject changed before disposition")
     try:
         blocking_text = blocking_raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SystemExit("blocking source is not UTF-8") from exc
     events = []
+    lines = []
     for number, line in enumerate(blocking_text.splitlines(), 1):
         if not line.strip():
             continue
@@ -244,6 +256,7 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
             raise SystemExit(f"blocking event {number} is not an object")
         try:
             events.append(validate_blocking_event(event))
+            lines.append(line)
         except AttentionGateError as exc:
             raise SystemExit(f"blocking event {number} is invalid: {exc}") from exc
     if not events:
@@ -254,6 +267,15 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
     ]
     if len(event_digests) != len(set(event_digests)):
         raise SystemExit("blocking source repeats an event identity")
+    if subject_digest == actual_subject_digest:
+        selected = set(event_digests)
+    elif subject_digest in event_digests:
+        selected = {subject_digest}
+    else:
+        raise SystemExit("blocking subject changed before disposition")
+    remaining = [
+        line for line, digest in zip(lines, event_digests, strict=True) if digest not in selected
+    ]
     evidence_raw = stable_regular(evidence_path, MAX_EVIDENCE_BYTES, "disposition evidence")
     actual_evidence_digest = "sha256:" + hashlib.sha256(evidence_raw).hexdigest()
     if actual_evidence_digest != evidence_digest:
@@ -331,6 +353,8 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
         timestamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
         receipts = []
         for event, event_digest in zip(events, event_digests, strict=True):
+            if event_digest not in selected:
+                continue
             stable = {
                 "kind": "blocking_consumed",
                 "lane": lane,
@@ -394,6 +418,7 @@ with os.fdopen(blocking_fd, "r+b") as blocking:
         raise SystemExit("injected crash after durable receipt and before gate clear")
     blocking.seek(0)
     blocking.truncate(0)
+    blocking.write("".join(line + "\n" for line in remaining).encode("utf-8"))
     blocking.flush()
     os.fsync(blocking.fileno())
 
@@ -407,7 +432,12 @@ for directory_path in dict.fromkeys((blocking_path.parent, events_path.parent)):
     finally:
         os.close(directory)
 os.close(attention_fd)
-print(len(events))
+print(f"{len(selected)} {len(remaining)}")
 PY
 )
-echo "dispositioned $n blocking event(s) for $LANE; dispatch gate released"
+read -r DONE LEFT <<<"$n"
+if [ "$LEFT" -eq 0 ]; then
+  echo "dispositioned $DONE blocking event(s) for $LANE; dispatch gate released"
+else
+  echo "dispositioned $DONE blocking event(s) for $LANE; $LEFT still pending, each needs its own disposition"
+fi

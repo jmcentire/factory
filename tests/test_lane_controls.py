@@ -716,3 +716,155 @@ def test_tester_refuses_unusable_strategy_without_waiting_for_input(
     )
     assert result.returncode == 70 and "testing strategy" in result.stderr
     assert not (tmp_path / "injected.md").exists()
+
+
+# -- 8. the dependency cache and runtime reach the lane's commands (dogfood #31/#61) ---------
+
+
+def _read_only_dir(path: Path) -> Path:
+    path.mkdir(parents=True)
+    path.chmod(0o555)
+    return path
+
+
+def _policy(call: str) -> str:
+    import shlex
+
+    [policy] = [word for word in shlex.split(call)
+                if word.startswith("shell_environment_policy=")]
+    return policy
+
+
+def test_a_lanes_commands_get_the_cache_and_runtime_on_launch_and_resume(tmp_path: Path) -> None:
+    """Codex runs lane commands under inherit="core", so a DENO_DIR in Codex's own env never
+    reaches `deno`: the variable must be in the shell policy, on launch and on every resume."""
+
+    lanes = Lanes(tmp_path / "run")
+    store = _read_only_dir(tmp_path / "dep-cache" / "deno-dir")
+    runtime = _read_only_dir(tmp_path / "deno-2.7.14" / "bin")
+    launched = lanes.lane("coder", "--cache-env", f"DENO_DIR={store}",
+                          "--runtime-dir", str(runtime))
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    [call] = lanes.windows("coder")
+    expected = ('shell_environment_policy={inherit="core",ignore_default_excludes=false,'
+                f'set={{DENO_DIR="{store}"}}}}')
+    assert _policy(call) == expected
+    assert f"PATH={runtime}{os.pathsep}" in call
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["lane_env"] == {"cache_env": {"DENO_DIR": str(store)},
+                               "runtime_dirs": [str(runtime)]}
+    prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text()
+    assert f"DENO_DIR={store} is set for your commands" in prompt
+
+    (lanes.root / "tmux-lanes" / "coder-thread-id").write_text(
+        "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8")
+    resumed = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
+         "--runs", str(lanes.root.parent)],
+        lanes.operator, lanes.env,
+    )
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    respawn = next(line for line in lanes.tmux_log.read_text().splitlines()
+                   if "respawn-pane" in line)
+    assert _policy(respawn) == expected
+    assert f"PATH={runtime}{os.pathsep}" in respawn
+
+
+def test_a_writable_or_reserved_lane_environment_is_refused(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    writable = tmp_path / "writable-cache"
+    writable.mkdir()
+    refused = lanes.lane("coder", "--cache-env", f"DENO_DIR={writable}")
+    assert refused.returncode == 64 and "writable" in refused.stderr
+    store = _read_only_dir(tmp_path / "store")
+    reserved = lanes.lane("coder", "--cache-env", f"HOME={store}")
+    assert reserved.returncode == 64 and "reserved" in reserved.stderr
+    assert lanes.windows("coder") == []
+
+
+
+@pytest.mark.parametrize("shape", ["linked-store", "linked-ancestor", "writable-file",
+                                   "writable-subdir", "inner-link"])
+def test_a_store_that_can_change_after_admission_is_refused(tmp_path: Path, shape: str) -> None:
+    """Review of #31/#61: the read-only check covers every path component and every entry."""
+
+    lanes = Lanes(tmp_path / "run")
+    real = tmp_path / "real" / "deno-dir"
+    (real / "deps").mkdir(parents=True)
+    (real / "deps" / "mod.ts").write_text("export {};\n")
+    store = real
+    if shape == "linked-store":
+        store = tmp_path / "store-link"
+        store.symlink_to(real)
+    elif shape == "linked-ancestor":
+        (tmp_path / "parent-link").symlink_to(tmp_path / "real")
+        store = tmp_path / "parent-link" / "deno-dir"
+    elif shape == "inner-link":
+        (real / "deps" / "outside").symlink_to(tmp_path)
+    for path in [real / "deps" / "mod.ts", real / "deps", real]:
+        path.chmod(0o444 if path.is_file() else 0o555)
+    if shape == "writable-file":
+        (real / "deps").chmod(0o755)
+        (real / "deps" / "mod.ts").chmod(0o644)
+        (real / "deps").chmod(0o555)
+    elif shape == "writable-subdir":
+        (real / "deps").chmod(0o755)
+    try:
+        refused = lanes.lane("coder", "--cache-env", f"DENO_DIR={store}")
+    finally:
+        for path in [real, real / "deps"]:
+            path.chmod(0o755)
+    assert refused.returncode == 64, refused.stdout + refused.stderr
+    assert ("symlink" if "link" in shape else "writable") in refused.stderr
+    assert lanes.windows("coder") == []
+
+# -- 9. the Tester lane against the agreed Strategy (dogfood #36, #65, #73) ----------------
+
+
+def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    upstream = b"route: /site\n"
+    strategy = lanes.root / "artifacts" / "testing-strategy.md"
+    strategy.write_text(strategy.read_text() + "oracle-input: tools/site-route.yaml sha256:"
+                        + hashlib.sha256(upstream).hexdigest() + "\n")
+    refused = lanes.lane("tester")
+    assert refused.returncode == 70 and "tools/site-route.yaml (absent)" in refused.stderr
+    assert lanes.windows("tester") == []
+    (lanes.clone("tester") / "tools").mkdir()
+    (lanes.clone("tester") / "tools" / "site-route.yaml").write_bytes(upstream)
+    launched = lanes.lane("tester")
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+
+def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path / "run")
+    strategy = lanes.root / "artifacts" / "testing-strategy.md"
+    strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n"
+                        "test-modules: *_test.ts\n")
+    assert lanes.lane("tester").returncode == 0
+    clone = lanes.clone("tester")
+    (clone / "cap_test.ts").write_text('Deno.test("request cap", () => {});\n')
+
+    def freeze() -> subprocess.CompletedProcess[str]:
+        return run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
+                    "--runs", str(lanes.root.parent)], lanes.operator, lanes.env)
+
+    refused = freeze()
+    assert refused.returncode == 70 and "R16.11-a" in refused.stderr
+    (clone / "cap_test.ts").write_text('Deno.test("R16.11-a: request cap", () => {});\n')
+    frozen = freeze()
+    assert frozen.returncode == 0, frozen.stdout + frozen.stderr
+    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+    assert row["traceability_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}
+
+
+def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -> None:
+    """Live drill: tmux 3.7 ignores the session-level remain-on-exit, so a finished lane's
+    window vanished (the "window gone" family behind dogfood #29 and #69)."""
+    lanes = Lanes(tmp_path)
+    launched = lanes.lane("coder")
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    calls = lanes.tmux_log.read_text().splitlines()
+    assert any("set-option -w -t r1:coder remain-on-exit on" in call for call in calls), calls
+    assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)

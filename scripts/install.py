@@ -77,9 +77,11 @@ def render_loader(layout: Layout, name: str, source: str) -> str:
     title = canonical.read_text(encoding="utf-8").splitlines()[0]
     body = (
         f"{title}\n\n"
-        f"Read `{canonical}` and follow it as this command's complete instructions, with\n"
-        f"`$FACTORY_HOME` = `{layout.root}`. That file is the canonical source; this file is a\n"
-        "thin loader so canonical edits propagate without fan-out.\n\n"
+        f"Read `$FACTORY_HOME/{source}` and follow it as this command's complete instructions.\n"
+        "When the `FACTORY_HOME` environment variable is set (a factory seat sets it to the\n"
+        "checkout that ignited its run), use that value; otherwise `$FACTORY_HOME` =\n"
+        f"`{layout.root}`, so this command reads `{canonical}`. That file is the canonical\n"
+        "source; this file is a thin loader so canonical edits propagate without fan-out.\n\n"
         "Written by `make install` in that checkout. Add machine-local bindings (auth, target\n"
         "labels) below; once this file is edited, reinstalling keeps it as it is.\n\n"
     )
@@ -260,11 +262,22 @@ def _kindex_check(path_env: str) -> Check:
     return Check("ok", "kindex", f"kindex-lite {match.group(0)} at {lite}")
 
 
+def _timeout_check(path_env: str) -> Check:
+    """mutate.sh and flake.sh refuse without GNU `timeout`, which macOS does not ship."""
+
+    found = shutil.which("timeout", path=path_env) or shutil.which("gtimeout", path=path_env)
+    if found is None:
+        return Check("warn", "timeout", "GNU timeout not found; mutate.sh and flake.sh refuse. "
+                     "Fix: brew install coreutils")
+    return Check("ok", "timeout", found)
+
+
 def doctor(layout: Layout, path_env: str) -> list[Check]:
     checks = [_python_check(layout), _tessera_check(layout, path_env)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
     checks.append(_kindex_check(path_env))
+    checks.append(_timeout_check(path_env))
     if shutil.which("claude", path=path_env) is None:
         checks.append(Check("warn", "claude", "Claude Code CLI not found; the /commands need it "
                             "(https://claude.com/claude-code)"))

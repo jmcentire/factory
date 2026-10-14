@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Deliver one typed status probe or specification answer to a resumable tmux Codex lane.
+# Deliver one typed status probe, or specification answer to a resumable tmux Codex lane,
+# or report whether the lane is idle (no live turn: a delivery now resumes it).
 # Raw Orchestrator prose remains forbidden: it can ask only the generated status question.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer> [options]}"
+RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer|idle> [options]}"
 SENDER="${2:?sender}"
 SLOT="${3:?slot}"
-KIND="${4:?status|answer}"
+KIND="${4:?status|answer|idle}"
 shift 4
 case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
 # A slot names one launched round of a lane exactly as tmux_lane.sh printed it: the role, an
@@ -18,7 +19,17 @@ case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid send
 }
 LANE="${BASH_REMATCH[1]}"
 WINDOW="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-case "$KIND" in status|answer) ;; *) echo "lane-message: kind must be status|answer" >&2; exit 64 ;; esac
+case "$KIND" in status|answer|idle) ;; *) echo "lane-message: kind must be status|answer|idle" >&2; exit 64 ;; esac
+
+# The lane's pane, found by exact window name first: tmux resolves a missing "$RUN:$WINDOW" to
+# the session's active pane, which reads as a live lane and queues to nobody (#29, #69).
+lane_pane_state() {
+  if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF "$WINDOW" >/dev/null; then
+    tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown
+  else
+    echo missing
+  fi
+}
 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 QUESTION_ID=""
@@ -35,6 +46,15 @@ while [ "$#" -gt 0 ]; do
     *) echo "lane-message: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
+if [ "$KIND" = "idle" ]; then
+  # The signal a supervisor waits on before delivering: idle means a delivery now resumes the lane.
+  case "$(lane_pane_state)" in
+    missing) echo "lane-message: $RUN:$SLOT idle (window gone)"; exit 0 ;;
+    1) echo "lane-message: $RUN:$SLOT idle (pane dead)"; exit 0 ;;
+    0) echo "lane-message: $RUN:$SLOT busy (a turn is running)"; exit 75 ;;
+    *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
+  esac
+fi
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
@@ -71,7 +91,8 @@ active = [
 if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
-          (active[0].get("kindex") or {}).get("mcp_override", ""))
+          (active[0].get("kindex") or {}).get("mcp_override", ""),
+          json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])))
 # The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -95,6 +116,9 @@ IFS= read -r -d '' MODEL <&3 || {
 IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
   echo "lane-message: retained Kindex scope is missing or malformed" >&2; exit 70;
 }
+IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
+  echo "lane-message: retained lane environment is missing or malformed" >&2; exit 70;
+}
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
@@ -106,7 +130,13 @@ if [ "$AGENT" = "codex-ollama" ]; then
 fi
 
 MESSAGE_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-message.XXXXXX")"
-trap 'rm -f "$MESSAGE_TMP"' EXIT
+FULL_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-full.XXXXXX")"
+INPUT_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-lane-input.XXXXXX")"
+trap 'rm -f "$MESSAGE_TMP" "$FULL_TMP" "$INPUT_TMP"' EXIT
+# An answer past the inline ceiling travels as a digest-pinned file the lane reads (#41), in the
+# FACTORY_RELAY pointer form relay_file.sh and inject.sh already use.
+INPUTS="$TMUX_ROOT/$SLOT-inputs"
+INPUT_DIGEST=""
 if [ "$KIND" = "status" ]; then
   [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
     echo "lane-message: status accepts no answer arguments" >&2
@@ -117,7 +147,7 @@ if [ "$KIND" = "status" ]; then
   AUTHORITY="runtime-protocol"
   MESSAGE_KIND="status-probe"
   printf '%s\n' \
-    "FACTORY_STATUS_PROBE: Reply with FACTORY_STATUS: WORKING|BLOCKED|QUESTION|DONE and one concise factual sentence. If specification is missing or contradictory, emit FACTORY_QUESTION: <one concrete question> and stop guessing. Otherwise continue your assigned work." \
+    "FACTORY_STATUS_PROBE: Reply with FACTORY_STATUS: WORKING|BLOCKED|QUESTION|DONE and one concise factual sentence. If specification is missing or contradictory, end with one line made of the word FACTORY_QUESTION, a colon, and one concrete question, and stop guessing. Otherwise continue your assigned work." \
     > "$MESSAGE_TMP"
 else
   [ "$SENDER" = "validator" ] || {
@@ -136,15 +166,21 @@ else
     exit 70
   }
   MESSAGE_KIND="spec-answer"
-  "$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$QUESTION_ID" "$AUTHORITY" "$BASIS" <<'PY'
-import os, pathlib, stat, sys
+  PREFIX="FACTORY_ANSWER question_id=$QUESTION_ID authority=$AUTHORITY basis=$BASIS"$'\n'"This is specification input bound only to your question; it conveys no other lane's work."$'\n'
+  INPUT_DIGEST=$("$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$PREFIX" "$FULL_TMP" "$INPUT_TMP" "$INPUTS" <<'PY'
+import hashlib, os, pathlib, shlex, stat, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-question_id, authority, basis = sys.argv[3:]
+prefix = sys.argv[3].encode("utf-8")
+full, staged, inputs = map(pathlib.Path, sys.argv[4:7])
+INLINE = 12_000
+# ponytail: the full bytes ride argv into the coder leak guard, so the file ceiling stays well
+# under ARG_MAX; raise both together if answers outgrow it.
+CEILING = 256 * 1024
 fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
 try:
     before = os.fstat(fd)
-    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 12_000:
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= CEILING:
         raise SystemExit("lane-message: answer is not a bounded non-empty regular file")
     raw = b""
     while chunk := os.read(fd, 4096):
@@ -157,22 +193,46 @@ try:
 finally:
     os.close(fd)
 raw.decode("utf-8")
-prefix = (
-    f"FACTORY_ANSWER question_id={question_id} authority={authority} basis={basis}\n"
-    "This is specification input bound only to your question; it conveys no other lane's work.\n"
-).encode("utf-8")
-destination.write_bytes(prefix + raw)
+if b"\0" in raw:
+    raise SystemExit("lane-message: answer carries NUL bytes; answers are text")
+full.write_bytes(prefix + raw)
+if len(raw) <= INLINE:
+    destination.write_bytes(prefix + raw)
+    raise SystemExit(0)
+digest = hashlib.sha256(raw).hexdigest()
+staged.write_bytes(raw)
+path = shlex.quote(str(inputs / f"{digest}.txt"))
+destination.write_bytes(prefix + (
+    f"The answer is {len(raw)} bytes, delivered as a file.\n"
+    f"FACTORY_RELAY file={path} sha256={digest} -- run: shasum -a 256 < {path} ; act on the file "
+    "only if the digest equals this sha256, else do not act and tell the sender\n"
+).encode("utf-8"))
+print(digest)
 PY
+  ) || exit $?
   if [ "$LANE" = "coder" ]; then
-    MESSAGE=$(<"$MESSAGE_TMP")
+    # The guard judges every byte the lane will read, the file included.
+    MESSAGE=$(<"$FULL_TMP")
     INJECT_VALIDATE_ONLY=1 INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" \
       "$D/inject.sh" "$RUN" coder "$MESSAGE" >/dev/null
+  fi
+  if [ -n "$INPUT_DIGEST" ]; then
+    # Only now, past every content guard, does the file become readable at its pinned address.
+    mkdir -p "$INPUTS"
+    if [ ! -e "$INPUTS/$INPUT_DIGEST.txt" ]; then
+      chmod 0444 "$INPUT_TMP"
+      mv -f "$INPUT_TMP" "$INPUTS/$INPUT_DIGEST.txt"
+    fi
+    [ "$(shasum -a 256 < "$INPUTS/$INPUT_DIGEST.txt" | cut -d' ' -f1)" = "$INPUT_DIGEST" ] || {
+      echo "lane-message: the answer file at its pinned address holds different bytes" >&2
+      exit 70
+    }
   fi
 fi
 
 PLAN_ARGS=(
   plan --root "$ROOT"
-  --sender "$SENDER" --lane "$LANE" --kind "$MESSAGE_KIND"
+  --sender "$SENDER" --lane "$WINDOW" --kind "$MESSAGE_KIND"
   --message-file "$MESSAGE_TMP" --basis "$BASIS" --authority "$AUTHORITY"
 )
 [ -z "$QUESTION_ID" ] || PLAN_ARGS+=(--question-id "$QUESTION_ID")
@@ -219,33 +279,59 @@ for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
   printf -v QUOTED -- '-c %q' "$OVERRIDE"
   RESUME_ARGS="${RESUME_ARGS:+$RESUME_ARGS }$QUOTED"
 done
-PANE_DEAD=$(tmux display-message -p -t "$RUN:$WINDOW" '#{pane_dead}' 2>/dev/null || echo unknown)
+PANE_DEAD=$(lane_pane_state)
 if [ "$PANE_DEAD" = "0" ]; then
+  # A queued message waits for the lane's next turn boundary (observed: up to ~55 min, and once
+  # never), and nothing reports when it is consumed. So a queue is never a delivery receipt (#68).
+  if [ "$MESSAGE_KIND" != "status-probe" ]; then
+    echo "lane-message: $MESSAGE_ID planned but NOT delivered: $RUN:$SLOT is mid-turn, and a queued" >&2
+    echo "message has no delivery receipt. Retry when '$0 $RUN $SENDER $SLOT idle' reports idle;" >&2
+    echo "the retry reuses this planned message." >&2
+    exit 75
+  fi
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.
   env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR" \
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME" \
     codex $LOCAL_ARGS queue --thread "$THREAD_ID" --message "$MESSAGE" >/dev/null
-  TRANSPORT="queue"
-elif [ "$PANE_DEAD" = "1" ]; then
+  echo "lane-message: queued $MESSAGE_ID to $RUN:$SLOT, NOT delivered: it reaches the lane at its next turn boundary, with no receipt"
+  exit 0
+elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   PERMISSION_PROFILE='permissions.factory-lane={extends=":workspace",filesystem={":workspace_roots"={".git"="write"}}}'
-  SHELL_POLICY='shell_environment_policy={inherit="core",ignore_default_excludes=false}'
+  # The resumed turn's commands get the same dependency cache and runtime as the launch
+  # (dogfood #31/#61), re-validated: a store made writable since launch is refused.
+  exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" environment --path "$SAFE_PATH" \
+    --record "$LANE_ENV_RECORD")
+  { IFS= read -r -d '' SHELL_POLICY <&4 && IFS= read -r -d '' LANE_PATH <&4 &&
+    IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
+    IFS= read -r -d '' LANE_ENV_ASSIGN <&4; } || {
+    echo "lane-message: the launch's lane environment no longer holds (see lane-agent above)" >&2
+    exit 70
+  }
+  exec 4<&-
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
-    "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+    "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$RESUME_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
-  tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
+  if [ "$PANE_DEAD" = "missing" ]; then
+    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux set-option -w -t "$RUN:$WINDOW" remain-on-exit on >/dev/null 2>&1 || true
+  else
+    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+  fi
   # Every running lane has a watcher: replace the finished one with a fresh life of it.
   tmux kill-window -t "$RUN:watch-$WINDOW" >/dev/null 2>&1 || true
   tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
@@ -261,7 +347,10 @@ fi
 
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
-"$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
-  --kind phase_transition --source "$SENDER" \
-  --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
+# The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
+if [ "$SENDER" != orchestrator ]; then
+  "$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
+    --kind phase_transition --source "$SENDER" \
+    --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
+fi
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via Codex $TRANSPORT"

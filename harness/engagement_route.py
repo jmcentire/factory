@@ -90,8 +90,10 @@ def _channel(root: pathlib.Path) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _send(root: pathlib.Path, subject: str) -> dict[str, object]:
-    """Hand the question to the configured channel. Never blocks the run.
+def send_to_question_channel(root: pathlib.Path, subject: str) -> dict[str, object]:
+    """Hand one message to the run's configured question channel. Never blocks the run.
+
+    Public because the dispatcher pages the human through the same channel.
 
     A channel that fails is recorded as unsent rather than retried forever: the
     escalation is already in the register, so the human sees it either way.
@@ -224,7 +226,7 @@ def _item(arguments: argparse.Namespace) -> int:
     if authority_row is not None:
         record["authority"] = authority_row
     if routing.action == NOTIFY_CHANNEL:
-        record["delivery"] = _send(root, subject)
+        record["delivery"] = send_to_question_channel(root, subject)
     filename = REGISTERS.get(routing.action)
     if filename:
         _append(root, filename, record)

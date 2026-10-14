@@ -30,6 +30,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 D="$(cd "$(dirname "$0")" && pwd -P)"
+# The seats read prompts from, and call the harness of, the checkout that ignites the run, never
+# whichever checkout an installed /command or the operator's shell happens to name.
+FACTORY_HOME="$(cd "$D/.." && pwd -P)"
+export FACTORY_HOME
 # Explicit per-run opt-in: captured lane data leaves this host only when selected.
 JEV_CONFIG=$("$FACTORY_PYTHON" - "$D" "$JEV_CALLS" <<'PYJEV'
 import json, os, sys
@@ -85,6 +89,15 @@ case "$FACTORY_RUN_STATE" in
     echo "factory: run $RUN is $FACTORY_RUN_STATE and cannot be ignited" >&2
     exit 66 ;;
 esac
+# One ignition per run at a time. The lock is on fd 9's open file description, so it is held
+# until this shell exits (a crash included) and never outlives it; tmux is started with fd 9
+# closed so the tmux server cannot inherit it. Every check and write below happens under it,
+# so the cleanup on a failed attempt can only ever remove this attempt's own files.
+exec 9>>"$ROOT/ignition.lock"
+python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null || {
+  echo "factory: another ignition of $RUN is in progress" >&2
+  exit 75
+}
 [ ! -e "$FACTORY_HARNESS_META" ] && [ ! -L "$FACTORY_HARNESS_META" ] || {
   echo "factory: harness metadata already exists for $RUN" >&2
   exit 65
@@ -92,6 +105,38 @@ esac
 tmux has-session -t "$RUN" 2>/dev/null && {
   echo "factory: tmux session '$RUN' already exists; it is not adopted" >&2
   exit 65
+}
+# Each attempt records its own tmux-session resource: a terminal record cannot return to
+# planned, so a retry after an attempt that removed its session (abandoned, residue=false)
+# takes the next id. Any other earlier status is unresolved residue and is refused.
+SESSION_RESOURCE=$($FACTORY_CLI verify-resources --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" |
+  python3 -c '
+import json, sys
+attempts = {
+    rid: r.get("status") for rid, r in json.load(sys.stdin).get("resources", {}).items()
+    if r.get("resource_type") == "tmux-session"
+}
+open_ = sorted(f"{rid}={status}" for rid, status in attempts.items() if status != "abandoned")
+if open_:
+    raise SystemExit("factory: an earlier ignition left " + ", ".join(open_) +
+                     "; disposition it before retrying")
+print("tmux-session" if not attempts else f"tmux-session-{len(attempts) + 1}")
+') || exit 65
+IGNITION_FILES=""
+RESOURCE_STATE=""
+cleanup_ignition() {
+  # An attempt that failed anywhere between planning its session and settling it is closed
+  # here, so its resource row never refuses the next retry as still planned.
+  if [ "$RESOURCE_STATE" = planned ]; then
+    if tmux has-session -t "$RUN" 2>/dev/null; then
+      resource_event '{"reason":"ignition failed after the session was created","residue":true}' failed || true
+    else
+      resource_event '{"reason":"ignition failed before the session was created","residue":false}' abandoned || true
+    fi
+  fi
+  rm -f "$TASK_TMP"
+  # A failed attempt leaves nothing that refuses the next one (exit 65 "already exists").
+  [ -z "$IGNITION_FILES" ] || rm -f "$ROOT/harness.json" "$ROOT/TASK.md"
 }
 
 REQUEST="$ROOT/evidence/intake/execution-request.json"
@@ -101,7 +146,7 @@ REQUEST="$ROOT/evidence/intake/execution-request.json"
 }
 
 TASK_TMP="$(mktemp "${TMPDIR:-/tmp}/factory-task.XXXXXX")"
-trap 'rm -f "$TASK_TMP"' EXIT
+trap cleanup_ignition EXIT
 if [ -f "$TASK_IN" ]; then
   cp "$TASK_IN" "$TASK_TMP"
 else
@@ -146,7 +191,7 @@ case "$ORCHESTRATOR_AGENT" in
     ORCHESTRATOR_VERSION=$(agy --version 2>/dev/null) || {
       echo "factory: agy CLI is not runnable" >&2; exit 70;
     }
-    ORCHESTRATOR_HELP=$(agy --help 2>/dev/null) || exit 70
+    ORCHESTRATOR_HELP=$(agy --help 2>&1) || exit 70
     for REQUIRED in --new-project --prompt-interactive --sandbox \
       --dangerously-skip-permissions --add-dir; do
       printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
@@ -173,6 +218,9 @@ case "$ORCHESTRATOR_AGENT" in
     ;;
 esac
 
+# No harness metadata exists yet, so a file here can only be left by an ignition that
+# failed, and is replaced.
+IGNITION_FILES=1
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
@@ -299,17 +347,21 @@ FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
 
 resource_event() {
   factory_record_resource --runs "$FACTORY_RUNS_ROOT" --run-id "$RUN" \
-    --resource-id tmux-session --resource-type tmux-session --identifier "$RUN" \
+    --resource-id "$SESSION_RESOURCE" --resource-type tmux-session --identifier "$RUN" \
     --creator-action harness-ignition --ownership run-owned \
     --baseline-json '{"absent_at_plan":true}' --disposition-json "$1" \
     --evidence-json "{\"target-state\":\"$FACTORY_TARGET_STATE_DIGEST\"}" \
-    --status "$2" --actor harness-ignition >/dev/null
+    --status "$2" --actor harness-ignition >/dev/null || return $?
+  # Callers use `|| true`, which suspends set -e in here, so a failed write must not mark the
+  # state recorded; the EXIT trap then still closes a planned attempt.
+  RESOURCE_STATE="$2"
 }
 resource_event '{}' planned
 
-printf -v CTL_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q %q %q --run %q --root %q' \
-  "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_PYTHON" "$D/dispatcher.py" "$RUN" "$ROOT"
-VALIDATOR_PROMPT="Act as the Validator under docs/VALIDATION-DIRECTIVE.md and the /validate contract. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
+SEAT_ENV="$(factory_seat_env)"
+printf -v CTL_CMD 'exec env %s %q %q --run %q --root %q' \
+  "$SEAT_ENV" "$FACTORY_PYTHON" "$D/dispatcher.py" "$RUN" "$ROOT"
+VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Treat every cross-boundary identifier (principal, role, grant, table, metric or resource type, log field, token audience, env var, service or topic name) as unverified until $ROOT/artifacts/boundary-register.json records it on both sides: read $ROOT/orchestrator/BOUNDARIES.md, run $ROOT/orchestrator/bin/boundary_register.py verify --root $ROOT --workdir <the run's target workdir> whenever lanes touch a boundary, and block on any identifier a lane uses that the register lacks or names differently, or on access presumed without a record. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block, halt, or no-op: block gates the next transition; halt stops the Validator outright (HALT is set and its window is killed, and only a human clears HALT and re-seats it). Use halt when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
 ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
@@ -326,16 +378,16 @@ if [ "$ORCHESTRATOR_AGENT" = "codex" ] && [ -n "$ORCHESTRATOR_MODEL" ]; then
 fi
 case "$VALIDATOR_AGENT" in
   codex)
-    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write %s%q' \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s codex --sandbox workspace-write %s%q' \
+      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   ollama)
-    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q ollama launch codex --model %q -- --sandbox workspace-write %q' \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s ollama launch codex --model %q -- --sandbox workspace-write %q' \
+      "$SEAT_ENV" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
     ;;
   claude)
-    printf -v VALIDATOR_CMD 'exec env FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q claude %s%q' \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s claude %s%q' \
+      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
 esac
 
@@ -351,25 +403,26 @@ case "$ORCHESTRATOR_AGENT" in
     # --sandbox restricts terminal effects; --dangerously-skip-permissions only
     # prevents unattended tool prompts from neutering the resident monitor. It
     # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
-      "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
     ;;
   codex)
     SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
-    printf -v ORCHESTRATOR_CMD 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
-      "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-      "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$ROOT" "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
 esac
 
 mkdir -p "$ROOT/orchestrator"
 chmod 700 "$ROOT/orchestrator"
 mkdir -p "$ROOT/orchestrator/bin"
-cp "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
-cp "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
-cp "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
-cp "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
+# -f: a failed earlier attempt left these read-only; the retry replaces them.
+cp -f "$D/../prompts/orchestrate.md" "$ROOT/orchestrator/ROLE.md"
+cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
+cp -f "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
+cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
   "$D/boundary_register.py" \
   "$ROOT/orchestrator/bin/"
@@ -394,7 +447,7 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py" \
   "$ROOT/orchestrator/bin/boundary_register.py"
-if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD"; then
+if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2
   exit 70
@@ -423,10 +476,12 @@ if ! tmux new-window -t "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
   echo "factory: dispatcher window failed; created tmux session was terminally accounted" >&2
   exit 70
 fi
+IGNITION_FILES=""
 tmux select-window -t "$RUN:validator" 2>/dev/null || true
 resource_event '{}' active
 
 echo "factory '$RUN' is live: tmux attach -t $RUN"
+echo "  — accept the folder-trust prompt in each seat window to continue —"
 echo "  exact commit : $FACTORY_BASE_COMMIT"
 echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
 echo "  control root : $ROOT"

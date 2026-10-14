@@ -3,6 +3,71 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.17] - 2026-10-14
+
+The composition dogfood fixes (PR #54): what three dogfood runs of the factory against real
+targets found, fixed in the harness, the prompts and the doctrine, with the review fixes on top.
+
+### Added
+
+- **Strategy binding (gate LFX).** A Tester launch is refused when its tree lacks an
+  `oracle-input:` the Testing Strategy cites, reaches it through a link, or holds other bytes. A
+  Tester freeze is refused while a Critical `planned-case:` id is in no declared test module.
+  `discovery_check.py` refuses an integrated tree whose runner (`test_inventory.py`: pytest,
+  vitest, deno) lists no runnable test from a Tester module or names no Critical case in a
+  runnable test. Skipped and ignored tests are listed apart and count as nothing. The check
+  runs only on the exact candidate commit, unchanged, and writes a receipt bound to that commit,
+  the Strategy's sha256 and the Tester's latest freeze. `endgame.sh` renders no verdict without
+  that receipt for every Tester slot that froze.
+- **Seat paging.** The dispatcher pages the human through the run's question channel when a
+  seat sits on a provider usage-limit dialog or a host permission prompt, or when the resident
+  Orchestrator stops assessing. The usage-limit match is anchored on the providers' own dialog
+  lines, and no match ever throttles the Orchestrator's activity feed.
+- `harness/spawn.py` (a spawn ledger, so a run signals only processes it recorded starting),
+  `harness/with_secret.py` (a credential reaches one child's environment and never its output),
+  `harness/agent_exec.py` (non-interactive agent CLIs with stdin closed and a cap) and
+  `harness/relay_file.sh` (multi-line text reaches a seat as a digest-pinned file).
+- A lane answer over 12,000 bytes is delivered as a digest-pinned file. A queryable lane-idle
+  signal. The dispatcher wakes the Validator when a lane question or DONE is pending.
+- An opt-in `repo.contract_sources` target setting: the target is refused when
+  `contracts/SOURCES.md` and the vendored contract files disagree.
+- `freeze-exclude:` in `.factory/projection.conf`: a git-ignored dependency tree the lane freeze
+  skips unread. A value holding whitespace or `#` is refused.
+
+### Changed
+
+- **Behavior ledger.** Rows go to the human in one message, each accepted or refuted by row id.
+  The restatement shortcut, where a cross-family reviewer clears a row that only restates a
+  decided item, applies only under `autonomous` engagement (founder ruling 2026-10-14). Under
+  `interactive` and `scheduled` engagement the human rules on every row.
+- A Codex lane records each `FACTORY_QUESTION` marker as its own question. The body runs to the
+  next marker line or a blank line. A question over the dialogue's size limit is recorded
+  truncated, with a visible marker, and no longer kills the lane.
+- Parallel lane instances (`tester-b`) are watched, asked and answered under their own identity.
+- The blocking gate admits on consumption receipts. `consume_block` dispositions one event at a
+  time. A `blocking_reopened` event reopens a consumed one.
+- A missing `projection.conf` refuses projection and dispatch for both lanes. The Validator
+  procedure states that requirement before Phase A and caches the declared dependencies
+  read-only before dispatch.
+- The harness runs on stock macOS (no GNU `timeout`, sealed-directory renames, bare `python3`).
+  Seats launch with Claude Code prompt suggestions off.
+
+### Fixed
+
+- A failed ignition leaves nothing that refuses a retry, under a run-scoped ignition lock. A
+  failed resource write is not recorded as settled.
+- Seat windows carry the `FACTORY_RESUME_*` anchors and no other run's control root.
+  `factory_seat_env` emits every `env -u` before any assignment. The Orchestrator seat has the
+  same authority environment as the other seats.
+- The watchdog waits quietly for Phase A's generation, and escalates only when a launch journal
+  shows an active lane.
+- A queued delivery to a busy lane is not recorded as delivered. Delivery to a lane with no
+  window resumes its thread.
+- The coder oracle-leak guard matches test detail, not the words "test" or "oracle". The verdict
+  filter accepts only a single verdict line.
+- `ground.sh` finds seat transcripts under `CLAUDE_CONFIG_DIR`. `tripwire` scans only this
+  run's transcripts. The Orchestrator journal cap is 128 MiB. agy's `--help` is read from stderr.
+
 ## [0.8.16] - 2026-10-14
 
 Boundary identifiers are verified, never assumed. A principal, role, grant, table, metric or

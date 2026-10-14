@@ -195,8 +195,10 @@ closed enrolled union cannot masquerade as whole-run semantic completeness.
 A tmux author that cannot proceed without guessing emits `FACTORY_QUESTION:`. The dispatcher
 retains an occurrence-specific question ID. Only the Validator can bind a human answer or already
 ratified specification to that ID; the Orchestrator can issue only a generated status probe. Both
-travel through `codex queue` or `codex exec resume` to the exact retained thread, never through raw
-terminal input. Planned and delivered records are separate, cross-lane answers and conflicting
+travel to the exact retained thread, never through raw terminal input: an answer by `codex exec
+resume` once the lane is idle (a lane mid-turn refuses it, exit 75), a status probe also by
+`codex queue`, which is reported as not delivered and never receipted. Planned and delivered
+records are separate, cross-lane answers and conflicting
 second answers refuse, and neither author's work is projected into the other lane.
 
 There is **no one-shot orchestrator mode**. `orchestrator_wake.sh` remains as a frozen-projection
@@ -389,6 +391,31 @@ machine, before the agent starts and while it runs:
   `cursor-agent` run their CLI's own configured default. Each launch row records the `model`,
   its `model_source` (`operator`, `codex-config` or `agent`) and the `model_config` overrides,
   and `tmux_lane_message.sh` resumes a lane on the same selection.
+- **Dependency cache and runtime.** `--cache-env NAME=<dir>` (for example
+  `DENO_DIR=<run>/dep-cache/deno-dir`) and `--runtime-dir <bin dir>` give the lane's own shell
+  commands the pre-fetched store and a real runtime binary. Codex runs those commands under
+  `shell_environment_policy.inherit="core"`, which drops every other variable, so the cache
+  variables are set in the policy itself and the runtime directory goes first on PATH; both are
+  recorded in the launch row (`lane_env`) and re-applied on every resume. Each directory must
+  exist, have no symlink on its path or inside it, and hold no entry with a write bit, or the
+  launch is refused.
+- **Oracle inputs.** A Tester launch reads the Strategy's `oracle-input: <path> sha256:<digest>`
+  lines (`harness/strategy_plan.py oracle-inputs`) and is refused when its tree lacks a cited
+  input, reaches it through a linked directory, or holds bytes other than the pinned upstream
+  digest. A Tester freeze reads its `planned-case: <id> [class]` and `test-modules: <glob>` lines
+  (`strategy_plan.py traceability`) and is refused, leaving the lane open, while a Critical case
+  id appears in no frozen test module outside a full-line comment; other gaps are recorded in the
+  freeze row's `traceability_gaps`. That is a source-reference check only. Before Phase C,
+  `discovery_check.py --candidate-sha <commit> --strategy` reads a `factory-test-inventory/1`
+  document from `harness/test_inventory.py` (pytest, vitest or deno) in the integrated tree,
+  which must be that commit with no change, and refuses while a Tester module has no runnable
+  collected test or a Critical case id is in no runnable test's name. A skipped or ignored test
+  (pytest `skip`/`skipif`/`xfail(run=False)`/`unittest.skip`, Deno `ignore`) is not runnable: it
+  cannot fail. A green check writes `<run>/discovery/<slot>-<commit>.json`, bound to the commit,
+  the Strategy's sha256 and the slot's latest freeze. `endgame.sh` refuses to render a verdict
+  (`discovery_check.py require`) unless every Tester slot that froze has that receipt for the
+  judged commit and the ratified Strategy's current bytes; no harness step starts Phase C
+  itself, so endgame is the earliest mechanical point that holds the check.
 - **Sign-in preflight.** `harness/lane_agent.py preflight` runs the agent's own status command
   (`codex login status`, `agent status --format json`) with stdin closed, a time bound, and the
   exact scrubbed environment the lane gets. Signed out, or a check that waits for input, is a
@@ -603,11 +630,17 @@ dependency-free (bash + python3 + git):
 - `harness/attention_gate.py` — validates the closed producer-event shapes and owns the shared
   run-local lock that orders blocking-event production, disposition, and dispatch admission;
   exact retries repair only unterminated blocker tails, and an inherited dispatch descriptor
-  repeats admission rather than becoming authority.
+  repeats admission rather than becoming authority. Admission is a cursor over the receipts:
+  every event with a `blocking_written` receipt needs its own `blocking_consumed` receipt, so
+  emptying the file opens nothing, and a receipted event missing from the file is restored.
+  `attention_gate.py reopen --root <run> --lane <lane> --event-digest <d> --reason <text>`
+  reopens a consumed event as a new `blocking_reopened` event citing it, with its own receipt.
 - `harness/consume_block.sh` — locks the exact pending subject, rejects malformed producer events,
   requires exactly one durable producer receipt plus a typed disposition, retains and hashes the
   run-owned evidence bytes, and fsyncs the receipt plus its parent before durably releasing the
   dispatch gate. Unrelated malformed legacy event rows are ignored and grant no authority.
+  The subject is the whole file (one disposition for every pending event) or one event's
+  canonical digest (that event alone is receipted and removed; the rest stay pending).
 - `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
   a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.
@@ -698,10 +731,11 @@ dependency-free (bash + python3 + git):
       [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>]
       [--instance <name>] [--round <tag>] [--metered]
       [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+      [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
       [--read-allowance-minutes 15] [--stall-window-minutes 20]
   harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
   harness/tmux_lane.sh <run> <coder|tester> freeze [--instance <name>] [--round <tag>]
-  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer ...
+  harness/tmux_lane_message.sh <run> <validator|orchestrator> <slot> status|answer|idle ...
   harness/lane_watchdog.py report --root <run root>
   ```
 
@@ -709,7 +743,16 @@ dependency-free (bash + python3 + git):
   prompt, launch journal, thread, log (`<slot>-lane.log`), exits journal and watcher state under
   `tmux-lanes/`. Every lane process runs under `lane_agent.py run`, which tees its output to the
   lane log and records its end. Only `codex` and `codex-ollama` lanes keep a resumable thread
-  for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher.
+  for `tmux_lane_message.sh`; a resume starts a new life of the lane's watcher. `idle` reports
+  whether a slot has no live turn (window gone or pane dead: exit 0) or is mid-turn (exit 75),
+  reading the lane window by exact name; freeze reads it the same way.
+  An answer over 12,000 bytes (up to 256 KiB) is delivered as a read-only file
+  at `tmux-lanes/<slot>-inputs/<sha256>.txt` with a `FACTORY_RELAY file=… sha256=…` pointer;
+  the coder leak guard judges the file's bytes before the file is placed. These answer files, and
+  the `<run>/relay/<sha256>.txt` files `relay_file.sh` and `inject.sh` write for multi-line or
+  oversized messages, sit under the run root, which a tmux lane is not denied reading: tmux lanes
+  claim no read isolation for them. The guards judge what is delivered; nothing stops one lane
+  from reading another lane's relayed text if it goes looking.
   Preflight requires a standalone repository whose Git/common directory is local and an agent
   CLI exposing the exact flags the launch uses; the retained launch records its version.
   Codex is launched as the agent harness with a lane-scoped permission profile that reopens the

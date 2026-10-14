@@ -16,14 +16,21 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
-from lane_dialogue import LaneDialogueError, record_question  # noqa: E402
+from lane_dialogue import (  # noqa: E402
+    MAX_TEXT_BYTES,
+    LaneDialogueError,
+    record_question,
+)
 
 _THREAD = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _MAX_PROMPT = 4 * 1024 * 1024
-_FACTORY_QUESTION = re.compile(r"^FACTORY_QUESTION:\s*(\S.*)$")
+_FACTORY_QUESTION = re.compile(r"[ \t]*FACTORY_QUESTION:[ \t]*(.*)")
+# A question longer than the dialogue's text ceiling is recorded truncated, with this visible
+# marker, rather than refused: a refusal there would kill the lane mid-turn over prose length.
+_TRUNCATED = "\n[truncated by codex_lane_session: question exceeded the dialogue size limit]"
 
 
 class SessionError(RuntimeError):
@@ -79,11 +86,45 @@ def _agent_message(value: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
-def _retain_questions(root: pathlib.Path, role: str, message: str) -> None:
+def _questions(message: str) -> list[str]:
+    """Decide the typed questions in one assistant message.
+
+    Each ``FACTORY_QUESTION:`` line opens one question. Its body continues on the following
+    lines until the next marker line or a blank line, so a multi-line question survives and
+    two questions stay two records (answering one never closes the other).
+    """
+
+    questions: list[str] = []
+    body: list[str] | None = None
     for line in message.splitlines():
-        matched = _FACTORY_QUESTION.fullmatch(line.strip())
-        if matched is not None:
-            record_question(root, role, matched.group(1))
+        marker = _FACTORY_QUESTION.fullmatch(line)
+        if marker is not None:
+            if body is not None:
+                questions.append("\n".join(body).strip())
+            body = [marker.group(1)]
+        elif body is not None and line.strip():
+            body.append(line)
+        elif body is not None:
+            questions.append("\n".join(body).strip())
+            body = None
+    if body is not None:
+        questions.append("\n".join(body).strip())
+    return [_bounded(question) for question in questions if question]
+
+
+def _bounded(question: str) -> str:
+    """Fit a question inside the dialogue ceiling, marking any truncation visibly."""
+
+    raw = question.encode("utf-8")
+    if len(raw) <= MAX_TEXT_BYTES:
+        return question
+    room = MAX_TEXT_BYTES - len(_TRUNCATED.encode("utf-8"))
+    return raw[:room].decode("utf-8", errors="ignore").rstrip() + _TRUNCATED
+
+
+def _retain_questions(root: pathlib.Path, role: str, message: str) -> None:
+    for question in _questions(message):
+        record_question(root, role, question)
 
 
 def _read_thread(path: pathlib.Path) -> str:
@@ -153,8 +194,9 @@ def run_turn(
 ) -> int:
     if (root is None) != (role is None):
         raise SessionError("run root and role must be supplied together")
-    if role is not None and role not in {"coder", "tester"}:
-        raise SessionError("lane role must be coder or tester")
+    lane_id = r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?"
+    if role is not None and not re.fullmatch(lane_id, role):
+        raise SessionError("lane must be coder or tester[-instance]")
     prompt = _read_regular(prompt_path)
     if not command or command[0] == "--":
         command = command[1:]
@@ -221,7 +263,8 @@ def main() -> int:
     parser.add_argument("--thread-file", type=pathlib.Path, required=True)
     parser.add_argument("--events", type=pathlib.Path, required=True)
     parser.add_argument("--root", type=pathlib.Path, required=True)
-    parser.add_argument("--role", choices=("coder", "tester"), required=True)
+    # The lane identity (tester-b for an instance), which its questions are recorded under.
+    parser.add_argument("--role", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     try:

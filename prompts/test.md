@@ -38,8 +38,9 @@ So:
 
 If the signed artifacts contradict one another or leave an expected behavior genuinely
 undetermined, end the tmux Codex turn with one exact, standalone final line:
-
-`FACTORY_QUESTION: <one concrete question>`
+the marker word FACTORY_QUESTION, a colon, then one concrete question. The
+format is described rather than shown, so this prompt's own text can never be registered
+as a question.
 
 Record the blocked item and finish the work the question does not block; end the round with the
 question. Ask one question at a time and stop; do not choose among semantics or encode a guessed answer in
@@ -226,7 +227,12 @@ blocked, and ask at the end of the round.
    registers, are silent, or are ambiguous, reported as spec-defects with the exact items in
    tension. **Report, do not resolve.**
 7. **What you did not write, and why** — every planned Strategy row you could not realize,
-   named as a gap. Do not silently drop a row or substitute a cheaper test for a high-value
+   named as a gap. Name each `planned-case:` id of the Strategy in the test name of the test that
+   realizes it (a pytest parametrize id such as `test_cap[R7.1]`, or the Deno/vitest test title),
+   in a file the Strategy's `test-modules:` glob matches. The freeze is refused while a Critical
+   case id appears in no test module, and a README, inventory or comment line naming it does not
+   count; at Phase C only the name of a runnable collected test counts, so an id that sits only in
+   a test's code, or in a skipped or ignored test, leaves the case untested. Do not silently drop a row or substitute a cheaper test for a high-value
    one; that reopens approval.
 
 ### The oracle self-check — run it before you emit `__DONE__`

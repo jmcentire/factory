@@ -66,6 +66,22 @@ def _load_json(path: pathlib.Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def _journal_has_active_life(journal: pathlib.Path) -> bool:
+    """A lane launch journal recorded a real launch: planned and launch-failed rows do not."""
+    try:
+        lines = journal.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("status") == "active":
+            return True
+    return False
+
+
 class SignalWatchdog:
     def __init__(
         self,
@@ -156,6 +172,10 @@ class SignalWatchdog:
 
     # -- the check ------------------------------------------------------------
 
+    def _a_lane_launched(self) -> bool:
+        journals = (self.root / "tmux-lanes").glob("*-launch.jsonl")
+        return any(map(_journal_has_active_life, journals))
+
     def check(
         self,
         emit: Callable[..., None],
@@ -169,6 +189,26 @@ class SignalWatchdog:
             return "terminal"
         try:
             knobs = self.knobs()
+            if not knobs.get("generation_prepared", True):
+                # Phase A has no generation yet: nothing to watch, and not an error
+                # — until a lane has launched. Lanes dispatched via tmux_lane never
+                # create one (dogfood #44), so waiting on it would silently end
+                # monitoring: escalate once per run instead.
+                self._knobs = None
+                if not self._a_lane_launched():
+                    return "awaiting-generation"
+                state = _load_json(self.state_path)
+                if not state.get("unobservable_escalated"):
+                    state["unobservable_escalated"] = True
+                    self._write_state(state)
+                    emit(
+                        "watchdog_unobservable",
+                        "lanes dispatched via tmux_lane with no prepared generation; "
+                        "signal knobs unobservable — monitoring lost, operator "
+                        "attention required",
+                        wake=True,
+                    )
+                return "unobservable"
             passes = int(self._cli_json("pass-count")["passes"])
         except (WatchdogError, KeyError, ValueError, TypeError) as exc:
             # Round-6 6-8: a persistent observation refusal must not silently disarm

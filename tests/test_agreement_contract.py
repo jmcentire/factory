@@ -372,6 +372,7 @@ def test_probe_judges_the_candidate_commit_not_what_its_repository_planted(
     )
     candidate, sha = create_probe_candidate(tmp_path)
     marker = tmp_path / "smudge-ran"
+    (candidate / ".git" / "info").mkdir(exist_ok=True)  # a git template may omit info/
     (candidate / ".git" / "info" / "attributes").write_text(
         "agreement_test.py export-ignore\n* filter=plant\n", encoding="utf-8"
     )
@@ -424,3 +425,20 @@ def test_two_direction_probe_evidence_binds_candidate_and_oracles(tmp_path: Path
     assert verify_evidence(root, artifacts, candidate_sha=sha) is not None
     with pytest.raises(AgreementContractError, match="stale or belongs"):
         verify_evidence(root, artifacts, candidate_sha="f" * 40)
+
+
+def test_probe_commands_keep_the_dependency_cache_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An offline probe reads its dependencies from the run's store; scrubbing DENO_DIR
+    silently pointed it at an empty cache (dogfood #58). Credentials stay scrubbed."""
+
+    import importlib
+
+    monkeypatch.syspath_prepend(str(PROBE.parent))
+    probe = importlib.import_module("agreement_probe")
+    monkeypatch.setenv("DENO_DIR", "/store/deno-dir")
+    monkeypatch.setenv("OPENAI_API_KEY", "not-for-the-probe")
+    command = ["sh", "-c", 'test "$DENO_DIR" = /store/deno-dir && test -z "${OPENAI_API_KEY:-}"']
+
+    assert probe.run_command(command, cwd=tmp_path, timeout=10, label="cache probe") == 0

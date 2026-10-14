@@ -418,7 +418,7 @@ class LaneWatch:
             if commit["sha"] not in known:
                 state["commits"].append(commit)
                 known.add(commit["sha"])
-        pending = self._pending_question(str(launch.get("role", "")))
+        pending = self._pending_question(str(launch.get("lane") or launch.get("role", "")))
         if pending:
             state["hold_ts"] = current
         done = self._scan_output(launch, state)
