@@ -198,6 +198,15 @@ obtained. A checked item without that citation is still unchecked.
    Where only inspection is possible, the basis and residual risk are declared.
    A document silently out of parity is `BLOCKED:docs`, treated as negative
    evidence — a confidently wrong document is worse than a missing one.
+   The target's own engineering rules are invariant documents too: its
+   `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`,
+   `.claude/rules/**` and `.rule-review/rules/**`, snapshotted from the pinned
+   SHA into `artifacts/repo-rules/` before Phase A is drafted
+   (`prompts/validate.md`, Repo rules). Every rule a requirement touches is
+   cited by path and id in the Product Specification and quoted verbatim to
+   both lanes, and the PR body states per touched rule why the change
+   complies. A change that breaks a target rule without a human-ratified
+   exception is negative evidence, not a gap.
 
 5. **Tool and integration boundary.** Re-derive the platform's available tool,
    credential, network-route, and integration inventory. Confirm every item has
