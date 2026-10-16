@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""testing_standard — the founder's testing standard, injected into every Tester lane's prompt.
+"""testing_standard — the founder's testing standard, injected into every Tester lane's prompt,
+and the Coder doctrine, injected into every Coder lane's prompt.
 
 The invariant: **a Tester lane starts with the testing standard in its prompt, or it does not
 start.** In msg-r2 the Tester briefs pointed at the contracts, never at ``TESTING.md``; the
@@ -14,6 +15,15 @@ what the lane was given:
   run's, mandatorily; ``dispatch_lane.sh`` does not, because run-model injects the ratified
   strategy from the state capsule. A mutable Markdown view must not condition a qualified
   lane (Gate B).
+
+A Coder lane (``--role coder``) receives the same way:
+
+- ``docs/standards/HOW-WE-WRITE-CODE.md`` — How We Write Code;
+- ``prompts/engineer.md`` — the Coder role doctrine.
+
+A Coder given only a terse brief stops early. On Terminal-Bench 4, a Haiku Coder with a compact
+brief ended its session in 1-3 minutes; primed with this doctrine (and the task verbatim) its
+median build session went from 8 to 41 minutes.
 
 A source that is missing, empty, a symlink, not a regular file or not UTF-8 refuses the block,
 and the caller refuses the launch.
@@ -35,16 +45,27 @@ import sys
 import tempfile
 
 SCHEMA = "factory-testing-standard-injection/1"
+CODER_SCHEMA = "factory-coder-doctrine-injection/1"
 MAX_SOURCE_BYTES = 1024 * 1024
 STANDARD = pathlib.PurePosixPath("docs/standards/TESTING.md")
 DOCTRINE = pathlib.PurePosixPath("prompts/test.md")
+CODING_STANDARD = pathlib.PurePosixPath("docs/standards/HOW-WE-WRITE-CODE.md")
+CODER_DOCTRINE = pathlib.PurePosixPath("prompts/engineer.md")
 MARKER = "FACTORY_TESTING_STANDARD"
+CODER_MARKER = "FACTORY_CODER_DOCTRINE"
 
 PREAMBLE = """MANDATORY FIRST READING — THE FOUNDER'S TESTING STANDARD (role=tester)
 Read every document below in full before you write, change or run any test. They are the
 founder's testing standard (How We Test, the T-rules), the Tester role doctrine and, when
 present, this run's testing strategy. They bind every test you write: a test that breaks them
 is rejected whether or not it passes. Every lane report cites the T-rules it relied on.
+"""
+
+CODER_PREAMBLE = """MANDATORY FIRST READING — THE CODER DOCTRINE (role=coder)
+Read every document below in full before you write or change any code. They are the factory's
+coding standard (How We Write Code) and the Coder role doctrine. They bind all work in this lane:
+real code only, evidence for every claim, and the signed artifacts in the lane task as the
+specification.
 """
 
 
@@ -77,8 +98,13 @@ def _read(path: pathlib.Path, label: str) -> str:
         raise StandardMissing(f"{label} at {path} is not UTF-8") from None
 
 
-def sources(factory_home: pathlib.Path,
-            strategy: pathlib.Path | None) -> list[tuple[str, str, pathlib.Path]]:
+def sources(factory_home: pathlib.Path, strategy: pathlib.Path | None,
+            role: str = "tester") -> list[tuple[str, str, pathlib.Path]]:
+    if role == "coder":
+        return [
+            ("coding-standard", "How We Write Code", factory_home / CODING_STANDARD),
+            ("coder-doctrine", "Coder role doctrine", factory_home / CODER_DOCTRINE),
+        ]
     named: list[tuple[str, str, pathlib.Path]] = [
         ("testing-standard", "How We Test", factory_home / STANDARD),
         ("tester-doctrine", "Tester role doctrine", factory_home / DOCTRINE),
@@ -88,23 +114,28 @@ def sources(factory_home: pathlib.Path,
     return named
 
 
-def build(factory_home: pathlib.Path,
-          strategy: pathlib.Path | None = None) -> tuple[str, dict[str, object]]:
+def build(factory_home: pathlib.Path, strategy: pathlib.Path | None = None,
+          role: str = "tester") -> tuple[str, dict[str, object]]:
     """The block text and its receipt: each source's path and sha256."""
 
-    parts = [PREAMBLE]
+    coder = role == "coder"
+    if coder and strategy is not None:
+        raise StandardMissing("a Coder lane is never given the testing strategy")
+    marker = CODER_MARKER if coder else MARKER
+    parts = [CODER_PREAMBLE if coder else PREAMBLE]
     recorded: dict[str, dict[str, str]] = {}
-    for key, label, path in sources(factory_home, strategy):
+    for key, label, path in sources(factory_home, strategy, role):
         if path.is_symlink():
             raise StandardMissing(f"{label} at {path} is a symlink")
         text = _read(path, label)
         digest = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
         recorded[key] = {"path": str(path), "digest": digest}
         parts.append(
-            f"\n<<<{MARKER} {key} digest={digest}>>>\n{text.rstrip(chr(10))}\n"
-            f"<<<END {MARKER} {key} digest={digest}>>>\n"
+            f"\n<<<{marker} {key} digest={digest}>>>\n{text.rstrip(chr(10))}\n"
+            f"<<<END {marker} {key} digest={digest}>>>\n"
         )
-    return "".join(parts), {"schema_version": SCHEMA, "sources": recorded}
+    return "".join(parts), {"schema_version": CODER_SCHEMA if coder else SCHEMA,
+                            "sources": recorded}
 
 
 def write_block(output: pathlib.Path, text: str) -> None:
@@ -125,19 +156,24 @@ def write_block(output: pathlib.Path, text: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="inject the testing standard into a Tester lane")
+    parser = argparse.ArgumentParser(
+        description="inject the testing standard into a Tester lane, or the Coder doctrine into a "
+        "Coder lane"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     block = commands.add_parser("block")
     block.add_argument("--factory-home", type=pathlib.Path, required=True)
     block.add_argument("--strategy", type=pathlib.Path)
+    block.add_argument("--role", choices=("tester", "coder"), default="tester")
     block.add_argument("--output", type=pathlib.Path, required=True)
     arguments = parser.parse_args(argv)
     try:
-        text, receipt = build(arguments.factory_home, arguments.strategy)
+        text, receipt = build(arguments.factory_home, arguments.strategy, arguments.role)
         write_block(arguments.output, text)
     except (StandardMissing, OSError) as error:
+        lane = "Coder" if arguments.role == "coder" else "Tester"
         print(
-            f"testing-standard: {error}; a Tester lane does not start without it",
+            f"testing-standard: {error}; a {lane} lane does not start without it",
             file=sys.stderr,
         )
         return 70

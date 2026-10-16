@@ -146,7 +146,11 @@ def test_cursor_agent_lane_runs_the_print_mode_invocation_under_the_lane_wrapper
     assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
     assert row["cli_contract"] == "cursor-agent-print-v1"
     assert row["auth_preflight"] == "cursor-agent-status"
-    assert row["watch"] == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30}
+    watch = dict(row["watch"])
+    assert Path(watch.pop("runs_dir")).name == "runs"
+    # A cursor-agent lane keeps no resumable thread, so it gets neither a wrap-up nor reviews.
+    assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
+                     "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
 
     # A cursor-agent lane has no Codex thread to resume: messaging it says to launch a round.
     message = run(
@@ -389,7 +393,8 @@ def test_status_counts_lane_commits_without_running_host_git(tmp_path: Path) -> 
 
 class Watched:
     def __init__(self, tmp_path: Path, *, caps: dict[str, object] | None = None,
-                 qualify: dict[str, object] | None = None) -> None:
+                 qualify: dict[str, object] | None = None,
+                 watch: dict[str, object] | None = None, thread: bool = False) -> None:
         self.root = tmp_path / "run"
         self.lanes = self.root / "tmux-lanes"
         self.lanes.mkdir(parents=True)
@@ -403,18 +408,36 @@ class Watched:
             "agent": "codex-ollama", "model": "glm-test:cloud", "terminal": False,
             "repository": str(self.repo), "lane_log": str(self.log),
             "lane_exits": str(self.exits), "tmux_target": "r1:tester",
-            "watch": {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30},
+            "watch": {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
+                      **(watch or {})},
             "caps": caps or {}, "qualify": qualify,
         }
         (self.lanes / "tester-launch.jsonl").write_text(json.dumps(row) + "\n")
+        if thread:
+            (self.lanes / "tester-thread-id").write_text(
+                "12345678-1234-4234-8234-123456789abc\n")
+            delivery = self.lanes / "tester-delivery.env"
+            delivery.write_text("PATH=/usr/bin:/bin\n")
+            delivery.chmod(0o600)
         self.clock = Clock()
         self.stops: list[str] = []
         self.said: list[str] = []
+        self.delivered: list[list[str]] = []
         self.watch = lane_watchdog.LaneWatch(
             root=self.root, slot="tester", now=self.clock, stop=self._stop,
             tmux=lambda *a: subprocess.CompletedProcess(a, 0, "", ""), echo=self.said.append,
+            deliver=self._deliver,
         )
         self.watch.arm()
+
+    def _deliver(self, argv: list[str]) -> str:
+        self.delivered.append(argv)
+        return "scheduled"
+
+    def resume(self, seconds: float) -> None:
+        """What a delivered lane message does: a new life of the watcher after the resume."""
+        self.clock.value = T0 + seconds
+        self.watch.arm(new_life=True)
 
     def _stop(self, target: str) -> str:
         self.stops.append(target)
@@ -523,6 +546,182 @@ def test_a_resumed_turn_carries_the_lanes_active_time_toward_its_cap(tmp_path: P
     assert watched.at(5000 + 600) == "capped"  # 1200 s + 600 s = $1 at $2/h
 
 
+# -- 4b. wrap-up before the cap, and progress-review pauses ----------------------------------
+
+RESUMABLE = {"runs_dir": "/runs", "wrap_s": 300}
+
+
+def test_a_resumable_lane_gets_a_wrap_up_turn_before_the_cap_stops_it(tmp_path: Path) -> None:
+    """A lane killed mid-edit at its cap leaves nothing that runs (Terminal-Bench 4: a 59/60
+    deliverable fell to 0/60). Five minutes before the cap the turn ends and a generated wrap-up
+    resumes the thread; the cap still stops the lane, counting only active time."""
+
+    watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=True)
+    _commit(watched.repo, T0 + 100, "a")
+    assert watched.at(1499) == "watching" and watched.delivered == []
+    assert watched.at(1500) == "wrapping"
+    assert watched.stops == ["r1:tester"]
+    [argv] = watched.delivered
+    assert argv[0].endswith("tmux_lane_message.sh")
+    assert argv[1:5] == ["r1", "watchdog", "tester", "wrapup"]
+    assert argv[argv.index("--minutes") + 1] == "5" and argv[argv.index("--runs") + 1] == "/runs"
+    [event] = [row for row in watched.events() if row["kind"] == "lane-wrap-up"]
+    assert event["wake"] is True
+    # Time between the interrupt and the resumed turn is not work.
+    watched.resume(1600)
+    assert watched.at(1600 + 299) == "watching"
+    assert watched.at(1600 + 300) == "capped"  # 1500 s + 300 s
+    assert len(watched.delivered) == 1  # one wrap-up per lane
+    assert watched.stops == ["r1:tester", "r1:tester"]
+
+
+def test_an_undelivered_wrap_up_ends_the_lane_as_capped(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=True)
+    _commit(watched.repo, T0 + 100, "a")
+    assert watched.at(1500) == "wrapping"
+    assert watched.at(1500 + 300) == "wrapping"
+    assert watched.at(1500 + 301) == "capped"
+    [event] = [row for row in watched.events() if row["kind"] == "refusal-lane-cap"]
+    assert "did not resume it" in str(event["detail"])
+    # Whatever became of the notice, the lane is stopped again before it is left unwatched.
+    assert watched.stops == ["r1:tester", "r1:tester"]
+
+
+def test_a_wrap_up_that_cannot_start_leaves_the_lane_running_to_its_cap(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=True)
+    watched.watch.deliver = lambda argv: "not started: no environment"
+    _commit(watched.repo, T0 + 100, "a")
+    assert watched.at(1500) == "watching" and watched.stops == []
+    assert watched.at(1600) == "watching"  # one attempt, not one per poll
+    assert watched.at(1800) == "capped"
+
+
+def test_the_wrap_up_delivery_runs_in_its_own_session_from_the_recorded_environment(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    env_file = tmp_path / "coder-delivery.env"
+    env_file.write_text(f"PATH={os.environ['PATH']}\nFACTORY_GENESIS=/keys/genesis\n")
+    env_file.chmod(0o644)
+    log = tmp_path / "coder-wrapup.log"
+    probe = ["sh", "-c", 'echo "genesis=$FACTORY_GENESIS home=${HOME:-none}"; ps -o sid= -p $$']
+    assert lane_watchdog.spawn_delivery(probe, env_file, log).startswith("not started")
+    env_file.chmod(0o600)
+    assert lane_watchdog.spawn_delivery(probe, env_file, log).startswith("started")
+    for _ in range(50):
+        if log.exists() and len(log.read_text().splitlines()) >= 2:
+            break
+        time.sleep(0.1)
+    shown, session = log.read_text().splitlines()[:2]
+    assert shown == "genesis=/keys/genesis home=none"  # exactly the recorded names
+    assert int(session) != os.getsid(0)  # survives the watcher's window being killed
+
+
+def test_a_lane_without_a_resumable_thread_is_stopped_at_the_cap_without_a_wrap_up(
+    tmp_path: Path,
+) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=False)
+    _commit(watched.repo, T0 + 100, "a")
+    assert watched.at(1500) == "watching"
+    assert watched.at(1800) == "capped" and watched.delivered == []
+
+
+def test_a_coder_is_paused_for_review_and_its_paused_time_is_not_work(tmp_path: Path) -> None:
+    """Terminal-Bench 4: reviews every 18 minutes against one review at the first stop raised
+    solves from 15.8% to 28.9% (+13 points, 95% CI 0 to +26) with the same models."""
+
+    watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080,
+                                       "review_wait_s": 900}, thread=True)
+    _commit(watched.repo, T0 + 100, "a")
+    _commit(watched.repo, T0 + 1000, "b")
+    assert watched.at(1079) == "watching"
+    assert watched.at(1080) == "paused" and watched.stops == ["r1:tester"]
+    [due] = [row for row in watched.events() if row["kind"] == "lane-review-due"]
+    assert due["wake"] is True and "tmux_lane_message.sh r1 validator tester review" in str(
+        due["detail"])
+    # Paused: no stall, no cap, one overdue reminder when the review is late.
+    assert watched.at(1080 + 900) == "paused"
+    assert watched.at(1080 + 901) == "paused"
+    assert watched.at(1080 + 5000) == "paused"
+    overdue = [row for row in watched.events() if row["kind"] == "lane-review-overdue"]
+    assert len(overdue) == 1
+    # The review resumes the lane: the next pause comes after another 18 minutes of work.
+    watched.resume(9000)
+    _commit(watched.repo, T0 + 9500, "c")
+    assert watched.at(9000 + 1079) == "watching"
+    assert watched.at(9000 + 1080) == "paused"
+    assert json.loads((watched.lanes / "tester-watch.json").read_text())["reviews"] == 2
+
+
+def test_a_review_pause_carries_the_stall_window_instead_of_resetting_it(tmp_path: Path) -> None:
+    """Without the carry, a pause every 18 minutes would grant a fresh 15-minute read allowance
+    each time, and a Coder that stopped committing would never be stall-stopped."""
+
+    watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080},
+                      thread=True)
+    _commit(watched.repo, T0 + 120, "only")
+    assert watched.at(1080) == "paused"  # 180 s past the read allowance, carried
+    watched.resume(5000)
+    assert watched.at(5000 + 1019) == "watching"  # 1019 + 180 = 1199 s idle
+    assert watched.at(5000 + 1021) == "stalled"
+
+
+def test_a_pause_that_did_not_stop_the_lane_is_cancelled(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080},
+                      thread=True)
+    _commit(watched.repo, T0 + 600, "a")
+    assert watched.at(1080) == "paused"
+    live = subprocess.CompletedProcess((), 0, "tester @6\n", "")
+    watched.watch.tmux = lambda *a: (
+        live if a[0] == "list-windows" else subprocess.CompletedProcess(a, 0, "0\n", ""))
+    assert watched.at(1080 + 30) == "paused"  # within the stop's grace
+    assert watched.at(1080 + 61) == "watching"
+    assert [row["kind"] for row in watched.events()].count("lane-review-cancelled") == 1
+
+
+def test_a_new_round_closes_a_slot_left_paused(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080},
+                      thread=True)
+    _commit(watched.repo, T0 + 600, "a")
+    assert watched.at(1080) == "paused"
+    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == ["tester"]
+    [output] = watched.rows("lane-output.jsonl")
+    assert output["outcome"] == "superseded" and output["commits"] == 1
+    assert watched.at(9000) == "superseded"
+    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == []
+
+
+def test_no_review_pause_is_taken_when_the_wrap_up_is_near_or_a_question_is_pending(
+    tmp_path: Path,
+) -> None:
+    from harness.lane_dialogue import record_question
+
+    near = Watched(tmp_path / "near", caps={"wall_cap_s": 1800},
+                   watch={**RESUMABLE, "review_every_s": 1260}, thread=True)
+    _commit(near.repo, T0 + 100, "a")
+    assert near.at(1260) == "watching"  # 540 s left, inside the wrap-up plus headroom
+    assert near.at(1500) == "wrapping"
+    asking = Watched(tmp_path / "asking", watch={"runs_dir": "/runs", "review_every_s": 600},
+                     thread=True)
+    record_question(asking.root, "tester", "Which clock does the contract's `at` mean?")
+    assert asking.at(700) == "watching" and asking.stops == []
+    unrecorded = Watched(tmp_path / "unrecorded", watch={"runs_dir": "/runs",
+                                                         "review_every_s": 600}, thread=True)
+    (unrecorded.lanes / "tester-delivery.env").unlink()
+    _commit(unrecorded.repo, T0 + 100, "a")
+    assert unrecorded.at(700) == "watching" and unrecorded.stops == []
+
+
+def test_remaining_reports_the_cap_as_the_watchdog_counts_it(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 1800})
+    watched.at(600)
+    assert lane_watchdog.remaining(watched.root, "tester", now=watched.clock).startswith(
+        "time left: 20m 00s of this lane's 30m cap")
+    uncapped = Watched(tmp_path / "uncapped")
+    assert lane_watchdog.remaining(uncapped.root, "tester") == "no wall-clock cap on this lane"
+
+
 # -- 5. the qualification probe -------------------------------------------------------------
 
 
@@ -625,6 +824,69 @@ def test_a_tester_prompt_carries_the_testing_standard_itself(tmp_path: Path) -> 
     assert lanes.lane("coder").returncode == 0
     coder = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "FACTORY_TESTING_STANDARD" not in coder
+
+
+def test_a_coder_prompt_carries_the_coder_doctrine_its_clock_and_its_review_cadence(
+    tmp_path: Path,
+) -> None:
+    """A Coder with a compact brief stops early (Terminal-Bench 4: 1-3 minute sessions); one
+    primed with the doctrine kept building. It is told its cap, how to read what is left, the
+    wrap-up it will get, and that the Validator will pause it for reviews."""
+
+    lanes = Lanes(tmp_path)
+    assert lanes.lane("coder", "--wall-cap-minutes", "60").returncode == 0
+    prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
+    standard = REPO / "docs" / "standards" / "HOW-WE-WRITE-CODE.md"
+    doctrine = REPO / "prompts" / "engineer.md"
+    for key, path in (("coding-standard", standard), ("coder-doctrine", doctrine)):
+        assert f"<<<FACTORY_CODER_DOCTRINE {key} digest={_sha(path)}>>>" in prompt
+        assert path.read_text(encoding="utf-8").strip() in prompt
+    assert (prompt.index("FACTORY TMUX LANE PROTOCOL")
+            < prompt.index("MANDATORY FIRST READING — THE CODER DOCTRINE")
+            < prompt.index("VERBATIM LANE TASK"))
+    assert "capped at 60 minutes of active time" in prompt
+    assert "lane_watchdog.py remaining --root" in prompt
+    assert "About 5 minutes before the cap you receive FACTORY_WRAP_UP" in prompt
+    assert "Every 18 minutes of work the watchdog pauses this lane" in prompt
+    assert "FACTORY_TESTING_STANDARD" not in prompt
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["coder_doctrine"]["sources"]["coder-doctrine"]["digest"] == _sha(doctrine)
+    assert row["testing_standard"] is None
+    assert row["watch"]["wrap_s"] == 300 and row["watch"]["review_every_s"] == 1080
+    assert row["watch"]["runs_dir"] == str(lanes.root.parent)
+    # What the watcher needs to deliver the wrap-up itself, owner-only.
+    delivery = lanes.root / "tmux-lanes" / "coder-delivery.env"
+    assert delivery.stat().st_mode & 0o777 == 0o600
+    recorded = dict(line.split("=", 1) for line in delivery.read_text().splitlines())
+    assert {"PATH", "FACTORY_CLI", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
+            "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CONFIG_MANIFEST"} <= set(recorded)
+
+
+def test_review_pauses_are_for_codex_coder_launches_and_can_be_turned_off(
+    tmp_path: Path,
+) -> None:
+    lanes = Lanes(tmp_path)
+    refused = lanes.lane("tester", "--review-every-minutes", "10")
+    assert refused.returncode == 64 and "Coder launch only" in refused.stderr
+    _cursor_stub(lanes.stub, signed_in=True)
+    refused = lanes.lane("coder", "--agent", "cursor-agent", "--wall-cap-minutes", "60",
+                         "--wrap-up-minutes", "5")
+    assert refused.returncode == 64 and "resumable codex lane" in refused.stderr
+    assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
+    prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
+    assert "pauses this lane" not in prompt and "capped at" not in prompt
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["watch"]["review_every_s"] == 0 and row["watch"]["wrap_s"] == 0
+
+
+def test_a_coder_launch_is_refused_when_the_doctrine_cannot_be_injected(tmp_path: Path) -> None:
+    home = tmp_path / "factory-without-doctrine"
+    (home / "prompts").mkdir(parents=True)
+    (home / "prompts" / "engineer.md").write_text("# /engineer\n")
+    with pytest.raises(testing_standard.StandardMissing, match="How We Write Code"):
+        testing_standard.build(home, role="coder")
+    with pytest.raises(testing_standard.StandardMissing, match="never given the testing"):
+        testing_standard.build(REPO, tmp_path / "strategy.md", role="coder")
 
 
 def test_a_tester_launch_is_refused_when_the_standard_cannot_be_injected(

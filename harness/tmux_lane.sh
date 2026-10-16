@@ -12,7 +12,11 @@
 #   - refuses a metered agent without a per-round spend cap and a declared rate, reserves the
 #     cap in the run's objective-budget ledger (harness/lane_budget.py), and refuses a metered
 #     agent/model that has not passed a qualification probe;
-#   - puts the founder's testing standard into every Tester prompt (harness/testing_standard.py);
+#   - puts the founder's testing standard into every Tester prompt and the Coder doctrine into
+#     every Coder prompt (harness/testing_standard.py);
+#   - tells the lane its wall-clock cap and how to read what is left of it, and, for a resumable
+#     Codex lane, has the watcher send a wrap-up notice --wrap-up-minutes before the cap and pause a
+#     Coder for the Validator's progress review every --review-every-minutes of work;
 #   - starts a watcher window beside the lane (harness/lane_watchdog.py lane) that stops a stalled or
 #     capped lane and wakes the operator when the lane finishes. A lane with no watcher is not
 #     launched.
@@ -26,6 +30,8 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
                   [--instance <name>] [--round <tag>] [--metered]
                   [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
+                  [--wrap-up-minutes <min, default 5; 0 = none>]
+                  [--review-every-minutes <min, Coder launches default 18; 0 = none>]
                   [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
@@ -52,6 +58,8 @@ READ_ALLOWANCE_MINUTES=15
 STALL_WINDOW_MINUTES=20
 FIRST_COMMIT_MINUTES=""
 MIN_COMMITS=1
+WRAP_UP_MINUTES=""
+REVIEW_EVERY_MINUTES=""
 LANE_ENV_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -70,6 +78,8 @@ while [ "$#" -gt 0 ]; do
     --stall-window-minutes) STALL_WINDOW_MINUTES="$2"; shift 2 ;;
     --first-commit-minutes) FIRST_COMMIT_MINUTES="$2"; shift 2 ;;
     --min-commits) MIN_COMMITS="$2"; shift 2 ;;
+    --wrap-up-minutes) WRAP_UP_MINUTES="$2"; shift 2 ;;
+    --review-every-minutes) REVIEW_EVERY_MINUTES="$2"; shift 2 ;;
     --cache-env) LANE_ENV_ARGS+=(--cache-env "$2"); shift 2 ;;
     --runtime-dir) LANE_ENV_ARGS+=(--runtime-dir "$2"); shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
@@ -202,10 +212,11 @@ if [ "$ACTION" != "freeze" ]; then
   # wall-capped. Each field prints on its own line; an error prints the refusal.
   CAPS=$("$FACTORY_PYTHON" - "$METERED" "$ACTION" "$SPEND_CAP" "$RATE" "$WALL_CAP_MINUTES" \
     "$READ_ALLOWANCE_MINUTES" "$STALL_WINDOW_MINUTES" "$FIRST_COMMIT_MINUTES" "$MIN_COMMITS" \
-    <<'PY'
+    "$ROLE" "$WRAP_UP_MINUTES" "$REVIEW_EVERY_MINUTES" "$AGENT" <<'PY'
 import decimal, sys
 
-metered, action, cap, rate, wall, allowance, window, first, minimum = sys.argv[1:]
+(metered, action, cap, rate, wall, allowance, window, first, minimum,
+ role, wrap, review, agent) = sys.argv[1:]
 
 def amount(text, label):
     try:
@@ -242,9 +253,34 @@ window_s = int(amount(window, "--stall-window-minutes") * 60)
 first_s = int(amount(first, "--first-commit-minutes") * 60) if first else read_s
 if not minimum.isdigit() or int(minimum) < 1:
     raise SystemExit("--min-commits must be a positive integer")
+
+def minutes_or_off(text, label, default):
+    if text == "":
+        return default
+    if text == "0":
+        return 0
+    return int(amount(text, label) * 60)
+
+# Both end the live turn and continue the lane's retained Codex thread, so only a codex or
+# codex-ollama lane can have them. A wrap-up needs a cap to precede and room inside it: none on
+# a cap under three wrap-ups. Progress reviews pause a Coder doing real work, never a
+# qualification probe or a Tester.
+resumable = agent in {"codex", "codex-ollama"}
+wrap_s = minutes_or_off(wrap, "--wrap-up-minutes", 5 * 60 if resumable else 0) if wall_cap else 0
+if wrap_s and int(wall_cap) < 3 * wrap_s:
+    wrap_s = 0
+review_s = minutes_or_off(
+    review, "--review-every-minutes",
+    18 * 60 if resumable and role == "coder" and action == "launch" else 0,
+)
+if (wrap_s or review_s) and not resumable:
+    raise SystemExit("--wrap-up-minutes and --review-every-minutes need a resumable codex lane")
+if review_s and (role != "coder" or action != "launch"):
+    raise SystemExit("--review-every-minutes applies to a Coder launch only")
 fields = [
     "" if spend_cap is None else str(spend_cap), "" if per_hour is None else str(per_hour),
     wall_cap, microusd, str(read_s), str(window_s), str(first_s), minimum,
+    str(wrap_s), str(review_s),
 ]
 sys.stdout.write("".join(field + "\n" for field in fields))
 PY
@@ -258,7 +294,8 @@ PY
   { IFS= read -r SPEND_CAP && IFS= read -r RATE && IFS= read -r WALL_CAP_S &&
     IFS= read -r CAP_MICROUSD && IFS= read -r READ_ALLOWANCE_S &&
     IFS= read -r STALL_WINDOW_S && IFS= read -r FIRST_COMMIT_S &&
-    IFS= read -r MIN_COMMITS; } <<< "$CAPS" || refuse 70 "lane caps could not be read back"
+    IFS= read -r MIN_COMMITS && IFS= read -r WRAP_S && IFS= read -r REVIEW_S; } <<< "$CAPS" ||
+    refuse 70 "lane caps could not be read back"
 
   REPOSITORY_RECEIPT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" \
     "$REPO_ROOT/harness/lane_repository.py" validate --source "$REPOSITORY") || \
@@ -436,9 +473,18 @@ PY
   esac
 
   # Every Tester prompt opens with the founder's testing standard, the Tester doctrine and the
-  # run's testing strategy, as bytes with digests. Without them the Tester does not start.
+  # run's testing strategy, as bytes with digests. Without them the Tester does not start. Every
+  # Coder prompt opens the same way with How We Write Code and the Coder doctrine.
   STANDARD_RECEIPT='null'
+  CODER_RECEIPT='null'
   STANDARD_BLOCK=""
+  if [ "$ROLE" = coder ]; then
+    STANDARD_BLOCK="$TMUX_ROOT/$SLOT-coder-doctrine.md"
+    CODER_RECEIPT=$("$FACTORY_PYTHON" "$D/testing_standard.py" block --role coder \
+      --factory-home "$REPO_ROOT" --output "$STANDARD_BLOCK" 2>&1) || \
+      refuse 70 "CODER DOCTRINE: $CODER_RECEIPT" \
+        "restore docs/standards/HOW-WE-WRITE-CODE.md and prompts/engineer.md in $REPO_ROOT"
+  fi
   if [ "$ROLE" = tester ]; then
     STANDARD_BLOCK="$TMUX_ROOT/$SLOT-testing-standard.md"
     STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
@@ -493,12 +539,16 @@ PY
   ) || exit $?
 
   PROMPT="$TMUX_ROOT/$SLOT-prompt.txt"
+  # What is left of the cap, as the watcher counts it; the lane runs this itself.
+  printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
+    "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
+  case "$AGENT" in codex|codex-ollama) RESUMABLE=1 ;; *) RESUMABLE=0 ;; esac
   PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
-    "$LANE_ENV_NOTICE" <<'PY'
+    "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" <<'PY'
 import hashlib, os, pathlib, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-role, slot, standard, environment = sys.argv[3:]
+role, slot, standard, environment, wall, wrap, review, resumable, clock = sys.argv[3:]
 task = source.read_bytes()
 protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - You are a real author agent, not a prompt printer. Work the task and use tools.
@@ -520,6 +570,27 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - A turn ending is not the run ending. The Validator alone judges and Gate L alone
   closes the run.
 """
+if wall:
+    protocol += (
+        f"- This lane's work is capped at {int(wall) // 60} minutes of active time across its\n"
+        f"  turns; `{clock}` prints what is left. Use that time: a requirement you have not\n"
+        "  exercised is not done.\n"
+    )
+    if int(wrap) and resumable == "1":
+        protocol += (
+            f"- About {int(wrap) // 60} minutes before the cap you receive FACTORY_WRAP_UP. Then start\n"
+            "  nothing new: finish or revert any half-made edit, leave the work building and\n"
+            "  running, commit, and end with the done line. At the cap the watchdog stops the lane.\n"
+        )
+    else:
+        protocol += "- At the cap the watchdog stops the lane: keep the committed work building.\n"
+if int(review) and resumable == "1":
+    protocol += (
+        f"- Every {int(review) // 60} minutes of work the watchdog pauses this lane and the Validator\n"
+        "  reviews it against the ratified specification; a FACTORY_REVIEW then resumes this\n"
+        "  same session. Weigh it against the specification's own words and keep what already\n"
+        "  works.\n"
+    )
 if environment:
     protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
 raw = protocol.encode("utf-8")
@@ -589,6 +660,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
     "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
+    "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "$CODER_RECEIPT" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
@@ -598,8 +670,9 @@ import datetime, json, sys
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
     standard, lane_log, lane_exits, qualifications, lane_env, model_source,
-) = sys.argv[1:37]
-model_config = sys.argv[37:]
+    wrap_s, review_s, runs_dir, coder_doctrine,
+) = sys.argv[1:41]
+model_config = sys.argv[41:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -632,6 +705,12 @@ print(json.dumps({
         "read_allowance_s": int(read_allowance),
         "stall_window_s": int(stall_window),
         "poll_s": 30,
+        # lane_watchdog.py: the wrap-up before the cap and the Coder's progress-review pauses,
+        # both delivered by resuming the lane's thread through tmux_lane_message.sh.
+        "wrap_s": int(wrap_s),
+        "review_every_s": int(review_s),
+        "review_wait_s": 900,
+        "runs_dir": runs_dir,
     },
     "qualify": (
         {"first_commit_s": int(first_commit), "min_commits": int(min_commits),
@@ -639,6 +718,7 @@ print(json.dumps({
         if action == "qualify" else None
     ),
     "testing_standard": json.loads(standard),
+    "coder_doctrine": json.loads(coder_doctrine),
     "lane_log": lane_log,
     "lane_exits": lane_exits,
     "tmux_target": f"{run}:{lane}",
@@ -730,7 +810,24 @@ row["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="sec
 print(json.dumps(row, sort_keys=True, separators=(",", ":")))
 PY
   }
+  # A wrap-up notice is a lane message the watcher starts on its own, and the watcher's scrubbed
+  # environment cannot load the run's context. Record, owner-only, the environment this launch
+  # ran under for the names tmux_lane_message.sh reads; without the record a lane keeps the plain
+  # cap stop.
+  if [ "$WRAP_S" != 0 ]; then
+    DELIVERY_ENV="$TMUX_ROOT/$SLOT-delivery.env"
+    ( umask 077; : > "$DELIVERY_ENV"
+      for NAME in FACTORY_CLI FACTORY_GENESIS FACTORY_ROOT_PUBLIC_KEY FACTORY_TESSERA_BIN \
+        FACTORY_RESUME_CHECKPOINT FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST \
+        FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_KEYS_DIR FACTORY_PYTHON FACTORY_RUNS_DIR \
+        HOME USER PATH LANG TERM SHELL TMPDIR CODEX_HOME TMUX; do
+        VALUE="${!NAME:-}"
+        [ -n "$VALUE" ] && [[ "$VALUE" != *$'\n'* ]] && printf '%s=%s\n' "$NAME" "$VALUE" >> "$DELIVERY_ENV"
+      done; true )
+  fi
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
+  # A round its watcher had paused for review, or was wrapping up, ends as superseded.
+  "$FACTORY_PYTHON" "$D/lane_watchdog.py" close --root "$ROOT" --lane "$LANE" --by "$SLOT" || true
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
