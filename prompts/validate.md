@@ -586,6 +586,23 @@ two separate claims about two separate parties — keep them apart.**
    confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
    resolve or escalate it instead of treating its expected silence as a liveness alarm.
 
+   **Review the Coder at each pause, while it can still change course.** A Codex Coder lane
+   pauses after every 18 minutes of work (`tmux_lane.sh --review-every-minutes`) and wakes you
+   with `lane-review-due`. Freeze it (`tmux_lane.sh <run> coder freeze`), then read and exercise
+   the frozen tree against the ratified specification: run what exists, compare its outputs
+   with each requirement's own words, and look for a wrong method, a misread requirement, or
+   work the specification does not ask for. Resume it with `tmux_lane_message.sh <run>
+   validator <slot> review --verdict on-track|redirect --review-file <file>`: lead with the one
+   change that matters most, as requirement ids and observed behaviour, never the Tester's tests
+   (the coder leak guard refuses them). The lane does no work until you answer, so answer within
+   minutes; a late review wakes you again (`lane-review-overdue`). A review freeze is not the
+   candidate: the lane keeps working after it, so freeze again when it is done. On Terminal-Bench 4 with the
+   same models, reviews every 18 minutes instead of one at the first stop raised full solves from
+   15.8% to 28.9%, and 14 of 16 reviews in one run named a concrete, measured defect the builder
+   then fixed. Five minutes before a lane's cap the watchdog interrupts its turn and resumes it
+   with a generated `FACTORY_WRAP_UP`, so a capped lane leaves work that builds, not a half-made
+   edit.
+
 7. **Tell the Coder what the failure's nature requires, and no more.** Classify the failure
    first (TESTING.md T37): a bad implementation, an architectural problem, a bad test, or a
    specification defect. Then tell the Coder only what that class needs. A bad implementation:
@@ -596,18 +613,25 @@ two separate claims about two separate parties — keep them apart.**
    the trace, or the fixture: the Coder never sees the tests, as the Tester never sees the
    code. A suite that talks back becomes an interactive debugger, and an implementation tuned
    against a talkative suite is tuned to the oracle instead of the specification.
-   `inject.sh --results` carries only the bare PASS/FAIL; send the finding as an ordinary
-   message, which the oracle-leak guard still screens.
+   `inject.sh --results` carries only the bare PASS/FAIL. Send the finding into the Coder's
+   own thread, `tmux_lane_message.sh <run> validator <slot> review --verdict repair
+   --review-file <file>`, which the oracle-leak guard still screens: the Coder keeps its context
+   and its earlier checks, where a new `--round` starts from nothing. (`inject.sh` types into a
+   pane, which only a `codex-interactive` lane reads.) Launch a new round only for a lane with no
+   resumable thread, one that reached its cap, or one whose context is spent. **Reproduce before you route.** A Tester FAIL
+   is an allegation until you have observed the behaviour from the implementation's own outputs;
+   an unreproduced FAIL is a candidate bad test, never a Coder defect. Repairs driven by
+   unreproduced failures broke working code on Terminal-Bench 4.
 
 ---
 
 7. **Launch every lane through the Factory harness, never a run-local launcher.** `harness/tmux_lane.sh` (author lanes) and `harness/dispatch_lane.sh` (qualified lanes) carry the controls a run depends on:
    - a non-interactive sign-in preflight: a signed-out agent, or one whose check waits for input, is refused with the exact command that fixes it;
    - a per-round spend cap for every metered model (`--spend-cap-usd` and `--usd-per-hour`), reserved against the run's objective budget (`factory.sh --budget`) and enforced as wall-clock time, because no agent we run reports live spend;
-   - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`;
-   - the founder's testing standard, `TESTING.md` and the Tester doctrine with the run's TESTING-STRATEGY, injected into every Tester prompt.
+   - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`. For a Codex lane it also sends the wrap-up notice five minutes before the cap (`--wrap-up-minutes`) and pauses a Coder for your review every 18 minutes of work (`--review-every-minutes`); the lane prompt states the cap and the command that prints what is left;
+   - the founder's testing standard, `TESTING.md` and the Tester doctrine with the run's TESTING-STRATEGY, injected into every Tester prompt; How We Write Code and the Coder doctrine (`engineer.md`), injected into every Coder prompt.
 
-   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama` and `cursor-agent`; a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
+   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama`, `cursor-agent`, and the registry harnesses `claude`, `agy` and `prime-agent` (`harness/agents.py`); a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
 
    Before a model takes a lane, it passes a capped qualification probe, and a metered model cannot launch without one:
    - `harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> --agent <agent> --model <model> [--spend-cap-usd <usd> --usd-per-hour <usd>]`, always wall-capped (30 minutes by default);

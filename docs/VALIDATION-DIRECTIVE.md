@@ -302,6 +302,13 @@ obtained. A checked item without that citation is still unchecked.
    Orchestrator must judge its substantive adequacy. Open findings, stale digests, missing members,
    or an out-of-date Orchestrator assessment block.
 
+   A Tester FAIL is an allegation until the Validator reproduces the behaviour from the
+   implementation's own outputs; an unreproduced FAIL is a candidate bad test and is never routed
+   to the Coder as a defect. A reproduced finding goes into the Coder's own thread
+   (`tmux_lane_message.sh <run> validator <slot> review --verdict repair`), and the Validator
+   also reviews a running Coder at each `lane-review-due` pause against the ratified
+   specification, so a wrong approach is redirected while the lane can still change course.
+
 8. **Fresh baseline, controls, and final gate.** The trusted baseline is green
    before new tests are trusted, unless a pre-existing red is individually
    attributed and recorded. In a correction, the negative control (**red-now**)

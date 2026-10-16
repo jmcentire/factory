@@ -444,6 +444,26 @@ machine, before the agent starts and while it runs:
   lane repository's reflog file, never from running git there. Each lane's end appends its
   commits, time to first commit, wall time, spend and commits per dollar to
   `tmux-lanes/lane-output.jsonl` (`lane_watchdog.py report --root <run root>`).
+- **Wrap-up before the cap.** A lane is told its cap in its prompt, with the command that prints
+  what is left (`lane_watchdog.py remaining --root <run root> --slot <slot>`). For a `codex` or
+  `codex-ollama` lane the watcher interrupts the live turn `--wrap-up-minutes` (default 5) before
+  the cap and resumes the thread with a generated `FACTORY_WRAP_UP` (`tmux_lane_message.sh <run>
+  watchdog <slot> wrapup`), so the lane spends its last minutes leaving work that builds instead
+  of being stopped mid-edit. The cap stop still follows. The watcher's environment is scrubbed, so
+  the launch records, owner-only, the environment a lane message needs
+  (`tmux-lanes/<slot>-delivery.env`) and the notice runs in its own session from it, its output in
+  `<slot>-wrapup.log`; a notice that does not resume the lane within five minutes ends it as
+  capped.
+- **Progress reviews.** A `codex` Coder launch pauses after every `--review-every-minutes`
+  (default 18; `0` turns it off) of active work: the watcher ends the turn, keeps the pane, and
+  wakes the Validator (`lane-review-due`). The Validator freezes the lane, reviews the frozen tree
+  against the ratified specification and resumes the same thread with `tmux_lane_message.sh <run>
+  validator <slot> review --verdict on-track|redirect|repair --review-file <file>`, a
+  `FACTORY_REVIEW` that passes the coder leak guard. Paused time is not counted toward the cap; a
+  review missing after 15 minutes wakes the Validator again (`lane-review-overdue`). The stall
+  window carries across a pause instead of granting a fresh read allowance, and a new round
+  launched over a paused lane closes it as `superseded`. The same `review --verdict repair`
+  carries a finding after a judge into the Coder's own thread; a lane at its cap refuses it.
 - **Qualification probe.** `tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <brief>
   [--agent ... --model ...]` runs a small capped brief (always wall-capped, 30 minutes by
   default) and records time to first commit, commit count and a pass or fail
