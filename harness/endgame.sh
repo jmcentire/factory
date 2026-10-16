@@ -141,12 +141,40 @@ resource_event() {
 }
 resource_event '{}' planned
 mkdir -p "$(dirname "$FRESH")"
-# FACTORY_LFS_OBJECTS names a local Git LFS object directory (for example a clone's
-# .git/lfs/objects). Each LFS pointer is then judged as the content its digest names, so a
-# target's gates do not run against pointer stubs. Unset, pointers stay pointers and are counted.
+TARGET_CONF="${HARNESS_TARGET_CONF:-$FACTORY_WORKDIR/.factory/target.conf}"
+# Git LFS: with a store, each LFS pointer is judged as the content its digest names, so a
+# target's gates do not run against pointer stubs. The store is FACTORY_LFS_OBJECTS when set,
+# otherwise the LFS directory of the local operator repository the run resolved its objects
+# from (the `target-contact` resource, `resolve-target --object-source`). Every object is
+# verified against its pointer, so the store's location never chooses a judged byte.
+# `lfs: required` in target.conf makes any pointer left unhydrated fail the verdict.
+LFS_REQUIRED=0
+LFS_SETTING_REFUSED=""
+if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
+  LFS_SETTING=$(grep -E '^lfs:' "$TARGET_CONF" | sed 's/^lfs:[[:space:]]*//; s/[[:space:]]*$//' | sort -u)
+  case "$LFS_SETTING" in
+    "") ;;
+    required) LFS_REQUIRED=1 ;;
+    *) LFS_SETTING_REFUSED="lfs: in $TARGET_CONF must be 'required', not '$LFS_SETTING'" ;;
+  esac
+fi
+LFS_STORE="${FACTORY_LFS_OBJECTS:-}"
+LFS_STORE_FROM="FACTORY_LFS_OBJECTS"
+if [ -z "$LFS_STORE" ]; then
+  OBJECT_SOURCE=$(printf '%s' "$RESOURCES" | python3 -c 'import json, sys
+contact = json.load(sys.stdin).get("resources", {}).get("target-contact") or {}
+if (contact.get("baseline") or {}).get("mode") == "local-object-source":
+    print(contact.get("identifier", ""))')
+  if [ -n "$OBJECT_SOURCE" ] && SOURCE_GIT_DIR=$(python3 "$D/host_git.py" run \
+      --repository "$OBJECT_SOURCE" -- rev-parse --path-format=absolute --git-common-dir \
+      2>/dev/null) && [ -d "$SOURCE_GIT_DIR/lfs/objects" ]; then
+    LFS_STORE="$SOURCE_GIT_DIR/lfs/objects"
+    LFS_STORE_FROM="the run's local object source"
+  fi
+fi
 MATERIALIZE_ARGS=(--repository "$CANDIDATE" --commit "$SHA" --destination "$FRESH" --admit-symlinks)
-if [ -n "${FACTORY_LFS_OBJECTS:-}" ]; then
-  MATERIALIZE_ARGS+=(--lfs-objects "$FACTORY_LFS_OBJECTS")
+if [ -n "$LFS_STORE" ]; then
+  MATERIALIZE_ARGS+=(--lfs-objects "$LFS_STORE")
 fi
 if ! MATERIALIZED=$(python3 "$D/host_git.py" materialize "${MATERIALIZE_ARGS[@]}"); then
   resource_event '{"reason":"candidate materialization failed","residue":true}' failed || true
@@ -166,12 +194,28 @@ resource_event '{}' active
 FAILED=0
 say() { printf '%s\n' "$*"; }
 say "== Git LFS content in the judged checkout =="
-printf '%s' "$MATERIALIZED" | python3 -c 'import json, sys
+if [ -n "$LFS_STORE" ]; then
+  say "   store: $LFS_STORE (from $LFS_STORE_FROM)"
+else
+  say "   store: none (no FACTORY_LFS_OBJECTS, and no local object source with an LFS store)"
+fi
+LFS_LEFT=$(printf '%s' "$MATERIALIZED" | python3 -c 'import json, sys
 d = json.load(sys.stdin)
-hydrated, size, left = d["lfs_hydrated"], d["lfs_bytes"], d["lfs_pointers_left"]
-print(f"   hydrated: {hydrated} file(s), {size} bytes")
-if left:
-    print(f"   left as pointers: {left} file(s); set FACTORY_LFS_OBJECTS to judge their content")'
+print(d["lfs_hydrated"], d["lfs_bytes"], d["lfs_pointers_left"])')
+read -r LFS_HYDRATED LFS_BYTES LFS_LEFT <<<"$LFS_LEFT"
+say "   hydrated: $LFS_HYDRATED file(s), $LFS_BYTES bytes"
+if [ "$LFS_LEFT" -gt 0 ]; then
+  say "   left as pointers: $LFS_LEFT file(s)"
+  if [ "$LFS_REQUIRED" -eq 1 ]; then
+    say "   target.conf requires Git LFS content; resolve the target with --object-source from a"
+    say "   clone that has its LFS objects, or set FACTORY_LFS_OBJECTS"
+    FAILED=1
+  fi
+fi
+if [ -n "$LFS_SETTING_REFUSED" ]; then
+  say "   $LFS_SETTING_REFUSED"
+  FAILED=1
+fi
 if [ "$AGREEMENT_EVIDENCE_GREEN" -eq 1 ]; then
   say "== cross-path agreement evidence =="
   say "   exact-subject agreement evidence: GREEN"
@@ -214,7 +258,6 @@ gate "full gate suite" make ship
 gate "isolation proof" make test-isolation
 
 say "== live proof against the declared exact-target environment =="
-TARGET_CONF="${HARNESS_TARGET_CONF:-$FACTORY_WORKDIR/.factory/target.conf}"
 if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
   if ( cd "$FRESH" && HARNESS_DIR="$FACTORY_HARNESS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
        HARNESS_TARGET_CONF="$TARGET_CONF" "$D/proof.sh" "$RUN" ); then

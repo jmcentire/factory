@@ -418,5 +418,5 @@ def test_endgame_reads_the_candidate_only_through_host_git() -> None:
     assert '"$D/host_git.py" resolve --repository "$CANDIDATE"' in text
     assert 'MATERIALIZE_ARGS=(--repository "$CANDIDATE"' in text
     assert '"$D/host_git.py" materialize "${MATERIALIZE_ARGS[@]}"' in text
-    assert '--lfs-objects "$FACTORY_LFS_OBJECTS"' in text
+    assert '--lfs-objects "$LFS_STORE"' in text
     assert "A status that could not be read is not a clean status." in text
