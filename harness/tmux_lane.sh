@@ -22,7 +22,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options]
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
-                  [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <model>]
+                  [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent] [--model <model>]
                   [--instance <name>] [--round <tag>] [--metered]
                   [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
@@ -76,8 +76,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 AGENT="${AGENT_ARG:-codex}"
-case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent) ;;
-  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent" >&2; exit 64 ;;
+case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent) ;;
+  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent" >&2; exit 64 ;;
 esac
 [ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z0-9][a-z0-9-]{0,15}$ ]] || {
   echo "tmux-lane: --instance must be 1-16 lowercase letters, digits or '-'" >&2; exit 64;
@@ -428,6 +428,11 @@ PY
           refuse 70 "cursor-agent CLI contract lacks $REQUIRED ($AGENT_VERSION)"
       done
       CLI_CONTRACT="cursor-agent-print-v1" ;;
+    claude|agy|prime-agent)
+      # A registry harness (harness/agents.py): the registry builds its headless turn.
+      AGENT_VERSION=$("$AGENT_EXECUTABLE" --version 2>/dev/null | head -1) || \
+        refuse 70 "$AGENT CLI is not runnable"
+      CLI_CONTRACT="agent-registry-headless-v1" ;;
   esac
 
   # Every Tester prompt opens with the founder's testing standard, the Tester doctrine and the
@@ -658,7 +663,8 @@ PY
   LOCAL_ARGS=""
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
-  elif [ "$MODEL_SOURCE" = operator ] && [ "$AGENT" != "cursor-agent" ]; then
+  elif [ "$MODEL_SOURCE" = operator ] && [ "$AGENT" != "cursor-agent" ] && \
+    case "$AGENT" in claude|agy|prime-agent) false ;; *) true ;; esac; then
     LOCAL_ARGS="-m $MODEL"
   fi
   for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
@@ -678,8 +684,13 @@ PY
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
     "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS"
+  # On a host whose kernel will not give Codex's own sandbox a namespace (a gVisor container,
+  # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
+  CODEX_SANDBOX_ARG=""
+  [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
   case "$AGENT" in
     codex|codex-ollama)
+      [ -z "$CODEX_SANDBOX_ARG" ] || LOCAL_ARGS="$CODEX_SANDBOX_ARG${LOCAL_ARGS:+ $LOCAL_ARGS}"
       printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
@@ -691,6 +702,22 @@ PY
     cursor-agent)
       printf -v LANE_CMD '%s %s --prompt-arg %q -- agent -p %s --force --trust --workspace %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CURSOR_MODEL_ARGS" "$REPOSITORY" ;;
+    claude|agy|prime-agent)
+      # The harness's named credentials reach the lane through an owner-only file the wrapper
+      # loads, never through this launch string.
+      CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
+      ( umask 077; : > "$CREDENTIALS"
+        while IFS= read -r NAME; do
+          [ -n "$NAME" ] && [ -n "${!NAME:-}" ] && printf '%s=%s\n' "$NAME" "${!NAME}" >> "$CREDENTIALS"
+        done < <("$FACTORY_PYTHON" "$D/agents.py" credential-env --agent "$AGENT") )
+      TURN=()
+      while IFS= read -r -d '' PART; do TURN+=("$PART"); done < <(
+        "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$MODEL" --cwd "$REPOSITORY")
+      [ "${#TURN[@]}" -ge 2 ] || refuse 70 "the agent registry built no turn for $AGENT"
+      QUOTED_TURN=""
+      for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
+      printf -v LANE_CMD '%s %s --env-file %q --prompt-arg %q --%s' \
+        "$ENV_PREFIX" "$WRAP" "$CREDENTIALS" "$PROMPT" "$QUOTED_TURN" ;;
   esac
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"

@@ -42,9 +42,16 @@ ask it to recommend some; a launch that names none runs each agent's own configu
 
 | Role | Agents it can run | Naming a model (optional) |
 |---|---|---|
-| Validator | `codex` (default), `claude`, `ollama` (Codex on a local Ollama model) | `FACTORY_VALIDATOR_AGENT`, `FACTORY_VALIDATOR_MODEL` (`FACTORY_VALIDATOR_OLLAMA_MODEL`, required for `ollama`) |
-| Orchestrator | `agy` (default), `codex` | `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_ORCHESTRATOR_MODEL` (codex only; select agy's model inside agy with `/model`) |
-| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`) | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
+| Validator | `codex` (default), `claude`, `agy`, `prime-agent`, `ollama` (Codex on a local Ollama model) | `FACTORY_VALIDATOR_AGENT`, `FACTORY_VALIDATOR_MODEL` (`FACTORY_VALIDATOR_OLLAMA_MODEL`, required for `ollama`) |
+| Orchestrator | `agy` (default), `codex`, `claude`, `prime-agent` | `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_ORCHESTRATOR_MODEL` |
+| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`), `claude`, `agy`, `prime-agent` | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
+
+`harness/agents.py` is the registry behind `claude`, `agy` and `prime-agent`: each entry states
+how the harness takes a headless turn, a model, an effort and a session to resume, and which
+credential variables it reads. Those credentials reach a seat through an owner-only file, never
+the tmux launch string. A `prime-agent` model may name its provider (`provider/model`). On a host
+whose kernel cannot give Codex's sandbox a namespace (a gVisor container, for one), set
+`FACTORY_LANE_SANDBOX=off`: the container is then the sandbox.
 
 A `codex` lane with no `--model` runs the model your own Codex config selects. Each lane's launch
 record states the model it actually ran. Ollama models must already be on the machine

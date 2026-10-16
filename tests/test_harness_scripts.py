@@ -10679,19 +10679,19 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     assert "gpt-mine" not in tester_call
 
 
-def test_an_agy_orchestrator_refuses_a_model_it_cannot_be_given(tmp_path: Path) -> None:
-    """agy has no model flag: a named Orchestrator model for it is refused, not silently dropped."""
+def test_an_agy_orchestrator_receives_the_model_the_operator_names(tmp_path: Path) -> None:
+    """agy takes a model flag: a named Orchestrator model reaches its launch, never dropped."""
 
-    task = "Name a model agy cannot take."
+    task = "Name a model for agy."
     operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
-    refused = run(
+    launched = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
         {**env, "FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
     )
-    assert refused.returncode == 64 and "select the model inside agy" in refused.stderr
-    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
+    assert launched.returncode == 0, launched.stderr
+    assert "--model gemini-test" in tmux_log.read_text()
 
 
 def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:

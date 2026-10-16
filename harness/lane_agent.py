@@ -90,6 +90,12 @@ AGENTS: Mapping[str, Agent] = {
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
     # Cursor's agent CLI in print mode: `agent -p [--model <m>] --force --trust --workspace <lane>`.
     "cursor-agent": Agent("cursor-agent", "agent", "argv", False, "cursor-status"),
+    # Harnesses whose headless turn comes from the registry (harness/agents.py): any of them may
+    # hold any seat. Sign-in is the harness's own; the check proves the CLI runs headless and
+    # that a credential it names is present (by variable or its own config), never its value.
+    "claude": Agent("claude", "claude", "argv", False, "registry"),
+    "agy": Agent("agy", "agy", "argv", False, "registry"),
+    "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry"),
 }
 
 
@@ -190,6 +196,11 @@ def preflight(
                 remediation,
             )
         return "cursor-agent-status"
+    if chosen.auth == "registry":
+        _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
+                remediation=f"install {chosen.executable} and sign it in as this user",
+                label=chosen.name)
+        return "registry-cli-runs"
     # codex-ollama: the local Ollama server answers for the model (harness/model_availability.sh
     # has already run `ollama show`); Codex's --oss mode uses no ChatGPT sign-in. ollama.com
     # sign-in for a :cloud model has no non-interactive status command to check.
@@ -325,8 +336,13 @@ def run_lane(
     exits: pathlib.Path,
     prompt: pathlib.Path | None = None,
     terminal: bool = False,
+    env_file: pathlib.Path | None = None,
 ) -> int:
-    """Run one lane process to its end and record that end."""
+    """Run one lane process to its end and record that end.
+
+    ``env_file`` (owner-only ``NAME=value`` lines) adds a harness's named credentials to the
+    child's environment, so they never appear on a command line or in the tmux launch string.
+    """
 
     argv = list(command)
     if argv[:1] == ["--"]:
@@ -335,6 +351,14 @@ def run_lane(
         raise ValueError("lane command is empty")
     if prompt is not None:
         argv.append(_read_prompt(prompt, MAX_ARGV_PROMPT))
+    child_env = dict(os.environ)
+    if env_file is not None:
+        if env_file.stat().st_mode & 0o077:
+            raise ValueError(f"credential file {env_file} is readable by others")
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.isidentifier():
+                child_env[name] = value
     stopped = False
     process: subprocess.Popen[bytes] | None = None
 
@@ -349,11 +373,12 @@ def run_lane(
     }
     try:
         if terminal:
-            process = subprocess.Popen(argv)
+            process = subprocess.Popen(argv, env=child_env)
             rc = process.wait()
         else:
             process = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=child_env,
             )
             assert process.stdout is not None
             for raw in process.stdout:
@@ -485,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--exits", type=pathlib.Path, required=True)
     runner.add_argument("--prompt-arg", type=pathlib.Path)
     runner.add_argument("--terminal", action="store_true")
+    runner.add_argument("--env-file", type=pathlib.Path)
     runner.add_argument("lane_command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     try:
@@ -523,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
             exits=arguments.exits,
             prompt=arguments.prompt_arg,
             terminal=arguments.terminal,
+            env_file=arguments.env_file,
         )
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)

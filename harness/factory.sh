@@ -59,13 +59,15 @@ VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
 ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
 VALIDATOR_MODEL="${FACTORY_VALIDATOR_MODEL:-}"
 ORCHESTRATOR_MODEL="${FACTORY_ORCHESTRATOR_MODEL:-}"
+# Any registered harness (harness/agents.py) may hold either resident seat; ollama is Codex on a
+# local model and stays a Validator option.
 case "$VALIDATOR_AGENT" in
-  codex|ollama|claude) ;;
-  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude)" >&2; exit 64 ;;
+  codex|ollama|claude|agy|prime-agent) ;;
+  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude|agy|prime-agent)" >&2; exit 64 ;;
 esac
 case "$ORCHESTRATOR_AGENT" in
-  agy|codex) ;;
-  *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex)" >&2; exit 64 ;;
+  agy|codex|claude|prime-agent) ;;
+  *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex|claude|prime-agent)" >&2; exit 64 ;;
 esac
 
 if [ "$VALIDATOR_AGENT" = "ollama" ]; then
@@ -74,10 +76,6 @@ if [ "$VALIDATOR_AGENT" = "ollama" ]; then
   VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-$VALIDATOR_MODEL}"
   factory_require_ollama_model factory FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL" || exit $?
 fi
-[ "$ORCHESTRATOR_AGENT" != "agy" ] || [ -z "$ORCHESTRATOR_MODEL" ] || {
-  echo "factory: agy takes no model flag; unset FACTORY_ORCHESTRATOR_MODEL and select the model inside agy with /model" >&2
-  exit 64
-}
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
@@ -215,6 +213,12 @@ case "$ORCHESTRATOR_AGENT" in
       }
     done
     ORCHESTRATOR_CLI_CONTRACT="codex-resident-tui-v1"
+    ;;
+  claude|prime-agent)
+    ORCHESTRATOR_VERSION=$("$ORCHESTRATOR_AGENT" --version 2>/dev/null | head -1) || {
+      echo "factory: $ORCHESTRATOR_AGENT CLI is not runnable" >&2; exit 70;
+    }
+    ORCHESTRATOR_CLI_CONTRACT="$ORCHESTRATOR_AGENT-resident-tui-v1"
     ;;
 esac
 
@@ -369,17 +373,21 @@ ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, cla
 # agent runs its own configured default.
 VALIDATOR_MODEL_ARGS=""
 case "$VALIDATOR_AGENT" in
-  codex|claude)
+  codex|claude|agy|prime-agent)
     [ -z "$VALIDATOR_MODEL" ] || printf -v VALIDATOR_MODEL_ARGS -- '--model %q ' "$VALIDATOR_MODEL" ;;
 esac
 ORCHESTRATOR_MODEL_ARGS=""
-if [ "$ORCHESTRATOR_AGENT" = "codex" ] && [ -n "$ORCHESTRATOR_MODEL" ]; then
+if [ -n "$ORCHESTRATOR_MODEL" ]; then
   printf -v ORCHESTRATOR_MODEL_ARGS -- '--model %q ' "$ORCHESTRATOR_MODEL"
 fi
+# On a host whose kernel cannot give Codex's sandbox a namespace, the operator sets
+# FACTORY_LANE_SANDBOX=off and the container is the sandbox (harness/tmux_lane.sh, same switch).
+CODEX_SANDBOX_FLAGS="--sandbox workspace-write"
+[ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
 case "$VALIDATOR_AGENT" in
   codex)
-    printf -v VALIDATOR_CMD 'exec env %s codex --sandbox workspace-write %s%q' \
-      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s codex %s %s%q' \
+      "$SEAT_ENV" "$CODEX_SANDBOX_FLAGS" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   ollama)
     printf -v VALIDATOR_CMD 'exec env %s ollama launch codex --model %q -- --sandbox workspace-write %q' \
@@ -387,6 +395,14 @@ case "$VALIDATOR_AGENT" in
     ;;
   claude)
     printf -v VALIDATOR_CMD 'exec env %s claude %s%q' \
+      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  agy)
+    printf -v VALIDATOR_CMD 'exec env %s agy --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
+      "$SEAT_ENV" "$FACTORY_WORKDIR" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  prime-agent)
+    printf -v VALIDATOR_CMD 'exec env %s prime-agent %s-- %q' \
       "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
 esac
@@ -403,15 +419,33 @@ case "$ORCHESTRATOR_AGENT" in
     # --sandbox restricts terminal effects; --dangerously-skip-permissions only
     # prevents unattended tool prompts from neutering the resident monitor. It
     # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
-      "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    ;;
+  claude|prime-agent)
+    # A cleared environment admits only the harness's named credentials, through an owner-only
+    # file the lane wrapper loads, so no credential appears in the tmux launch string.
+    ORCH_CREDENTIALS="$ROOT/orchestrator-credentials.env"
+    ( umask 077; : > "$ORCH_CREDENTIALS"
+      while IFS= read -r NAME; do
+        [ -n "$NAME" ] && [ -n "${!NAME:-}" ] && printf '%s=%s\n' "$NAME" "${!NAME}" >> "$ORCH_CREDENTIALS"
+      done < <("$FACTORY_PYTHON" "$D/agents.py" credential-env --agent "$ORCHESTRATOR_AGENT") )
+    if [ "$ORCHESTRATOR_AGENT" = claude ]; then
+      printf -v ORCH_TAIL 'claude --permission-mode bypassPermissions %s%q' "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    else
+      printf -v ORCH_TAIL 'prime-agent --cwd %q %s-- %q' "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    fi
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q %q %q run --slot orchestrator --log %q --exits %q --terminal --env-file %q -- %s' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
+      "$FACTORY_PYTHON" "$D/lane_agent.py" \
+      "$ROOT/orchestrator-lane.log" "$ROOT/orchestrator-exits.jsonl" "$ORCH_CREDENTIALS" "$ORCH_TAIL"
     ;;
   codex)
     SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex %s --add-dir %q --no-alt-screen %s%q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+      "$CODEX_SANDBOX_FLAGS" "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
 esac
 
