@@ -15,6 +15,9 @@
 #   probe: <name>:: <command>  # exercised via receipt.sh; nonzero = proof failure
 #   lfs: required              # read by endgame.sh, not here: judge Git LFS content, never
 #                              # pointer stubs (see harness/README.md, Genericity)
+#   judged-drift-allow: <glob> # read by endgame.sh, not here: tracked-file drift its gates
+#                              # may leave on these paths (Git :(glob) syntax) is reported
+#                              # and listed instead of breaking the judged subject
 # usage: proof.sh <run>
 set -uo pipefail
 # shellcheck source=harness/factory_python.sh
