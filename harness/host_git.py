@@ -25,6 +25,8 @@ from factory_runtime.host_git import (
 # A judged checkout is the target's whole tree; the ceilings stop a runaway, not a real repo.
 MAX_FILES = 200_000
 MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
+# LFS content is streamed from disk, never held in memory, so its ceiling is larger.
+MAX_LFS_BYTES = 64 * 1024 * 1024 * 1024
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--commit", required=True)
     materialize.add_argument("--destination", type=pathlib.Path, required=True)
     materialize.add_argument("--admit-symlinks", action="store_true")
+    materialize.add_argument(
+        "--lfs-objects",
+        type=pathlib.Path,
+        help="local Git LFS object directory to write LFS pointers' verified content from",
+    )
     run = commands.add_parser("run", help="run one Git command under the closed environment")
     run.add_argument("--repository", type=pathlib.Path, required=True)
     run.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -55,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
                 admit_symlinks=arguments.admit_symlinks,
                 max_files=MAX_FILES,
                 max_total_bytes=MAX_TOTAL_BYTES,
+                lfs_objects=arguments.lfs_objects,
+                max_lfs_bytes=MAX_LFS_BYTES,
             )
             print(json.dumps(dataclasses.asdict(result), sort_keys=True))
         else:

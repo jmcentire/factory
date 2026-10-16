@@ -13,6 +13,8 @@
 #   teardown:  <script>        # always runs, even after failures
 #   access:    <path-or-text>  # where a human finds entry points + credentials doc
 #   probe: <name>:: <command>  # exercised via receipt.sh; nonzero = proof failure
+#   lfs: required              # read by endgame.sh, not here: judge Git LFS content, never
+#                              # pointer stubs (see harness/README.md, Genericity)
 # usage: proof.sh <run>
 set -uo pipefail
 # shellcheck source=harness/factory_python.sh

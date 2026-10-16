@@ -1434,11 +1434,14 @@ def execution_truth_fixture(
     projection_conf: str = "coder-exclude: tests\ntester-include: impl.py\n",
     harness_status: str | None = "open",
     terminal_resources: bool = False,
+    extra_blobs: dict[str, bytes] | None = None,
 ) -> tuple[Path, Path, dict[str, object]]:
     """Create a real v3 intake run with a verified run-owned target checkout.
 
     Harness tests must not manufacture the retired ``repo/base_sha`` JSON shape: the scripts
     under test now consume the same ledger-derived target-state as production.
+    ``extra_blobs`` are committed byte for byte (no clean filter runs) beside the projection
+    contract, for targets whose committed bytes matter, such as Git LFS pointers.
     """
 
     operator = projection_fixture(tmp)
@@ -1446,6 +1449,19 @@ def execution_truth_fixture(
     config.parent.mkdir()
     config.write_text(projection_conf, encoding="utf-8")
     subprocess.run(["git", "add", ".factory/projection.conf"], cwd=operator, check=True)
+    for name, data in (extra_blobs or {}).items():
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--no-filters", "--stdin"],
+            cwd=operator,
+            input=data,
+            check=True,
+            capture_output=True,
+        ).stdout.decode("ascii").strip()
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}"],
+            cwd=operator,
+            check=True,
+        )
     subprocess.run(
         [
             "git",
@@ -10981,6 +10997,117 @@ def test_endgame_refuses_a_verdict_across_a_mismatched_boundary(tmp_path: Path) 
     assert r.returncode != 0
     assert "endgame verdict: GREEN" not in r.stdout
     assert "the boundary register does not verify" in r.stdout + r.stderr
+
+
+def test_endgame_reports_the_lfs_content_it_judged(tmp_path: Path) -> None:
+    """Endgame states how much Git LFS content its judged checkout holds, so pointer stubs
+    are never judged silently as if they were the target's assets."""
+
+    r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
+
+    assert "== Git LFS content in the judged checkout ==" in r.stdout, r.stdout + r.stderr
+    assert "hydrated: 0 file(s), 0 bytes" in r.stdout
+    assert "left as pointers" not in r.stdout
+
+
+ENDGAME_LFS_ART = b"\x89PNG\r\n\x1a\n bytes a target keeps in Git LFS\n"
+ENDGAME_LFS_OID = hashlib.sha256(ENDGAME_LFS_ART).hexdigest()
+ENDGAME_LFS_POINTER = (
+    "version https://git-lfs.github.com/spec/v1\n"
+    f"oid sha256:{ENDGAME_LFS_OID}\nsize {len(ENDGAME_LFS_ART)}\n"
+).encode("ascii")
+
+
+def _endgame_over_an_lfs_target(
+    tmp_path: Path, *, stocked: bool, target_conf: str | None = None
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """Endgame over a target that commits one Git LFS pointer, resolved from a local operator
+    repository whose LFS store holds the object only when ``stocked``. ``make`` is stubbed red
+    so the run stops at the verdict. Returns the run, the run root and the operator repo."""
+
+    operator, root, target_state = execution_truth_fixture(
+        tmp_path,
+        terminal_resources=False,
+        extra_blobs={
+            ".gitattributes": b"*.png filter=lfs diff=lfs merge=lfs -text\n",
+            "art/board.png": ENDGAME_LFS_POINTER,
+        },
+    )
+    sha = str(target_state["resolved_commit"])
+    _verified_boundary_register(root)
+    if stocked:
+        stored = (
+            operator / ".git" / "lfs" / "objects"
+            / ENDGAME_LFS_OID[:2] / ENDGAME_LFS_OID[2:4] / ENDGAME_LFS_OID
+        )
+        stored.parent.mkdir(parents=True)
+        stored.write_bytes(ENDGAME_LFS_ART)
+    stub_dir = tmp_path / "redmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env.pop("FACTORY_LFS_OBJECTS", None)
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    if target_conf is not None:
+        conf = tmp_path / "target.conf"
+        conf.write_text(target_conf, encoding="utf-8")
+        env["HARNESS_TARGET_CONF"] = str(conf)
+    r = run(
+        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        tmp_path,
+        env,
+    )
+    return r, root, operator
+
+
+def test_endgame_hydrates_lfs_content_from_the_runs_local_object_source(
+    tmp_path: Path,
+) -> None:
+    """A run resolved from a local operator repository judges LFS content from that
+    repository's own LFS store, with no environment variable to remember."""
+
+    r, root, operator = _endgame_over_an_lfs_target(tmp_path, stocked=True)
+
+    assert "hydrated: 1 file(s)" in r.stdout, r.stdout + r.stderr
+    assert "the run's local object source" in r.stdout
+    (judged,) = (root / "endgame").glob("endgame-checkout-*")
+    assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_ART
+
+
+def test_endgame_fails_a_target_that_requires_lfs_content_it_cannot_supply(
+    tmp_path: Path,
+) -> None:
+    r, root, _ = _endgame_over_an_lfs_target(
+        tmp_path, stocked=False, target_conf="lfs: required\n"
+    )
+
+    assert "requires Git LFS content" in r.stdout, r.stdout + r.stderr
+    assert "endgame verdict: GREEN" not in r.stdout
+    (judged,) = (root / "endgame").glob("endgame-checkout-*")
+    assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_POINTER
+
+
+def test_endgame_judges_a_target_conf_that_says_nothing_about_lfs(tmp_path: Path) -> None:
+    """A target.conf without an ``lfs:`` line is the common case: endgame still runs every
+    section and leaves pointers as reported pointers rather than stopping early."""
+
+    r, _, _ = _endgame_over_an_lfs_target(
+        tmp_path, stocked=False, target_conf="provision: true\n"
+    )
+
+    assert "left as pointers: 1 file(s)" in r.stdout, r.stdout + r.stderr
+    assert "requires Git LFS content" not in r.stdout
+    assert "endgame verdict: RED" in r.stdout
+
+
+def test_endgame_refuses_an_lfs_setting_it_does_not_know(tmp_path: Path) -> None:
+    r, _, _ = _endgame_over_an_lfs_target(tmp_path, stocked=True, target_conf="lfs: maybe\n")
+
+    assert "lfs: in" in r.stdout and "must be 'required'" in r.stdout, r.stdout + r.stderr
+    assert "endgame verdict: GREEN" not in r.stdout
 
 
 def test_endgame_judges_the_boundary_register_against_the_candidate(tmp_path: Path) -> None:

@@ -9,8 +9,11 @@ command never ran or that the bytes on disk are the commit's own.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -237,6 +240,174 @@ def test_the_destination_must_be_new(tmp_path: Path) -> None:
         materialize(repository, commit, destination)
 
 
+LFS_ATTRIBUTES = "*.png filter=lfs diff=lfs merge=lfs -text\n"
+
+
+def lfs_pointer(content: bytes) -> bytes:
+    """A Git LFS v1 pointer for ``content`` (git-lfs spec, docs/spec.md)."""
+
+    oid = hashlib.sha256(content).hexdigest()
+    return (
+        f"version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {len(content)}\n"
+    ).encode("ascii")
+
+
+def lfs_repository(
+    tmp_path: Path, files: dict[str, bytes], *, attributes: str = LFS_ATTRIBUTES
+) -> tuple[Path, str]:
+    """Commit ``files`` byte for byte (no clean filter runs), beside ``attributes``."""
+
+    repository, _ = committed_repository(tmp_path, {".gitattributes": attributes})
+    for name, data in files.items():
+        blob = subprocess.run(
+            ["git", "-C", str(repository), "hash-object", "-w", "--no-filters", "--stdin"],
+            input=data,
+            check=True,
+            capture_output=True,
+        ).stdout.decode("ascii").strip()
+        git(repository, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    git(repository, "commit", "-qm", "lfs")
+    return repository, git(repository, "rev-parse", "HEAD")
+
+
+def lfs_store(tmp_path: Path, objects: dict[str, bytes]) -> Path:
+    """A local LFS object directory: ``<oid[0:2]>/<oid[2:4]>/<oid>`` (git-lfs layout)."""
+
+    store = tmp_path / "lfs-objects"
+    store.mkdir()
+    for oid, data in objects.items():
+        path = store / oid[:2] / oid[2:4] / oid
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return store
+
+
+def materialize_lfs(
+    repository: Path, commit: str, destination: Path, store: Path | None, **ceilings: int
+) -> MaterializedCommit:
+    return materialize_commit(
+        repository,
+        commit,
+        destination,
+        admit_symlinks=False,
+        max_files=1000,
+        max_total_bytes=1024 * 1024,
+        lfs_objects=store,
+        max_lfs_bytes=ceilings.get("max_lfs_bytes", 1024 * 1024),
+    )
+
+
+ART = b"\x89PNG\r\n\x1a\n not really a png, but bytes git-lfs would hold\n"
+ART_OID = hashlib.sha256(ART).hexdigest()
+
+
+def test_an_lfs_pointer_is_written_as_the_content_its_digest_names(tmp_path: Path) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    result = materialize_lfs(
+        repository, commit, destination, lfs_store(tmp_path, {ART_OID: ART})
+    )
+
+    assert (destination / "art.png").read_bytes() == ART
+    assert (result.lfs_hydrated, result.lfs_pointers_left, result.lfs_bytes) == (1, 0, len(ART))
+
+
+def test_without_an_lfs_store_the_pointer_bytes_are_kept_and_counted(tmp_path: Path) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    result = materialize(repository, commit, destination)
+
+    assert (destination / "art.png").read_bytes() == lfs_pointer(ART)
+    assert (result.lfs_hydrated, result.lfs_pointers_left) == (0, 1)
+
+
+def test_a_pointer_shaped_file_git_does_not_route_through_lfs_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    repository, commit = lfs_repository(tmp_path, {"fixture.txt": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    result = materialize_lfs(
+        repository, commit, destination, lfs_store(tmp_path, {ART_OID: ART})
+    )
+
+    assert (destination / "fixture.txt").read_bytes() == lfs_pointer(ART)
+    assert (result.lfs_hydrated, result.lfs_pointers_left) == (0, 0)
+
+
+def test_an_lfs_object_missing_from_the_store_refuses_before_any_file_is_written(
+    tmp_path: Path,
+) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    with pytest.raises(HostGitError, match=rf"not in the LFS store .*art\.png \({ART_OID}\)"):
+        materialize_lfs(repository, commit, destination, lfs_store(tmp_path, {}))
+
+    assert not destination.exists()
+
+
+def test_an_lfs_object_whose_bytes_do_not_match_its_digest_is_refused(tmp_path: Path) -> None:
+    """The pointer names its content by SHA-256: a store object with other bytes of the same
+    size is a substitution, so nothing it holds reaches the judged tree."""
+
+    forged = bytes(reversed(ART))
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    with pytest.raises(HostGitError, match="does not match its pointer"):
+        materialize_lfs(repository, commit, destination, lfs_store(tmp_path, {ART_OID: forged}))
+
+    assert not (destination / "art.png").exists()
+
+
+def test_the_lfs_byte_ceiling_refuses_before_any_file_is_written(tmp_path: Path) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+
+    with pytest.raises(HostGitError, match="LFS content exceeds 8 bytes"):
+        materialize_lfs(
+            repository,
+            commit,
+            destination,
+            lfs_store(tmp_path, {ART_OID: ART}),
+            max_lfs_bytes=8,
+        )
+
+    assert not destination.exists()
+
+
+def test_the_cli_hydrates_from_the_lfs_store_it_is_given(tmp_path: Path) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    destination = tmp_path / "judged"
+    store = lfs_store(tmp_path, {ART_OID: ART})
+
+    printed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "harness" / "host_git.py"),
+            "materialize",
+            "--repository",
+            str(repository),
+            "--commit",
+            commit,
+            "--destination",
+            str(destination),
+            "--lfs-objects",
+            str(store),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+    ).stdout
+
+    assert json.loads(printed)["lfs_hydrated"] == 1
+    assert (destination / "art.png").read_bytes() == ART
+
+
 def test_endgame_reads_the_candidate_only_through_host_git() -> None:
     """Endgame's candidate may be a lane repository; no host Git may run there directly."""
 
@@ -245,5 +416,7 @@ def test_endgame_reads_the_candidate_only_through_host_git() -> None:
     assert 'git -C "$CANDIDATE"' not in text
     assert 'git -C "$FRESH"' not in text
     assert '"$D/host_git.py" resolve --repository "$CANDIDATE"' in text
-    assert '"$D/host_git.py" materialize --repository "$CANDIDATE"' in text
+    assert 'MATERIALIZE_ARGS=(--repository "$CANDIDATE"' in text
+    assert '"$D/host_git.py" materialize "${MATERIALIZE_ARGS[@]}"' in text
+    assert '--lfs-objects "$LFS_STORE"' in text
     assert "A status that could not be read is not a clean status." in text

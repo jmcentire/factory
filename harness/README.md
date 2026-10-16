@@ -206,6 +206,13 @@ names a consuming project:
   Directive ledger, provisional chain, and role doctrine paths are not ambient seams: the external
   resume configuration must name them exactly as `factory-directive-ledger`,
   `factory-directive-provisional`, and `factory-role-doctrine`.
+- Git LFS: `endgame.sh` writes each LFS pointer in the judged checkout as the content its
+  SHA-256 names, verified on copy, from a local LFS object store; a missing or mismatched
+  object refuses materialization, and no LFS program runs. The store is the LFS directory of
+  the local operator repository the run resolved from (`resolve-target --object-source`), or
+  `FACTORY_LFS_OBJECTS` when set (needed for a remotely resolved run). A target whose gates need
+  its LFS content puts `lfs: required` in `target.conf`, and any pointer left unhydrated then
+  fails the verdict instead of being judged as a stub.
 - Keys are per-**project** and the human holds none: `factory init` mints one key per worker,
   a host-held human-principal key that records only what the human said, the genesis and the
   ledger chain root, into `.factory/keys/`. Each worker is granted only its own key
