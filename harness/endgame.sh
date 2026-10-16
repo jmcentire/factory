@@ -151,7 +151,8 @@ TARGET_CONF="${HARNESS_TARGET_CONF:-$FACTORY_WORKDIR/.factory/target.conf}"
 LFS_REQUIRED=0
 LFS_SETTING_REFUSED=""
 if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
-  LFS_SETTING=$(grep -E '^lfs:' "$TARGET_CONF" | sed 's/^lfs:[[:space:]]*//; s/[[:space:]]*$//' | sort -u)
+  LFS_SETTING=$({ grep -E '^lfs:' "$TARGET_CONF" || true; } | \
+    sed 's/^lfs:[[:space:]]*//; s/[[:space:]]*$//' | sort -u)
   case "$LFS_SETTING" in
     "") ;;
     required) LFS_REQUIRED=1 ;;

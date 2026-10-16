@@ -11090,6 +11090,19 @@ def test_endgame_fails_a_target_that_requires_lfs_content_it_cannot_supply(
     assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_POINTER
 
 
+def test_endgame_judges_a_target_conf_that_says_nothing_about_lfs(tmp_path: Path) -> None:
+    """A target.conf without an ``lfs:`` line is the common case: endgame still runs every
+    section and leaves pointers as reported pointers rather than stopping early."""
+
+    r, _, _ = _endgame_over_an_lfs_target(
+        tmp_path, stocked=False, target_conf="provision: true\n"
+    )
+
+    assert "left as pointers: 1 file(s)" in r.stdout, r.stdout + r.stderr
+    assert "requires Git LFS content" not in r.stdout
+    assert "endgame verdict: RED" in r.stdout
+
+
 def test_endgame_refuses_an_lfs_setting_it_does_not_know(tmp_path: Path) -> None:
     r, _, _ = _endgame_over_an_lfs_target(tmp_path, stocked=True, target_conf="lfs: maybe\n")
 
