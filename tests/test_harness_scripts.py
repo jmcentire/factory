@@ -10983,6 +10983,17 @@ def test_endgame_refuses_a_verdict_across_a_mismatched_boundary(tmp_path: Path) 
     assert "the boundary register does not verify" in r.stdout + r.stderr
 
 
+def test_endgame_reports_the_lfs_content_it_judged(tmp_path: Path) -> None:
+    """Endgame states how much Git LFS content its judged checkout holds, so pointer stubs
+    are never judged silently as if they were the target's assets."""
+
+    r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
+
+    assert "== Git LFS content in the judged checkout ==" in r.stdout, r.stdout + r.stderr
+    assert "hydrated: 0 file(s), 0 bytes" in r.stdout
+    assert "left as pointers" not in r.stdout
+
+
 def test_endgame_judges_the_boundary_register_against_the_candidate(tmp_path: Path) -> None:
     r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
 

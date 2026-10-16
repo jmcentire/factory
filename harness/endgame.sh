@@ -141,8 +141,14 @@ resource_event() {
 }
 resource_event '{}' planned
 mkdir -p "$(dirname "$FRESH")"
-if ! python3 "$D/host_git.py" materialize --repository "$CANDIDATE" --commit "$SHA" \
-  --destination "$FRESH" --admit-symlinks >/dev/null; then
+# FACTORY_LFS_OBJECTS names a local Git LFS object directory (for example a clone's
+# .git/lfs/objects). Each LFS pointer is then judged as the content its digest names, so a
+# target's gates do not run against pointer stubs. Unset, pointers stay pointers and are counted.
+MATERIALIZE_ARGS=(--repository "$CANDIDATE" --commit "$SHA" --destination "$FRESH" --admit-symlinks)
+if [ -n "${FACTORY_LFS_OBJECTS:-}" ]; then
+  MATERIALIZE_ARGS+=(--lfs-objects "$FACTORY_LFS_OBJECTS")
+fi
+if ! MATERIALIZED=$(python3 "$D/host_git.py" materialize "${MATERIALIZE_ARGS[@]}"); then
   resource_event '{"reason":"candidate materialization failed","residue":true}' failed || true
   refusal_event "candidate materialization failed"
   exit 70
@@ -159,6 +165,13 @@ resource_event '{}' active
 
 FAILED=0
 say() { printf '%s\n' "$*"; }
+say "== Git LFS content in the judged checkout =="
+printf '%s' "$MATERIALIZED" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+hydrated, size, left = d["lfs_hydrated"], d["lfs_bytes"], d["lfs_pointers_left"]
+print(f"   hydrated: {hydrated} file(s), {size} bytes")
+if left:
+    print(f"   left as pointers: {left} file(s); set FACTORY_LFS_OBJECTS to judge their content")'
 if [ "$AGREEMENT_EVIDENCE_GREEN" -eq 1 ]; then
   say "== cross-path agreement evidence =="
   say "   exact-subject agreement evidence: GREEN"
