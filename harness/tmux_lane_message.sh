@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Deliver one typed status probe, or specification answer to a resumable tmux Codex lane,
-# or report whether the lane is idle (no live turn: a delivery now resumes it).
-# Raw Orchestrator prose remains forbidden: it can ask only the generated status question.
+# Deliver one typed status probe, specification answer, progress review or wrap-up notice to a
+# resumable tmux Codex lane, or report whether the lane is idle (no live turn: a delivery now
+# resumes it). Raw Orchestrator prose remains forbidden: it can ask only the generated status
+# question. The watchdog sends only the generated wrap-up notice (lane_watchdog.py), and only the
+# Validator sends a progress review, to a Coder lane, through the coder leak guard.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator> <slot: coder|tester[-instance][.round]> <status|answer|idle> [options]}"
+RUN="${1:?usage: tmux_lane_message.sh <run> <validator|orchestrator|watchdog> <slot: coder|tester[-instance][.round]> <status|answer|review|wrapup|idle> [options]}"
 SENDER="${2:?sender}"
 SLOT="${3:?slot}"
-KIND="${4:?status|answer|idle}"
+KIND="${4:?status|answer|review|wrapup|idle}"
 shift 4
-case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
+case "$SENDER" in validator|orchestrator|watchdog) ;; *) echo "lane-message: invalid sender" >&2; exit 64 ;; esac
 # A slot names one launched round of a lane exactly as tmux_lane.sh printed it: the role, an
 # optional parallel instance (tester-b) and an optional round (tester-b.r3).
 [[ "$SLOT" =~ ^(coder|tester)(-[a-z0-9][a-z0-9-]{0,15})?(\.[A-Za-z0-9][A-Za-z0-9_-]{0,39})?$ ]] || {
@@ -19,7 +21,11 @@ case "$SENDER" in validator|orchestrator) ;; *) echo "lane-message: invalid send
 }
 LANE="${BASH_REMATCH[1]}"
 WINDOW="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-case "$KIND" in status|answer|idle) ;; *) echo "lane-message: kind must be status|answer|idle" >&2; exit 64 ;; esac
+case "$KIND" in status|answer|review|wrapup|idle) ;; *) echo "lane-message: kind must be status|answer|review|wrapup|idle" >&2; exit 64 ;; esac
+case "$SENDER:$KIND" in
+  watchdog:wrapup|watchdog:idle) ;;
+  watchdog:*|*:wrapup|orchestrator:review) echo "lane-message: $SENDER may not send $KIND" >&2; exit 77 ;;
+esac
 
 # The lane's pane, found by exact window name first: tmux resolves a missing "$RUN:$WINDOW" to
 # the session's active pane, which reads as a live lane and queues to nobody (#29, #69).
@@ -44,6 +50,10 @@ QUESTION_ID=""
 ANSWER_FILE=""
 BASIS=""
 AUTHORITY=""
+VERDICT=""
+REVIEW_FILE=""
+MINUTES=""
+WAIT_IDLE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -51,6 +61,10 @@ while [ "$#" -gt 0 ]; do
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
     --basis) BASIS="$2"; shift 2 ;;
     --authority) AUTHORITY="$2"; shift 2 ;;
+    --verdict) VERDICT="$2"; shift 2 ;;
+    --review-file) REVIEW_FILE="$2"; shift 2 ;;
+    --minutes) MINUTES="$2"; shift 2 ;;
+    --wait-idle) WAIT_IDLE="$2"; shift 2 ;;
     *) echo "lane-message: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -146,8 +160,8 @@ trap 'rm -f "$MESSAGE_TMP" "$FULL_TMP" "$INPUT_TMP"' EXIT
 INPUTS="$TMUX_ROOT/$SLOT-inputs"
 INPUT_DIGEST=""
 if [ "$KIND" = "status" ]; then
-  [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
-    echo "lane-message: status accepts no answer arguments" >&2
+  [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY$VERDICT$REVIEW_FILE$MINUTES" ] || {
+    echo "lane-message: status accepts no answer, review or wrap-up arguments" >&2
     exit 64
   }
   [ -z "$BASIS" ] || { echo "lane-message: status basis is generated" >&2; exit 64; }
@@ -157,30 +171,85 @@ if [ "$KIND" = "status" ]; then
   printf '%s\n' \
     "FACTORY_STATUS_PROBE: Reply with FACTORY_STATUS: WORKING|BLOCKED|QUESTION|DONE and one concise factual sentence. If specification is missing or contradictory, end with one line made of the word FACTORY_QUESTION, a colon, and one concrete question, and stop guessing. Otherwise continue your assigned work." \
     > "$MESSAGE_TMP"
+elif [ "$KIND" = "wrapup" ]; then
+  # The watchdog's generated notice before a lane's cap stop (lane_watchdog.py): never prose.
+  [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY$BASIS$VERDICT$REVIEW_FILE" ] || {
+    echo "lane-message: wrapup accepts only --minutes" >&2; exit 64;
+  }
+  [[ "$MINUTES" =~ ^[0-9]{1,3}$ ]] || { echo "lane-message: wrapup requires --minutes <n>" >&2; exit 64; }
+  BASIS="the lane's wall-clock cap is $MINUTES minutes away; the watchdog stops it at the cap"
+  AUTHORITY="runtime-protocol"
+  MESSAGE_KIND="wrap-up"
+  printf '%s\n' \
+    "FACTORY_WRAP_UP: about $MINUTES minutes of this lane's time remain. Then the watchdog stops it, and the work is judged exactly as you leave it. Start nothing new. Finish or revert any half-made edit, make sure the work builds and runs through its real entrypoint, rerun the checks that passed before, commit, and end with the lane's done line." \
+    > "$MESSAGE_TMP"
 else
-  [ "$SENDER" = "validator" ] || {
-    echo "lane-message: the Orchestrator may probe status but may not answer specifications" >&2
-    exit 77
-  }
-  [ -n "$QUESTION_ID" ] && [ -n "$ANSWER_FILE" ] && [ -n "$BASIS" ] && [ -n "$AUTHORITY" ] || {
-    echo "lane-message: answer requires --question-id, --answer-file, --basis, and --authority" >&2
-    exit 64
-  }
-  case "$AUTHORITY" in human-answer|ratified-spec) ;; *)
-    echo "lane-message: answer authority must be human-answer|ratified-spec" >&2; exit 64 ;;
-  esac
-  [ -f "$ANSWER_FILE" ] && [ ! -L "$ANSWER_FILE" ] || {
-    echo "lane-message: answer file must be a regular non-symlink file" >&2
+  [ -z "$MINUTES" ] || { echo "lane-message: --minutes belongs to wrapup" >&2; exit 64; }
+  if [ "$KIND" = "review" ]; then
+    # The Validator's progress review of a paused or finished Coder (lane_watchdog.py pauses a
+    # Coder every --review-every-minutes): requirement ids and observed behaviour against the
+    # ratified specification, resumed into the Coder's own thread so it keeps its context.
+    [ "$LANE" = coder ] || { echo "lane-message: a progress review goes to a Coder lane" >&2; exit 64; }
+    # A resumed turn of a lane that used up its cap is stopped by its watcher within a poll.
+    if "$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" <<'PY'
+import json, pathlib, sys
+try:
+    state = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(state, dict) and state.get("status") == "capped" else 1)
+PY
+    then
+      echo "lane-message: $RUN:$SLOT reached its cap, so a resumed turn would be stopped at once; launch a new --round with the finding in its brief" >&2
+      exit 70
+    fi
+    [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
+      echo "lane-message: review takes --verdict, --review-file and an optional --basis" >&2; exit 64;
+    }
+    case "$VERDICT" in on-track|redirect|repair) ;; *)
+      echo "lane-message: review requires --verdict on-track|redirect|repair" >&2; exit 64 ;;
+    esac
+    BODY_FILE="$REVIEW_FILE"
+    AUTHORITY="ratified-spec"
+    BASIS="${BASIS:-Validator progress review against the ratified specification}"
+    MESSAGE_KIND="progress-review"
+    VERDICT_WORD=$(printf '%s' "$VERDICT" | tr 'a-z-' 'A-Z_')
+    PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your work against the ratified specification. It names requirements and the behaviour it observed, never the tests."$'\n'
+    if [ "$VERDICT" = repair ]; then
+      SUFFIX=$'\n'"Fix what it names, keeping what already works: rerun the checks that passed before and restore any you break. Then commit and end with the lane's done line again."$'\n'
+    else
+      SUFFIX=$'\n'"Weigh it against the specification's own words. If it shows your approach will miss a requirement, change course now; if you are certain it misreads the specification, say so in one sentence, or ask your one question in the protocol's question form. Whatever you change, keep what already works: rerun the checks that passed before and restore any you break. Then continue the assigned work."$'\n'
+    fi
+  else
+    [ -z "$VERDICT$REVIEW_FILE" ] || { echo "lane-message: --verdict and --review-file belong to review" >&2; exit 64; }
+    [ "$SENDER" = "validator" ] || {
+      echo "lane-message: the Orchestrator may probe status but may not answer specifications" >&2
+      exit 77
+    }
+    [ -n "$QUESTION_ID" ] && [ -n "$ANSWER_FILE" ] && [ -n "$BASIS" ] && [ -n "$AUTHORITY" ] || {
+      echo "lane-message: answer requires --question-id, --answer-file, --basis, and --authority" >&2
+      exit 64
+    }
+    case "$AUTHORITY" in human-answer|ratified-spec) ;; *)
+      echo "lane-message: answer authority must be human-answer|ratified-spec" >&2; exit 64 ;;
+    esac
+    BODY_FILE="$ANSWER_FILE"
+    MESSAGE_KIND="spec-answer"
+    PREFIX="FACTORY_ANSWER question_id=$QUESTION_ID authority=$AUTHORITY basis=$BASIS"$'\n'"This is specification input bound only to your question; it conveys no other lane's work."$'\n'
+    SUFFIX=""
+  fi
+  [ -f "$BODY_FILE" ] && [ ! -L "$BODY_FILE" ] || {
+    echo "lane-message: $KIND file must be a regular non-symlink file" >&2
     exit 70
   }
-  MESSAGE_KIND="spec-answer"
-  PREFIX="FACTORY_ANSWER question_id=$QUESTION_ID authority=$AUTHORITY basis=$BASIS"$'\n'"This is specification input bound only to your question; it conveys no other lane's work."$'\n'
-  INPUT_DIGEST=$("$FACTORY_PYTHON" - "$ANSWER_FILE" "$MESSAGE_TMP" "$PREFIX" "$FULL_TMP" "$INPUT_TMP" "$INPUTS" <<'PY'
+  INPUT_DIGEST=$("$FACTORY_PYTHON" - "$BODY_FILE" "$MESSAGE_TMP" "$PREFIX" "$FULL_TMP" "$INPUT_TMP" "$INPUTS" "$SUFFIX" "$KIND" <<'PY'
 import hashlib, os, pathlib, shlex, stat, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
 prefix = sys.argv[3].encode("utf-8")
 full, staged, inputs = map(pathlib.Path, sys.argv[4:7])
+suffix = sys.argv[7].encode("utf-8")
+label = sys.argv[8]
 INLINE = 12_000
 # ponytail: the full bytes ride argv into the coder leak guard, so the file ceiling stays well
 # under ARG_MAX; raise both together if answers outgrow it.
@@ -189,7 +258,7 @@ fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
 try:
     before = os.fstat(fd)
     if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= CEILING:
-        raise SystemExit("lane-message: answer is not a bounded non-empty regular file")
+        raise SystemExit(f"lane-message: {label} is not a bounded non-empty regular file")
     raw = b""
     while chunk := os.read(fd, 4096):
         raw += chunk
@@ -197,24 +266,24 @@ try:
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
         after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
     ):
-        raise SystemExit("lane-message: answer changed while read")
+        raise SystemExit(f"lane-message: {label} changed while read")
 finally:
     os.close(fd)
 raw.decode("utf-8")
 if b"\0" in raw:
-    raise SystemExit("lane-message: answer carries NUL bytes; answers are text")
-full.write_bytes(prefix + raw)
+    raise SystemExit(f"lane-message: {label} carries NUL bytes; it must be text")
+full.write_bytes(prefix + raw + suffix)
 if len(raw) <= INLINE:
-    destination.write_bytes(prefix + raw)
+    destination.write_bytes(prefix + raw + suffix)
     raise SystemExit(0)
 digest = hashlib.sha256(raw).hexdigest()
 staged.write_bytes(raw)
 path = shlex.quote(str(inputs / f"{digest}.txt"))
 destination.write_bytes(prefix + (
-    f"The answer is {len(raw)} bytes, delivered as a file.\n"
+    f"The {label} is {len(raw)} bytes, delivered as a file.\n"
     f"FACTORY_RELAY file={path} sha256={digest} -- run: shasum -a 256 < {path} ; act on the file "
     "only if the digest equals this sha256, else do not act and tell the sender\n"
-).encode("utf-8"))
+).encode("utf-8") + suffix)
 print(digest)
 PY
   ) || exit $?
@@ -288,6 +357,13 @@ for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
   RESUME_ARGS="${RESUME_ARGS:+$RESUME_ARGS }$QUOTED"
 done
 PANE_DEAD=$(lane_pane_state)
+# The watchdog ends the live turn just before it delivers a wrap-up; give the pane that long to die.
+[[ "$WAIT_IDLE" =~ ^[0-9]{1,3}$ ]] || { echo "lane-message: --wait-idle takes whole seconds" >&2; exit 64; }
+while [ "$PANE_DEAD" = "0" ] && [ "$WAIT_IDLE" -gt 0 ]; do
+  sleep 1
+  WAIT_IDLE=$((WAIT_IDLE - 1))
+  PANE_DEAD=$(lane_pane_state)
+done
 if [ "$PANE_DEAD" = "0" ]; then
   # A queued message waits for the lane's next turn boundary (observed: up to ~55 min, and once
   # never), and nothing reports when it is consumed. So a queue is never a delivery receipt (#68).
@@ -357,7 +433,7 @@ fi
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
-if [ "$SENDER" != orchestrator ]; then
+if [ "$SENDER" = validator ]; then
   "$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
     --kind phase_transition --source "$SENDER" \
     --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
