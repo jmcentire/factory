@@ -12,8 +12,7 @@
 #   - refuses a metered agent without a per-round spend cap and a declared rate, reserves the
 #     cap in the run's objective-budget ledger (harness/lane_budget.py), and refuses a metered
 #     agent/model that has not passed a qualification probe;
-#   - puts the founder's testing standard into every Tester prompt and the Coder doctrine into
-#     every Coder prompt (harness/testing_standard.py);
+#   - puts the founder's testing standard into every Tester prompt (harness/testing_standard.py);
 #   - tells the lane its wall-clock cap and how to read what is left of it, and, for a resumable
 #     Codex lane, has the watcher send a wrap-up notice --wrap-up-minutes before the cap and pause a
 #     Coder for the Validator's progress review every --review-every-minutes of work;
@@ -473,18 +472,9 @@ PY
   esac
 
   # Every Tester prompt opens with the founder's testing standard, the Tester doctrine and the
-  # run's testing strategy, as bytes with digests. Without them the Tester does not start. Every
-  # Coder prompt opens the same way with How We Write Code and the Coder doctrine.
+  # run's testing strategy, as bytes with digests. Without them the Tester does not start.
   STANDARD_RECEIPT='null'
-  CODER_RECEIPT='null'
   STANDARD_BLOCK=""
-  if [ "$ROLE" = coder ]; then
-    STANDARD_BLOCK="$TMUX_ROOT/$SLOT-coder-doctrine.md"
-    CODER_RECEIPT=$("$FACTORY_PYTHON" "$D/testing_standard.py" block --role coder \
-      --factory-home "$REPO_ROOT" --output "$STANDARD_BLOCK" 2>&1) || \
-      refuse 70 "CODER DOCTRINE: $CODER_RECEIPT" \
-        "restore docs/standards/HOW-WE-WRITE-CODE.md and prompts/engineer.md in $REPO_ROOT"
-  fi
   if [ "$ROLE" = tester ]; then
     STANDARD_BLOCK="$TMUX_ROOT/$SLOT-testing-standard.md"
     STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
@@ -660,7 +650,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
     "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
-    "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "$CODER_RECEIPT" \
+    "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
@@ -670,9 +660,9 @@ import datetime, json, sys
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
     standard, lane_log, lane_exits, qualifications, lane_env, model_source,
-    wrap_s, review_s, runs_dir, coder_doctrine,
-) = sys.argv[1:41]
-model_config = sys.argv[41:]
+    wrap_s, review_s, runs_dir,
+) = sys.argv[1:40]
+model_config = sys.argv[40:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -718,7 +708,6 @@ print(json.dumps({
         if action == "qualify" else None
     ),
     "testing_standard": json.loads(standard),
-    "coder_doctrine": json.loads(coder_doctrine),
     "lane_log": lane_log,
     "lane_exits": lane_exits,
     "tmux_target": f"{run}:{lane}",

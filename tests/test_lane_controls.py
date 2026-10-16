@@ -826,31 +826,25 @@ def test_a_tester_prompt_carries_the_testing_standard_itself(tmp_path: Path) -> 
     assert "FACTORY_TESTING_STANDARD" not in coder
 
 
-def test_a_coder_prompt_carries_the_coder_doctrine_its_clock_and_its_review_cadence(
+def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
     tmp_path: Path,
 ) -> None:
-    """A Coder with a compact brief stops early (Terminal-Bench 4: 1-3 minute sessions); one
-    primed with the doctrine kept building. It is told its cap, how to read what is left, the
-    wrap-up it will get, and that the Validator will pause it for reviews."""
+    """A capped Coder lane is told its cap, how to read what is left of it, the wrap-up it will
+    get, and that the Validator will pause it for reviews."""
 
     lanes = Lanes(tmp_path)
     assert lanes.lane("coder", "--wall-cap-minutes", "60").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
-    standard = REPO / "docs" / "standards" / "HOW-WE-WRITE-CODE.md"
-    doctrine = REPO / "prompts" / "engineer.md"
-    for key, path in (("coding-standard", standard), ("coder-doctrine", doctrine)):
-        assert f"<<<FACTORY_CODER_DOCTRINE {key} digest={_sha(path)}>>>" in prompt
-        assert path.read_text(encoding="utf-8").strip() in prompt
     assert (prompt.index("FACTORY TMUX LANE PROTOCOL")
-            < prompt.index("MANDATORY FIRST READING — THE CODER DOCTRINE")
             < prompt.index("VERBATIM LANE TASK"))
     assert "capped at 60 minutes of active time" in prompt
     assert "lane_watchdog.py remaining --root" in prompt
     assert "About 5 minutes before the cap you receive FACTORY_WRAP_UP" in prompt
     assert "Every 18 minutes of work the watchdog pauses this lane" in prompt
     assert "FACTORY_TESTING_STANDARD" not in prompt
+    assert "FACTORY_CODER_DOCTRINE" not in prompt
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
-    assert row["coder_doctrine"]["sources"]["coder-doctrine"]["digest"] == _sha(doctrine)
+    assert "coder_doctrine" not in row
     assert row["testing_standard"] is None
     assert row["watch"]["wrap_s"] == 300 and row["watch"]["review_every_s"] == 1080
     assert row["watch"]["runs_dir"] == str(lanes.root.parent)
@@ -877,16 +871,6 @@ def test_review_pauses_are_for_codex_coder_launches_and_can_be_turned_off(
     assert "pauses this lane" not in prompt and "capped at" not in prompt
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["watch"]["review_every_s"] == 0 and row["watch"]["wrap_s"] == 0
-
-
-def test_a_coder_launch_is_refused_when_the_doctrine_cannot_be_injected(tmp_path: Path) -> None:
-    home = tmp_path / "factory-without-doctrine"
-    (home / "prompts").mkdir(parents=True)
-    (home / "prompts" / "engineer.md").write_text("# /engineer\n")
-    with pytest.raises(testing_standard.StandardMissing, match="How We Write Code"):
-        testing_standard.build(home, role="coder")
-    with pytest.raises(testing_standard.StandardMissing, match="never given the testing"):
-        testing_standard.build(REPO, tmp_path / "strategy.md", role="coder")
 
 
 def test_a_tester_launch_is_refused_when_the_standard_cannot_be_injected(
