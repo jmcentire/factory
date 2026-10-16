@@ -11110,6 +11110,95 @@ def test_endgame_refuses_an_lfs_setting_it_does_not_know(tmp_path: Path) -> None
     assert "endgame verdict: GREEN" not in r.stdout
 
 
+def _endgame_whose_gates_drift(
+    tmp_path: Path, target_conf: str | None
+) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+    """Endgame over a target whose gates (a stubbed red ``make``) rewrite one tracked file and
+    create one untracked ``.meta`` file in the judged checkout, the way an engine's cold
+    import re-serializes settings. Returns the run, the run root and the rewritten path."""
+
+    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    sha = str(target_state["resolved_commit"])
+    _verified_boundary_register(root)
+    source = Path(str(target_state["source_root"]))
+    tracked = sorted(
+        subprocess.run(
+            ["git", "-C", str(source), "ls-tree", "-r", "--name-only", sha],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+    )[0]
+    stub_dir = tmp_path / "driftmake-bin"
+    stub_dir.mkdir()
+    make_stub = stub_dir / "make"
+    make_stub.write_text(
+        "#!/bin/sh\n"
+        f"printf 'reserialized\\n' >> '{tracked}'\n"
+        "mkdir -p generated/deep && : > generated/deep/Thing.meta\n"
+        "echo 'stub make: red'\nexit 1\n",
+        encoding="utf-8",
+    )
+    make_stub.chmod(0o755)
+    install_resident_orchestrator_stub(stub_dir, root)
+    env = _factory_cli_env()
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    if target_conf is not None:
+        conf = tmp_path / "target.conf"
+        conf.write_text(target_conf.format(tracked=tracked), encoding="utf-8")
+        env["HARNESS_TARGET_CONF"] = str(conf)
+    r = run(
+        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        tmp_path,
+        env,
+    )
+    return r, root, tracked
+
+
+def test_endgame_drift_outside_a_declared_allowance_still_breaks_the_subject(
+    tmp_path: Path,
+) -> None:
+    r, _, _ = _endgame_whose_gates_drift(
+        tmp_path, "judged-drift-allow: generated/**/*.meta\n"
+    )
+
+    assert "evidence no longer names one subject" in r.stdout, r.stdout + r.stderr
+    assert "tolerated drift" not in r.stdout
+
+
+def test_endgame_reports_and_lists_drift_the_target_declares(tmp_path: Path) -> None:
+    r, root, tracked = _endgame_whose_gates_drift(
+        tmp_path,
+        "judged-drift-allow: {tracked}\njudged-drift-allow: generated/**/*.meta\n",
+    )
+
+    assert "evidence no longer names one subject" not in r.stdout, r.stdout + r.stderr
+    assert "tolerated drift: 2 path(s) matched judged-drift-allow" in r.stdout
+    (listing,) = (root / "endgame").glob("tolerated-drift-*.txt")
+    listed = listing.read_text(encoding="utf-8")
+    assert tracked in listed
+    assert "generated/deep/Thing.meta" in listed
+
+
+def test_endgame_without_an_allowance_breaks_the_subject_on_any_drift(tmp_path: Path) -> None:
+    r, _, _ = _endgame_whose_gates_drift(tmp_path, None)
+
+    assert "evidence no longer names one subject" in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    "pattern", ["**", "*", "**/*", ":(top)x", "/abs/*.meta", "a/../b", "  "]
+)
+def test_endgame_refuses_an_unbounded_or_magic_drift_allowance(
+    tmp_path: Path, pattern: str
+) -> None:
+    r, _, _ = _endgame_whose_gates_drift(tmp_path, f"judged-drift-allow: {pattern}\n")
+
+    assert "judged-drift-allow in" in r.stdout and "is refused" in r.stdout, r.stdout + r.stderr
+    assert "evidence no longer names one subject" in r.stdout
+    assert "endgame verdict: GREEN" not in r.stdout
+
+
 def test_endgame_judges_the_boundary_register_against_the_candidate(tmp_path: Path) -> None:
     r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
 

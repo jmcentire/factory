@@ -273,14 +273,56 @@ fi
 
 say "== exact-subject and run-owned-resource hygiene =="
 factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || FAILED=1
+# A target whose own toolchain rewrites tracked files while its gates run (an engine that
+# re-serializes import settings on a cold import, say) names those paths in target.conf as
+# `judged-drift-allow: <glob>`, Git's `:(glob)` pathspec syntax. Drift on those paths is
+# reported and listed, never silently dropped; drift anywhere else still breaks the subject.
+# A malformed or match-everything pattern refuses the allowance and fails the verdict.
+DRIFT_ALLOW=()
+if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
+  if DRIFT_ALLOW_TEXT=$(python3 - "$TARGET_CONF" <<'PY'
+import pathlib, re, sys
+prefix = "judged-drift-allow:"
+for number, line in enumerate(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines(), 1):
+    if not line.startswith(prefix):
+        continue
+    value = line[len(prefix):].strip()
+    parts = value.split("/")
+    if (not value or value.startswith((":", "/")) or "\\" in value
+            or any(part in {"", ".", ".."} for part in parts)
+            or not re.search(r"[^*?/\[\]]", value)):
+        raise SystemExit(f"line {number}: {value!r} is not a bounded relative glob")
+    print(value)
+PY
+  ); then
+    if [ -n "$DRIFT_ALLOW_TEXT" ]; then
+      while IFS= read -r pattern; do DRIFT_ALLOW+=(":(exclude,glob)$pattern"); done <<<"$DRIFT_ALLOW_TEXT"
+    fi
+  else
+    say "   judged-drift-allow in $TARGET_CONF is refused; no drift is tolerated"
+    FAILED=1
+  fi
+fi
 # The gates above ran candidate code inside $FRESH, so its .git is no longer the host's either.
 # A status that could not be read is not a clean status.
 if ! FRESH_STATUS=$(fresh_git status --porcelain --untracked-files=all); then
   say "   endgame checkout status could not be read; evidence no longer names one subject"
   FAILED=1
-elif [ -n "$FRESH_STATUS" ]; then
+elif [ -n "$FRESH_STATUS" ] && [ "${#DRIFT_ALLOW[@]}" -eq 0 ]; then
   say "   endgame checkout changed while judging; evidence no longer names one subject"
   FAILED=1
+elif [ -n "$FRESH_STATUS" ]; then
+  if ! JUDGED_STATUS=$(fresh_git status --porcelain --untracked-files=all -- . "${DRIFT_ALLOW[@]}"); then
+    say "   endgame checkout status could not be read; evidence no longer names one subject"
+    FAILED=1
+  elif [ -n "$JUDGED_STATUS" ]; then
+    say "   endgame checkout changed while judging; evidence no longer names one subject"
+    FAILED=1
+  else
+    TOLERATED="$ROOT/endgame/tolerated-drift-$RESOURCE_ID.txt"
+    printf '%s\n' "$FRESH_STATUS" > "$TOLERATED"
+    say "   tolerated drift: $(printf '%s\n' "$FRESH_STATUS" | wc -l | tr -d ' ') path(s) matched judged-drift-allow; listed in $TOLERATED"
+  fi
 fi
 
 # Endgame may mechanically disposition only what it can prove. Exact target/object stores, the

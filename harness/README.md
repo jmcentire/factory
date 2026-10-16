@@ -198,6 +198,12 @@ names a consuming project:
   that the lane freeze skips unread instead of refusing its symlinks); `#` starts a comment only
   at the start of a line, and a `freeze-exclude` value holding whitespace or `#` is refused.
   The legacy `.harness/projection.conf` is not read.
+  `target.conf` may also carry `judged-drift-allow: <glob>` lines (Git `:(glob)` pathspec
+  syntax) naming paths the target's own toolchain rewrites while its gates run, such as an
+  engine re-serializing import settings on a cold import. `endgame.sh` reports and lists drift
+  on those paths in `<run>/endgame/tolerated-drift-<resource>.txt`; drift anywhere else still
+  breaks the judged subject. A malformed, absolute, `..`, pathspec-magic or match-everything
+  pattern refuses the allowance and fails the verdict.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
   360-minute default are refused), plus externally supplied
