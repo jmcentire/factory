@@ -737,9 +737,9 @@ class Dispatcher:
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
             f"{schema} to {report}, then submit: {python} "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
-            "Review orchestrator/jev.jsonl when jev_screen is enabled; use assessment/4 "
-            "(assessment/5 carries screen_review too) "
-            f"(screen cursor={screen_cursor}); consume its completed prefix. "
+            "When jev_screen is enabled, review orchestrator/jev.jsonl and carry screen_review "
+            "in this same assessment (assessment/4, or assessment/5 when progress_review "
+            f"applies) (screen cursor={screen_cursor}); consume its completed prefix. "
             "Decide block, halt, or no-op; never grant or close."
         )
         environment = dict(os.environ)

@@ -2094,6 +2094,7 @@ def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_conte
         "PATH": env["PATH"],
         "FACTORY_CONTROL_ROOT": "/stale/run-b",
         "FACTORY_WORKDIR": "/stale",
+        "DIRECTIVE_LEDGER": "/stale/DIRECTIVES/ledger.jsonl",
     }
     for window in ("validator", "orchestrator"):
         dump.unlink(missing_ok=True)
@@ -2106,6 +2107,10 @@ def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_conte
             assert seat.get(name), (window, name)
         # No predicted "approval" ghost text in a seat's input line (dogfood #53).
         assert seat["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] == "false", window
+        # directive.py otherwise resolves a cwd-relative ledger the seat's tree never holds
+        # (herald-dash-r2: the Validator's ground failed until the operator exported it).
+        ledger = Path(seat["DIRECTIVE_LEDGER"])
+        assert ledger.is_absolute() and ledger.name == "directive-ledger.jsonl", window
         if window == "orchestrator":
             assert "FACTORY_KEYS_DIR" not in seat
 
