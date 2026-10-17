@@ -311,6 +311,26 @@ obtained. A checked item without that citation is still unchecked.
    Orchestrator must judge its substantive adequacy. Open findings, stale digests, missing members,
    or an out-of-date Orchestrator assessment block.
 
+   A Tester FAIL is an allegation until the Validator reproduces the behaviour from the
+   implementation's own outputs; an unreproduced FAIL is a candidate bad test and is never routed
+   to the Coder as a defect. A reproduced finding goes into the Coder's own thread
+   (`tmux_lane_message.sh <run> validator <slot> review --verdict repair`), and the Validator
+   also reviews a running Coder at each `lane-review-due` pause against the ratified
+   specification, on every resumable harness, so a wrong approach is redirected while the lane
+   can still change course. Tester lanes are reviewed on the same cadence for oracle quality and
+   coverage against the testing strategy, never against the Coder's code.
+
+   Founder direction (2026-10-16): the Orchestrator and the Validator assess the code and the
+   progress regularly; status reporting does not substitute for it. At every slice boundary and
+   at least every 60 minutes, the Validator writes a debrief
+   (`artifacts/debriefs/<stamp>.json`, `factory-validator-debrief/1`, checked by
+   `harness/validator_debrief.py`): what is verified with evidence from the work, what is claimed
+   but unverified with the check that settles it, risks, and decisions the human owes, each
+   classified `critical`, `action-required`, `at-your-convenience` or `informative`. A missing or
+   overdue debrief, or one that judges nothing, is negative evidence. The Orchestrator's
+   assessment/5 carries the matching code-and-progress review every second cadence tick and at
+   every slice boundary; a status recap does not satisfy either.
+
 8. **Fresh baseline, controls, and final gate.** The trusted baseline is green
    before new tests are trusted, unless a pre-existing red is individually
    attributed and recorded. In a correction, the negative control (**red-now**)

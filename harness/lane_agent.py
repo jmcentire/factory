@@ -47,11 +47,20 @@ import stat
 import subprocess
 import sys
 import tomllib
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+_HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
+if _HARNESS_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_ROOT)
+
+import agents  # noqa: E402  (harness/agents.py, the harness registry)
+
 EXIT_SCHEMA = "factory-lane-exit/1"
 REFUSED = 77
+# A plan lane whose harness announced API billing is stopped at once with this code.
+BILLING_REFUSED = 78
 # A prompt passed as one argv element must fit the smallest per-argument limit we run on
 # (Linux MAX_ARG_STRLEN is 128 KiB); a larger prompt is refused, never truncated.
 MAX_ARGV_PROMPT = 128 * 1024 - 1
@@ -90,6 +99,16 @@ AGENTS: Mapping[str, Agent] = {
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
     # Cursor's agent CLI in print mode: `agent -p [--model <m>] --force --trust --workspace <lane>`.
     "cursor-agent": Agent("cursor-agent", "agent", "argv", False, "cursor-status"),
+    # Harnesses whose headless turn comes from the registry (harness/agents.py): any of them may
+    # hold any seat. Each runs on the operator's signed-in plan unless launched --metered, and its
+    # check proves that sign-in the way the harness itself reports it, never a credential value.
+    "claude": Agent("claude", "claude", "argv", False, "claude-plan"),
+    # Claude Code on a model the local Ollama server serves (GLM): the Ollama plan.
+    "claude-ollama": Agent("claude-ollama", "claude", "argv", False, "ollama-server"),
+    "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
+    "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
+    # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
+    "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
 }
 
 
@@ -138,8 +157,10 @@ def preflight(
     environ: Mapping[str, str],
     timeout: float = 20.0,
     runner: Runner = subprocess.run,
+    billing: str = "plan",
 ) -> str:
-    """Return how sign-in was established, or raise PreflightRefused with the exact fix."""
+    """Return how sign-in was established, or raise PreflightRefused with the exact fix. A plan
+    lane (the default) must be signed in to the operator's plan, not to a per-use API key."""
 
     chosen = agent(name)
     if chosen.auth == "codex-login":
@@ -169,6 +190,11 @@ def preflight(
                 + (f" ({said[0][:120]})" if said else ""),
                 remediation,
             )
+        if billing == "plan" and "api key" in (result.stdout + result.stderr).lower():
+            raise PreflightRefused(
+                f"Codex is signed in with an API key for CODEX_HOME={home}, not the ChatGPT plan",
+                f"CODEX_HOME={quoted} codex login --device-auth   (or launch the lane --metered)",
+            )
         return "codex-login-status"
     if chosen.auth == "cursor-status":
         remediation = "agent login   (once, as this user; or put CURSOR_API_KEY in agent's config)"
@@ -190,6 +216,69 @@ def preflight(
                 remediation,
             )
         return "cursor-agent-status"
+    if chosen.auth == "claude-plan":
+        remediation = "claude auth login   (once, as this user, with the Claude subscription)"
+        result = _status([chosen.executable, "auth", "status", "--json"], timeout=timeout,
+                         runner=runner, remediation=remediation, label="Claude Code")
+        try:
+            document = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            document = None
+        if not isinstance(document, dict) or document.get("loggedIn") is not True:
+            raise PreflightRefused("Claude Code is not signed in", remediation)
+        on_key = document.get("authMethod") in ("api_key", None) or document.get("apiKeySource")
+        if billing == "plan" and on_key:
+            raise PreflightRefused(
+                f"Claude Code would bill an API key ({document.get('apiKeySource')}), "
+                "not the plan",
+                "unset the key for the lane, or launch it --metered with a spend cap",
+            )
+        return f"claude-plan:{document.get('authMethod')}"
+    if chosen.auth == "ollama-server":
+        remediation = ("start the Ollama server (`ollama serve`) and `ollama signin` for "
+                       ":cloud models")
+        result = _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
+                         remediation="install Claude Code", label="Claude Code")
+        if result.returncode != 0:
+            raise PreflightRefused("Claude Code is not runnable", "install Claude Code")
+        try:
+            with urllib.request.urlopen(f"{agents.OLLAMA_BASE_URL}/api/version",
+                                        timeout=timeout) as response:
+                json.load(response)
+        except (OSError, ValueError) as error:
+            raise PreflightRefused(f"the Ollama server does not answer ({error})",
+                                   remediation) from None
+        return "ollama-server-answers"
+    if chosen.auth == "agy-plan":
+        remediation = "agy   (run it once interactively, as this user, to sign in)"
+        result = _status([chosen.executable, "models"], timeout=timeout, runner=runner,
+                         remediation=remediation, label="agy")
+        shown = result.stdout + result.stderr
+        if result.returncode != 0 or "sign in" in shown.lower():
+            raise PreflightRefused("agy is not signed in", remediation)
+        return "agy-models"
+    if chosen.auth == "muse-plan":
+        remediation = "muse login   (once, as this user; META_API_KEY would bill the API instead)"
+        if environ.get("META_API_KEY"):
+            raise PreflightRefused("META_API_KEY would override Muse's account sign-in",
+                                   "unset it for the lane, or launch it --metered")
+        base = pathlib.Path(environ.get("XDG_CONFIG_HOME")
+                            or pathlib.Path(environ.get("HOME", "~")) / ".config")
+        auth = base / "muse" / "auth.json"
+        try:
+            stored = json.loads(auth.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            stored = None
+        if not isinstance(stored, dict) or not stored.get("providers"):
+            raise PreflightRefused(f"Muse has no stored sign-in at {auth}", remediation)
+        _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
+                remediation="install Muse Code", label="muse")
+        return "muse-auth-stored"
+    if chosen.auth == "registry":
+        _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
+                remediation=f"install {chosen.executable} and sign it in as this user",
+                label=chosen.name)
+        return "registry-cli-runs"
     # codex-ollama: the local Ollama server answers for the model (harness/model_availability.sh
     # has already run `ollama show`); Codex's --oss mode uses no ChatGPT sign-in. ollama.com
     # sign-in for a :cloud model has no non-interactive status command to check.
@@ -317,6 +406,19 @@ def record_exit(exits: pathlib.Path, *, slot: str, rc: int, stopped: bool) -> di
     return row
 
 
+def _record_session(path: pathlib.Path, session: str) -> None:
+    """Write a resumable session id owner-only, atomically, never through a symlink."""
+
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:-]{7,127}", session):
+        return
+    temporary = path.with_name(path.name + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(session + "\n")
+    os.replace(temporary, path)
+
+
 def run_lane(
     command: Sequence[str],
     *,
@@ -325,8 +427,21 @@ def run_lane(
     exits: pathlib.Path,
     prompt: pathlib.Path | None = None,
     terminal: bool = False,
+    env_file: pathlib.Path | None = None,
+    session_agent: str = "",
+    session_file: pathlib.Path | None = None,
+    plan_only: bool = False,
 ) -> int:
-    """Run one lane process to its end and record that end."""
+    """Run one lane process to its end and record that end.
+
+    ``env_file`` (owner-only ``NAME=value`` lines) adds a harness's named credentials to the
+    child's environment, so they never appear on a command line or in the tmux launch string.
+
+    With ``session_agent``, the first session id the harness streams is written to
+    ``session_file`` the moment it appears, so a turn the watchdog ends mid-flight can be resumed.
+    With ``plan_only``, a harness that announces per-use API billing in its stream is stopped at
+    once and the run ends ``BILLING_REFUSED``: a plan lane never spends on an API key.
+    """
 
     argv = list(command)
     if argv[:1] == ["--"]:
@@ -335,8 +450,34 @@ def run_lane(
         raise ValueError("lane command is empty")
     if prompt is not None:
         argv.append(_read_prompt(prompt, MAX_ARGV_PROMPT))
+    child_env = dict(os.environ)
+    if env_file is not None:
+        if env_file.stat().st_mode & 0o077:
+            raise ValueError(f"credential file {env_file} is readable by others")
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.isidentifier():
+                child_env[name] = value
     stopped = False
+    refused_billing = ""
+    session_seen = False
+    chosen = agents.harness(session_agent) if session_agent else None
     process: subprocess.Popen[bytes] | None = None
+
+    def _watch(raw: bytes) -> None:
+        nonlocal session_seen, refused_billing
+        if chosen is None:
+            return
+        line = raw.decode("utf-8", errors="replace")
+        if session_file is not None and not session_seen:
+            session = chosen.session_in(line)
+            if session:
+                _record_session(session_file, session)
+                session_seen = True
+        if plan_only and not refused_billing and chosen.billing_in(line) == "api":
+            refused_billing = chosen.name
+            if process is not None and process.poll() is None:
+                process.terminate()
 
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
@@ -349,17 +490,19 @@ def run_lane(
     }
     try:
         if terminal:
-            process = subprocess.Popen(argv)
+            process = subprocess.Popen(argv, env=child_env)
             rc = process.wait()
         else:
             process = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=child_env,
             )
             assert process.stdout is not None
             for raw in process.stdout:
                 sys.stdout.buffer.write(raw)
                 sys.stdout.buffer.flush()
                 _append(log, raw)
+                _watch(raw)
             rc = process.wait()
     except OSError as error:
         _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
@@ -367,6 +510,10 @@ def run_lane(
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+    if refused_billing:
+        _append(log, (f"lane-agent: {refused_billing} started on per-use API billing in a plan "
+                      "lane; stopped. Unset the key or launch the lane --metered.\n").encode())
+        rc = BILLING_REFUSED
     marker = f"__LANE_EXIT__ {slot} rc={rc}\n"
     _append(log, marker.encode())
     record_exit(exits, slot=slot, rc=rc, stopped=stopped)
@@ -474,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("preflight")
     check.add_argument("--agent", required=True)
     check.add_argument("--timeout", type=float, default=20.0)
+    check.add_argument("--billing", choices=("plan", "metered"), default="plan")
     environment = commands.add_parser("environment")
     environment.add_argument("--path", required=True)
     environment.add_argument("--cache-env", action="append", default=[])
@@ -485,6 +633,10 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--exits", type=pathlib.Path, required=True)
     runner.add_argument("--prompt-arg", type=pathlib.Path)
     runner.add_argument("--terminal", action="store_true")
+    runner.add_argument("--env-file", type=pathlib.Path)
+    runner.add_argument("--session-agent", default="")
+    runner.add_argument("--session-file", type=pathlib.Path)
+    runner.add_argument("--plan-only", action="store_true")
     runner.add_argument("lane_command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     try:
@@ -513,7 +665,8 @@ def main(argv: list[str] | None = None) -> int:
                  lane.assignments())
             return 0
         if arguments.command == "preflight":
-            how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout)
+            how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout,
+                            billing=arguments.billing)
             print(how)
             return 0
         return run_lane(
@@ -523,6 +676,10 @@ def main(argv: list[str] | None = None) -> int:
             exits=arguments.exits,
             prompt=arguments.prompt_arg,
             terminal=arguments.terminal,
+            env_file=arguments.env_file,
+            session_agent=arguments.session_agent,
+            session_file=arguments.session_file,
+            plan_only=arguments.plan_only,
         )
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)

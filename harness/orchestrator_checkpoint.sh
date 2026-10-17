@@ -67,7 +67,7 @@ esac
 
 CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
   --kind "$KIND" --source validator --detail "$DETAIL") || exit $?
-MESSAGE="# FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3, and submit it with orchestrator/bin/orchestrator_channel.py. Decide block, halt, or no-op; never grant or close."
+MESSAGE="# FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3 (assessment/5 with a progress_review when harness.json sets progress_review: a checkpoint is a slice boundary and owes the code-and-progress review), and submit it with orchestrator/bin/orchestrator_channel.py. Decide block, halt, or no-op; never grant or close."
 if ! INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" INJECT_SUBMIT_DELAY=0.1 \
   "$D/inject.sh" "$RUN" orchestrator "$MESSAGE" >/dev/null; then
   echo "orchestrator-checkpoint: resident Orchestrator notification failed" >&2

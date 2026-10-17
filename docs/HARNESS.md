@@ -444,6 +444,45 @@ machine, before the agent starts and while it runs:
   lane repository's reflog file, never from running git there. Each lane's end appends its
   commits, time to first commit, wall time, spend and commits per dollar to
   `tmux-lanes/lane-output.jsonl` (`lane_watchdog.py report --root <run root>`).
+- **Native harness per model, plan billing, a private lane home.** Each model runs in its own
+  vendor's harness (`harness/agents.py`): `claude` (Claude Code), `claude-ollama` (Claude Code on a
+  local Ollama model such as GLM, as `ollama launch claude` runs it), `codex`, `agy`, `muse` (Muse
+  Code) and `cursor-agent` (Grok and the other Cursor models; the effort is in the model name). A
+  lane runs on the operator's signed-in plan unless launched `--metered` (founder direction
+  2026-10-16): its env file admits no variable that would switch the harness to per-use API
+  billing, its preflight proves the plan sign-in (`claude auth status` is `claude.ai`, `codex
+  login status` is ChatGPT, `agent status`, `agy models`, Muse's stored sign-in with no
+  `META_API_KEY`), and the lane wrapper stops a lane (`rc=78`) whose harness announces API billing
+  in its first event. `agents.py lane-setup` builds the slot's agent home so the harness sees the
+  lane's scoped Kindex (Kinbase read-only) and none of the operator's MCP servers, rules or hooks:
+  `--mcp-config --strict-mcp-config --setting-sources project,local` for Claude Code, `--bare` for
+  claude-ollama, an `XDG_CONFIG_HOME` for Muse, and for cursor-agent and agy a private `HOME`
+  whose `Library` is the operator's (the keychain sign-in) and whose dot-files are the lane's.
+  `--effort` sets the reasoning effort; `<slot>-turn.json` records how to resume the session.
+- **Every resumable lane, not only Codex.** The wrapper records the session id the harness streams
+  first (`--session-agent`, `<slot>-thread-id`), so the watcher's wrap-up and review pauses, and
+  every lane message, resume a registry lane's own session (`--resume`, `--session-id` or
+  `--conversation`). Only `codex-interactive` has no resumable session.
+- **Wrap-up before the cap.** A lane is told its cap in its prompt, with the command that prints
+  what is left (`lane_watchdog.py remaining --root <run root> --slot <slot>`). For a resumable
+  lane the watcher interrupts the live turn `--wrap-up-minutes` (default 5) before
+  the cap and resumes the thread with a generated `FACTORY_WRAP_UP` (`tmux_lane_message.sh <run>
+  watchdog <slot> wrapup`), so the lane spends its last minutes leaving work that builds instead
+  of being stopped mid-edit. The cap stop still follows. The watcher's environment is scrubbed, so
+  the launch records, owner-only, the environment a lane message needs
+  (`tmux-lanes/<slot>-delivery.env`) and the notice runs in its own session from it, its output in
+  `<slot>-wrapup.log`; a notice that does not resume the lane within five minutes ends it as
+  capped.
+- **Progress reviews.** A resumable Coder launch pauses after every `--review-every-minutes`
+  (default 18; `0` turns it off) of active work: the watcher ends the turn, keeps the pane, and
+  wakes the Validator (`lane-review-due`). The Validator freezes the lane, reviews the frozen tree
+  against the ratified specification and resumes the same thread with `tmux_lane_message.sh <run>
+  validator <slot> review --verdict on-track|redirect|repair --review-file <file>`, a
+  `FACTORY_REVIEW` that passes the coder leak guard. Paused time is not counted toward the cap; a
+  review missing after 15 minutes wakes the Validator again (`lane-review-overdue`). The stall
+  window carries across a pause instead of granting a fresh read allowance, and a new round
+  launched over a paused lane closes it as `superseded`. The same `review --verdict repair`
+  carries a finding after a judge into the Coder's own thread; a lane at its cap refuses it.
 - **Qualification probe.** `tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <brief>
   [--agent ... --model ...]` runs a small capped brief (always wall-capped, 30 minutes by
   default) and records time to first commit, commit count and a pass or fail

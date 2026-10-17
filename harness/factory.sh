@@ -59,14 +59,55 @@ VALIDATOR_AGENT="${FACTORY_VALIDATOR_AGENT:-codex}"
 ORCHESTRATOR_AGENT="${FACTORY_ORCHESTRATOR_AGENT:-agy}"
 VALIDATOR_MODEL="${FACTORY_VALIDATOR_MODEL:-}"
 ORCHESTRATOR_MODEL="${FACTORY_ORCHESTRATOR_MODEL:-}"
+# Any registered harness (harness/agents.py) may hold either resident seat; ollama is Codex on a
+# local model and stays a Validator option.
 case "$VALIDATOR_AGENT" in
-  codex|ollama|claude) ;;
-  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude)" >&2; exit 64 ;;
+  codex|ollama|claude|claude-ollama|agy|muse|cursor-agent|prime-agent) ;;
+  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude|claude-ollama|agy|muse|cursor-agent|prime-agent)" >&2; exit 64 ;;
 esac
 case "$ORCHESTRATOR_AGENT" in
-  agy|codex) ;;
-  *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex)" >&2; exit 64 ;;
+  agy|codex|claude|claude-ollama|muse|cursor-agent|prime-agent) ;;
+  *) echo "factory: unsupported orchestrator agent '$ORCHESTRATOR_AGENT' (agy|codex|claude|claude-ollama|muse|cursor-agent|prime-agent)" >&2; exit 64 ;;
 esac
+# Seats run on the operator's signed-in plan, never a per-use API key (founder direction
+# 2026-10-16), unless the operator sets FACTORY_SEAT_BILLING=metered. Effort is optional per seat.
+SEAT_BILLING="${FACTORY_SEAT_BILLING:-plan}"
+case "$SEAT_BILLING" in plan|metered) ;; *) echo "factory: FACTORY_SEAT_BILLING must be plan or metered" >&2; exit 64 ;; esac
+VALIDATOR_EFFORT="${FACTORY_VALIDATOR_EFFORT:-}"
+ORCHESTRATOR_EFFORT="${FACTORY_ORCHESTRATOR_EFFORT:-}"
+for SEAT_EFFORT in "$VALIDATOR_EFFORT" "$ORCHESTRATOR_EFFORT"; do
+  case "$SEAT_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
+    *) echo "factory: seat effort must be minimal|low|medium|high|xhigh|max" >&2; exit 64 ;;
+  esac
+done
+for SEAT_AGENT in "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT"; do
+  if [ "$SEAT_AGENT" = claude-ollama ]; then
+    [ "$SEAT_AGENT" != "$VALIDATOR_AGENT" ] || [ -n "$VALIDATOR_MODEL" ] || {
+      echo "factory: a claude-ollama Validator needs FACTORY_VALIDATOR_MODEL (e.g. glm-5.3:cloud)" >&2; exit 64; }
+    [ "$SEAT_AGENT" != "$ORCHESTRATOR_AGENT" ] || [ -n "$ORCHESTRATOR_MODEL" ] || {
+      echo "factory: a claude-ollama Orchestrator needs FACTORY_ORCHESTRATOR_MODEL (e.g. glm-5.3:cloud)" >&2; exit 64; }
+  fi
+done
+# The flags that carry a seat's effort, by harness.
+seat_effort_args() {  # <agent> <effort>
+  [ -n "$2" ] || return 0
+  case "$1" in
+    claude|claude-ollama|agy) printf -- '--effort %s ' "$2" ;;
+    muse) printf -- '--reasoning-effort %s ' "$2" ;;
+    codex|ollama) printf -- '-c model_reasoning_effort=%s ' "$2" ;;
+    prime-agent) printf -- '--thinking %s ' "$2" ;;
+    *) ;;  # cursor-agent names the effort in the model
+  esac
+}
+# A plan seat's command never sees the variables that would bill the API.
+seat_unset_args() {  # <agent>
+  [ "$SEAT_BILLING" = plan ] || return 0
+  [ "$1" != ollama ] || set -- codex  # `ollama launch codex` is Codex on the local server
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] && printf -- '-u %s ' "$name"
+  done < <("$FACTORY_PYTHON" "$D/agents.py" api-env --agent "$1")
+}
 
 if [ "$VALIDATOR_AGENT" = "ollama" ]; then
   # shellcheck source=harness/model_availability.sh
@@ -74,10 +115,6 @@ if [ "$VALIDATOR_AGENT" = "ollama" ]; then
   VALIDATOR_MODEL="${FACTORY_VALIDATOR_OLLAMA_MODEL:-$VALIDATOR_MODEL}"
   factory_require_ollama_model factory FACTORY_VALIDATOR_OLLAMA_MODEL "$VALIDATOR_MODEL" || exit $?
 fi
-[ "$ORCHESTRATOR_AGENT" != "agy" ] || [ -z "$ORCHESTRATOR_MODEL" ] || {
-  echo "factory: agy takes no model flag; unset FACTORY_ORCHESTRATOR_MODEL and select the model inside agy with /model" >&2
-  exit 64
-}
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
@@ -216,6 +253,17 @@ case "$ORCHESTRATOR_AGENT" in
     done
     ORCHESTRATOR_CLI_CONTRACT="codex-resident-tui-v1"
     ;;
+  claude|claude-ollama|muse|cursor-agent|prime-agent)
+    case "$ORCHESTRATOR_AGENT" in
+      claude-ollama) ORCHESTRATOR_EXECUTABLE=claude ;;
+      cursor-agent) ORCHESTRATOR_EXECUTABLE=agent ;;
+      *) ORCHESTRATOR_EXECUTABLE="$ORCHESTRATOR_AGENT" ;;
+    esac
+    ORCHESTRATOR_VERSION=$("$ORCHESTRATOR_EXECUTABLE" --version 2>/dev/null | head -1) || {
+      echo "factory: $ORCHESTRATOR_AGENT CLI is not runnable" >&2; exit 70;
+    }
+    ORCHESTRATOR_CLI_CONTRACT="$ORCHESTRATOR_AGENT-resident-tui-v1"
+    ;;
 esac
 
 # No harness metadata exists yet, so a file here can only be left by an ignition that
@@ -298,6 +346,9 @@ metadata = {
     "lane_isolation": "QUALIFIED_PR2",
     "interactive_validator_boundary": "operator-owned-tmux",
     "validator_agent": validator_agent,
+    # The Orchestrator's code-and-progress review (assessment/5) is owed every 2nd cadence tick
+    # and at every slice boundary (founder direction 2026-10-16; harness/orchestrator_channel.py).
+    "progress_review": {"every_cadence_ticks": 2},
     "orchestrator_agent": orchestrator_agent,
     "orchestrator_cli_version": orchestrator_version,
     "orchestrator_cli_contract": orchestrator_cli_contract,
@@ -364,31 +415,83 @@ printf -v CTL_CMD 'exec env %s %q %q --run %q --root %q' \
 VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 VALIDATOR_PROMPT+=" Before drafting Phase A, snapshot the pinned target's own rule files with python3 $D/repo_rules.py snapshot and read them all; cite every touched rule by path and id in the Product Specification, quote those rules verbatim into both lane briefs (the lanes cannot see the freeze-excluded guidance files), put any needed rule exception to the human instead of coding it, and state per touched rule in the PR body why the change complies."
+VALIDATOR_PROMPT+=" Every Coder lane on a resumable harness pauses every 18 minutes of work and wakes you with lane-review-due: freeze it, review the frozen tree against the ratified specification, and resume it within minutes with tmux_lane_message.sh review (requirement ids and observed behaviour, never the tests); review each Tester lane on the same cadence for oracle quality and coverage against the testing strategy, never against the code; at every slice boundary and at least every 60 minutes write an evidenced debrief to artifacts/debriefs/ (harness/validator_debrief.py check; overdue says when one is owed); send findings after a judge into the Coder's own thread the same way, and reproduce a Tester FAIL from the implementation's own outputs before you route it."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Treat every cross-boundary identifier (principal, role, grant, table, metric or resource type, log field, token audience, env var, service or topic name) as unverified until $ROOT/artifacts/boundary-register.json records it on both sides: read $ROOT/orchestrator/BOUNDARIES.md, run $ROOT/orchestrator/bin/boundary_register.py verify --root $ROOT --workdir <the run's target workdir> whenever lanes touch a boundary, and block on any identifier a lane uses that the register lacks or names differently, or on access presumed without a record. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block, halt, or no-op: block gates the next transition; halt stops the Validator outright (HALT is set and its window is killed, and only a human clears HALT and re-seats it). Use halt when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
 ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
 # A model the operator named goes on the command line. Without one these stay empty and each
 # agent runs its own configured default.
 VALIDATOR_MODEL_ARGS=""
 case "$VALIDATOR_AGENT" in
-  codex|claude)
+  codex|claude|claude-ollama|agy|muse|cursor-agent|prime-agent)
     [ -z "$VALIDATOR_MODEL" ] || printf -v VALIDATOR_MODEL_ARGS -- '--model %q ' "$VALIDATOR_MODEL" ;;
 esac
+VALIDATOR_MODEL_ARGS+="$(seat_effort_args "$VALIDATOR_AGENT" "$VALIDATOR_EFFORT")"
+VALIDATOR_UNSET="$(seat_unset_args "$VALIDATOR_AGENT")"
 ORCHESTRATOR_MODEL_ARGS=""
-if [ "$ORCHESTRATOR_AGENT" = "codex" ] && [ -n "$ORCHESTRATOR_MODEL" ]; then
+if [ -n "$ORCHESTRATOR_MODEL" ]; then
   printf -v ORCHESTRATOR_MODEL_ARGS -- '--model %q ' "$ORCHESTRATOR_MODEL"
+fi
+ORCHESTRATOR_MODEL_ARGS+="$(seat_effort_args "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_EFFORT")"
+# On a host whose kernel cannot give Codex's sandbox a namespace, the operator sets
+# FACTORY_LANE_SANDBOX=off and the container is the sandbox (harness/tmux_lane.sh, same switch).
+CODEX_SANDBOX_FLAGS="--sandbox workspace-write"
+[ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
+if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+  # An unsandboxed seat is a fact of the run, recorded where the run's events are read, not only
+  # implied by an inherited environment variable.
+  "$FACTORY_PYTHON" - "$ROOT/events.jsonl" <<'PY' || exit 70
+import datetime, json, os, sys
+row = json.dumps({
+    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "kind": "seat-sandbox-off", "class": "seat", "source": "factory.sh", "wake": False,
+    "detail": "FACTORY_LANE_SANDBOX=off: Codex seats run with "
+              "--dangerously-bypass-approvals-and-sandbox; the host must be the sandbox",
+}, sort_keys=True, separators=(",", ":"))
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+try:
+    os.write(fd, (row + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY
 fi
 case "$VALIDATOR_AGENT" in
   codex)
-    printf -v VALIDATOR_CMD 'exec env %s codex --sandbox workspace-write %s%q' \
-      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s%s codex %s %s%q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$CODEX_SANDBOX_FLAGS" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   ollama)
     printf -v VALIDATOR_CMD 'exec env %s ollama launch codex --model %q -- --sandbox workspace-write %q' \
       "$SEAT_ENV" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
     ;;
   claude)
-    printf -v VALIDATOR_CMD 'exec env %s claude %s%q' \
-      "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    printf -v VALIDATOR_CMD 'exec env %s%s claude %s%q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  claude-ollama)
+    # Claude Code on the local Ollama server: its fixed variables travel in an owner-only file.
+    VALIDATOR_SEAT_ENV="$ROOT/validator-seat.env"
+    "$FACTORY_PYTHON" "$D/agents.py" seat-env --agent claude-ollama --billing "$SEAT_BILLING" \
+      --model "$VALIDATOR_MODEL" --env-file "$VALIDATOR_SEAT_ENV" || exit 70
+    printf -v VALIDATOR_CMD 'exec env %s%s %q %q run --slot validator --log %q --exits %q --terminal --env-file %q -- claude --permission-mode bypassPermissions %s%q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$FACTORY_PYTHON" "$D/lane_agent.py" \
+      "$ROOT/validator-lane.log" "$ROOT/validator-exits.jsonl" "$VALIDATOR_SEAT_ENV" \
+      "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  agy)
+    printf -v VALIDATOR_CMD 'exec env %s%s agy --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$FACTORY_WORKDIR" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  muse)
+    printf -v VALIDATOR_CMD 'exec env %s%s muse --yolo --workspace %q %s%q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$FACTORY_WORKDIR" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  cursor-agent)
+    printf -v VALIDATOR_CMD 'exec env %s%s agent --force --trust --approve-mcps --workspace %q %s%q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$FACTORY_WORKDIR" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
+    ;;
+  prime-agent)
+    printf -v VALIDATOR_CMD 'exec env %s%s prime-agent %s-- %q' \
+      "$VALIDATOR_UNSET" "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
 esac
 
@@ -404,15 +507,37 @@ case "$ORCHESTRATOR_AGENT" in
     # --sandbox restricts terminal effects; --dangerously-skip-permissions only
     # prevents unattended tool prompts from neutering the resident monitor. It
     # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q --prompt-interactive %q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
-      "$FACTORY_WORKDIR" "$ORCHESTRATOR_PROMPT"
+      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+    ;;
+  claude|claude-ollama|muse|cursor-agent|prime-agent)
+    # A cleared environment admits only the harness's named variables (on a plan seat, never an
+    # API key) and its fixed seat variables, through an owner-only file the lane wrapper loads,
+    # so no credential appears in the tmux launch string.
+    ORCH_CREDENTIALS="$ROOT/orchestrator-credentials.env"
+    "$FACTORY_PYTHON" "$D/agents.py" seat-env --agent "$ORCHESTRATOR_AGENT" \
+      --billing "$SEAT_BILLING" --model "$ORCHESTRATOR_MODEL" --env-file "$ORCH_CREDENTIALS" || exit 70
+    case "$ORCHESTRATOR_AGENT" in
+      claude|claude-ollama)
+        printf -v ORCH_TAIL 'claude --permission-mode bypassPermissions %s%q' "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT" ;;
+      muse)
+        printf -v ORCH_TAIL 'muse --yolo --workspace %q %s%q' "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT" ;;
+      cursor-agent)
+        printf -v ORCH_TAIL 'agent --force --trust --approve-mcps --workspace %q %s%q' "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT" ;;
+      *)
+        printf -v ORCH_TAIL 'prime-agent --cwd %q %s-- %q' "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT" ;;
+    esac
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q %q %q run --slot orchestrator --log %q --exits %q --terminal --env-file %q -- %s' \
+      "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
+      "$FACTORY_PYTHON" "$D/lane_agent.py" \
+      "$ROOT/orchestrator-lane.log" "$ROOT/orchestrator-exits.jsonl" "$ORCH_CREDENTIALS" "$ORCH_TAIL"
     ;;
   codex)
     SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex --sandbox workspace-write --add-dir %q --no-alt-screen %s%q' \
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q codex %s --add-dir %q --no-alt-screen %s%q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
-      "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
+      "$CODEX_SANDBOX_FLAGS" "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
 esac
 
@@ -489,6 +614,7 @@ echo "  control root : $ROOT"
 echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
 echo "  model lanes  : QUALIFIED_PR2"
+echo "  sandbox      : ${FACTORY_LANE_SANDBOX:-on}"
 echo "  validator    : operator-owned coordination"
 echo "  validator ai : $VALIDATOR_AGENT${VALIDATOR_MODEL:+ ($VALIDATOR_MODEL)}"
 echo "  orchestrator : $ORCHESTRATOR_AGENT${ORCHESTRATOR_MODEL:+ ($ORCHESTRATOR_MODEL)} (resident strategic monitor; tmux-unqualified)"
