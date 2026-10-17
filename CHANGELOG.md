@@ -3,6 +3,47 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.19] - 2026-10-17
+
+Lessons from Terminal-Bench 4 (#58), plan-billed native harnesses (#64), target repo rules (#57) and
+large-target review baselines (#61).
+
+### Added
+
+- **Mid-run reviews and wrap-up before the cap (#58).** A resumable Coder pauses every 18 minutes
+  of work for the Validator's `FACTORY_REVIEW`, which resumes its own thread. A resumable lane gets
+  a `FACTORY_WRAP_UP` turn five minutes before its cap. Any harness can hold any seat.
+- **Native plan-billed harnesses (#64).** claude, claude-ollama, agy, muse and cursor-agent lanes
+  and seats run in their own CLIs on the logged-in plan. API-key variables never reach a plan lane,
+  preflight refuses an API login, and a turn that reports API billing is stopped (exit 78). Each
+  registry lane gets a private config home that sees only its own Kindex.
+- **Every lane resumes its own session (#64).** Review pauses and wrap-ups apply to every resumable
+  Coder, not only Codex.
+- **Assessment/5 (#64).** Orchestrator check-ins carry an evidence-cited progress review every
+  second tick and at slice boundaries, plus a `signal_class`. The Validator records an hourly
+  evidenced debrief (`validator_debrief.py`).
+- **Target repo rules (#57).** Before Phase A the Validator snapshots the target's own rule files
+  (`repo_rules.py snapshot`), cites the touched rules in the Product Specification, quotes them
+  into both lane briefs and states compliance per rule in the PR body.
+- **Review baseline by reference, and declared projection limits (#61).** A target can hold its
+  review baseline by commit and tree instead of embedding it, with every blob re-derived from
+  streamed bytes. A target's declared projection limits come from the manifest its run authorized.
+  One declared limit now governs both the runner bundle and the lane freeze.
+
+### Fixed
+
+- **A Coder paused for review no longer waits forever.** The overdue notice re-emits with its age
+  every review wait, and after four waits the pause emits `lane-review-expired`.
+- **A stale review snapshot cannot pass as the candidate.** A resumed lane records a reopen row,
+  and the discovery check refuses until the lane is frozen again.
+- **`FACTORY_LANE_SANDBOX=off` is recorded.** The launch row records `sandbox` and a resume
+  follows it. An unsandboxed ignition appends a `seat-sandbox-off` event.
+- **Seats get the run's directive ledger.** `DIRECTIVE_LEDGER` is now the checkpoint-verified
+  source, not a cwd-relative path no seat tree holds.
+- `prime-agent` is metered by construction.
+- The lane-controls session test no longer depends on Linux-only `ps -o sid`.
+- The dispatcher's activity notice names one assessment schema.
+
 ## [0.8.18] - 2026-10-14
 
 Harness fixes from the msg-r2-pr3s run that 0.8.17 did not already cover.
