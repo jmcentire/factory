@@ -185,22 +185,22 @@
         "projection_limits": {
           "type": "object",
           "additionalProperties": false,
-          "description": "What this target's size actually is. The factory bounds a projection so an unbounded one cannot deny a lane, but the bound is the target's to declare; the defaults fit a small repository and nothing else.",
+          "description": "What this target's size actually is. The factory bounds a projection so an unbounded one cannot deny a lane, but the bound is the target's to declare; the defaults fit a small repository and nothing else. A run reads these from the manifest bytes it authorized. Each declared limit bounds both the author-lane freeze (defaults 10,000 files, 16 MiB per file, 256 MiB in all) and the qualified-lane runner bundle (defaults 4,096 files, 512 KiB per file, 1.2 MB in all), which the runner-projection protocol still caps on its own. A limit left undeclared keeps each default.",
           "properties": {
             "max_files": {
               "type": "integer",
               "minimum": 1,
-              "description": "Most files a lane may be shown. Default 4,096."
+              "description": "Most files a lane may be shown."
             },
             "max_file_bytes": {
               "type": "integer",
               "minimum": 1,
-              "description": "Largest single file a lane may be shown. Default 524,288."
+              "description": "Largest single file a lane may be shown, in bytes."
             },
             "max_total_bytes": {
               "type": "integer",
               "minimum": 1,
-              "description": "Most bytes a projection may carry in total. Default 1,200,000."
+              "description": "Most bytes a projection may carry in total."
             }
           }
         },

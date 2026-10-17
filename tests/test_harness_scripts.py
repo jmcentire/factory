@@ -1434,6 +1434,7 @@ def execution_truth_fixture(
     projection_conf: str = "coder-exclude: tests\ntester-include: impl.py\n",
     harness_status: str | None = "open",
     terminal_resources: bool = False,
+    target_manifest: Path | None = None,
 ) -> tuple[Path, Path, dict[str, object]]:
     """Create a real v3 intake run with a verified run-owned target checkout.
 
@@ -1472,9 +1473,10 @@ def execution_truth_fixture(
         check=True,
     )
 
-    manifest = load_target_manifest(
+    manifest_path = target_manifest or (
         Path(__file__).parent / "fixtures" / "synthetic_target" / "target.toml"
     )
+    manifest = load_target_manifest(manifest_path)
     runs = tmp / ".factory" / "runs"
     store = RunStore(runs, clock=lambda: 100)
 
@@ -1523,6 +1525,8 @@ def execution_truth_fixture(
     )
     target_evidence = runs / run_id / "evidence" / "target-resolution"
     target_evidence.mkdir(parents=True)
+    # Production retains the authorized manifest bytes at authorize-target-resolution.
+    (target_evidence / "target-manifest.toml").write_bytes(manifest_path.read_bytes())
     (target_evidence / "target-state.json").write_text(
         json.dumps(target_state, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
