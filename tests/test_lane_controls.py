@@ -654,12 +654,20 @@ def test_a_coder_is_paused_for_review_and_its_paused_time_is_not_work(tmp_path: 
     [due] = [row for row in watched.events() if row["kind"] == "lane-review-due"]
     assert due["wake"] is True and "tmux_lane_message.sh r1 validator tester review" in str(
         due["detail"])
-    # Paused: no stall, no cap, one overdue reminder when the review is late.
+    # Paused: no stall, no cap. A late review is a stuck effect: the overdue notice re-emits with
+    # its age every review wait, then the pause emits expired once and stays paused.
     assert watched.at(1080 + 900) == "paused"
     assert watched.at(1080 + 901) == "paused"
+    assert watched.at(1080 + 1200) == "paused"  # still inside the second wait: no repeat yet
+    assert watched.at(1080 + 1801) == "paused"
+    kinds = [row["kind"] for row in watched.events()]
+    assert kinds.count("lane-review-overdue") == 2 and "lane-review-expired" not in kinds
+    assert watched.at(1080 + 3601) == "paused"
     assert watched.at(1080 + 5000) == "paused"
-    overdue = [row for row in watched.events() if row["kind"] == "lane-review-overdue"]
-    assert len(overdue) == 1
+    kinds = [row["kind"] for row in watched.events()]
+    assert kinds.count("lane-review-overdue") == 2 and kinds.count("lane-review-expired") == 1
+    [expired] = [row for row in watched.events() if row["kind"] == "lane-review-expired"]
+    assert "60 min expiry" in str(expired["detail"])
     # The review resumes the lane: the next pause comes after another 18 minutes of work.
     watched.resume(9000)
     _commit(watched.repo, T0 + 9500, "c")

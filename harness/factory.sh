@@ -435,6 +435,24 @@ ORCHESTRATOR_MODEL_ARGS+="$(seat_effort_args "$ORCHESTRATOR_AGENT" "$ORCHESTRATO
 # FACTORY_LANE_SANDBOX=off and the container is the sandbox (harness/tmux_lane.sh, same switch).
 CODEX_SANDBOX_FLAGS="--sandbox workspace-write"
 [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
+if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+  # An unsandboxed seat is a fact of the run, recorded where the run's events are read, not only
+  # implied by an inherited environment variable.
+  "$FACTORY_PYTHON" - "$ROOT/events.jsonl" <<'PY' || exit 70
+import datetime, json, os, sys
+row = json.dumps({
+    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "kind": "seat-sandbox-off", "class": "seat", "source": "factory.sh", "wake": False,
+    "detail": "FACTORY_LANE_SANDBOX=off: Codex seats run with "
+              "--dangerously-bypass-approvals-and-sandbox; the host must be the sandbox",
+}, sort_keys=True, separators=(",", ":"))
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+try:
+    os.write(fd, (row + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY
+fi
 case "$VALIDATOR_AGENT" in
   codex)
     printf -v VALIDATOR_CMD 'exec env %s%s codex %s %s%q' \
@@ -595,6 +613,7 @@ echo "  control root : $ROOT"
 echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
 echo "  model lanes  : QUALIFIED_PR2"
+echo "  sandbox      : ${FACTORY_LANE_SANDBOX:-on}"
 echo "  validator    : operator-owned coordination"
 echo "  validator ai : $VALIDATOR_AGENT${VALIDATOR_MODEL:+ ($VALIDATOR_MODEL)}"
 echo "  orchestrator : $ORCHESTRATOR_AGENT${ORCHESTRATOR_MODEL:+ ($ORCHESTRATOR_MODEL)} (resident strategic monitor; tmux-unqualified)"

@@ -675,7 +675,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$CLI_CONTRACT" "$AUTH" "$SPEND_CAP" "$RATE" "$WALL_CAP_S" "$READ_ALLOWANCE_S" \
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
     "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
-    "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" \
+    "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "${FACTORY_LANE_SANDBOX:-on}" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
 import datetime, json, sys
 (
@@ -685,9 +685,9 @@ import datetime, json, sys
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
     standard, lane_log, lane_exits, qualifications, lane_env, model_source,
-    wrap_s, review_s, runs_dir,
-) = sys.argv[1:40]
-model_config = sys.argv[40:]
+    wrap_s, review_s, runs_dir, sandbox,
+) = sys.argv[1:41]
+model_config = sys.argv[41:]
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -709,6 +709,9 @@ print(json.dumps({
     "prompt_via": prompt_via,
     "auth_preflight": auth.strip(),
     "metered": metered == "true",
+    # FACTORY_LANE_SANDBOX=off (a host whose kernel gives Codex's sandbox no namespace) runs the
+    # lane unsandboxed; the record says so, and a resume reuses this, never the ambient value.
+    "sandbox": "off" if sandbox == "off" else "on",
     "caps": {
         "spend_cap_usd": spend_cap or None,
         "usd_per_hour": rate or None,

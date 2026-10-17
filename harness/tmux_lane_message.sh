@@ -116,7 +116,8 @@ if len(active) != 1:
     raise SystemExit("lane-message: retained active launch is missing or ambiguous")
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
           (active[0].get("kindex") or {}).get("mcp_override", ""),
-          json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])))
+          json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])),
+          "off" if active[0].get("sandbox") == "off" else "on")
 # The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -142,6 +143,9 @@ IFS= read -r -d '' KINDEX_OVERRIDE <&3 || {
 }
 IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
   echo "lane-message: retained lane environment is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' LANE_SANDBOX <&3 || {
+  echo "lane-message: retained lane sandbox is missing or malformed" >&2; exit 70;
 }
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
@@ -424,11 +428,14 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # and records its end, and a fresh watcher is started for it below.
   case "$AGENT" in
     codex|codex-ollama)
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
+  # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
+  RESUME_SANDBOX=""
+  [ "$LANE_SANDBOX" != off ] || RESUME_SANDBOX="--dangerously-bypass-approvals-and-sandbox "
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
-    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
+    "$RESUME_SANDBOX" 'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
       # launched with (its turn record); the wrapper keeps recording the session and billing.
@@ -467,6 +474,26 @@ PY
   esac
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
+  # A resumed turn can change the tree after a review freeze, so the journal records the reopen
+  # before the turn starts: discovery_check.latest_freeze then refuses until the lane is frozen
+  # again, instead of passing the mid-run review snapshot as the candidate. Recorded first, so a
+  # resume that fails to start still reads as unfrozen (fail closed).
+  "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" <<'PY'
+import datetime, json, os, sys
+journal, run, role, slot, sender, kind, message_id = sys.argv[1:]
+row = json.dumps({
+    "schema_version": "factory-tmux-lane-reopen/1",
+    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "run_id": run, "role": role, "slot": slot, "sender": sender,
+    "message_kind": kind, "message_id": message_id,
+}, sort_keys=True, separators=(",", ":"))
+fd = os.open(journal, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+try:
+    os.write(fd, (row + "\n").encode("utf-8"))
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
   # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
   if [ "$PANE_DEAD" = "missing" ]; then
     tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"

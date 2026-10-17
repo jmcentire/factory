@@ -2115,6 +2115,42 @@ def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_conte
             assert "FACTORY_KEYS_DIR" not in seat
 
 
+@pytest.mark.parametrize("sandbox", ["on", "off"])
+def test_an_unsandboxed_ignition_is_recorded_as_a_run_event(tmp_path: Path, sandbox: str) -> None:
+    task = "Record how the seats are sandboxed."
+    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    env.update({
+        "FACTORY_ORCHESTRATOR_AGENT": "codex",
+        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
+        "FACTORY_KEYS_DIR": str(keys),
+        "FACTORY_HOME": str(HARNESS.parent),
+        "FACTORY_LANE_SANDBOX": sandbox,
+    })
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"sandbox      : {sandbox}" in result.stdout
+    orchestrator = next(
+        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
+    )
+    events = root / "events.jsonl"
+    rows = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
+    recorded = [row for row in rows if row.get("kind") == "seat-sandbox-off"]
+    if sandbox == "off":
+        assert "--dangerously-bypass-approvals-and-sandbox" in orchestrator
+        assert len(recorded) == 1 and recorded[0]["source"] == "factory.sh"
+    else:
+        assert "--sandbox workspace-write" in orchestrator
+        assert "--dangerously-bypass-approvals-and-sandbox" not in orchestrator
+        assert not recorded
+
+
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     tmp_path: Path,
 ) -> None:
@@ -2210,8 +2246,9 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert rows[-1]["boundary"] == "regular-files-only-no-git"
 
 
+@pytest.mark.parametrize("sandbox", ["on", "off"])
 def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_blocked(
-    tmp_path: Path,
+    tmp_path: Path, sandbox: str
 ) -> None:
     from harness.lane_dialogue import record_question
 
@@ -2222,22 +2259,25 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
         harness_status="open",
     )
     env, tmux_log = factory_ignition_env(tmp_path, root)
+    # The resume follows the launch record's sandbox, never the ambient switch: the ambient value
+    # here is always the opposite of what the lane launched with.
+    env["FACTORY_LANE_SANDBOX"] = "off" if sandbox == "on" else "on"
     lane = tmp_path / "standalone tester"
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
+    launch = {
+        "schema_version": "factory-tmux-lane-launch/1",
+        "status": "active",
+        "run_id": "r1",
+        "role": "tester",
+        "agent": "codex",
+        "repository": str(lane),
+    }
+    if sandbox == "off":
+        launch["sandbox"] = "off"  # launches before the field existed read as sandboxed
     (launch_dir / "tester-launch.jsonl").write_text(
-        json.dumps(
-            {
-                "schema_version": "factory-tmux-lane-launch/1",
-                "status": "active",
-                "run_id": "r1",
-                "role": "tester",
-                "agent": "codex",
-                "repository": str(lane),
-            }
-        )
-        + "\n",
+        json.dumps(launch) + "\n",
         encoding="utf-8",
     )
     thread_id = "12345678-1234-4234-8234-123456789abc"
@@ -2315,6 +2355,14 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
     assert "respawn-pane" in tmux_call
     assert "exec --json resume" in tmux_call
     assert ".git" in tmux_call and "write" in tmux_call
+    bypass = "--dangerously-bypass-approvals-and-sandbox" in tmux_call
+    assert bypass == (sandbox == "off")
+    # The resumed turn can change the tree, so the launch journal now ends in a reopen row and
+    # an earlier freeze no longer reads as the lane's frozen candidate.
+    launches = [json.loads(line) for line in
+                (root / "tmux-lanes" / "tester-launch.jsonl").read_text().splitlines()]
+    assert launches[-1]["schema_version"] == "factory-tmux-lane-reopen/1"
+    assert launches[-1]["message_kind"] == "spec-answer" and launches[-1]["sender"] == "validator"
 
 
 def test_tmux_lane_message_refuses_orchestrator_specification_answer(
@@ -10635,6 +10683,7 @@ def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
     assert " exec -m gpt-coder --ignore-user-config" in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"], row["model_config"]) == ("gpt-coder", "operator", [])
+    assert row["sandbox"] == "on"  # the record a resume reuses (FACTORY_LANE_SANDBOX unset)
 
 
 def test_with_no_model_named_each_agent_runs_its_own_default(tmp_path: Path) -> None:

@@ -103,6 +103,10 @@ REVIEW_HEADROOM_S = 5 * 60
 WRAP_DELIVERY_S = 5 * 60
 # A pause whose stop did not take (the pane is still live this long after it) is cancelled.
 PAUSE_GRACE_S = 60
+# An unanswered review is a stuck required effect: the overdue signal re-emits with its age every
+# review wait, and after this many waits the pause emits expired once. The lane stays paused, so a
+# late review still resumes it; nothing about the lane is destroyed.
+REVIEW_EXPIRY_WAITS = 4
 # Lanes whose retained session a lane message resumes: a Codex exec thread, or a registry
 # harness's session (harness/agents.py), recorded by the lane wrapper as soon as it streams.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy", "muse",
@@ -650,7 +654,7 @@ class LaneWatch:
         stopped = self.stop(str(launch.get("tmux_target", "")))
         reviews = int(state.get("reviews", 0)) + 1
         state.update(status="paused", paused_ts=current, active_s=active, reviews=reviews,
-                     review_overdue_woken=False, stall_carry_s=idle)
+                     review_overdue_count=0, review_expired=False, stall_carry_s=idle)
         self._write_state(state)
         run = launch.get("run_id", "<run>")
         self._wake(
@@ -676,13 +680,29 @@ class LaneWatch:
                        "the review pause did not stop the lane; it is watched again",
                        refusal=False)
             return "watching"
-        if not state.get("review_overdue_woken") and waited > wait:
-            state["review_overdue_woken"] = True
+        if state.get("review_expired"):
+            return "paused"
+        expiry = wait * REVIEW_EXPIRY_WAITS
+        if waited > expiry:
+            state["review_expired"] = True
+            self._write_state(state)
+            self._wake(
+                launch, "lane-review-expired",
+                f"paused {waited / 60:.0f} min with no progress review, past its "
+                f"{expiry / 60:.0f} min expiry; the lane stays paused and does no work until a "
+                "review resumes it",
+                refusal=False,
+            )
+            return "paused"
+        overdue = int(state.get("review_overdue_count", 0))
+        if waited > wait * (overdue + 1):
+            state["review_overdue_count"] = overdue + 1
             self._write_state(state)
             self._wake(
                 launch, "lane-review-overdue",
-                f"paused {waited / 60:.0f} min waiting for the Validator's progress review; the "
-                "lane does no work until a review resumes it",
+                f"paused {waited / 60:.0f} min waiting for the Validator's progress review "
+                f"(overdue notice {overdue + 1}; expires at {expiry / 60:.0f} min); the lane does "
+                "no work until a review resumes it",
                 refusal=False,
             )
         return "paused"

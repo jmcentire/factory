@@ -107,7 +107,8 @@ AGENTS: Mapping[str, Agent] = {
     "claude-ollama": Agent("claude-ollama", "claude", "argv", False, "ollama-server"),
     "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
     "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
-    "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry"),
+    # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
+    "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
 }
 
 

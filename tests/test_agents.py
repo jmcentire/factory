@@ -44,6 +44,10 @@ def test_registry_lists_every_harness_the_lanes_accept() -> None:
     assert lane_agent.agent("agy").auth == "agy-plan"
     assert lane_agent.agent("muse").auth == "muse-plan"
     assert lane_agent.agent("prime-agent").auth == "registry"
+    # Metered by construction: a prime-agent lane needs a spend cap even without --metered.
+    assert lane_agent.agent("prime-agent").metered
+    assert not any(lane_agent.agent(name).metered
+                   for name in ("claude", "claude-ollama", "agy", "muse", "cursor-agent"))
     # Every registry harness tmux_lane.sh routes through lane-setup is one lane_agent knows.
     for name in agents.HARNESSES:
         if name != "codex":
