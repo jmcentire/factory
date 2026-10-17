@@ -64,6 +64,25 @@ def test_accepts_a_minimal_valid_manifest(tmp_path) -> None:
     assert tm.build["max_attempts"] == 2
 
 
+def test_a_target_may_choose_how_its_review_baseline_is_held(tmp_path) -> None:
+    text = VALID.replace(
+        'construction_modes = ["regenerate", "brownfield"]\n',
+        'construction_modes = ["regenerate", "brownfield"]\nreview_baseline = "git-reference"\n',
+    )
+    tm = load_target_manifest(_write(tmp_path, text))
+    assert tm.build["review_baseline"] == "git-reference"
+    assert "review_baseline" not in load_target_manifest(_write(tmp_path, VALID)).build
+
+
+def test_rejects_an_unknown_review_baseline(tmp_path) -> None:
+    text = VALID.replace(
+        'construction_modes = ["regenerate", "brownfield"]\n',
+        'construction_modes = ["regenerate", "brownfield"]\nreview_baseline = "lazy"\n',
+    )
+    with pytest.raises(TargetManifestError, match="schema violation"):
+        load_target_manifest(_write(tmp_path, text))
+
+
 # --------------------------------------------------------------------------- #
 # Reject malformed
 # --------------------------------------------------------------------------- #

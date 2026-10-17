@@ -198,6 +198,10 @@ names a consuming project:
   that the lane freeze skips unread instead of refusing its symlinks); `#` starts a comment only
   at the start of a line, and a `freeze-exclude` value holding whitespace or `#` is refused.
   The legacy `.harness/projection.conf` is not read.
+- A lane's size bound is the target's. The lane freeze and the qualified-lane runner bundle both
+  read `build.projection_limits` from `<runs>/<run>/evidence/target-resolution/target-manifest.toml`,
+  the manifest bytes the run authorized, and refuse it unless its digest is the one the target
+  state names. A limit the manifest leaves undeclared keeps that boundary's own default.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
   360-minute default are refused), plus externally supplied
