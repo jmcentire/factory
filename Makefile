@@ -191,7 +191,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/discovery_check.py \
 		harness/strategy_plan.py harness/test_inventory.py \
 		harness/jev_screen.py harness/jev_rules.py \
-		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
+		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
 		harness/spawn.py harness/with_secret.py
 
@@ -206,7 +206,7 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/discovery_check.py \
 		harness/strategy_plan.py harness/test_inventory.py \
 		harness/jev_screen.py harness/jev_rules.py \
-		harness/phase_compiler.py harness/run_guidance.py harness/semantic_union.py \
+		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
 		harness/spawn.py harness/with_secret.py
 

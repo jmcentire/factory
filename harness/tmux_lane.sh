@@ -927,7 +927,8 @@ fi
 
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
-  --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
+  --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}" \
+  --control-root "$ROOT" --target-manifest-digest "$FACTORY_TARGET_MANIFEST_DIGEST") || exit $?
 # A Tester freezes only when its modules mention every Critical planned case of the Strategy
 # (dogfood #73, traceability only); refused, the lane stays open to write them. That the cases are
 # runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,

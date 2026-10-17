@@ -544,7 +544,9 @@ Validation now includes a mandatory adversarial code review over the same immuta
 an optional instruction to "look carefully." Before the Validator runs, the host issues a closed
 review subject binding the exact Stage-E execution-request bytes from the externally anchored
 resume checkpoint, the frozen implementation/tests and snapshots, all three ratified phase
-artifacts and their ordered review-item inventories, complete bounded Git-object baseline and canonical candidate change set, build input,
+artifacts and their ordered review-item inventories, complete Git-object baseline (embedded, or by
+commit and tree with a SHA-256 listing digest when the target sets `build.review_baseline =
+"git-reference"`) and canonical candidate change set, build input,
 plan, pattern catalog, acceptance obligations, resume checkpoint, configuration and exceptional
 test-change authority, target state, and frozen Validator execution identity. Target-controlled
 Validator source is constrained to one admitted Python file and supplied from the exact captured

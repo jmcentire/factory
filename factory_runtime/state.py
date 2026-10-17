@@ -1654,6 +1654,7 @@ class RunStore:
                     observations_source_digest=supplied[
                         "validator-review-observations-source"
                     ],
+                    baseline_object_store=current.target_state.get("object_store"),
                 )
                 from factory_runtime.evidence_plane import (
                     EvidencePlaneError,
@@ -2737,6 +2738,7 @@ class RunStore:
                             observations_source_digest=str(
                                 digests["validator-review-observations-source"]
                             ),
+                            baseline_object_store=target_state.get("object_store"),
                         )
                         from factory_runtime.evidence_plane import (
                             EvidencePlaneError,

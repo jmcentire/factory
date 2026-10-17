@@ -187,16 +187,17 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     assert (row["model"], row["model_source"]) == ("", "agent")
 
 
-def test_every_lane_agent_is_described_once_and_only_codex_ollama_is_metered() -> None:
-    """lane_agent.py names each agent tmux_lane.sh admits, and no other; the agent metered by
-    construction is the Ollama-backed one. Any other launch is metered only when marked."""
+def test_every_lane_agent_is_described_once_and_only_the_per_use_agents_are_metered() -> None:
+    """lane_agent.py names each agent tmux_lane.sh admits, and no other; the agents metered by
+    construction are the Ollama-backed Codex and prime-agent (OpenRouter, no plan). Any other
+    launch is metered only when marked."""
 
     text = (HARNESS / "tmux_lane.sh").read_text(encoding="utf-8")
     match = re.search(r'case "\$AGENT" in ([a-z|-]+)\) ;;', text)
     assert match is not None
     assert set(match.group(1).split("|")) == set(lane_agent.AGENTS)
     assert {name for name, agent in lane_agent.AGENTS.items() if agent.metered} == {
-        "codex-ollama"
+        "codex-ollama", "prime-agent"
     }
 
 

@@ -30,6 +30,7 @@ from factory_runtime.instruction_control import (
 from factory_runtime.isolation import MacOSSandbox
 from factory_runtime.orchestrator_projection import build_orchestrator_projection
 from factory_runtime.projection_bundle import bundle_runner_projection
+from factory_runtime.projection_limits import retained_projection_limits
 from factory_runtime.resources import ResourceLedger
 from factory_runtime.resume import derive_resume_checkpoint, verify_resume_checkpoint
 from factory_runtime.runner import (
@@ -1623,6 +1624,10 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
             target_state_digest=projection.target_state_digest,
             resolved_commit=str(projection.target_state["resolved_commit"]),
             resolved_tree=str(projection.target_state["resolved_tree"]),
+            **retained_projection_limits(
+                str(projection.target_state["control_root"]),
+                expected_digest=str(projection.target_state["target_manifest_digest"]),
+            ),
         )
         _write_json_once(arguments.output, document)
         _emit(
