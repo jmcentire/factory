@@ -586,9 +586,10 @@ two separate claims about two separate parties — keep them apart.**
    confirmed stall. A pending typed question is already a known `waiting-on-validator` state;
    resolve or escalate it instead of treating its expected silence as a liveness alarm.
 
-   **Review the Coder at each pause, while it can still change course.** A Codex Coder lane
-   pauses after every 18 minutes of work (`tmux_lane.sh --review-every-minutes`) and wakes you
-   with `lane-review-due`. Freeze it (`tmux_lane.sh <run> coder freeze`), then read and exercise
+   **Review the Coder at each pause, while it can still change course.** Every Coder lane on a
+   resumable harness (one whose session the harness can resume: `codex`, `codex-ollama` and the
+   resumable registry harnesses) pauses after every 18 minutes of work
+   (`tmux_lane.sh --review-every-minutes`) and wakes you with `lane-review-due`. Freeze it (`tmux_lane.sh <run> coder freeze`), then read and exercise
    the frozen tree against the ratified specification: run what exists, compare its outputs
    with each requirement's own words, and look for a wrong method, a misread requirement, or
    work the specification does not ask for. Resume it with `tmux_lane_message.sh <run>
@@ -602,6 +603,40 @@ two separate claims about two separate parties — keep them apart.**
    then fixed. Five minutes before a lane's cap the watchdog interrupts its turn and resumes it
    with a generated `FACTORY_WRAP_UP`, so a capped lane leaves work that builds, not a half-made
    edit.
+
+   **Review the Tester the same way, for its oracles, not code.** Review each Tester lane on the
+   same cadence: at its pause where the launch pauses Testers, otherwise from its committed tests
+   at each code-and-progress review, delivered when its turn ends. Read its tests against the run's TESTING-STRATEGY and
+   the ratified specification: is every requirement in this slice covered, does each new test
+   fail at base for the named reason (Phase C Q3), does it assert the specification's words
+   rather than an implementation's habits, and is any oracle vacuous or tautological. Resume it
+   with the same `review` message. Never pass the Coder's code, diff or design into a Tester
+   review.
+
+   Founder direction (2026-10-16): the Orchestrator and the Validator assess the code and the
+   progress regularly; status reporting does not substitute for it. A review that restates what
+   the lane said it did, without running or reading the work, is not a review.
+
+   **Debrief the human with an assessment, not a status recap.** At every slice boundary and at
+   least every 60 minutes of run time, write a debrief to
+   `<run root>/artifacts/debriefs/<UTC stamp>.json` (schema `factory-validator-debrief/1`) with
+   a short `.md` beside it, and check it with `harness/validator_debrief.py check <file>`;
+   `harness/validator_debrief.py overdue --root <run root>` says when one is owed. It assesses
+   the code and progress against the ratified specification:
+   - **verified**: what you have observed working, each item citing the commit or path that
+     shows it (a lane console or `OUTSTANDING-WORK.md` is not evidence);
+   - **unverified**: what a lane claims and you have not yet observed, with who claimed it and
+     the check that will settle it;
+   - **risks**: what could go wrong next, with references where they exist;
+   - **decisions_owed**: the questions the human must answer.
+
+   Every item carries a `signal_class`, most urgent first: `critical` (the human is needed now:
+   danger, a halt, a compliance issue), `action-required` (the human owes a decision or answer),
+   `at-your-convenience` (worth the human's attention, blocks nothing), `informative` (record
+   only). A decision owed is at least `action-required`, and the debrief's own class is never
+   below its most urgent item. The class classifies the fact; paging is decided downstream. A
+   debrief with nothing verified and nothing unverified is a status recap and is refused. The
+   run's human surface (Herald) reads these files; it never reads your pane.
 
 7. **Tell the Coder what the failure's nature requires, and no more.** Classify the failure
    first (TESTING.md T37): a bad implementation, an architectural problem, a bad test, or a
@@ -628,10 +663,10 @@ two separate claims about two separate parties — keep them apart.**
 7. **Launch every lane through the Factory harness, never a run-local launcher.** `harness/tmux_lane.sh` (author lanes) and `harness/dispatch_lane.sh` (qualified lanes) carry the controls a run depends on:
    - a non-interactive sign-in preflight: a signed-out agent, or one whose check waits for input, is refused with the exact command that fixes it;
    - a per-round spend cap for every metered model (`--spend-cap-usd` and `--usd-per-hour`), reserved against the run's objective budget (`factory.sh --budget`) and enforced as wall-clock time, because no agent we run reports live spend;
-   - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`. For a Codex lane it also sends the wrap-up notice five minutes before the cap (`--wrap-up-minutes`) and pauses a Coder for your review every 18 minutes of work (`--review-every-minutes`); the lane prompt states the cap and the command that prints what is left;
+   - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`. For a lane on a resumable harness it also sends the wrap-up notice five minutes before the cap (`--wrap-up-minutes`) and pauses a Coder for your review every 18 minutes of work (`--review-every-minutes`); the lane prompt states the cap and the command that prints what is left;
    - the founder's testing standard, `TESTING.md` and the Tester doctrine with the run's TESTING-STRATEGY, injected into every Tester prompt.
 
-   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama`, `cursor-agent`, and the registry harnesses `claude`, `agy` and `prime-agent` (`harness/agents.py`); a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
+   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama`, `cursor-agent`, and the registry harnesses `claude`, `claude-ollama` (Claude Code on a local Ollama model), `agy`, `muse` and `prime-agent` (`harness/agents.py`). `cursor-agent` and every registry harness run on the operator's signed-in plan unless launched `--metered`: a plan lane admits no API key, its preflight proves the plan sign-in, and the wrapper stops a lane whose harness reports per-use billing; a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
 
    Before a model takes a lane, it passes a capped qualification probe, and a metered model cannot launch without one:
    - `harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> --agent <agent> --model <model> [--spend-cap-usd <usd> --usd-per-hour <usd>]`, always wall-capped (30 minutes by default);

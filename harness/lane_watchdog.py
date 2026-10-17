@@ -26,8 +26,9 @@ Validator's attention has no control at all, so the watcher, not a person, does 
   ends (the ``lane_agent.py run`` exit record; ``__LANE_EXIT__`` in the log), the operator is
   woken.
 
-Two more apply to a lane whose Codex thread can be resumed (``codex``, ``codex-ollama``), because
-both end the live turn and continue the same session through ``tmux_lane_message.sh``:
+Two more apply to a lane whose session can be resumed (a Codex exec thread, or the session a
+registry harness streams: ``RESUMABLE_AGENTS``), because both end the live turn and continue the
+same session through ``tmux_lane_message.sh``:
 
 - **Wrap-up before the cap.** ``wrap_s`` before the wall-clock cap the live turn is interrupted
   and a generated ``FACTORY_WRAP_UP`` notice resumes the thread, so the lane spends its last
@@ -102,7 +103,10 @@ REVIEW_HEADROOM_S = 5 * 60
 WRAP_DELIVERY_S = 5 * 60
 # A pause whose stop did not take (the pane is still live this long after it) is cancelled.
 PAUSE_GRACE_S = 60
-RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama"})
+# Lanes whose retained session a lane message resumes: a Codex exec thread, or a registry
+# harness's session (harness/agents.py), recorded by the lane wrapper as soon as it streams.
+RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy", "muse",
+                              "cursor-agent", "prime-agent"})
 _DONE = re.compile(r"^\W*__LANE_DONE__\s+\S+\s+commits=\d+\W*$")
 _REFLOG = re.compile(r"^([0-9a-f]{40,64}) ([0-9a-f]{40,64}) [^\t]*> (\d+) [+-]\d{4}\t(.*)$")
 _MAX_REFLOG_BYTES = 4 * 1024 * 1024
@@ -156,10 +160,21 @@ def read_commits(repository: pathlib.Path, since: float) -> list[dict[str, Any]]
     return commits
 
 
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
 def _done_in(text: str) -> bool:
-    """A ``__LANE_DONE__ <slot> commits=<n>`` line, in plain output or inside a Codex agent
-    message. The protocol states the form with ``<n>`` unfilled, so an echoed prompt is not a
-    completion."""
+    """A ``__LANE_DONE__ <slot> commits=<n>`` line, in plain output or inside any string of a
+    harness's JSON event (a Codex agent message, a Claude or Cursor result, a Muse terminal
+    event, an agy step). The protocol states the form with ``<n>`` unfilled, so an echoed prompt
+    is not a completion."""
 
     for line in text.splitlines():
         if _DONE.match(line):
@@ -170,13 +185,7 @@ def _done_in(text: str) -> bool:
             value = json.loads(line)
         except json.JSONDecodeError:
             continue
-        item = value.get("item") if isinstance(value, dict) else None
-        if (
-            isinstance(item, dict)
-            and item.get("type") == "agent_message"
-            and isinstance(item.get("text"), str)
-            and any(_DONE.match(part) for part in item["text"].splitlines())
-        ):
+        if any(_DONE.match(part) for string in _strings(value) for part in string.splitlines()):
             return True
     return False
 
@@ -374,8 +383,9 @@ class LaneWatch:
         return _read_rows(pathlib.Path(str(launch.get("lane_exits", ""))))
 
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
-        """A turn this watcher ends can be continued: a Codex thread was retained, and the launch
-        recorded where the runs live and the environment a lane message needs."""
+        """A turn this watcher ends can be continued: a session was retained (a Codex thread, or
+        a registry harness's session), and the launch recorded where the runs live and the
+        environment a lane message needs."""
 
         thread = self.lanes / f"{self.slot}-thread-id"
         return (

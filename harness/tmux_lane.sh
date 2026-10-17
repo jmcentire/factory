@@ -25,7 +25,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options]
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
-                  [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent] [--model <model>]
+                  [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
+                  [--effort <low|medium|high|xhigh|max>]
                   [--instance <name>] [--round <tag>] [--metered]
                   [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
@@ -47,6 +48,7 @@ REPOSITORY=""
 PROMPT_SOURCE=""
 AGENT_ARG=""
 MODEL_ARG=""
+EFFORT=""
 INSTANCE=""
 ROUND=""
 METERED_ARG=0
@@ -67,6 +69,7 @@ while [ "$#" -gt 0 ]; do
     --prompt) PROMPT_SOURCE="$2"; shift 2 ;;
     --agent) AGENT_ARG="$2"; shift 2 ;;
     --model) MODEL_ARG="$2"; shift 2 ;;
+    --effort) EFFORT="$2"; shift 2 ;;
     --instance) INSTANCE="$2"; shift 2 ;;
     --round) ROUND="$2"; shift 2 ;;
     --metered) METERED_ARG=1; shift ;;
@@ -85,8 +88,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 AGENT="${AGENT_ARG:-codex}"
-case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent) ;;
-  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|agy|prime-agent" >&2; exit 64 ;;
+case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
+  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent" >&2; exit 64 ;;
+esac
+case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
+  *) echo "tmux-lane: --effort must be minimal|low|medium|high|xhigh|max" >&2; exit 64 ;;
+esac
+# cursor-agent names the effort in the model (grok-4.7-xhigh); codex-ollama's is the model's own.
+case "$AGENT" in cursor-agent|codex-ollama|codex-interactive)
+  [ -z "$EFFORT" ] || { echo "tmux-lane: $AGENT takes its effort from the model name or config, not --effort" >&2; exit 64; } ;;
 esac
 [ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z0-9][a-z0-9-]{0,15}$ ]] || {
   echo "tmux-lane: --instance must be 1-16 lowercase letters, digits or '-'" >&2; exit 64;
@@ -162,6 +172,18 @@ if [ "$ACTION" != "freeze" ]; then
   if [ "$AGENT_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
     METERED=true
   fi
+  # A lane whose session a lane message can resume: a Codex exec thread, or a registry harness's
+  # session (harness/agents.py), which the lane wrapper records the moment the harness streams it.
+  case "$AGENT" in
+    codex|codex-ollama) AGENT_RESUMABLE=1 ;;
+    codex-interactive) AGENT_RESUMABLE=0 ;;
+    *) DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ')
+       case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
+       case "$DESCRIBED" in *metered-only*) METERED=true ;; esac ;;
+  esac
+  if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
+    echo "tmux-lane: claude-ollama needs --model (an Ollama model, e.g. glm-5.3:cloud)" >&2; exit 64
+  fi
 fi
 mkdir -p "$TMUX_ROOT"
 chmod 700 "$TMUX_ROOT"
@@ -211,11 +233,11 @@ if [ "$ACTION" != "freeze" ]; then
   # wall-capped. Each field prints on its own line; an error prints the refusal.
   CAPS=$("$FACTORY_PYTHON" - "$METERED" "$ACTION" "$SPEND_CAP" "$RATE" "$WALL_CAP_MINUTES" \
     "$READ_ALLOWANCE_MINUTES" "$STALL_WINDOW_MINUTES" "$FIRST_COMMIT_MINUTES" "$MIN_COMMITS" \
-    "$ROLE" "$WRAP_UP_MINUTES" "$REVIEW_EVERY_MINUTES" "$AGENT" <<'PY'
+    "$ROLE" "$WRAP_UP_MINUTES" "$REVIEW_EVERY_MINUTES" "$AGENT_RESUMABLE" <<'PY'
 import decimal, sys
 
 (metered, action, cap, rate, wall, allowance, window, first, minimum,
- role, wrap, review, agent) = sys.argv[1:]
+ role, wrap, review, resumable_flag) = sys.argv[1:]
 
 def amount(text, label):
     try:
@@ -260,11 +282,11 @@ def minutes_or_off(text, label, default):
         return 0
     return int(amount(text, label) * 60)
 
-# Both end the live turn and continue the lane's retained Codex thread, so only a codex or
-# codex-ollama lane can have them. A wrap-up needs a cap to precede and room inside it: none on
+# Both end the live turn and continue the lane's retained session, so only a resumable lane (a
+# Codex exec thread, or a registry harness's recorded session) can have them. A wrap-up needs a cap to precede and room inside it: none on
 # a cap under three wrap-ups. Progress reviews pause a Coder doing real work, never a
 # qualification probe or a Tester.
-resumable = agent in {"codex", "codex-ollama"}
+resumable = resumable_flag == "1"
 wrap_s = minutes_or_off(wrap, "--wrap-up-minutes", 5 * 60 if resumable else 0) if wall_cap else 0
 if wrap_s and int(wall_cap) < 3 * wrap_s:
     wrap_s = 0
@@ -273,7 +295,7 @@ review_s = minutes_or_off(
     18 * 60 if resumable and role == "coder" and action == "launch" else 0,
 )
 if (wrap_s or review_s) and not resumable:
-    raise SystemExit("--wrap-up-minutes and --review-every-minutes need a resumable codex lane")
+    raise SystemExit("--wrap-up-minutes and --review-every-minutes need a resumable lane")
 if review_s and (role != "coder" or action != "launch"):
     raise SystemExit("--review-every-minutes applies to a Coder launch only")
 fields = [
@@ -407,7 +429,10 @@ PY
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on
   # a login screen; it is refused here with the exact command that fixes it.
   set +e
-  AUTH=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/lane_agent.py" preflight --agent "$AGENT" 2>&1)
+  PREFLIGHT_BILLING=plan
+  [ "$METERED" != true ] || PREFLIGHT_BILLING=metered
+  AUTH=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/lane_agent.py" preflight --agent "$AGENT" \
+    --billing "$PREFLIGHT_BILLING" 2>&1)
   AUTH_RC=$?
   set -e
   if [ "$AUTH_RC" -ne 0 ]; then
@@ -459,12 +484,12 @@ PY
     cursor-agent)
       AGENT_VERSION=$(agent --version 2>/dev/null) || refuse 70 "cursor-agent CLI (agent) is not runnable"
       AGENT_HELP=$(agent --help 2>/dev/null) || exit 70
-      for REQUIRED in --print --model --force --trust --workspace; do
+      for REQUIRED in --print --model --force --trust --workspace --output-format --resume --approve-mcps; do
         printf '%s' "$AGENT_HELP" | grep -q -- "$REQUIRED" || \
           refuse 70 "cursor-agent CLI contract lacks $REQUIRED ($AGENT_VERSION)"
       done
-      CLI_CONTRACT="cursor-agent-print-v1" ;;
-    claude|agy|prime-agent)
+      CLI_CONTRACT="cursor-agent-stream-resume-v1" ;;
+    claude|claude-ollama|agy|muse|prime-agent)
       # A registry harness (harness/agents.py): the registry builds its headless turn.
       AGENT_VERSION=$("$AGENT_EXECUTABLE" --version 2>/dev/null | head -1) || \
         refuse 70 "$AGENT CLI is not runnable"
@@ -532,7 +557,7 @@ PY
   # What is left of the cap, as the watcher counts it; the lane runs this itself.
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
-  case "$AGENT" in codex|codex-ollama) RESUMABLE=1 ;; *) RESUMABLE=0 ;; esac
+  RESUMABLE="$AGENT_RESUMABLE"
   PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" <<'PY'
 import hashlib, os, pathlib, sys
@@ -732,16 +757,22 @@ PY
   LOCAL_ARGS=""
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
-  elif [ "$MODEL_SOURCE" = operator ] && [ "$AGENT" != "cursor-agent" ] && \
-    case "$AGENT" in claude|agy|prime-agent) false ;; *) true ;; esac; then
+  elif [ "$MODEL_SOURCE" = operator ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
     LOCAL_ARGS="-m $MODEL"
   fi
   for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
     printf -v QUOTED -- '-c %q' "$OVERRIDE"
     LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$QUOTED"
   done
-  CURSOR_MODEL_ARGS=""
-  [ -z "$MODEL" ] || printf -v CURSOR_MODEL_ARGS -- '--model %q' "$MODEL"
+  # A Codex lane's --effort travels as a config override, last so it wins; one closed-set word.
+  if [ "$AGENT" = codex ] && [ -n "$EFFORT" ]; then
+    LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
+    : > "$TMUX_ROOT/$SLOT-lane-setup.nul"
+    "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
+      --agent codex --model "$MODEL" --effort "$EFFORT" --billing plan \
+      --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" || \
+      refuse 70 "the lane's turn record could not be written"
+  fi
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
   CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
@@ -768,25 +799,39 @@ PY
       printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
-    cursor-agent)
-      printf -v LANE_CMD '%s %s --prompt-arg %q -- agent -p %s --force --trust --workspace %q' \
-        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CURSOR_MODEL_ARGS" "$REPOSITORY" ;;
-    claude|agy|prime-agent)
-      # The harness's named credentials reach the lane through an owner-only file the wrapper
-      # loads, never through this launch string.
+    cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
+      # A registry harness (harness/agents.py). Its private configuration (the lane's scoped
+      # Kindex and none of the operator's MCP servers, rules or hooks) and its variables are
+      # built under the slot's agent home; the variables reach the lane through an owner-only
+      # file the wrapper loads, never through this launch string. A plan lane admits no API key,
+      # and the wrapper stops it if the harness reports per-use billing anyway.
+      BILLING=plan
+      [ "$METERED" != true ] || BILLING=metered
+      AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
       CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
-      ( umask 077; : > "$CREDENTIALS"
-        while IFS= read -r NAME; do
-          [ -n "$NAME" ] && [ -n "${!NAME:-}" ] && printf '%s=%s\n' "$NAME" "${!NAME}" >> "$CREDENTIALS"
-        done < <("$FACTORY_PYTHON" "$D/agents.py" credential-env --agent "$AGENT") )
+      SETUP_OUT="$TMUX_ROOT/$SLOT-lane-setup.nul"
+      "$FACTORY_PYTHON" "$D/agents.py" lane-setup --agent "$AGENT" --billing "$BILLING" \
+        --home "$AGENT_HOME" --model "$MODEL" --kindex-record "$KINDEX" \
+        --env-file "$CREDENTIALS" > "$SETUP_OUT" || \
+        refuse 70 "the agent registry could not prepare $AGENT's lane home"
+      SETUP_ARGS=()
+      while IFS= read -r -d '' PART; do SETUP_ARGS+=("--extra-arg=$PART"); done < "$SETUP_OUT"
       TURN=()
       while IFS= read -r -d '' PART; do TURN+=("$PART"); done < <(
-        "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$MODEL" --cwd "$REPOSITORY")
+        "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$MODEL" \
+          --effort "$EFFORT" --cwd "$REPOSITORY" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"})
       [ "${#TURN[@]}" -ge 2 ] || refuse 70 "the agent registry built no turn for $AGENT"
+      # What a lane message needs to resume this session the same way (tmux_lane_message.sh).
+      "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
+        --agent "$AGENT" --model "$MODEL" --effort "$EFFORT" --billing "$BILLING" \
+        --env-file "$CREDENTIALS" --setup "$SETUP_OUT" || \
+        refuse 70 "the lane's turn record could not be written"
       QUOTED_TURN=""
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
-      printf -v LANE_CMD '%s %s --env-file %q --prompt-arg %q --%s' \
-        "$ENV_PREFIX" "$WRAP" "$CREDENTIALS" "$PROMPT" "$QUOTED_TURN" ;;
+      PLAN_FLAG=""
+      [ "$BILLING" != plan ] || PLAN_FLAG="--plan-only"
+      printf -v LANE_CMD '%s %s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
+        "$ENV_PREFIX" "$WRAP" "$CREDENTIALS" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$PROMPT" "$QUOTED_TURN" ;;
   esac
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"

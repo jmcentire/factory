@@ -330,6 +330,9 @@ def prepare(
         "seed": seeded,
         "kinbase": kinbase,
         "mcp_override": override,
+        # The same server as data, for a harness configured by file rather than by -c override
+        # (harness/agents.py lane_setup).
+        "mcp_server": {"command": command[0], "args": command[1:], "env": dict(environment)},
     }
 
 

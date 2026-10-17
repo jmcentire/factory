@@ -66,7 +66,8 @@ def _cursor_stub(directory: Path, *, signed_in: bool) -> None:
     _stub(directory, "agent", (
         'case "${1:-}" in\n'
         '  --version) echo "2026.10.01-test" ;;\n'
-        '  --help) echo "-p, --print --model --force --trust --workspace" ;;\n'
+        '  --help) echo "-p, --print --model --force --trust --workspace --output-format '
+        '--resume --approve-mcps" ;;\n'
         f"  status) echo '{state}' ;;\n"
         "esac\n"
         "exit 0\n"
@@ -127,7 +128,7 @@ class Lanes:
 # -- 1. agents and invocation shape ---------------------------------------------------------
 
 
-def test_cursor_agent_lane_runs_the_print_mode_invocation_under_the_lane_wrapper(
+def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrapper(
     tmp_path: Path,
 ) -> None:
     lanes = Lanes(tmp_path)
@@ -136,23 +137,33 @@ def test_cursor_agent_lane_runs_the_print_mode_invocation_under_the_lane_wrapper
     assert launched.returncode == 0, launched.stdout + launched.stderr
     lane = lanes.clone("coder").resolve()
     [call] = lanes.windows("coder")
-    assert f"-- agent -p --model grok-4.7-xhigh --force --trust --workspace {lane}" in call
+    assert ("-- agent -p --output-format stream-json --force --trust --approve-mcps "
+            f"--workspace {lane} --model grok-4.7-xhigh") in call
     assert "env -i" in call and "lane_agent.py run --slot coder" in call
     assert "--prompt-arg" in call and "coder-prompt.txt" in call
+    # A plan lane: the wrapper records its session as it streams and stops API billing.
+    assert "--session-agent cursor-agent" in call and "coder-thread-id" in call
+    assert "--plan-only" in call and "coder-credentials.env" in call
+    # Its private HOME holds only the lane's Kindex, never the operator's MCP servers.
+    home = lanes.root / "tmux-lanes" / "coder-agent-home" / "home"
+    assert list(json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]) == \
+        ["kindex"]
+    turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
+    assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
     [watcher] = lanes.windows("watch-coder")
     assert "lane_watchdog.py lane --root" in watcher and "--slot coder" in watcher
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["status"] == "active" and row["agent"] == "cursor-agent"
     assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
-    assert row["cli_contract"] == "cursor-agent-print-v1"
+    assert row["cli_contract"] == "cursor-agent-stream-resume-v1"
     assert row["auth_preflight"] == "cursor-agent-status"
     watch = dict(row["watch"])
     assert Path(watch.pop("runs_dir")).name == "runs"
-    # A cursor-agent lane keeps no resumable thread, so it gets neither a wrap-up nor reviews.
+    # A cursor-agent session is resumable, so a Coder gets the Validator's review pauses.
     assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
-                     "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
+                     "wrap_s": 0, "review_every_s": 1080, "review_wait_s": 900}
 
-    # A cursor-agent lane has no Codex thread to resume: messaging it says to launch a round.
+    # Until the harness has streamed its session there is nothing to resume: launch a round.
     message = run(
         ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
          "--runs", str(lanes.root.parent)],
@@ -170,7 +181,8 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     launched = lanes.lane("coder", "--agent", "cursor-agent")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
-    assert "-- agent -p  --force --trust --workspace" in call and "--model" not in call
+    assert "-- agent -p --output-format stream-json --force --trust --approve-mcps --workspace" \
+        in call and "--model" not in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"]) == ("", "agent")
 
@@ -605,7 +617,9 @@ def test_the_wrap_up_delivery_runs_in_its_own_session_from_the_recorded_environm
     env_file.write_text(f"PATH={os.environ['PATH']}\nFACTORY_GENESIS=/keys/genesis\n")
     env_file.chmod(0o644)
     log = tmp_path / "coder-wrapup.log"
-    probe = ["sh", "-c", 'echo "genesis=$FACTORY_GENESIS home=${HOME:-none}"; ps -o sid= -p $$']
+    # The session id portably: `ps -o sid=` is Linux-only (macOS ps has no sid keyword).
+    probe = ["sh", "-c", 'echo "genesis=$FACTORY_GENESIS home=${HOME:-none}"; "$0" -c '
+             '"import os; print(os.getsid(0))"', sys.executable]
     assert lane_watchdog.spawn_delivery(probe, env_file, log).startswith("not started")
     env_file.chmod(0o600)
     assert lane_watchdog.spawn_delivery(probe, env_file, log).startswith("started")
@@ -856,16 +870,15 @@ def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
             "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CONFIG_MANIFEST"} <= set(recorded)
 
 
-def test_review_pauses_are_for_codex_coder_launches_and_can_be_turned_off(
+def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     tmp_path: Path,
 ) -> None:
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    _cursor_stub(lanes.stub, signed_in=True)
-    refused = lanes.lane("coder", "--agent", "cursor-agent", "--wall-cap-minutes", "60",
+    refused = lanes.lane("coder", "--agent", "codex-interactive", "--wall-cap-minutes", "60",
                          "--wrap-up-minutes", "5")
-    assert refused.returncode == 64 and "resumable codex lane" in refused.stderr
+    assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
     assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "pauses this lane" not in prompt and "capped at" not in prompt

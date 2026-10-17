@@ -690,3 +690,171 @@ def test_orchestrator_halt_works_with_the_relative_root_the_runtime_passes(
     assert (tmp_path / ".factory" / "HALT").read_text().startswith("ORCHESTRATOR HALT")
     assert not (root / "HALT").exists()
     assert ["tmux", "kill-window", "-t", "r1:validator"] in calls
+
+
+# -- assessment/5: the code-and-progress review (founder direction 2026-10-16) ------------------
+
+
+def progress_root(tmp_path: Path, every: int = 2) -> Path:
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "harness.json").write_text(
+        json.dumps({"orchestrator_mode": "resident-monitoring", "status": "open",
+                    "progress_review": {"every_cadence_ticks": every}}),
+        encoding="utf-8",
+    )
+    return root
+
+
+def progress_review(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "evidence": ["lanes/coder/src/collector/adapter.ts:12-48", "commit:1a2b3c4d"],
+        "requirements_progress": [
+            {"requirement": "Every number shows its source and age.", "state": "in-progress",
+             "evidence": ["lanes/coder/src/record.ts:5-30"]},
+            {"requirement": "A failed scrape posts source-broken.", "state": "not-started",
+             "evidence": []},
+        ],
+        "trend": "on-track",
+        "trend_basis": "Two of five adapters committed in two ticks against a plan of one a tick.",
+        "code_findings": [
+            {"finding": "Adapter reads the clock directly; inject it to test staleness.",
+             "refs": ["lanes/coder/src/collector/adapter.ts:20"],
+             "signal_class": "at-your-convenience"},
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+def progress_assessment(cursor: int, **overrides: object) -> dict[str, object]:
+    body = assessment(
+        cursor,
+        schema_version="factory-orchestrator-assessment/5",
+        guidance_state="none",
+        guidance_selection_digest=None,
+        guidance_application_digest=None,
+        guidance_evidence_digest=None,
+        guidance_findings=[],
+        screen_review=None,
+        signal_class="at-your-convenience",
+        progress_review=progress_review(),
+    )
+    body.update(overrides)
+    return body
+
+
+def _cadence(root: Path) -> int:
+    return append_activity(root, kind="cadence", source="dispatcher", detail="cadence tick")
+
+
+def test_progress_run_refuses_an_assessment_without_the_review_schema(tmp_path: Path) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    with pytest.raises(OrchestratorChannelError, match="requires assessment/5"):
+        record_assessment(root, assessment(1))
+
+
+def test_review_is_due_every_second_tick_and_a_status_recap_is_refused(tmp_path: Path) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    # The first tick owes no review: a status-shaped assessment is recorded.
+    record_assessment(root, progress_assessment(1, progress_review=None,
+                                                signal_class="informative"))
+    _cadence(root)
+    with pytest.raises(OrchestratorChannelError, match="code-and-progress review is due"):
+        record_assessment(root, progress_assessment(2, progress_review=None,
+                                                    signal_class="informative"))
+    record_assessment(root, progress_assessment(2))
+    assert require_current(root) == (2, 2)
+    # The count restarts after a review.
+    _cadence(root)
+    record_assessment(root, progress_assessment(3, progress_review=None,
+                                                signal_class="informative"))
+
+
+def test_a_slice_boundary_always_owes_the_review(tmp_path: Path) -> None:
+    root = progress_root(tmp_path, every=8)
+    append_activity(root, kind="pre_dispatch", source="validator", detail="dispatch slice 2")
+    with pytest.raises(OrchestratorChannelError, match="review is due"):
+        record_assessment(root, progress_assessment(1, progress_review=None,
+                                                    signal_class="informative"))
+    record_assessment(root, progress_assessment(1))
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        [],
+        ["orchestrator/activity.jsonl:12"],
+        ["/runs/r1/tmux-lanes/coder-lane.log"],
+        ["orchestrator/OUTSTANDING-WORK.md"],
+        ["the coder says it finished the adapter"],
+    ],
+)
+def test_review_evidence_must_be_the_work_not_status(tmp_path: Path, evidence: list[str]) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    _cadence(root)
+    with pytest.raises(OrchestratorChannelError, match="evidence"):
+        record_assessment(root, progress_assessment(2, progress_review=progress_review(
+            evidence=evidence)))
+
+
+def test_claimed_progress_needs_its_own_evidence(tmp_path: Path) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    _cadence(root)
+    claimed = [{"requirement": "Adapters normalize records.", "state": "done", "evidence": []}]
+    with pytest.raises(OrchestratorChannelError, match="requirements_progress evidence"):
+        record_assessment(root, progress_assessment(2, progress_review=progress_review(
+            requirements_progress=claimed)))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"signal_class": "loud"}, "signal_class must be one of"),
+        ({"decision": "halt", "aligned": False, "adherence_findings": ["Validator wrote code."],
+          "signal_class": "action-required"}, "below what it reports"),
+        ({"planning_mode": "clarify", "decision": "block",
+          "specification_questions": ["Is Muse billing in scope for v1?"],
+          "signal_class": "at-your-convenience"}, "below what it reports"),
+        ({"decision": "block", "aligned": False, "signal_class": "informative"},
+         "below what it reports"),
+        ({"signal_class": "informative"}, "below what it reports"),  # its finding is higher
+    ],
+)
+def test_signal_class_is_never_below_what_the_assessment_reports(
+    tmp_path: Path, overrides: dict[str, object], message: str
+) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    _cadence(root)
+    with pytest.raises(OrchestratorChannelError, match=message):
+        record_assessment(root, progress_assessment(2, **overrides))
+
+
+def test_a_block_may_be_classified_above_its_floor(tmp_path: Path) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    _cadence(root)
+    report = record_assessment(root, progress_assessment(
+        2, decision="block", aligned=False, signal_class="critical"))
+    assert report["assessment"]["signal_class"] == "critical"
+
+
+def test_legacy_runs_keep_accepting_assessment_three(tmp_path: Path) -> None:
+    root = resident_root(tmp_path)
+    _cadence(root)
+    _cadence(root)
+    record_assessment(root, assessment(2))
+    assert orchestrator_channel.progress_review_due_now(root, 2) is None
+
+
+def test_dispatcher_can_tell_the_orchestrator_a_review_is_due(tmp_path: Path) -> None:
+    root = progress_root(tmp_path)
+    _cadence(root)
+    assert orchestrator_channel.progress_review_due_now(root, 1) is False
+    _cadence(root)
+    assert orchestrator_channel.progress_review_due_now(root, 2) is True

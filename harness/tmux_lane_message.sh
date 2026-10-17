@@ -90,14 +90,16 @@ THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
 CODEX_EVENTS="$TMUX_ROOT/$SLOT-codex-events.jsonl"
 LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
 LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
+# A registry lane's launch shape (harness/agents.py turn-record): how to resume its session.
+TURN_RECORD="$TMUX_ROOT/$SLOT-turn.json"
 
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
-  echo "lane-message: no retained Codex thread for $RUN:$SLOT yet (codex-interactive and cursor-agent lanes have none: launch a new --round instead)" >&2
+  echo "lane-message: no retained session for $RUN:$SLOT yet (a codex-interactive lane has none, and a registry lane has one once its harness starts streaming: launch a new --round instead)" >&2
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
 [[ "$THREAD_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
-  echo "lane-message: retained Codex thread id is malformed" >&2
+  echo "lane-message: retained session id is malformed" >&2
   exit 70
 }
 
@@ -144,7 +146,14 @@ IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
-case "$AGENT" in codex|codex-ollama) ;; *) echo "lane-message: a $AGENT lane has no resumable Codex thread; launch a new --round instead" >&2; exit 70 ;; esac
+case "$AGENT" in
+  codex|codex-ollama) ;;
+  cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
+    [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
+      echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
+    } ;;
+  *) echo "lane-message: a $AGENT lane has no resumable session; launch a new --round instead" >&2; exit 70 ;;
+esac
 if [ "$AGENT" = "codex-ollama" ]; then
   # shellcheck source=harness/model_availability.sh
   source "$(cd "$(dirname "$0")" && pwd -P)/model_availability.sh"
@@ -351,6 +360,12 @@ elif [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   esac
   LOCAL_ARGS="-m $MODEL"
 fi
+# A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) true ;; *) false ;; esac; then
+  TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
+  case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
+  [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
+fi
 RESUME_ARGS="$LOCAL_ARGS"
 for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
   printf -v QUOTED -- '-c %q' "$OVERRIDE"
@@ -373,6 +388,11 @@ if [ "$PANE_DEAD" = "0" ]; then
     echo "the retry reuses this planned message." >&2
     exit 75
   fi
+  case "$AGENT" in codex|codex-ollama) ;; *)
+    echo "lane-message: $MESSAGE_ID planned but NOT delivered: a live $AGENT turn takes no queued message;" >&2
+    echo "retry when '$0 $RUN $SENDER $SLOT idle' reports idle." >&2
+    exit 75 ;;
+  esac
   MESSAGE=$(<"$RETAINED_MESSAGE")
   # Queue is a typed Codex-session operation, not terminal text injection.
   env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR" \
@@ -402,11 +422,49 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
+  case "$AGENT" in
+    codex|codex-ollama)
   printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
-    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID"
+    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
+    *)
+      # A registry harness resumes its own session with the arguments, env file and billing it
+      # launched with (its turn record); the wrapper keeps recording the session and billing.
+      exec 5< <("$FACTORY_PYTHON" - "$TURN_RECORD" "$AGENT" <<'PY'
+import json, sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+if record.get("schema_version") != "factory-lane-turn/1" or record.get("agent") != sys.argv[2]:
+    raise SystemExit("lane-message: the turn record does not match this lane")
+fields = [record.get("model", ""), record.get("effort", ""), record.get("billing", ""),
+          record.get("env_file", ""), *record.get("extra", [])]
+if any(not isinstance(field, str) or "\0" in field for field in fields):
+    raise SystemExit("lane-message: the turn record is malformed")
+sys.stdout.write("".join(field + "\0" for field in fields))
+PY
+)
+      { IFS= read -r -d '' TURN_MODEL <&5 && IFS= read -r -d '' TURN_EFFORT <&5 &&
+        IFS= read -r -d '' TURN_BILLING <&5 && IFS= read -r -d '' TURN_ENV_FILE <&5; } || {
+        echo "lane-message: the turn record could not be read" >&2; exit 70;
+      }
+      TURN_EXTRA=()
+      while IFS= read -r -d '' PART <&5; do TURN_EXTRA+=("--extra-arg=$PART"); done
+      exec 5<&-
+      TURN=()
+      while IFS= read -r -d '' PART; do TURN+=("$PART"); done < <(
+        "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$TURN_MODEL" \
+          --effort "$TURN_EFFORT" --cwd "$REPOSITORY" --resume "$THREAD_ID" \
+          ${TURN_EXTRA[@]+"${TURN_EXTRA[@]}"})
+      [ "${#TURN[@]}" -ge 2 ] || { echo "lane-message: the agent registry built no resume turn" >&2; exit 70; }
+      QUOTED_TURN=""
+      for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
+      PLAN_FLAG=""
+      [ "$TURN_BILLING" != plan ] || PLAN_FLAG="--plan-only"
+      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
+        "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+        "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
+  esac
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
@@ -438,4 +496,5 @@ if [ "$SENDER" = validator ]; then
     --kind phase_transition --source "$SENDER" \
     --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
 fi
-echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via Codex $TRANSPORT"
+case "$AGENT" in codex|codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
+echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"
