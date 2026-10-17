@@ -332,6 +332,37 @@ fixing it then means re-committing the target and re-resolving the run. Check th
    write the test. That freeze check is traceability only; the Phase C discovery check is what
    proves each Critical case is a runnable collected test.
 
+## Repo rules — read the target's own rules before drafting Phase A
+
+The target repository enforces its own engineering rules on every PR, often by a review bot.
+A run that never reads them delivers a PR that breaks them: a default the source never gave
+invented to fill a gap, a failed lookup degraded into a silent fallback. The lanes cannot catch
+this, because the agent-guidance files are freeze-excluded from their trees and they see a rule
+only when you quote it.
+
+1. **Snapshot and read every rule source in the pinned target.** Run
+
+       python3 harness/repo_rules.py snapshot \
+         --workdir <the run's target workdir> --artifacts <run>/artifacts
+
+   It copies whichever of `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` (at
+   any depth), `.claude/rules/**` and `.rule-review/rules/**` exist into
+   `artifacts/repo-rules/`, with `manifest.json` binding each file's SHA-256 and front-matter
+   `id` and `title`. Read every file it lists, in full.
+2. **Classify every requirement against the rules it touches.** Each Product requirement names
+   the rules it touches, or states that it touches none.
+3. **Cite them in the Product Specification.** Its **Repo rules** section lists each relevant
+   rule by path and front-matter id, with its manifest digest. A rule nobody cited is a rule nobody checked.
+4. **Quote the relevant rules verbatim into both lane briefs.** A paraphrase is a restatement
+   that can drift, and the lanes have no other copy. Rules are not implementation detail; the
+   Tester gets them too.
+5. **A design that needs a rule exception is a question, never a silent choice.** Put it to the
+   human as a ledger row (or through the Orchestrator) before signing. A lane that finds a
+   requirement it cannot meet without breaking a rule raises a specification defect; it does
+   not code around the rule.
+6. **The delivered PR body states, per touched rule, why the change complies**, citing the rule
+   by path and id.
+
 ## Phase A — The frame (nothing is built until the human has agreed it)
 
 Produce exactly **three intent authorities**. Nothing else authorizes a requirement: not the
@@ -888,7 +919,8 @@ local-only; docs/specs/contracts/types/generated artifacts current; migrations a
 producers, registered consumers, and expected-head contracts; durable knowledge exported and
 committed; deployed digest matches the manifest.
 
-**You own the PR, the merge, and the verdict** — the Coder hands you a branch. Where the
+**You own the PR, the merge, and the verdict** — the Coder hands you a branch. The PR body
+states, per touched repo rule, why the change complies (Repo rules, step 6). Where the
 target repo gates review by label: label `work-in-progress`; **never** add `ready-to-review`
 (humans only).
 
