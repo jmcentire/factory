@@ -33,7 +33,11 @@ from factory_runtime.adversarial_review import (
     verify_validator_adversarial_review,
 )
 from factory_runtime.authority import human_public_keys
-from factory_runtime.candidate_diff import CandidateDiffError, build_candidate_review_context
+from factory_runtime.candidate_diff import (
+    BASELINE_EMBEDDED,
+    CandidateDiffError,
+    build_candidate_review_context,
+)
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
 from factory_runtime.evidence_plane import (
     ChecklistJournal,
@@ -604,6 +608,9 @@ class FactoryOrchestrator:
                     candidate_root=coder_snapshot.files_directory / "artifact",
                     candidate_digest=candidate_digest,
                     construction_mode=prepared.plan.construction_mode,
+                    baseline_storage=str(
+                        prepared.target.build.get("review_baseline", BASELINE_EMBEDDED)
+                    ),
                 )
                 checkpoint_bytes = read_stable_regular_bytes(
                     resume_checkpoint_path,
@@ -686,6 +693,7 @@ class FactoryOrchestrator:
                 command_digest=command_digest,
                 configuration_digest=configuration_digest,
                 environment_digest=environment_digest,
+                baseline_object_store=validation_projection.target_state.get("object_store"),
             )
             return review_subject
 
@@ -880,6 +888,7 @@ class FactoryOrchestrator:
                 build_plan_path=prepared.build_plan_path,
                 acceptance_catalog_path=retained_acceptance_catalog_path,
                 acceptance_observations_path=observations_path,
+                baseline_object_store=validation_projection.target_state.get("object_store"),
             )
             review_artifacts = retain_validator_adversarial_review(
                 self.workflow.root,

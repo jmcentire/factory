@@ -203,6 +203,11 @@
               "description": "Most bytes a projection may carry in total. Default 1,200,000."
             }
           }
+        },
+        "review_baseline": {
+          "type": "string",
+          "enum": ["embedded", "git-reference"],
+          "description": "How the Validator review subject holds the baseline it diffs the candidate against. embedded (the default) carries every baseline blob's bytes, so the subject verifies alone, which bounds it to a small repository: 4,096 files, 512 KiB each, about 1.2 MB in all. git-reference names the commit and tree, binds the complete listing by one SHA-256 digest, embeds only the baseline files the change replaces or deletes, and re-derives everything else from the run-owned object store on every verification."
         }
       }
     },

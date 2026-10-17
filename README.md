@@ -154,6 +154,15 @@ ceiling remains a target execution/promotion seam, so the mode label alone prove
 conformance. A target ABI is immutable within a run. An intentional ABI change starts a newly
 authorized run rather than being accepted as benign drift inside the old one.
 
+The review subject carries the baseline it diffs against. By default it embeds every baseline blob,
+so it verifies with nothing else in hand, and that caps the target at 4,096 files, 512 KiB per
+file and about 1.2 MB in all. A larger target sets `build.review_baseline = "git-reference"` in
+its manifest. The subject then names the commit and tree, binds the complete listing (path, Git
+mode, object id, SHA-256 content digest) by one `listing_digest`, and embeds only the baseline files
+the change replaces or deletes, under the same per-file and total ceilings. Everything else
+re-derives from the run-owned object store each time the review is verified, and a verification
+without that store refuses.
+
 ### Authorized-change bootstrap path
 
 This is the running, file-and-CLI intake path. It is the bootstrap answer to “how does a change
