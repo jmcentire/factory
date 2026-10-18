@@ -48,6 +48,7 @@ from orchestrator_channel import (  # noqa: E402 - adjacent harness module
     activity_highwater,
     append_activity,
     assessed_through,
+    progress_review_due_now,
 )
 from watchdog import SignalWatchdog  # noqa: E402 - adjacent harness module
 
@@ -707,6 +708,12 @@ class Dispatcher:
         except (OrchestratorChannelError, ScreenError, OSError) as exc:
             self._record_orchestrator_transport_failure(str(exc))
             return
+        # Advisory only: the channel enforces the review when the assessment is submitted, so an
+        # unreadable run record here leaves the notice unspecific rather than failing transport.
+        try:
+            review_due = progress_review_due_now(self.root, cursor) if cursor else None
+        except (OrchestratorChannelError, OSError):
+            review_due = None
         if (cursor <= self.last_delivered_cursor
                 and screen_cursor == self.last_delivered_screen_cursor):
             return
@@ -718,14 +725,21 @@ class Dispatcher:
         # The factory's own interpreter, by absolute path: a bare `python3` in the seat's shell
         # can be one without the factory's dependencies (run e: Homebrew 3.14, no jsonschema).
         python = shlex.quote(os.environ.get("FACTORY_PYTHON") or sys.executable)
+        # A run with progress_review owes assessment/5; the notice says whether this cursor owes
+        # the code-and-progress review, which the channel enforces the same way.
+        schema = "assessment/3"
+        if review_due is not None:
+            schema = ("assessment/5 with progress_review (due: read the work and cite it)"
+                      if review_due else "assessment/5")
         message = (
             f"# FACTORY_ACTIVITY cursors={start}..{cursor}. Consume EVERY unassessed record "
             "in that range from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's "
             "complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write "
-            f"assessment/3 to {report}, then submit: {python} "
+            f"{schema} to {report}, then submit: {python} "
             f"orchestrator/bin/orchestrator_channel.py report --root . --input {report}. "
-            "Review orchestrator/jev.jsonl when jev_screen is enabled; use assessment/4 "
-            f"(screen cursor={screen_cursor}); consume its completed prefix. "
+            "When jev_screen is enabled, review orchestrator/jev.jsonl and carry screen_review "
+            "in this same assessment (assessment/4, or assessment/5 when progress_review "
+            f"applies) (screen cursor={screen_cursor}); consume its completed prefix. "
             "Decide block, halt, or no-op; never grant or close."
         )
         environment = dict(os.environ)

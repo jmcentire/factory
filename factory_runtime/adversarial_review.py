@@ -24,6 +24,7 @@ from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.provenance import PhaseArtifact
 from factory_runtime.candidate_diff import (
     CandidateDiffError,
+    embedded_baseline_files,
     verify_candidate_review_context,
 )
 from factory_runtime.durability import DurabilityError, fsync_directory_chain
@@ -540,11 +541,16 @@ def build_validator_review_subject(
     command_digest: str,
     configuration_digest: str,
     environment_digest: str,
+    baseline_object_store: str | Path | None = None,
 ) -> dict[str, Any]:
     """Compile the exact immutable inputs the Validator must review."""
 
     try:
-        verify_candidate_review_context(base_source_snapshot, candidate_change_set)
+        verify_candidate_review_context(
+            base_source_snapshot,
+            candidate_change_set,
+            object_store=baseline_object_store,
+        )
     except CandidateDiffError as exc:
         raise AdversarialReviewError(str(exc)) from exc
     if (
@@ -801,7 +807,9 @@ def _verify_evidence_reference(
     if source == "baseline-source":
         relative = _relative_evidence_path(reference["path"]).as_posix()
         matches = [
-            entry for entry in subject["base_source_snapshot"]["files"] if entry["path"] == relative
+            entry
+            for entry in embedded_baseline_files(subject["base_source_snapshot"])
+            if entry["path"] == relative
         ]
         if len(matches) != 1:
             raise AdversarialReviewError(
@@ -1338,6 +1346,7 @@ def _verify_review_contract(
     subject: Mapping[str, Any],
     reviewer_identity: str,
     acceptance_observations: Mapping[str, Any],
+    baseline_object_store: str | Path | None = None,
 ) -> tuple[str, Sequence[Mapping[str, Any]]]:
     """Verify the closed review protocol without trusting mutable source paths."""
 
@@ -1358,7 +1367,9 @@ def _verify_review_contract(
         raise AdversarialReviewError("Validator review subject has the wrong protocol contract")
     try:
         verify_candidate_review_context(
-            subject["base_source_snapshot"], subject["candidate_change_set"]
+            subject["base_source_snapshot"],
+            subject["candidate_change_set"],
+            object_store=baseline_object_store,
         )
     except CandidateDiffError as exc:
         raise AdversarialReviewError(str(exc)) from exc
@@ -1470,7 +1481,7 @@ def _verify_review_contract(
         "review-authority-context",
         OPERATOR_INTENT_EVIDENCE_SOURCE,
     }
-    if subject["base_source_snapshot"]["files"]:
+    if embedded_baseline_files(subject["base_source_snapshot"]):
         required_sources.add("baseline-source")
     cited_sources = {str(reference["source"]) for reference in evidence}
     if cited_sources != required_sources:
@@ -1501,6 +1512,7 @@ def verify_validator_adversarial_review(
     build_plan_path: str | Path,
     acceptance_catalog_path: str | Path,
     acceptance_observations_path: str | Path,
+    baseline_object_store: str | Path | None = None,
 ) -> VerifiedAdversarialReview:
     """Re-derive coverage, finding identity, cited bytes, and the typed verdict."""
 
@@ -1509,6 +1521,7 @@ def verify_validator_adversarial_review(
         subject=subject,
         reviewer_identity=reviewer_identity,
         acceptance_observations=acceptance_observations,
+        baseline_object_store=baseline_object_store,
     )
     artifacts = subject["artifacts"]
     observations_bytes = _stable_read(
@@ -1780,6 +1793,7 @@ def verify_retained_validator_adversarial_review(
     acceptance_report: Mapping[str, Any],
     trusted_evidence_digests: Mapping[str, str],
     observations_source_digest: str,
+    baseline_object_store: str | Path | None = None,
 ) -> VerifiedAdversarialReview:
     """Reopen the exact review evidence and bind it to authoritative run state."""
 
@@ -1846,6 +1860,7 @@ def verify_retained_validator_adversarial_review(
         subject=subject,
         reviewer_identity=reviewer_identity,
         acceptance_observations=observations,
+        baseline_object_store=baseline_object_store,
     )
     if derived_subject_digest != subject_digest:
         raise AdversarialReviewError("retained Validator review subject address changed")
@@ -1965,6 +1980,7 @@ def verify_retained_validator_adversarial_review(
         build_plan_path=build_plan.payload_path,
         acceptance_catalog_path=catalog_path,
         acceptance_observations_path=observations_path,
+        baseline_object_store=baseline_object_store,
     )
     if (
         fully_verified.subject_digest != subject_digest

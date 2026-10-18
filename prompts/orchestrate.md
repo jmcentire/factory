@@ -258,12 +258,16 @@ human-specified method and the classification is genuinely ambiguous, block and 
 do not silently infer the replacement.
 
 Record the assessment through the run-owned `orchestrator/bin/orchestrator_channel.py report`
-copy (or `harness/orchestrator_channel.py` while developing Factory itself). The input is a JSON
-object with exactly these fields:
+copy (or `harness/orchestrator_channel.py` while developing Factory itself). A run whose
+`harness.json` sets `progress_review` takes assessment/5, shown here; any other run takes
+assessment/3, which is the same object without `screen_review`, `signal_class` and
+`progress_review` (assessment/4 adds only `screen_review`). `screen_review` is null unless
+`jev_screen` is enabled, and `progress_review` is null on a tick that owes none. The input is a
+JSON object with exactly these fields:
 
 ```json
 {
-  "schema_version": "factory-orchestrator-assessment/3",
+  "schema_version": "factory-orchestrator-assessment/5",
   "through_cursor": 1,
   "ultimate_goal": "goal reconstructed from user inputs",
   "current_action": "what the run is doing now",
@@ -318,7 +322,22 @@ object with exactly these fields:
   "summary": "concise retained call",
   "kindex_status": "consulted|unavailable",
   "kindex_context": ["0123456789ab"],
-  "kindex_basis": "what Kindex contributed, or why it was unavailable"
+  "kindex_basis": "what Kindex contributed, or why it was unavailable",
+  "screen_review": null,
+  "signal_class": "critical|action-required|at-your-convenience|informative",
+  "progress_review": {
+    "evidence": ["<lane tree or promoted path>[:line[-line]]", "commit:<sha>"],
+    "requirements_progress": [
+      {"requirement": "one requirement", "state": "done|in-progress|not-started|blocked",
+       "evidence": ["the path or commit that shows it"]}
+    ],
+    "trend": "ahead|on-track|behind|stalled",
+    "trend_basis": "what the work shows against the plan's pace",
+    "code_findings": [
+      {"finding": "architecture, locality, testability, or drift from the specification",
+       "refs": ["the path or commit"], "signal_class": "at-your-convenience"}
+    ]
+  }
 }
 ```
 
@@ -331,6 +350,45 @@ Kindex state update; high complexity must expose at least one such point; every
 `specification_questions` and forces `clarify|block`. Causal hypotheses must pre-register
 observable discriminators. `no-op` is not approval. Keep
 `orchestrator/OUTSTANDING-WORK.md` current across all turns and compactions.
+
+`signal_class` classifies the assessment for the human surface, most urgent first:
+`critical` needs the human now (a halt, danger, a compliance issue); `action-required` means the
+human owes a decision or an answer; `at-your-convenience` is worth the human's attention but
+blocks nothing; `informative` is record only. It classifies the fact; whether anyone is paged is
+decided downstream, never here. The channel refuses a class below what the assessment itself
+reports: a halt is `critical`, a specification question is at least `action-required`, a block or
+a `stalled` trend is at least `at-your-convenience`, and no assessment ranks below its most urgent
+code finding.
+
+## The code-and-progress review — every second tick and every slice boundary
+
+Founder direction (2026-10-16): the Orchestrator and the Validator assess the code and the
+progress regularly; status reporting does not substitute for it.
+
+The every-tick check-in reads the consoles. That shows what the lanes say, not what they built.
+So on every second cadence tick (`progress_review.every_cadence_ticks` in `harness.json`, about
+30 minutes at the default cadence) and at every slice boundary (a pre-dispatch, pre-verdict or
+phase-transition row in the range), the assessment carries a `progress_review`, and the channel
+refuses one that owes a review and has none. The dispatcher's `FACTORY_ACTIVITY` notice says
+when the cursor owes it.
+
+- **Read the work itself.** Read the lane trees as files, read-only (never run Git in a live
+  lane), the promoted commits, and the Validator's verdict and test records. The lanes' own
+  account of their work is a claim to check, not evidence.
+- **Progress against the plan.** For each requirement in play, say whether it is done, in
+  progress, not started or blocked, and cite the path or commit that shows it. A requirement
+  claimed done with no artifact behind it is in progress at best, and the gap is a finding.
+- **Trend.** Say whether the run is ahead, on track, behind or stalled, and give the basis from
+  the work: what was built since the last review against the plan's pace. A stalled trend goes
+  to the human.
+- **Code findings.** Architecture, locality, testability, and drift from the specification
+  (question 16, now asked of the code on every review rather than only at boundaries). Each
+  finding cites its path or commit and carries a `signal_class`. Route it at the level of
+  approach through the Validator; never pass one lane's code to the other.
+- **Status is not a review.** Evidence must be a commit or a path into the work. The channel
+  refuses the Orchestrator's own journals, `OUTSTANDING-WORK.md`, the dialogue journal and lane
+  console logs as evidence. A "no change" review that cites nothing new is itself a finding: say
+  what you read and what it shows.
 
 ## The check-in loop — every cadence tick, every lane
 
@@ -354,6 +412,8 @@ in two tiers so that none of them becomes a reflex:
 - **At every slice boundary, before any dispatch, verdict, or promote, and whenever a tick answer
   raises doubt**: 9, 10, 11, 12, 13, 14, 16, 17, and 18 — Kindex, Sim, Advocate, the simpler way,
   docs, compliance, code quality, monitoring, and committed/merged/green.
+- **Every second tick and at every slice boundary**: the code-and-progress review above, read
+  from the work rather than the consoles. It answers 7 and 16 from evidence.
 
 A reflexive "no change" repeated tick after tick is itself a warning sign: answer from what the
 journal shows since the last tick, and cite it.

@@ -16,8 +16,9 @@ from factory_runtime.schema import DocumentValidationError, validate_document
 
 # Defaults, not laws. A projection has to be bounded — an unbounded one is a
 # denial-of-service on the lane — but the bound belongs to the target, which
-# knows its own size. A pack raises these through build.projection_limits; a
-# repository with 6,000 source files is not a factory defect.
+# knows its own size. A pack raises these through build.projection_limits, which
+# the CLI reads from the run's retained manifest (factory_runtime.projection_limits);
+# a repository with 6,000 source files is not a factory defect.
 DEFAULT_MAX_FILES = 4_096
 DEFAULT_MAX_FILE_BYTES = 524_288
 DEFAULT_MAX_TOTAL_BYTES = 1_200_000

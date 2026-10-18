@@ -44,6 +44,17 @@ an occurrence-specific question ID from the completed assistant-message event an
 until the Validator binds a human answer or ratified-spec answer back into this same Codex thread.
 Ordinary prose is not the typed question channel.
 
+**A review, a finding and a wrap-up resume this same thread.** Every so many minutes of work the
+watchdog pauses a Coder lane and the Validator reviews it against the ratified specification; a
+finding after a judge arrives the same way, as a FACTORY_REVIEW. Before you act on one, reread the
+requirement it names in the signed artifacts: the specification decides, and a review can be
+wrong. Fix only as far as the behaviour it reports shows, then rerun the scratch checks that
+passed before and restore anything the fix broke: a fix that breaks working behaviour is a
+regression, not progress. If you are certain the review misreads the specification, say so in
+one sentence and continue, or raise the question in the typed form above. A FACTORY_WRAP_UP
+means the lane's cap is minutes away: start nothing new, finish or revert any half-made edit,
+leave the work building and committed, and end the round.
+
 **When a control blocks you, the path is up, not around.** A denied permission, a policy
 refusal, a sandbox limit, a missing credential — stop and ask. Do not find another route to
 the blocked action. The block was placed deliberately by someone who is not in this

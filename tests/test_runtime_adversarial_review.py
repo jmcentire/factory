@@ -73,7 +73,9 @@ def _full_edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
+def _fixture(
+    tmp_path: Path, *, baseline_storage: str = "embedded"
+) -> tuple[dict, dict, dict, dict[str, Path]]:
     implementation = tmp_path / "implementation"
     tests = tmp_path / "tests"
     implementation.mkdir(parents=True)
@@ -175,6 +177,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
     resolved_tree = _git(["rev-parse", "HEAD^{tree}"], cwd=source)
     object_store = tmp_path / "objects.git"
     _git(["clone", "-q", "--bare", str(source), str(object_store)])
+    paths["object_store"] = object_store
     candidate_digest = tree_digest(implementation)
     assertion_digest = digest_obj({"test_id": "addition", "expectation": "add(2, 3) returns 5"})
     output_digest = digest_obj({"exit_status": 0, "output": "addition passed"})
@@ -229,6 +232,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
         candidate_root=implementation,
         candidate_digest=candidate_digest,
         construction_mode="regenerate",
+        baseline_storage=baseline_storage,
     )
     verbatim_request = "Implement integer addition and prove it with acceptance evidence."
     execution_request = {
@@ -298,6 +302,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
         command_digest=_digest("command"),
         configuration_digest=_digest("configuration"),
         environment_digest=_digest("environment"),
+        baseline_object_store=object_store,
     )
     evidence = {
         "implementation": _reference("implementation", "candidate.py", implementation_bytes),
@@ -453,7 +458,15 @@ def _fixture(tmp_path: Path) -> tuple[dict, dict, dict, dict[str, Path]]:
     return subject, report, observations, paths
 
 
-def _verify(tmp_path: Path, subject: dict, report: dict, observations: dict, paths: dict):
+def _verify(
+    tmp_path: Path,
+    subject: dict,
+    report: dict,
+    observations: dict,
+    paths: dict,
+    *,
+    with_object_store: bool = True,
+):
     return verify_validator_adversarial_review(
         report,
         subject=subject,
@@ -466,6 +479,7 @@ def _verify(tmp_path: Path, subject: dict, report: dict, observations: dict, pat
         build_plan_path=paths["build_plan"],
         acceptance_catalog_path=paths["acceptance_catalog"],
         acceptance_observations_path=paths["observations"],
+        baseline_object_store=paths["object_store"] if with_object_store else None,
     )
 
 
@@ -477,6 +491,29 @@ def test_clean_review_binds_every_dimension_and_exact_evidence(tmp_path: Path) -
     assert verified.passed is True
     assert verified.subject_digest == digest_obj(subject)
     assert verified.report_digest == digest_obj(report)
+
+
+def test_git_reference_review_cites_the_changed_baseline_file_it_embeds(
+    tmp_path: Path,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path, baseline_storage="git-reference")
+
+    verified = _verify(tmp_path, subject, report, observations, paths)
+
+    assert subject["base_source_snapshot"]["schema_version"] == "factory-base-source-snapshot/2"
+    assert [entry["path"] for entry in subject["base_source_snapshot"]["changed_files"]] == [
+        "candidate.py"
+    ]
+    assert verified.passed is True
+
+
+def test_git_reference_review_refuses_without_the_run_owned_object_store(
+    tmp_path: Path,
+) -> None:
+    subject, report, observations, paths = _fixture(tmp_path, baseline_storage="git-reference")
+
+    with pytest.raises(AdversarialReviewError, match="without its run-owned object store"):
+        _verify(tmp_path, subject, report, observations, paths, with_object_store=False)
 
 
 @pytest.mark.parametrize(

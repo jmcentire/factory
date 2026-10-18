@@ -395,9 +395,11 @@ def test_real_tessera_preview_verifier_rejects_another_signing_identity(
     platform.system() != "Darwin",
     reason="full runtime E2E requires macOS Seatbelt",
 )
+@pytest.mark.parametrize("review_baseline", ["embedded", "git-reference"])
 def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    review_baseline: str,
 ) -> None:
     binary = _binary()
     cli = TesseraCli((str(binary),))
@@ -530,6 +532,7 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
                 f'pattern_catalog_digest = "{catalog.content_digest}"',
                 "max_attempts = 2",
                 'construction_modes = ["regenerate", "brownfield"]',
+                f'review_baseline = "{review_baseline}"',
                 "",
                 "[build.signal]",
                 "signal_pass_deadline = 2",
@@ -1204,6 +1207,22 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         == outcome.adversarial_review_digest
     )
     assert evidence["build_attempt"] == {"number": 2, "limit": 2}
+    subject_digest = evidence["preview_admission"]["artifact_digests"]["validator-review-subject"]
+    retained_subject = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / "synthetic-run"
+            / "evidence"
+            / "validator-adversarial-reviews"
+            / subject_digest.removeprefix("sha256:")
+            / "subject.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert retained_subject["base_source_snapshot"]["schema_version"] == {
+        "embedded": "factory-base-source-snapshot/1",
+        "git-reference": "factory-base-source-snapshot/2",
+    }[review_baseline]
     assert set(evidence["generation_artifacts"]) == {
         "target-manifest-source",
         "pattern-catalog",
