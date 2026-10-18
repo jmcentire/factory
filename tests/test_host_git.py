@@ -334,7 +334,22 @@ def test_a_pointer_shaped_file_git_does_not_route_through_lfs_is_left_alone(
     )
 
     assert (destination / "fixture.txt").read_bytes() == lfs_pointer(ART)
-    assert (result.lfs_hydrated, result.lfs_pointers_left) == (0, 0)
+    assert (result.lfs_hydrated, result.lfs_pointers_left) == (0, 1)
+
+
+@pytest.mark.parametrize("with_store", [False, True])
+def test_planted_attributes_cannot_hide_unhydrated_lfs_pointers(
+    tmp_path: Path, with_store: bool,
+) -> None:
+    repository, commit = lfs_repository(tmp_path, {"art.png": lfs_pointer(ART)})
+    (repository / ".git" / "info" / "attributes").write_text("* !filter\n")
+    destination = tmp_path / "judged"
+    store = lfs_store(tmp_path, {}) if with_store else None
+
+    result = materialize_lfs(repository, commit, destination, store)
+
+    assert (destination / "art.png").read_bytes() == lfs_pointer(ART)
+    assert (result.lfs_hydrated, result.lfs_pointers_left) == (0, 1)
 
 
 def test_an_lfs_object_missing_from_the_store_refuses_before_any_file_is_written(

@@ -31,8 +31,9 @@ names a local LFS object directory. A path whose committed blob is a well-formed
 and whose ``filter`` attribute in the commit is ``lfs`` is written as the store object its
 pointer names, streamed and checked against the pointer's SHA-256 and size. The pointer names
 that content by digest, so what lands on disk is still exactly what the commit names, and no
-LFS program runs. A missing or mismatched object refuses. Without a store the pointer bytes are
-written as committed and counted, so a caller can say the tree is not hydrated.
+LFS program runs. A missing or mismatched object refuses. Every pointer-shaped blob left on
+disk is counted, regardless of attributes, so repository-local attribute overrides cannot hide
+unhydrated content from a caller that requires LFS.
 """
 
 from __future__ import annotations
@@ -190,10 +191,11 @@ def materialize_commit(
         max_files=max_files,
     )
     blobs = _read_blobs(repository, entries, max_total_bytes=max_total_bytes, runner=runner)
-    pointers = _lfs_pointers(repository, commit, entries, blobs, runner=runner)
+    pointers = _lfs_pointers(entries, blobs)
     hydrate: dict[PurePosixPath, _LfsObject] = {}
     if lfs_objects is not None and pointers:
-        hydrate = _resolve_lfs_objects(Path(lfs_objects), pointers)
+        routed = _lfs_routed_pointers(repository, commit, pointers, runner=runner)
+        hydrate = _resolve_lfs_objects(Path(lfs_objects), routed)
         needed = sum(found.size for found in {o.oid: o for o in hydrate.values()}.values())
         if max_lfs_bytes is not None and needed > max_lfs_bytes:
             raise HostGitError(f"LFS content exceeds {max_lfs_bytes} bytes")
@@ -210,18 +212,10 @@ def materialize_commit(
 
 
 def _lfs_pointers(
-    repository: str | Path,
-    commit: str,
     entries: Sequence[_Entry],
     blobs: Mapping[str, bytes],
-    *,
-    runner: Runner,
 ) -> dict[PurePosixPath, tuple[str, int]]:
-    """Each regular path whose blob is an LFS pointer and that the commit routes through
-    ``filter=lfs``, mapped to the pointer's (oid, size).
-
-    Attributes are read from the commit's own tree (``check-attr --source``); a pointer-shaped
-    file the commit does not route through LFS, such as a test fixture, is ordinary content."""
+    """All regular pointer-shaped blobs, independent of agent-writable attributes."""
 
     candidates: dict[PurePosixPath, tuple[str, int]] = {}
     for entry in entries:
@@ -233,6 +227,19 @@ def _lfs_pointers(
         match = _LFS_POINTER.fullmatch(blob)
         if match:
             candidates[entry.path] = (match["oid"].decode("ascii"), int(match["size"]))
+    return candidates
+
+
+def _lfs_routed_pointers(
+    repository: str | Path,
+    commit: str,
+    candidates: Mapping[PurePosixPath, tuple[str, int]],
+    *,
+    runner: Runner,
+) -> dict[PurePosixPath, tuple[str, int]]:
+    """Select pointers to hydrate using attributes from ``commit``. Repository-local
+    ``info/attributes`` can override routing, but cannot suppress the unhydrated count."""
+
     if not candidates:
         return {}
     request = b"".join(path.as_posix().encode("utf-8") + b"\0" for path in candidates)

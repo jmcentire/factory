@@ -9005,12 +9005,11 @@ VENV_PY = HARNESS.parent / ".venv" / "bin" / "python"
 
 
 def _factory_cli_env() -> dict[str, str]:
-    if not VENV_PY.exists():
-        pytest.skip("factory venv not built — `make dev` (promote.sh needs the factory CLI)")
-    # The venv has the factory installed editable, so `import factory_runtime` resolves. PYTHONPATH
-    # is belt-and-suspenders for a venv built without the editable install.
+    cli_python = VENV_PY if VENV_PY.exists() else Path(sys.executable)
+    # CI installs into its test interpreter rather than a repo venv. Both can run the CLI;
+    # PYTHONPATH also supports a checkout without an editable install.
     return {
-        "FACTORY_CLI": f"{VENV_PY} -m factory_runtime.cli",
+        "FACTORY_CLI": f"{cli_python} -m factory_runtime.cli",
         "PYTHONPATH": str(HARNESS.parent),
     }
 
@@ -11019,11 +11018,12 @@ ENDGAME_LFS_POINTER = (
 
 
 def _endgame_over_an_lfs_target(
-    tmp_path: Path, *, stocked: bool, target_conf: str | None = None
+    tmp_path: Path, *, stocked: bool, target_conf: str = "",
+    planted_attributes: bool = False, empty_store: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Endgame over a target that commits one Git LFS pointer, resolved from a local operator
-    repository whose LFS store holds the object only when ``stocked``. ``make`` is stubbed red
-    so the run stops at the verdict. Returns the run, the run root and the operator repo."""
+    repository whose LFS store holds the object only when ``stocked``. Gates and live proof
+    pass, so an LFS policy failure alone must prevent Gate L from running."""
 
     operator, root, target_state = execution_truth_fixture(
         tmp_path,
@@ -11035,6 +11035,17 @@ def _endgame_over_an_lfs_target(
     )
     sha = str(target_state["resolved_commit"])
     _verified_boundary_register(root)
+    if planted_attributes:
+        candidate = Path(str(target_state["workdir"]))
+        git_dir = subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=candidate, text=True,
+        ).strip()
+        info = Path(git_dir) / "info"
+        info.mkdir(exist_ok=True)
+        (info / "attributes").write_text("* !filter\n")
+    if empty_store:
+        (operator / ".git" / "lfs" / "objects").mkdir(parents=True)
     if stocked:
         stored = (
             operator / ".git" / "lfs" / "objects"
@@ -11042,25 +11053,34 @@ def _endgame_over_an_lfs_target(
         )
         stored.parent.mkdir(parents=True)
         stored.write_bytes(ENDGAME_LFS_ART)
-    stub_dir = tmp_path / "redmake-bin"
+    stub_dir = tmp_path / "greenmake-bin"
     stub_dir.mkdir()
     make_stub = stub_dir / "make"
-    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
+    make_stub.write_text("#!/bin/sh\necho 'stub make: green'\nexit 0\n", encoding="utf-8")
     make_stub.chmod(0o755)
     install_resident_orchestrator_stub(stub_dir, root)
     env = _factory_cli_env()
     env.pop("FACTORY_LFS_OBJECTS", None)
     env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-    if target_conf is not None:
-        conf = tmp_path / "target.conf"
-        conf.write_text(target_conf, encoding="utf-8")
-        env["HARNESS_TARGET_CONF"] = str(conf)
+    conf = tmp_path / "target.conf"
+    conf.write_text("provision: true\nprobe: alive:: true\n" + target_conf, encoding="utf-8")
+    env["HARNESS_TARGET_CONF"] = str(conf)
     r = run(
         ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
         tmp_path,
         env,
     )
     return r, root, operator
+
+
+def _assert_lfs_policy_blocks_gate_l(r: subprocess.CompletedProcess[str], root: Path) -> None:
+    assert "full gate suite: GREEN" in r.stdout, r.stdout + r.stderr
+    assert "isolation proof: GREEN" in r.stdout
+    assert "proof: GREEN" in r.stdout
+    assert "Gate L: NOT RUN" in r.stdout
+    assert r.returncode == 1
+    assert json.loads((root / "endgame" / "verdict.json").read_text())["verdict"] == "RED"
+    assert not (root / "promotion_verdict.json").exists()
 
 
 def test_endgame_hydrates_lfs_content_from_the_runs_local_object_source(
@@ -11073,6 +11093,7 @@ def test_endgame_hydrates_lfs_content_from_the_runs_local_object_source(
 
     assert "hydrated: 1 file(s)" in r.stdout, r.stdout + r.stderr
     assert "the run's local object source" in r.stdout
+    assert "Gate L: NOT RUN" not in r.stdout, r.stdout + r.stderr
     (judged,) = (root / "endgame").glob("endgame-checkout-*")
     assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_ART
 
@@ -11085,9 +11106,32 @@ def test_endgame_fails_a_target_that_requires_lfs_content_it_cannot_supply(
     )
 
     assert "requires Git LFS content" in r.stdout, r.stdout + r.stderr
-    assert "endgame verdict: GREEN" not in r.stdout
+    _assert_lfs_policy_blocks_gate_l(r, root)
     (judged,) = (root / "endgame").glob("endgame-checkout-*")
     assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_POINTER
+
+
+def test_endgame_required_lfs_cannot_be_bypassed_with_planted_attributes(tmp_path: Path) -> None:
+    r, root, _ = _endgame_over_an_lfs_target(
+        tmp_path, stocked=False, empty_store=True, planted_attributes=True,
+        target_conf="lfs: required\n",
+    )
+
+    assert "hydrated: 0 file(s)" in r.stdout, r.stdout + r.stderr
+    assert "left as pointers: 1 file(s)" in r.stdout
+    assert "requires Git LFS content" in r.stdout
+    _assert_lfs_policy_blocks_gate_l(r, root)
+
+
+def test_endgame_auto_detected_incomplete_lfs_store_refuses_without_required(
+    tmp_path: Path,
+) -> None:
+    r, root, _ = _endgame_over_an_lfs_target(tmp_path, stocked=False, empty_store=True)
+
+    assert r.returncode == 70, r.stdout + r.stderr
+    assert "not in the LFS store" in r.stderr
+    assert not (root / "endgame" / "verdict.json").exists()
+    assert [row["detail"] for row in _refusal_events(root)] == ["candidate materialization failed"]
 
 
 def test_endgame_judges_a_target_conf_that_says_nothing_about_lfs(tmp_path: Path) -> None:
@@ -11100,14 +11144,14 @@ def test_endgame_judges_a_target_conf_that_says_nothing_about_lfs(tmp_path: Path
 
     assert "left as pointers: 1 file(s)" in r.stdout, r.stdout + r.stderr
     assert "requires Git LFS content" not in r.stdout
-    assert "endgame verdict: RED" in r.stdout
+    assert "Gate L: NOT RUN" not in r.stdout, r.stdout + r.stderr
 
 
 def test_endgame_refuses_an_lfs_setting_it_does_not_know(tmp_path: Path) -> None:
-    r, _, _ = _endgame_over_an_lfs_target(tmp_path, stocked=True, target_conf="lfs: maybe\n")
+    r, root, _ = _endgame_over_an_lfs_target(tmp_path, stocked=True, target_conf="lfs: maybe\n")
 
     assert "lfs: in" in r.stdout and "must be 'required'" in r.stdout, r.stdout + r.stderr
-    assert "endgame verdict: GREEN" not in r.stdout
+    _assert_lfs_policy_blocks_gate_l(r, root)
 
 
 def _endgame_whose_gates_drift(

@@ -218,7 +218,10 @@ names a consuming project:
   the local operator repository the run resolved from (`resolve-target --object-source`), or
   `FACTORY_LFS_OBJECTS` when set (needed for a remotely resolved run). A target whose gates need
   its LFS content puts `lfs: required` in `target.conf`, and any pointer left unhydrated then
-  fails the verdict instead of being judged as a stub.
+  fails the verdict instead of being judged as a stub, including pointer-shaped fixtures and
+  files whose LFS routing was disabled by repository-local attributes. With a store (including
+  one found automatically), missing or mismatched objects refuse even without `lfs: required`;
+  only runs without a store retain routed pointers as reported stubs.
 - Keys are per-**project** and the human holds none: `factory init` mints one key per worker,
   a host-held human-principal key that records only what the human said, the genesis and the
   ledger chain root, into `.factory/keys/`. Each worker is granted only its own key
