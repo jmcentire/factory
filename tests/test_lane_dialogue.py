@@ -165,3 +165,32 @@ def test_a_parallel_instance_question_binds_only_that_instance(tmp_path: Path) -
                  question_id=str(question["question_id"]))
     with pytest.raises(LaneDialogueError):
         record_question(root, "validator", "not a lane")
+
+
+def test_progress_reviews_come_only_from_the_validator_and_wrap_ups_only_from_the_watchdog(
+    tmp_path: Path,
+) -> None:
+    root = run_root(tmp_path)
+    review = plan_message(
+        root, sender="validator", lane="coder", message_kind="progress-review",
+        text="FACTORY_REVIEW verdict=ON_TRACK\nR-1 and R-2 hold.", basis="progress review 1",
+        authority="ratified-spec",
+    )
+    wrap = plan_message(
+        root, sender="watchdog", lane="coder", message_kind="wrap-up",
+        text="FACTORY_WRAP_UP: about 5 minutes remain.", basis="cap in 5 minutes",
+        authority="runtime-protocol",
+    )
+    assert review["message_kind"] == "progress-review" and wrap["sender"] == "watchdog"
+    for sender, kind, authority in (
+        ("orchestrator", "progress-review", "ratified-spec"),
+        ("validator", "progress-review", "human-answer"),
+        ("validator", "wrap-up", "runtime-protocol"),
+        ("watchdog", "status-probe", "runtime-protocol"),
+    ):
+        with pytest.raises(LaneDialogueError):
+            plan_message(root, sender=sender, lane="coder", message_kind=kind,
+                         text="x", basis="y", authority=authority)
+    # The journal that holds them still validates as a whole.
+    record_delivery(root, message_id=str(review["message_id"]), thread_id=THREAD,
+                    transport="resume")

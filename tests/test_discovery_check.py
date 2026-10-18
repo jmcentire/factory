@@ -118,6 +118,21 @@ def test_the_check_cannot_pass_vacuously_or_before_freeze(tmp_path: Path) -> Non
     assert _check(root, tree, found) == 70
 
 
+def test_a_lane_resumed_after_its_review_freeze_is_not_frozen(tmp_path: Path) -> None:
+    """A progress review freezes a lane mid-run, then a lane message resumes it; the resume's
+    reopen row (tmux_lane_message.sh) keeps that review snapshot from passing as the candidate."""
+
+    root, (tree, _) = _frozen_tester(tmp_path), _integrated(tmp_path)
+    found = _inventory(("tests/export_test.ts", "exports a CSV"))
+    journal = root / "tmux-lanes" / "tester-launch.jsonl"
+    journal.write_text(journal.read_text() + json.dumps(
+        {"schema_version": "factory-tmux-lane-reopen/1", "role": "tester", "slot": "tester",
+         "sender": "validator", "message_kind": "progress-review"}) + "\n")
+    with pytest.raises(discovery_check.DiscoveryError, match="not frozen"):
+        discovery_check.latest_freeze(root, "tester")
+    assert _check(root, tree, found) == 70
+
+
 def test_the_check_runs_only_on_the_exact_unchanged_candidate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

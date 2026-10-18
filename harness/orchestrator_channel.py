@@ -50,6 +50,13 @@ class OrchestratorChannelError(RuntimeError):
 _ACTIVITY_SCHEMA = "factory-orchestrator-activity/1"
 _LEGACY_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/2"
 _ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/3"
+_SCREEN_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/4"
+# assessment/5 adds the code-and-progress review and the signal class (founder direction
+# 2026-10-16: the Orchestrator assesses the code and progress, not merely reports status).
+_PROGRESS_ASSESSMENT_SCHEMA = "factory-orchestrator-assessment/5"
+_GUIDANCE_SCHEMAS = frozenset(
+    {_ASSESSMENT_SCHEMA, _SCREEN_ASSESSMENT_SCHEMA, _PROGRESS_ASSESSMENT_SCHEMA}
+)
 _REPORT_SCHEMA = "factory-orchestrator-report/1"
 _KIN_ID = re.compile(r"^[0-9a-f]{12}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -95,6 +102,24 @@ _FALSE_CLOSE = re.compile(
     r"(?:closed|complete|completed|done|finished)\b",
     re.IGNORECASE,
 )
+# The human surface's classes, most urgent first. A class classifies the fact; escalation (page
+# or ticket) is decided downstream, never here.
+_SIGNAL_CLASSES = ("critical", "action-required", "at-your-convenience", "informative")
+_SIGNAL_RANK = {name: rank for rank, name in enumerate(reversed(_SIGNAL_CLASSES))}
+_PROGRESS_TRENDS = frozenset({"ahead", "on-track", "behind", "stalled"})
+_REQUIREMENT_STATES = frozenset({"done", "in-progress", "not-started", "blocked"})
+# A slice boundary always owes a code-and-progress review; so does every Nth cadence tick.
+_PROGRESS_BOUNDARY_KINDS = frozenset({"pre_dispatch", "pre_verdict", "phase_transition"})
+_PROGRESS_REVIEW_EVERY_TICKS = 2
+# Evidence is the work itself: a commit, or a path (optionally :line or :start-end) into a lane
+# tree, a promoted tree, or the Validator's verdict and test records.
+_COMMIT_REF = re.compile(r"^(?:commit:)?[0-9a-f]{7,40}$")
+_PATH_REF = re.compile(r"^[A-Za-z0-9_.@~+/-]*[/.][A-Za-z0-9_.@~+/-]*(?::\d+(?:-\d+)?)?$")
+# What the lanes and the Orchestrator say about the work is status, not evidence of it.
+_STATUS_REFS = re.compile(
+    r"(?:^|/)(?:orchestrator/(?:activity|reports)\.jsonl|OUTSTANDING-WORK\.md"
+    r"|dialogue/journal\.jsonl)(?::|$)|-lane\.log(?::|$)"
+)
 # ponytail: a raised ceiling (run e passed 32 MiB); rotate reports.jsonl or validate from the
 # last accepted cursor when a run outgrows it.
 _MAX_JOURNAL_BYTES = 128 * 1024 * 1024
@@ -122,6 +147,132 @@ def _text_list(value: object, *, field: str, maximum_items: int = 32) -> list[st
     if not isinstance(value, list) or len(value) > maximum_items:
         raise OrchestratorChannelError(f"{field} must be a bounded list")
     return [_bounded_text(item, field=field, maximum=4096) for item in value]
+
+
+def _work_refs(value: object, *, field: str) -> list[str]:
+    refs = _text_list(value, field=field)
+    if not refs:
+        raise OrchestratorChannelError(f"{field} must cite the work: a commit or a path")
+    for ref in refs:
+        if not (_COMMIT_REF.fullmatch(ref) or _PATH_REF.fullmatch(ref)):
+            raise OrchestratorChannelError(f"{field} entry is not a commit or a path: {ref[:80]}")
+        if _STATUS_REFS.search(ref):
+            raise OrchestratorChannelError(
+                f"{field} cites status, not the work itself: {ref[:80]}"
+            )
+    return refs
+
+
+def _signal_class(value: object, *, field: str) -> str:
+    if value not in _SIGNAL_CLASSES:
+        raise OrchestratorChannelError(f"{field} must be one of {', '.join(_SIGNAL_CLASSES)}")
+    return str(value)
+
+
+def _progress_review(value: object) -> dict[str, Any] | None:
+    """Check the code-and-progress review: the work read and judged, with evidence."""
+
+    if value is None:
+        return None
+    expected = {"evidence", "requirements_progress", "trend", "trend_basis", "code_findings"}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise OrchestratorChannelError("progress_review has unknown or missing fields")
+    _work_refs(value.get("evidence"), field="progress_review evidence")
+    progress = value.get("requirements_progress")
+    if not isinstance(progress, list) or not progress or len(progress) > 32:
+        raise OrchestratorChannelError(
+            "progress_review must judge progress on at least one requirement"
+        )
+    for item in progress:
+        if not isinstance(item, dict) or set(item) != {"requirement", "state", "evidence"}:
+            raise OrchestratorChannelError(
+                "requirements_progress entry has unknown or missing fields"
+            )
+        _bounded_text(item.get("requirement"), field="requirements_progress requirement")
+        if item.get("state") not in _REQUIREMENT_STATES:
+            raise OrchestratorChannelError("requirements_progress has an invalid state")
+        if item["state"] != "not-started":
+            _work_refs(item.get("evidence"), field="requirements_progress evidence")
+        else:
+            _text_list(item.get("evidence"), field="requirements_progress evidence")
+    if value.get("trend") not in _PROGRESS_TRENDS:
+        raise OrchestratorChannelError("progress_review has an invalid trend")
+    _bounded_text(value.get("trend_basis"), field="progress_review trend_basis")
+    findings = value.get("code_findings")
+    if not isinstance(findings, list) or len(findings) > 32:
+        raise OrchestratorChannelError("progress_review code_findings must be a bounded list")
+    for item in findings:
+        if not isinstance(item, dict) or set(item) != {"finding", "refs", "signal_class"}:
+            raise OrchestratorChannelError("code_findings entry has unknown or missing fields")
+        _bounded_text(item.get("finding"), field="code_findings finding")
+        _work_refs(item.get("refs"), field="code_findings refs")
+        _signal_class(item.get("signal_class"), field="code_findings signal_class")
+    return dict(value)
+
+
+def progress_review_every(harness: Mapping[str, Any]) -> int | None:
+    """Cadence ticks between required code-and-progress reviews, or None for a legacy run."""
+
+    config = harness.get("progress_review")
+    if config is None:
+        return None
+    if not isinstance(config, dict) or set(config) != {"every_cadence_ticks"}:
+        raise OrchestratorChannelError("harness progress_review configuration is malformed")
+    every = config["every_cadence_ticks"]
+    if not isinstance(every, int) or isinstance(every, bool) or not 1 <= every <= 8:
+        raise OrchestratorChannelError("progress_review every_cadence_ticks must be 1-8")
+    return every
+
+
+def progress_review_due(
+    activity_rows: Sequence[Mapping[str, object]],
+    report_rows: Sequence[Mapping[str, object]],
+    *,
+    through: int,
+    every: int = _PROGRESS_REVIEW_EVERY_TICKS,
+) -> bool:
+    """Whether an assessment through ``through`` owes a code-and-progress review.
+
+    It is owed when the unassessed range crosses a slice boundary (pre-dispatch, pre-verdict,
+    phase transition), or when ``every`` cadence ticks have passed since the last review.
+    """
+
+    previous = 0
+    reviewed = 0
+    for row in report_rows:
+        assessment = row.get("assessment")
+        if not isinstance(assessment, dict):
+            continue
+        cursor = int(assessment.get("through_cursor") or 0)
+        if cursor >= through:
+            continue
+        previous = max(previous, cursor)
+        if assessment.get("progress_review") is not None:
+            reviewed = max(reviewed, cursor)
+    ticks = 0
+    for row in activity_rows:
+        position = row.get("cursor")
+        if not isinstance(position, int) or position > through:
+            continue
+        if position > previous and row.get("kind") in _PROGRESS_BOUNDARY_KINDS:
+            return True
+        if position > reviewed and row.get("kind") == "cadence":
+            ticks += 1
+    return ticks >= every
+
+
+def progress_review_due_now(root: pathlib.Path, through: int) -> bool | None:
+    """For the dispatcher's notice: None on a legacy run, else whether ``through`` owes one."""
+
+    root = pathlib.Path(root)
+    every = progress_review_every(_read_harness(root))
+    if every is None:
+        return None
+    directory = root / "orchestrator"
+    return progress_review_due(
+        _read_jsonl(directory / "activity.jsonl"), _read_jsonl(directory / "reports.jsonl"),
+        through=through, every=every,
+    )
 
 
 def _complexity_hotspots(value: object) -> tuple[list[dict[str, Any]], list[str]]:
@@ -561,16 +712,18 @@ def _validate_assessment(
     schema = value.get("schema_version")
     if schema == _LEGACY_ASSESSMENT_SCHEMA:
         expected = base_fields
-    elif schema in {_ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"}:
+    elif schema in _GUIDANCE_SCHEMAS:
         expected = base_fields | guidance_fields
-        if schema == "factory-orchestrator-assessment/4":
+        if schema == _SCREEN_ASSESSMENT_SCHEMA:
             expected = expected | {"screen_review"}
+        if schema == _PROGRESS_ASSESSMENT_SCHEMA:
+            expected = expected | {"screen_review", "signal_class", "progress_review"}
     else:
         expected = set()
     if set(value) != expected:
         raise OrchestratorChannelError("assessment has unknown or missing fields")
     checked_guidance: dict[str, Any] | None = None
-    if schema in {_ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"}:
+    if schema in _GUIDANCE_SCHEMAS:
         checked_guidance = _guidance_fields(value)
     if guidance_expected is not None:
         if checked_guidance is None:
@@ -740,9 +893,32 @@ def _validate_assessment(
             )
     if status == "unavailable" and any(node_id is not None for node_id in hotspot_nodes):
         raise OrchestratorChannelError("an unavailable Kindex assessment cannot cite hotspot state")
+    if schema == _PROGRESS_ASSESSMENT_SCHEMA:
+        _check_signal_class(value, decision=str(decision), questions=questions)
     if len(_canonical(value)) > _MAX_REPORT_BYTES:
         raise OrchestratorChannelError("assessment exceeds its byte ceiling")
     return dict(value)
+
+
+def _check_signal_class(value: Mapping[str, Any], *, decision: str, questions: list[str]) -> None:
+    """The class must be at least as urgent as what the assessment itself says."""
+
+    signal = _signal_class(value.get("signal_class"), field="assessment signal_class")
+    review = _progress_review(value.get("progress_review"))
+    floor = "informative"
+    if decision == "halt":
+        floor = "critical"
+    elif questions:
+        floor = "action-required"
+    elif decision == "block" or (review is not None and review["trend"] == "stalled"):
+        floor = "at-your-convenience"
+    for finding in review["code_findings"] if review is not None else []:
+        if _SIGNAL_RANK[finding["signal_class"]] > _SIGNAL_RANK[floor]:
+            floor = finding["signal_class"]
+    if _SIGNAL_RANK[signal] < _SIGNAL_RANK[floor]:
+        raise OrchestratorChannelError(
+            f"assessment signal_class {signal} is below what it reports ({floor})"
+        )
 
 
 def _validate_report_rows(
@@ -801,6 +977,7 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
         existing = _read_jsonl(report_path)
         previous_cursor = _validate_report_rows(existing, highwater=highwater)
         cursor = int(assessment["through_cursor"])
+        _require_progress_review(harness, activity_rows, existing, assessment)
         try:
             review_previous = previous_cursor
             if cursor == previous_cursor and existing:
@@ -852,6 +1029,30 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
                 halt_validator(root, assessment["summary"])
             _append(report_path, report)
     return report
+
+
+def _require_progress_review(
+    harness: Mapping[str, Any],
+    activity_rows: Sequence[Mapping[str, object]],
+    report_rows: Sequence[Mapping[str, object]],
+    assessment: Mapping[str, Any],
+) -> None:
+    every = progress_review_every(harness)
+    schema = assessment["schema_version"]
+    if every is None and schema != _PROGRESS_ASSESSMENT_SCHEMA:
+        return
+    if schema != _PROGRESS_ASSESSMENT_SCHEMA:
+        raise OrchestratorChannelError(
+            "this run requires assessment/5: a code-and-progress review and a signal class"
+        )
+    cursor = int(assessment["through_cursor"])
+    due = progress_review_due(activity_rows, report_rows, through=cursor,
+                              every=every or _PROGRESS_REVIEW_EVERY_TICKS)
+    if due and assessment.get("progress_review") is None:
+        raise OrchestratorChannelError(
+            "a code-and-progress review is due at this cursor: read the work and cite it; "
+            "a status recap does not satisfy it"
+        )
 
 
 def resident_mode(root: pathlib.Path) -> bool:
@@ -961,9 +1162,7 @@ def _require_current_guidance(
     if expected is None:
         return None
     latest = _latest_assessment(rows)
-    if latest is None or latest.get("schema_version") not in {
-        _ASSESSMENT_SCHEMA, "factory-orchestrator-assessment/4"
-    }:
+    if latest is None or latest.get("schema_version") not in _GUIDANCE_SCHEMAS:
         raise OrchestratorChannelError("current run has no assessment/3 guidance evidence")
     if _guidance_fields(latest) != expected:
         raise OrchestratorChannelError(

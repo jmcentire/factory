@@ -197,6 +197,12 @@
       }
     },
     "base_source_snapshot": {
+      "oneOf": [
+        {"$ref": "#/$defs/embedded_base_source_snapshot"},
+        {"$ref": "#/$defs/reference_base_source_snapshot"}
+      ]
+    },
+    "embedded_base_source_snapshot": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -218,31 +224,62 @@
         "files": {
           "type": "array",
           "maxItems": 4096,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "path",
-              "entry_type",
-              "git_mode",
-              "mode",
-              "object_id",
-              "content_digest",
-              "content_base64",
-              "content_utf8"
-            ],
-            "properties": {
-              "path": {"type": "string", "minLength": 1, "maxLength": 4096},
-              "entry_type": {"enum": ["file", "symlink", "gitlink"]},
-              "git_mode": {"enum": ["100644", "100755", "120000", "160000"]},
-              "mode": {"type": "integer", "minimum": 0, "maximum": 511},
-              "object_id": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
-              "content_digest": {"$ref": "#/$defs/digest"},
-              "content_base64": {"type": "string", "maxLength": 2097152},
-              "content_utf8": {"type": ["string", "null"], "maxLength": 524288}
-            }
-          }
+          "items": {"$ref": "#/$defs/embedded_baseline_file"}
         }
+      }
+    },
+    "reference_base_source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "resolved_commit",
+        "resolved_tree",
+        "hash_algorithm",
+        "subpath",
+        "entry_count",
+        "listing_digest",
+        "changed_files",
+        "snapshot_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "factory-base-source-snapshot/2"},
+        "resolved_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "resolved_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "hash_algorithm": {"enum": ["sha1", "sha256"]},
+        "subpath": {"type": "string", "maxLength": 4096},
+        "entry_count": {"type": "integer", "minimum": 0},
+        "listing_digest": {"$ref": "#/$defs/digest"},
+        "snapshot_digest": {"$ref": "#/$defs/digest"},
+        "changed_files": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/embedded_baseline_file"}
+        }
+      }
+    },
+    "embedded_baseline_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "entry_type",
+        "git_mode",
+        "mode",
+        "object_id",
+        "content_digest",
+        "content_base64",
+        "content_utf8"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "entry_type": {"enum": ["file", "symlink", "gitlink"]},
+        "git_mode": {"enum": ["100644", "100755", "120000", "160000"]},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+        "object_id": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "content_digest": {"$ref": "#/$defs/digest"},
+        "content_base64": {"type": "string", "maxLength": 2097152},
+        "content_utf8": {"type": ["string", "null"], "maxLength": 524288}
       }
     },
     "candidate_change_set": {

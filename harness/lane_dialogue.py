@@ -50,7 +50,9 @@ def _lane_argument(value: str) -> str:
         raise argparse.ArgumentTypeError(f"invalid lane {value!r}: coder or tester[-instance]")
     return value
 
-_SENDERS = frozenset({"validator", "orchestrator"})
+# The watchdog is a sender only of the generated wrap-up notice (lane_watchdog.py), never of
+# prose, an answer or a status probe.
+_SENDERS = frozenset({"validator", "orchestrator", "watchdog"})
 _AUTHORITIES = frozenset({"human-answer", "ratified-spec", "runtime-protocol"})
 _THREAD = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -236,8 +238,17 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
             if sender not in _SENDERS or not _is_lane(lane) or authority not in _AUTHORITIES:
                 raise LaneDialogueError("dialogue planned-message principal is invalid")
             if kind == "status-probe":
-                if row.get("question_id") is not None or authority != "runtime-protocol":
+                if (row.get("question_id") is not None or authority != "runtime-protocol"
+                        or sender == "watchdog"):
                     raise LaneDialogueError("status probe carries invalid authority")
+            elif kind == "progress-review":
+                if (row.get("question_id") is not None or sender != "validator"
+                        or authority != "ratified-spec"):
+                    raise LaneDialogueError("only the Validator may plan a progress review")
+            elif kind == "wrap-up":
+                if (row.get("question_id") is not None or sender != "watchdog"
+                        or authority != "runtime-protocol"):
+                    raise LaneDialogueError("only the watchdog may plan a wrap-up notice")
             elif kind == "spec-answer":
                 question_id = row.get("question_id")
                 if sender != "validator" or authority not in {"human-answer", "ratified-spec"}:
@@ -351,8 +362,16 @@ def plan_message(
         if sender not in _SENDERS or not _is_lane(lane):
             raise LaneDialogueError("message sender or lane is invalid")
         if message_kind == "status-probe":
-            if question_id is not None or authority != "runtime-protocol":
+            if question_id is not None or authority != "runtime-protocol" or sender == "watchdog":
                 raise LaneDialogueError("status probes use only runtime-protocol authority")
+        elif message_kind == "progress-review":
+            # The Validator's review of a paused or finished lane, judged against the ratified
+            # specification; it binds no question and passes the coder leak guard upstream.
+            if question_id is not None or sender != "validator" or authority != "ratified-spec":
+                raise LaneDialogueError("only the Validator may send a progress review")
+        elif message_kind == "wrap-up":
+            if question_id is not None or sender != "watchdog" or authority != "runtime-protocol":
+                raise LaneDialogueError("only the watchdog may send a wrap-up notice")
         elif message_kind == "spec-answer":
             if sender != "validator" or authority not in {"human-answer", "ratified-spec"}:
                 raise LaneDialogueError("only the Validator may answer a specification question")
@@ -364,7 +383,9 @@ def plan_message(
             if str(question_id) in _answered_question_ids(rows):
                 raise LaneDialogueError("question already has a delivered answer")
         else:
-            raise LaneDialogueError("message kind must be status-probe or spec-answer")
+            raise LaneDialogueError(
+                "message kind must be status-probe, spec-answer, progress-review or wrap-up"
+            )
         delivered = {
             str(row["message_id"]) for row in rows if row.get("record_type") == "message-delivered"
         }
@@ -502,7 +523,10 @@ def main() -> int:
     plan.add_argument("--root", type=pathlib.Path, required=True)
     plan.add_argument("--sender", choices=sorted(_SENDERS), required=True)
     plan.add_argument("--lane", type=_lane_argument, required=True)
-    plan.add_argument("--kind", choices=("status-probe", "spec-answer"), required=True)
+    plan.add_argument(
+        "--kind", choices=("status-probe", "spec-answer", "progress-review", "wrap-up"),
+        required=True,
+    )
     plan.add_argument("--message-file", type=pathlib.Path, required=True)
     plan.add_argument("--basis", required=True)
     plan.add_argument("--authority", choices=sorted(_AUTHORITIES), required=True)

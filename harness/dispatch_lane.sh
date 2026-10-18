@@ -500,10 +500,12 @@ else
     "$PROJECTION_RECEIPT" "$MODEL_PROJECTION" "$WS" "$TASK_FILE" "$DISPATCH_TASK" \
     "$GUIDANCE_PROJECTION" "$GUIDANCE_REQUIRED" "$TESTING_STANDARD_BLOCK" \
     "$ROLE" "$FENCE" "$RUN" "$FACTORY_GENERATION" "$FACTORY_TARGET_STATE_DIGEST" \
-    "$FACTORY_BASE_COMMIT" "$FACTORY_BASE_TREE" "$FACTORY_SOURCE_ROOT" <<'PY'
+    "$FACTORY_BASE_COMMIT" "$FACTORY_BASE_TREE" "$FACTORY_SOURCE_ROOT" \
+    "$FACTORY_CONTROL_ROOT" "$FACTORY_TARGET_MANIFEST_DIGEST" <<'PY'
 import json, pathlib, sys
 
 from factory_runtime.projection_bundle import bundle_runner_projection
+from factory_runtime.projection_limits import retained_projection_limits
 from factory_runtime.state_admission import read_stable_regular_bytes
 
 (
@@ -511,6 +513,7 @@ from factory_runtime.state_admission import read_stable_regular_bytes
     dispatch_task_text, guidance_path_text, guidance_required_text, standard_path_text,
     role, fence, run_id, generation_text, target_state_digest,
     resolved_commit, resolved_tree, source_root_text,
+    control_root_text, target_manifest_digest,
 ) = sys.argv[1:]
 receipt_path = pathlib.Path(receipt_path_text)
 projection_path = pathlib.Path(projection_path_text)
@@ -552,6 +555,7 @@ expected_projection = bundle_runner_projection(
     target_state_digest=target_state_digest,
     resolved_commit=resolved_commit,
     resolved_tree=resolved_tree,
+    **retained_projection_limits(control_root_text, expected_digest=target_manifest_digest),
 )
 expected_projection_raw = (
     json.dumps(expected_projection, sort_keys=True, separators=(",", ":")).encode() + b"\n"

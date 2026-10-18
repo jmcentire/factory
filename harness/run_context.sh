@@ -343,4 +343,11 @@ factory_seat_env() {
     FACTORY_ROOT_PUBLIC_KEY FACTORY_TESSERA_BIN FACTORY_CLI FACTORY_PYTHON FACTORY_HOME; do
     [ -z "${!var:-}" ] || printf ' %s=%q' "$var" "${!var}"
   done
+  # directive.py reads DIRECTIVE_LEDGER and otherwise falls back to a cwd-relative path, which a
+  # seat's working tree never holds. Pass the checkpoint-verified ledger source, never an ambient
+  # value, so a seat grounds against the same directive bytes the run was admitted with.
+  local ledger
+  if ledger="$(factory_config_source_path factory-directive-ledger 2>/dev/null)"; then
+    printf ' DIRECTIVE_LEDGER=%q' "$ledger"
+  fi
 }

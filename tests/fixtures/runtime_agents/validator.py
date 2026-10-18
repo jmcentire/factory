@@ -217,7 +217,8 @@ observations_ref = _evidence(
     "acceptance-obligation-observations.json",
     observations_path,
 )
-baseline_entry = review_subject["base_source_snapshot"]["files"][0]
+baseline_snapshot = review_subject["base_source_snapshot"]
+baseline_entry = (baseline_snapshot.get("changed_files") or baseline_snapshot["files"])[0]
 baseline_ref = _evidence_data(
     "baseline-source",
     baseline_entry["path"],

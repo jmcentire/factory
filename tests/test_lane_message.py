@@ -209,3 +209,95 @@ def test_an_orchestrator_status_probe_to_an_idle_lane_exits_cleanly(tmp_path: Pa
     )
     assert probe.returncode == 0, probe.stdout + probe.stderr
     assert "delivered" in probe.stdout
+
+
+def message(
+    operator: Path, root: Path, env: dict[str, str], sender: str, lane: str, kind: str,
+    *extra: str,
+) -> subprocess.CompletedProcess[str]:
+    return run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", sender, lane, kind,
+         "--runs", str(root.parent), *extra],
+        operator,
+        env,
+    )
+
+
+def test_a_progress_review_resumes_the_coders_own_thread(tmp_path: Path) -> None:
+    """A finding reaches a codex-exec Coder only by resuming its thread: inject.sh types into a
+    pane that `codex exec` never reads, and a new --round starts a fresh context. The review is
+    framed, leak-guarded and receipted like an answer."""
+
+    operator, root, env, tmux_log = lane_fixture(tmp_path, "coder")
+    review = tmp_path / "review.txt"
+    review.write_text(
+        "R-3: checkout of an empty cart returned 200 with total 0; the specification requires "
+        "the typed EmptyCart refusal.\n", encoding="utf-8")
+
+    delivered = message(operator, root, env, "validator", "coder", "review",
+                        "--verdict", "redirect", "--review-file", str(review))
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    planned = read_chain(root / "dialogue" / "journal.jsonl")[0]
+    assert planned["message_kind"] == "progress-review" and planned["authority"] == "ratified-spec"
+    text = planned["text"]
+    assert text.startswith("FACTORY_REVIEW verdict=REDIRECT\n")
+    assert "R-3: checkout of an empty cart" in text
+    assert "rerun the checks that passed before and restore any you break" in text
+    receipts = [row for row in read_chain(root / "dialogue" / "journal.jsonl")
+                if row["record_type"] == "message-delivered"]
+    assert [row["transport"] for row in receipts] == ["resume"]
+    assert "exec --json resume" in tmux_log.read_text(encoding="utf-8")
+
+
+def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
+    tmp_path: Path,
+) -> None:
+    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    review = tmp_path / "review.txt"
+    review.write_text("test_checkout_empty_cart fails: see the assertion.\n", encoding="utf-8")
+    leaked = message(operator, root, env, "validator", "coder", "review",
+                     "--verdict", "redirect", "--review-file", str(review))
+    assert leaked.returncode == 80, leaked.stdout + leaked.stderr
+    review.write_text("R-3 holds.\n", encoding="utf-8")
+    refused = message(operator, root, env, "orchestrator", "coder", "review",
+                      "--verdict", "on-track", "--review-file", str(review))
+    assert refused.returncode == 77
+    no_verdict = message(operator, root, env, "validator", "coder", "review",
+                         "--review-file", str(review))
+    assert no_verdict.returncode == 64
+    tester = tmp_path / "tester"
+    tester.mkdir()
+    operator, root, env, _ = lane_fixture(tester, "tester")
+    to_tester = message(operator, root, env, "validator", "tester", "review",
+                        "--verdict", "on-track", "--review-file", str(review))
+    assert to_tester.returncode == 64 and "Coder lane" in to_tester.stderr
+
+
+def test_only_the_watchdog_sends_the_generated_wrap_up(tmp_path: Path) -> None:
+    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    refused = message(operator, root, env, "validator", "coder", "wrapup", "--minutes", "5")
+    assert refused.returncode == 77
+    refused = message(operator, root, env, "watchdog", "coder", "status")
+    assert refused.returncode == 77
+    delivered = message(operator, root, env, "watchdog", "coder", "wrapup", "--minutes", "5",
+                        "--wait-idle", "2")
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    planned = read_chain(root / "dialogue" / "journal.jsonl")[0]
+    assert planned["sender"] == "watchdog" and planned["message_kind"] == "wrap-up"
+    assert planned["text"].startswith("FACTORY_WRAP_UP: about 5 minutes of this lane's time")
+    assert "Start nothing new" in planned["text"]
+
+
+def test_a_lane_at_its_cap_refuses_a_review_and_status_refuses_stray_arguments(
+    tmp_path: Path,
+) -> None:
+    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    (root / "tmux-lanes" / "coder-watch.json").write_text('{"status": "capped"}\n')
+    review = tmp_path / "review.txt"
+    review.write_text("R-3: fix the refusal.\n", encoding="utf-8")
+    refused = message(operator, root, env, "validator", "coder", "review",
+                      "--verdict", "repair", "--review-file", str(review))
+    assert refused.returncode == 70 and "reached its cap" in refused.stderr
+    assert "new --round" in refused.stderr
+    stray = message(operator, root, env, "validator", "coder", "status", "--verdict", "redirect")
+    assert stray.returncode == 64
