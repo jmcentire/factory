@@ -277,7 +277,8 @@ factory_verify_target_state "$RUN" "$FACTORY_RUNS_ROOT" >/dev/null || FAILED=1
 # re-serializes import settings on a cold import, say) names those paths in target.conf as
 # `judged-drift-allow: <glob>`, Git's `:(glob)` pathspec syntax. Drift on those paths is
 # reported and listed, never silently dropped; drift anywhere else still breaks the subject.
-# A malformed or match-everything pattern refuses the allowance and fails the verdict.
+# Malformed patterns and patterns with no literal path character refuse the allowance and
+# fail the verdict. This syntax check does not bound how many paths a glob may match.
 DRIFT_ALLOW=()
 if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
   if DRIFT_ALLOW_TEXT=$(python3 - "$TARGET_CONF" <<'PY'
@@ -305,6 +306,7 @@ PY
 fi
 # The gates above ran candidate code inside $FRESH, so its .git is no longer the host's either.
 # A status that could not be read is not a clean status.
+TOLERATED_DRIFT_COUNT=0
 if ! FRESH_STATUS=$(fresh_git status --porcelain --untracked-files=all); then
   say "   endgame checkout status could not be read; evidence no longer names one subject"
   FAILED=1
@@ -321,7 +323,8 @@ elif [ -n "$FRESH_STATUS" ]; then
   else
     TOLERATED="$ROOT/endgame/tolerated-drift-$RESOURCE_ID.txt"
     printf '%s\n' "$FRESH_STATUS" > "$TOLERATED"
-    say "   tolerated drift: $(printf '%s\n' "$FRESH_STATUS" | wc -l | tr -d ' ') path(s) matched judged-drift-allow; listed in $TOLERATED"
+    TOLERATED_DRIFT_COUNT=$(printf '%s\n' "$FRESH_STATUS" | wc -l | tr -d ' ')
+    say "   tolerated drift: $TOLERATED_DRIFT_COUNT path(s) matched judged-drift-allow; listed in $TOLERATED"
   fi
 fi
 
@@ -481,13 +484,14 @@ else
 fi
 
 mkdir -p "$ROOT/endgame"
-python3 - "$ROOT" "$RUN" "$SHA" "$CANDIDATE_RESOURCE" "$FAILED" <<'PY'
+python3 - "$ROOT" "$RUN" "$SHA" "$CANDIDATE_RESOURCE" "$FAILED" "$TOLERATED_DRIFT_COUNT" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
-root, run, sha, resource, failed = sys.argv[1:]
+root, run, sha, resource, failed, tolerated_drift_count = sys.argv[1:]
 body = {
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "run": run, "final_sha": sha, "candidate_resource": resource,
     "verdict": "RED" if int(failed) else "GREEN",
+    "tolerated_drift_count": int(tolerated_drift_count),
 }
 path = pathlib.Path(root) / "endgame" / "verdict.json"
 temporary = tempfile.NamedTemporaryFile(

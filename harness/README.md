@@ -202,8 +202,11 @@ names a consuming project:
   syntax) naming paths the target's own toolchain rewrites while its gates run, such as an
   engine re-serializing import settings on a cold import. `endgame.sh` reports and lists drift
   on those paths in `<run>/endgame/tolerated-drift-<resource>.txt`; drift anywhere else still
-  breaks the judged subject. A malformed, absolute, `..`, pathspec-magic or match-everything
-  pattern refuses the allowance and fails the verdict.
+  breaks the judged subject. `endgame/verdict.json` records `tolerated_drift_count` (zero for
+  a clean checkout). Malformed, absolute, `..`, pathspec-magic patterns and patterns with no
+  literal path character (`*`, `**`, `**/*`) refuse the allowance and fail the verdict.
+  This is a syntax check: broad patterns such as `**/*.*`, `**/[!.]*` and `*.*` are accepted
+  and can match most or all tracked files. Targets must choose their allowances accordingly.
 - Env seams: `HARNESS_DIR`, `HARNESS_PROJECTION_CONF`,
   `HARNESS_TARGET_CONF`, `HARNESS_MAX_GROUND_MIN` (tighten-only: values above the
   360-minute default are refused), plus externally supplied
