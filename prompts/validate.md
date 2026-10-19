@@ -984,6 +984,12 @@ states, per touched repo rule, why the change complies (Repo rules, step 6). Whe
 target repo gates review by label: label `work-in-progress`; **never** add `ready-to-review`
 (humans only).
 
+Every factory PR body carries the fingerprint line `FactoryRun: <task id>` (the Linear ticket,
+e.g. `FactoryRun: CORE-5313`), so factory PRs are countable with
+`gh search prs FactoryRun --match body`. Keep `FactoryRun` one word: search drops punctuation,
+so `Factory-Run` matches every PR that says "factory run". Before the verdict, confirm it is
+present with `gh pr view <n> --json body`; a PR without it is not process-complete.
+
 ---
 
 ## Governance — you are inside the lifecycle, not above it
