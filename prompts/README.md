@@ -35,7 +35,7 @@ them before dispatch; either is conforming.
 | `build.md` | `/build` — the single-agent research-plan-build-ship pipeline; collapsed roles, so Cosmetic and small Standard work only |
 | `orchestrate.md` | Orchestrator-agent — the advisory runner seat beside the enforcing dispatcher scripts |
 | `code-review.md` | The code-review standard every reviewing agent binds to |
-| `diff-intent-gate.md` | Standing directive for every lane: diffs are checked against declared intent; agents escalate, humans ratify |
+| `diff-intent-gate.md` | Standing directive for every lane: diffs are checked against declared intent; lanes escalate, the Validator decides, the founder's words govern |
 
 ## Genericity and target data
 

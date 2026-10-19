@@ -1,4 +1,4 @@
-.PHONY: help install uninstall doctor dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance ship
+.PHONY: help install uninstall doctor dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance ship
 
 .DEFAULT_GOAL := help
 
@@ -216,6 +216,9 @@ check-purity: check-python ## the anti-coupling guard (core imports nothing targ
 check-doctrine: check-python ## structural parity for active doctrine surfaces
 	$(PY) scripts/check_doctrine_sync.py
 
+check-human-gates: check-python ## P-0001: no false human gate or run-wide stop in the factory's own prompts, docs or code
+	$(PY) scripts/check_no_human_gates.py
+
 check-wiring: check-python ## fail-closed wiring audit (every provided service reachable from an entrypoint)
 	$(PY) scripts/check_wiring.py
 
@@ -250,7 +253,7 @@ check-glossary: check-python ## glossary referent-integrity + single-definition-
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
+ship: check-purity check-doctrine check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> human-gates -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:

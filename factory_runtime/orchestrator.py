@@ -382,7 +382,7 @@ class FactoryOrchestrator:
                 )
                 acceptance_catalog = stored_catalog.catalog
                 catalog_activation_artifacts = dict(stored_catalog.artifact_digests)
-                # 4.1b: only the human AUTHORITY nonce is consumed; the Validator
+                # 4.1b: the AUTHORITY receipt nonce alone is consumed; the Validator
                 # attribution carries no replay ceremony.
                 catalog_activation_nonces = [stored_catalog.human_receipt.nonce]
             else:

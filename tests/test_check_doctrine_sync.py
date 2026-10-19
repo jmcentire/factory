@@ -231,7 +231,7 @@ def test_signed_supersession_alone_cannot_authorize_a_test_change(tmp_path: Path
     root = _copy_guard_surface(tmp_path)
     doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
     source = doctrine.read_text(encoding="utf-8")
-    rule = "firm affirmative human\nruling over its impact"
+    rule = "firm affirmative recorded\nruling over its impact"
     assert rule in source
     doctrine.write_text(
         source.replace(rule, "signed superseding item\nwithout a separate impact ruling"),
@@ -240,7 +240,7 @@ def test_signed_supersession_alone_cannot_authorize_a_test_change(tmp_path: Path
 
     errors = check_repository(root)
 
-    assert "existing-test-disposition-missing:firm affirmative human ruling" in errors
+    assert "existing-test-disposition-missing:firm affirmative recorded ruling" in errors
 
 
 def test_the_operational_control_names_cannot_be_dropped(tmp_path: Path) -> None:

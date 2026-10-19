@@ -9,10 +9,14 @@ Enforces (fucked_up.md §8-§12):
     git history to be signature-clean (hardware key on the founder's side:
     the agent can verify, it cannot sign)
 
-Agents may run: verify, show, active, provisional. The signed chain stays
-founder-only — appends the founder didn't sign fail verification. Live rulings
-enter through the provisional side chain (provisional.jsonl): agent-appendable,
-transcript-cited, TTL'd, settled later by signed ratify/refuse entries.
+Agents may run: verify, show, active, provisional. Appends to the signed chain
+that the founder didn't sign fail verification. Live rulings enter through the
+provisional side chain (provisional.jsonl): agent-appendable and transcript-cited.
+A provisional entry that cites the founder's own words is in force at once and
+never expires; nothing waits on the founder to ratify what they already said
+(founder, 2026-10-18, P-0001). One that cites the run's own decision is in force
+until its TTL. A signed ratify/refuse entry, whenever the founder makes one,
+settles either.
 """
 import argparse
 import contextlib
@@ -218,7 +222,8 @@ def cmd_supersede(args):
 
 def cmd_provisional(args):
     # Agent-appendable side chain — NOT the signed ledger. Authority is borrowed
-    # from the live transcript, cited precisely, and expires unless ratified.
+    # from the live transcript, cited precisely. The founder's own words never expire;
+    # the run's own decision lapses at its TTL.
     entries = loadp()
     now = datetime.datetime.now(datetime.UTC)
     body = {"id": f"P-{len(entries)+1:04d}",
@@ -237,7 +242,9 @@ def cmd_provisional(args):
     validate_candidate(signed, [*entries, body])
     ensure_file(LEDGER)
     append_line(PROV, body)
-    print(body["id"], body["hash"][:12], "expires", body["expires"])
+    lapse = "in force (the founder's words)" if args.cite_speaker == "human" else (
+        "expires " + body["expires"])
+    print(body["id"], body["hash"][:12], lapse)
 
 def cmd_ratify(args):
     prov = next((p for p in loadp() if p["id"] == args.pid), None)
@@ -295,7 +302,8 @@ def cmd_active(args):
     signed_scopes = {e["scope"] for e in entries if e["id"] not in dead}
     now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     for p in loadp(required=True):
-        if p["id"] in settled or p["expires"] < now: continue
+        founder_words = p.get("cite_speaker") == "human"
+        if p["id"] in settled or (not founder_words and p["expires"] < now): continue
         if args.since and p["ts"] < args.since: continue
         # "You must prioritize what I SAID." A provisional borrows authority from
         # the transcript; a signed entry IS the founder. Where both speak to one
@@ -329,7 +337,9 @@ def cmd_active(args):
                     f'  [SUBORDINATE to the signed directive scoped {overlapping[0]}'
                     f' — cited speaker: {cited.speaker}, tier: {cited.tier}]'
                 )
-        print(f'{p["id"]} [PROVISIONAL until {p["expires"]}] [{p["scope"]}] {p["text"]}'
+        standing = "IN FORCE: the founder's words" if founder_words else (
+            f'PROVISIONAL until {p["expires"]}')
+        print(f'{p["id"]} [{standing}] [{p["scope"]}] {p["text"]}'
               f'  <- {p["cite"]}{subordinate}')
         for q in p.get("qualifiers", []): print(f"      ↳ {q}")
 

@@ -63,9 +63,13 @@ def _signed(
 
 
 def _provisional(
-    entries: list[dict[str, Any]], *, expires: str, scope: str = "run"
+    entries: list[dict[str, Any]],
+    *,
+    expires: str,
+    scope: str = "run",
+    cite_speaker: str | None = None,
 ) -> dict[str, Any]:
-    body = {
+    body: dict[str, Any] = {
         "id": f"P-{len(entries) + 1:04d}",
         "ts": "2026-08-19T12:00:00+00:00",
         "scope": scope,
@@ -75,6 +79,8 @@ def _provisional(
         "expires": expires,
         "prev_hash": entries[-1]["hash"] if entries else "0" * 64,
     }
+    if cite_speaker is not None:
+        body["cite_speaker"] = cite_speaker
     return {**body, "hash": _hash(body)}
 
 
@@ -323,12 +329,30 @@ def test_inapplicable_provisional_does_not_block_another_role() -> None:
     assert contract["provisional"]["entry_count"] == 1
 
 
-def test_live_unsettled_provisional_blocks_instead_of_becoming_instruction() -> None:
+def test_a_provisional_never_blocks_a_dispatch_waiting_on_a_signature() -> None:
+    """P-0001 (founder, 2026-10-18): asking the founder to ratify what they already said
+    is a false gate. The run's own unexpired decision is in force, labeled as the run's."""
     provisional: list[dict[str, Any]] = []
     provisional.append(_provisional(provisional, expires="2026-12-31T00:00:00+00:00"))
-    with pytest.raises(InstructionControlError) as failure:
-        _contract(provisional=_lines(provisional))
-    assert failure.value.code == "UNSETTLED_PROVISIONAL"
+    contract = _contract(provisional=_lines(provisional))
+    assert contract["provisional"]["live_unsettled_count"] == 0
+    [directive] = contract["directives"]
+    assert directive["directive_id"] == "P-0001"
+    assert directive["source_class"] == "run-decision-provisional-ledger"
+
+
+def test_the_founders_cited_words_stay_in_force_and_never_expire() -> None:
+    provisional: list[dict[str, Any]] = []
+    provisional.append(
+        _provisional(provisional, expires="2026-08-19T12:30:00+00:00", cite_speaker="human")
+    )
+    provisional.append(
+        _provisional(provisional, expires="2026-08-19T12:30:00+00:00", cite_speaker="agent")
+    )
+    contract = _contract(provisional=_lines(provisional))
+    # The founder's words outlive their TTL; the run's own lapsed decision does not.
+    assert [d["directive_id"] for d in contract["directives"]] == ["P-0001"]
+    assert contract["directives"][0]["source_class"] == "founder-words-provisional-ledger"
 
 
 def test_refusal_settles_provisional_without_activating_its_text() -> None:

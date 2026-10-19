@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Mint an asymmetric lane projection from an already verified, run-owned source checkout.
 # usage: projection.sh <coder|tester> <source-root> <exact-commit> <dest-dir>
+#
+# A tester-include path absent at the pin is skipped and named in the receipt (absent_includes):
+# the Tester's own suite (tests/acceptance) never exists before the Tester writes it. When the pin
+# has no `contracts` and the run supplies its ratified contracts (HARNESS_RUN_CONTRACTS, a
+# directory, with HARNESS_ORACLE_CONTRACT, the oracle-contract.md that declares every contract
+# file's sha256), the Tester's view gets those files at contracts/, each checked against its
+# declared digest, and the receipt names them (run_contracts). herald-dash-r2 stalled on exactly
+# this: the Validator authors contracts/ during Phase A, so the pin cannot hold them.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
@@ -93,6 +101,29 @@ if [ "$ROLE" = tester ] && [ "${#INCLUDES[@]}" -eq 0 ]; then
   exit 66
 fi
 
+PRESENT=()
+ABSENT=()
+if [ "$ROLE" = tester ]; then
+  for included in "${INCLUDES[@]}"; do
+    if git -C "$SRC" cat-file -e "$SHA:$included" 2>/dev/null; then
+      PRESENT+=("$included")
+    else
+      ABSENT+=("$included")
+    fi
+  done
+fi
+RUN_CONTRACTS="${HARNESS_RUN_CONTRACTS:-}"
+SUPPLY_CONTRACTS=0
+if [ "$ROLE" = tester ] && [ -n "$RUN_CONTRACTS" ]; then
+  for absent in ${ABSENT[@]+"${ABSENT[@]}"}; do
+    if [ "$absent" = contracts ]; then SUPPLY_CONTRACTS=1; fi
+  done
+fi
+if [ "$ROLE" = tester ] && [ "${#PRESENT[@]}" -eq 0 ] && [ "$SUPPLY_CONTRACTS" -eq 0 ]; then
+  echo "refusing: no tester-include path exists at $SHA and the run supplied no contracts" >&2
+  exit 66
+fi
+
 mkdir -p "$DEST"
 if [ "$ROLE" = coder ]; then
   ARCHIVE_ARGS=(git -C "$SRC" archive "$SHA")
@@ -104,8 +135,58 @@ if [ "$ROLE" = coder ]; then
   fi
   "${ARCHIVE_ARGS[@]}" | tar -x -C "$DEST"
 else
-  git -C "$SRC" archive "$SHA" -- "${INCLUDES[@]}" | tar -x -C "$DEST"
+  if [ "${#PRESENT[@]}" -gt 0 ]; then
+    git -C "$SRC" archive "$SHA" -- "${PRESENT[@]}" | tar -x -C "$DEST"
+  fi
 fi
+RUN_CONTRACTS_RECEIPT=null
+if [ "$SUPPLY_CONTRACTS" -eq 1 ]; then
+  RUN_CONTRACTS_RECEIPT=$(python3 - "$RUN_CONTRACTS" "${HARNESS_ORACLE_CONTRACT:-}" "$DEST" <<'PY'
+import hashlib, json, pathlib, re, shutil, sys
+source, oracle, destination = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
+if not oracle:
+    raise SystemExit("refusing: HARNESS_RUN_CONTRACTS needs HARNESS_ORACLE_CONTRACT to check it")
+oracle_path = pathlib.Path(oracle)
+for label, item in (("run contracts", source), ("oracle contract", oracle_path)):
+    if item.is_symlink() or not item.exists():
+        raise SystemExit(f"refusing: {label} {item} is missing or a symlink")
+row = re.compile(r"^\|\s*`contracts/([^`/]+)`\s*\|\s*`(sha256:[0-9a-f]{64})`\s*\|")
+declared = {}
+for line in oracle_path.read_text(encoding="utf-8").splitlines():
+    match = row.match(line.strip())
+    if match:
+        declared[match.group(1)] = match.group(2)
+if not declared:
+    raise SystemExit(f"refusing: {oracle_path} declares no contracts/<file> sha256 digests")
+present = {}
+for item in sorted(source.iterdir()):
+    if item.is_symlink() or not item.is_file():
+        raise SystemExit(f"refusing: run contract {item.name} is not a regular file")
+    present[item.name] = item
+if set(present) != set(declared):
+    missing = sorted(set(declared) - set(present))
+    extra = sorted(set(present) - set(declared))
+    raise SystemExit(f"refusing: run contracts differ from the oracle contract "
+                     f"(missing {missing}, undeclared {extra})")
+target = destination / "contracts"
+target.mkdir()
+files = {}
+for name, item in present.items():
+    body = item.read_bytes()
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if digest != declared[name]:
+        raise SystemExit(f"refusing: contracts/{name} is {digest}, the oracle contract says "
+                         f"{declared[name]}")
+    (target / name).write_bytes(body)
+    files[name] = digest
+oracle_digest = "sha256:" + hashlib.sha256(oracle_path.read_bytes()).hexdigest()
+print(json.dumps({"source": str(source), "oracle_contract": str(oracle_path),
+                  "oracle_contract_digest": oracle_digest, "files": files},
+                 sort_keys=True, separators=(",", ":")))
+PY
+  ) || exit 66
+fi
+ABSENT_JSON=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' ${ABSENT[@]+"${ABSENT[@]}"})
 
 # Prove the source was unchanged across the copy window; a projection receipt over a moving
 # baseline is not evidence of any one subject.
@@ -118,9 +199,9 @@ fi
   git -c user.name=harness -c user.email=harness@local \
     commit --quiet -m "projection: $ROLE view of immutable target" )
 
-python3 - "$ROLE" "$SHA" "$TREE" "$SRC" "$DEST" <<'PY'
+python3 - "$ROLE" "$SHA" "$TREE" "$SRC" "$DEST" "$ABSENT_JSON" "$RUN_CONTRACTS_RECEIPT" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
-role, commit, tree, source, destination = sys.argv[1:]
+role, commit, tree, source, destination, absent, supplied = sys.argv[1:]
 root = pathlib.Path(destination)
 h = hashlib.sha256()
 for base, dirs, files in os.walk(root, followlinks=False):
@@ -138,5 +219,8 @@ body = {
     "role": role, "sha": commit, "tree": tree, "source_root": source,
     "dest": destination, "manifest_digest": "sha256:" + h.hexdigest(),
 }
+if role == "tester":
+    body["absent_includes"] = json.loads(absent)
+    body["run_contracts"] = json.loads(supplied)
 print(json.dumps(body, sort_keys=True, separators=(",", ":")))
 PY

@@ -399,7 +399,7 @@ def derive_effective_directive_contract(
     role: str,
     evaluated_at: int,
 ) -> dict[str, Any]:
-    """Derive the exact active directives or refuse lower-trust ambiguity.
+    """Derive the exact active directives: signed entries and in-force provisional ones.
 
     The external checkpoint proves which source bytes the run admitted. It does not, by
     itself, prove the human identity that authored those bytes; signer authentication remains
@@ -427,21 +427,23 @@ def derive_effective_directive_contract(
         )
         for entry in signed_entries
     }
-    live_provisional = [
+    # A provisional entry never blocks a dispatch waiting on a signature (founder, 2026-10-18,
+    # P-0001: a step whose output is a request for the founder to ratify what they already said is
+    # a false gate). One that cites the founder's own words is in force until the founder refuses
+    # or supersedes it, and never expires. One that cites the run's own decision is in force
+    # until its TTL, labeled as the run's decision so no lane mistakes it for the founder's.
+    in_force_provisional = [
         identifier
         for identifier, entry in provisional.items()
         if (
             identifier not in settled
             and provisional_applies[identifier]
-            and _timestamp(entry["expires"], label=identifier) > at
+            and (
+                entry.get("cite_speaker") == "human"
+                or _timestamp(entry["expires"], label=identifier) > at
+            )
         )
     ]
-    if live_provisional:
-        raise InstructionControlError(
-            "UNSETTLED_PROVISIONAL",
-            "unsettled provisional directives require human ratification/refusal: "
-            + ", ".join(live_provisional),
-        )
     directives: list[dict[str, Any]] = []
     for entry in signed_entries:
         identifier = str(entry["id"])
@@ -457,15 +459,29 @@ def derive_effective_directive_contract(
                 "source_class": "externally-checkpoint-bound-directive-ledger",
             }
         )
+    for identifier in in_force_provisional:
+        entry = provisional[identifier]
+        directives.append(
+            {
+                "directive_id": identifier,
+                "scope": entry["scope"],
+                "text": entry["text"],
+                "qualifiers": list(entry["qualifiers"]),
+                "entry_digest": f"sha256:{entry['hash']}",
+                "source_class": (
+                    "founder-words-provisional-ledger"
+                    if entry.get("cite_speaker") == "human"
+                    else "run-decision-provisional-ledger"
+                ),
+            }
+        )
     document = {
         "schema_version": "factory-effective-directive-contract/1",
         "run_id": run_id,
         "generation": generation,
         "role": role,
         "evaluated_at": evaluated_at,
-        "selection_policy": (
-            "applicable-unsuperseded-checkpoint-bound-entries-unsettled-provisional-blocks"
-        ),
+        "selection_policy": "applicable-unsuperseded-entries-and-in-force-provisional",
         "verification_mode": "externally-checkpoint-bound-hash-chain",
         "ledger": {
             "source_digest": digest_bytes(ledger_bytes),

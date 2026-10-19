@@ -86,8 +86,9 @@ review method and the rule IDs (A#, W#, T#) every finding cites.
   nothing survived). This is the order `skills/review.md` and the executable
   review check (`adversarial_review._expected_verdict`) apply.
 - **Never** emit APPROVE / PASS / green / merge-authorization for HIGH or
-  UNCLASSIFIED risk. Require a **named human** with authority over the affected
-  capability, even when every automated check passes.
+  UNCLASSIFIED risk on automated checks alone. It needs a deliberate, recorded review by
+  a named reviewer with authority over the affected capability (the Validator, with a
+  cross-family reader), even when every automated check passes.
 - Reference the **Diff-Intent Gate** when the change touches ratified intent /
   acceptance criteria / policy / a protected boundary; unresolved gate →
   `INCOMPLETE`.
@@ -98,6 +99,7 @@ The Validator reviews BOTH the producer code (Coder) and the tests (Tester) to
 this standard — not just "tests green." Test-sensitivity (lens 6) is the
 blind-oracle self-refutation we already run (RED on broken code → GREEN on fix).
 For a HIGH-risk change (auth / tenant isolation / money / access / migrations),
-the Validator produces the review + risk + evidence and returns
-**HUMAN_REVIEW_REQUIRED** — the founder (named human) signs off before deploy;
-the Validator does not autonomously green-light or deploy it.
+the review returns **HUMAN_REVIEW_REQUIRED**: the Validator then performs that
+deliberate review itself with a cross-family reader, records the risk, the evidence and
+its decision, and proceeds or blocks on it. The founder may override the recorded
+decision; nothing waits on them (P-0001).

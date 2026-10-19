@@ -99,7 +99,8 @@ FIDELITY_DELIVERS: Final = "delivers"
 #: A shortfall whose fix is bounded. Non-terminal, honest, not a failure: keep
 #: working. This is the exit whose absence made risk acceptance load-bearing.
 FIDELITY_REWORK: Final = "rework"
-#: Every shortfall is structural. The human decides; the run does not.
+#: Every shortfall is structural: the Validator decides whether to accept the risk or
+#: abandon the ticket, records the basis, and proceeds (P-0001).
 FIDELITY_RISK_ACCEPTANCE_ELIGIBLE: Final = "risk-acceptance-eligible"
 #: The enumeration and the work disagree: something unasked-for was built, or a
 #: deliverable has no work attributed to it at all.
@@ -381,7 +382,8 @@ def render(
         )
     return Fidelity(
         FIDELITY_RISK_ACCEPTANCE_ELIGIBLE,
-        "every shortfall needs a boundary moved or the ticket abandoned; the human decides",
+        "every shortfall needs a boundary moved or the ticket abandoned; the Validator decides "
+        "and records the basis",
         shortfalls=shortfalls,
     )
 

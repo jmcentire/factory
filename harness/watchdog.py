@@ -16,7 +16,7 @@ knobs, two firing modes:
   never a line count. At ``signal_pass_warn`` a host WARN event lands on the
   operator channel; at the deadline with no NO-relevant signal the watchdog
   records the terminal NO itself (``record_no.sh --kind watchdog-deadline`` — a
-  BOUND, class-excluded from the rewarded set) and halts dispatch. The
+  BOUND, class-excluded from the rewarded set) and ends dispatch. The
   ``record_no`` exit code is CHECKED: a refused record leaves the run open and
   raises ``record_no_refused`` — the deadline is then unsatisfied, not silently
   recorded (verification round-3 carryover).
@@ -342,7 +342,7 @@ class SignalWatchdog:
                 emit(
                     "signal_deadline_expired",
                     f"pass {passes}/{deadline}: terminal NO recorded "
-                    f"(watchdog-deadline, class bound) — halting dispatch",
+                    f"(watchdog-deadline, class bound) — dispatch ends",
                     wake=True,
                 )
                 verdict = "deadline-fired"

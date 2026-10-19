@@ -265,11 +265,11 @@ obtained. A checked item without that citation is still unchecked.
    not an erasure.
    For every test that passed on the baseline and now fails, an exact signed
    same-phase supersession is necessary but not sufficient for a Tester-side
-   update. A separately trusted affirmative human test-impact ruling must bind
+   update. An affirmative, recorded test-impact ruling must bind
    the run, current phase versions, exact old/new behavior, exact assertion or
    membership-frozen family, and the expected change copied from the signed
    superseder. Unchanged authority requires a code fix, and artifact silence or
-   conflicting supersession routes to the human. If an unrelated artifact amendment retains the exact item id and
+   conflicting supersession is decided by the Validator on the evidence and recorded. If an unrelated artifact amendment retains the exact item id and
    canonical intent digest, rebind the test provenance to the new artifact
    digest without changing its assertion and fix the code. Inconvenience never
    authorizes a test edit.
@@ -346,7 +346,7 @@ obtained. A checked item without that citation is still unchecked.
    Before any repair is written, a **reproduction** in a disposable environment
    must be recorded as having triggered the defect deliberately. A missing
    reproduction is an evidence gap disposed by class; a reproduction that did not
-   reproduce routes to the human rather than authorizing the repair; and
+   reproduce is recorded and never authorizes the repair; and
    reproduction-impossible is a declared lane condition that gates rather than a
    step quietly skipped. Tests actually reach the target they claim to exercise
    — proved by the oracle-quality pass of item 7, never inferred from a satisfied

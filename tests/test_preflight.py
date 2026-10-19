@@ -37,8 +37,13 @@ def _policy(humans=("human:founder",)) -> SegregationPolicy:
     return SegregationPolicy(human_ids=frozenset(humans))
 
 
-def _profile(delegates=("human:founder", "human:delegate")) -> CriticalityProfile:
-    return CriticalityProfile(critical_ratification_delegates=frozenset(delegates))
+def _profile(
+    delegates=("human:founder", "human:delegate"), min_approvers: int = 2
+) -> CriticalityProfile:
+    return CriticalityProfile(
+        critical_min_approvers=min_approvers,
+        critical_ratification_delegates=frozenset(delegates),
+    )
 
 
 def test_satisfiable_frame_is_a_clean_go() -> None:
@@ -151,6 +156,16 @@ def test_undeclared_delegate_roster_is_disclosed() -> None:
     assert "preflight-critical-roster-undeclared" in [
         finding.code for finding in report.disclosures
     ]
+
+
+def test_a_target_that_requires_no_approver_needs_no_roster() -> None:
+    """P-0001: no named human is a doctrine precondition, so a default profile with no
+    roster discloses nothing about approvers."""
+    report = run_preflight(
+        profile=_profile(delegates=(), min_approvers=0), policy=_policy(("human:founder",))
+    )
+    codes = [finding.code for finding in report.disclosures]
+    assert not [code for code in codes if code.startswith("preflight-critical-")]
 
 
 def test_could_not_check_is_loud_and_distinct_from_passed() -> None:

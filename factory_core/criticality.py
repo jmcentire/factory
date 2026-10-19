@@ -37,7 +37,10 @@ CRITICALITY_CLASSES: tuple[str, ...] = (
     CRITICALITY_COSMETIC,
 )
 
-CRITICAL_APPROVER_FLOOR = 2
+#: No human approval is a doctrine precondition for promotion (P-0001, founder 2026-10-18: the
+#: run involves the founder only at a genuine impasse). Critical surfaces stay gated on
+#: evidence; a target that wants named approvers declares them and raises this.
+CRITICAL_APPROVER_FLOOR = 0
 
 # These are the three evidence-chain links named by the doctrine. A surface may require more
 # evidence through its control profile, but it may not remove these.
@@ -161,16 +164,14 @@ class SurfaceControl:
 class CriticalityProfile:
     """The target's surface policy as data.
 
-    A target may raise the critical distinct-human approval floor but cannot lower the
-    doctrine floor of two.
+    The doctrine floor of named approvers is zero: a Critical surface is gated on its evidence,
+    and the run decides its promotion (P-0001). A target may raise ``critical_min_approvers``
+    for its own reasons.
 
-    ``critical_ratification_delegates`` is the named roster that fills the accountable-human seat
-    on a Critical surface. The principle it implements — an agent never occupies that seat — was
-    adopted with an explicit availability cost: a hazard-surface promotion waits on *any* named
-    delegate rather than on one individual, because a rule that blocks on one person's calendar is
-    a rule that gets suspended the first time it is inconvenient. An empty roster is not a
-    permissive default; it means nobody decided who may ratify, and the promotion layer disposes
-    of that as an evidence gap by class.
+    ``critical_ratification_delegates`` is the named roster those approvers come from when a
+    target requires them. With approvers required, an empty roster means nobody decided who may
+    approve, and the promotion layer disposes of that as an evidence gap by class; with none
+    required, the roster is not consulted.
     """
 
     surfaces: tuple[SurfaceControl, ...] = ()

@@ -3,6 +3,53 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.20] - 2026-10-18
+
+P-0001 (founder, 2026-10-18): the run involves the founder only at a genuine impasse, when no role
+in the run knows what needs doing. Every human gate and the run-wide stop are gone.
+
+### Removed
+
+- **The run-wide stop.** No HALT file, no Orchestrator `halt` effect, no killed Validator window, no
+  dispatcher enforcement, no `lane_env` refusal. The Orchestrator's effects are `block` and `no-op`; a
+  block gates the Validator's next transition until the Validator fixes what it names. A report
+  recorded before 0.8.20 with the old stop decision still replays, as the block it also wrote.
+- **Human gates in the run loop.** Phase ratification never requires a human co-signature. A
+  provisional directive never blocks a dispatch, and one that cites the founder's words is in force
+  at once and never expires. Unanswered lane questions never block a transition. No action waits in
+  a veto window. A Critical promotion needs no named human by default (a target may still require
+  approvers). The induced-behavior ledger is decided by the Validator row by row, never sent to the
+  founder for per-row verdicts.
+- **Paging the human.** The dispatcher answers a seat's folder-trust or permission dialog and
+  records it; a usage limit is recorded and waited out; an unresponsive Orchestrator wakes the
+  Validator.
+
+### Added
+
+- **The impasse rule and the false-gate test** in the doctrine (`AUTHORITY.md` H9, the Doctrine
+  Kernel, `validate.md`, `orchestrate.md`): a step whose output asks the founder to type go,
+  approve, confirm, sign, ratify or clear what they already asked for is a defect.
+- **`make check-human-gates`** (`scripts/check_no_human_gates.py`, gate NHG) fails the build on
+  human-gate phrasing or a run-wide stop in the factory's own prompts, docs and code.
+- **Prompts by reference.** A lane prompt is a short main prompt plus the verbatim task and the
+  testing standard as files in the lane's own `.git/factory-brief/`, each named with its sha256.
+  Every delegation (lane launch, resume, seat ignition) records `prompt_bytes`, the delivery limit
+  and the delivery mode; over the limit is never a refusal or a fallback to another agent, because
+  `lane_agent.py` passes an oversized argv turn by file pointer.
+- **Tester projection from the pin and the run.** A `tester-include` path absent at the pinned
+  commit is skipped and named in the receipt (`absent_includes`); when the pin has no `contracts`,
+  the Tester view gets the run's ratified `artifacts/contracts`, each checked against the digest
+  `artifacts/oracle-contract.md` declares.
+
+### Fixed
+
+- The `claude` Validator seat launches with `--permission-mode bypassPermissions`, and Codex seats
+  with `--ask-for-approval never`.
+- A Codex lane's own Kindex MCP is pre-approved (`default_tools_approval_mode="approve"`), so
+  `--ask-for-approval never` no longer rejects its tool calls.
+- A tripwire hit is an incident row with file and line only (never the matched text) and a failed
+  grounding; the run scrubs it, re-grounds and continues.
+
 ## [0.8.19] - 2026-10-17
 
 Lessons from Terminal-Bench 4 (#58), plan-billed native harnesses (#64), target repo rules (#57) and

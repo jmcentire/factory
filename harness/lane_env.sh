@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # lane_env.sh — the environment IS the capability grant.
 # Enforces §1 (no lane inherits a profile; the ~40 keys can't leak because they
-# were never present) plus two harness preflights: no run during an incident
-# HALT, no run without a fresh grounding receipt.
+# were never present) plus a harness preflight: no run without a fresh grounding
+# receipt. A tripwire incident fails grounding, so it blocks the next lane until
+# the run fixes the cause and re-grounds; nothing else stops the run.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 H="${FACTORY_HARNESS_ROOT:-${HARNESS_DIR:-.factory}}"
 GROUND_ROOT="${HARNESS_RUN_ROOT:-$H}"
 D="$(cd "$(dirname "$0")" && pwd -P)"
-[ -e "$H/HALT" ] && { echo "HALT: $(head -1 "$H/HALT")" >&2; exit 75; }
 # Grounding-staleness ceiling. HARNESS_MAX_GROUND_MIN tightens only: an ambient
 # environment variable is not authority to extend trust in a stale ground, so a
 # value above the 360-minute default is refused (clamped) — extending the window

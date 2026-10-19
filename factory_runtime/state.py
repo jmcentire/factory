@@ -465,7 +465,7 @@ def _require_approval_identities(
     *,
     context: str,
 ) -> None:
-    """Human approval needs both identities present and distinct.
+    """Candidate approval needs both identities present and distinct.
 
     ``LedgerEntry`` enforces distinctness only among the identities *actually present*, which is
     the right general default — a draft edit has no approver. ``human-approved`` is the state
@@ -497,7 +497,7 @@ def _require_approval_identities(
         )
     if approver == implementer:
         raise RunStateError(
-            "approver and implementer must be distinct identities for human approval"
+            "approver and implementer must be distinct identities for candidate approval"
         )
 
 
@@ -2349,7 +2349,7 @@ class RunStore:
                 _require_approval_identities(
                     str(record.get("approver_identity", "")),
                     str(record.get("implementer_identity", "")),
-                    context=f"ledger entry {index} human approval",
+                    context=f"ledger entry {index} candidate approval",
                 )
             elif destination is RunState.SPECIFICATION_DEFECT:
                 # Approval binds the prior candidate under the prior phase versions. A defect

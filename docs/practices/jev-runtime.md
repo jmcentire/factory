@@ -73,8 +73,8 @@ Every `yes` (>0.7) and `escalate` (0.3–0.7 inclusive) rule requires its own di
 bounded evidence basis. `no` (<0.3) grants nothing. Missing evidence and provider failures are
 grouped under one `unavailable` review per occurrence instead of seventeen false findings.
 A dismissal is the Orchestrator's manual judgment, not a Jev clearance. An upheld finding
-requires an adherence finding and `block` or `halt`; the existing Validator/human disposition
-mechanism remains the only route to resolve a block. Reports that omit, replace, or skip
+requires an adherence finding and `block`; the Validator's evidence-bound disposition,
+once it has fixed what the block names, remains the only route to resolve a block. Reports that omit, replace, or skip
 receipts are refused, including at transition-time revalidation. Exact report retries remain
 idempotent. Disabled runs retain assessment/3 and manual checks.
 
