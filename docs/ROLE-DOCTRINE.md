@@ -1130,6 +1130,8 @@ e.g. `FactoryRun: CORE-5313`), so factory PRs are countable with
 `gh search prs FactoryRun --match body`. Keep `FactoryRun` one word: search drops punctuation,
 so `Factory-Run` matches every PR that says "factory run". Before the verdict, confirm it is
 present with `gh pr view <n> --json body`; a PR without it is not process-complete.
+Also label every factory PR `factory` (`gh label create factory --force` first where the repo
+lacks it), so they filter exactly with `label:factory`.
 
 ---
 
