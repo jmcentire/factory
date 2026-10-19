@@ -19,7 +19,6 @@ import os
 import pathlib
 import re
 import stat
-import subprocess
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -60,6 +59,9 @@ _GUIDANCE_SCHEMAS = frozenset(
 _REPORT_SCHEMA = "factory-orchestrator-report/1"
 _KIN_ID = re.compile(r"^[0-9a-f]{12}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: The stop decision the Orchestrator held before 0.8.20 (founder, 2026-10-18: the run never
+#: stops; it blocks, fixes and continues). Accepted only when replaying a recorded report.
+_RETIRED_STOP_DECISION = "halt"  # gate-exempt: replay of reports recorded before 0.8.20
 _ACTIVITY_KINDS = frozenset(
     {
         "pane_delta",
@@ -661,6 +663,7 @@ def _validate_assessment(
     current_harness_state: str | None = None,
     pending_lane_questions: Sequence[str] = (),
     guidance_expected: Mapping[str, Any] | None = None,
+    recorded: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise OrchestratorChannelError("assessment must be an object")
@@ -836,8 +839,11 @@ def _validate_assessment(
                 "an open harness cannot be described as a closed or complete run"
             )
     decision = value.get("decision")
-    if decision not in {"block", "halt", "no-op"}:
-        raise OrchestratorChannelError("assessment decision must be block, halt, or no-op")
+    # A report already in the journal before 0.8.20 may carry the retired stop decision;
+    # it replays as the block it also wrote. A new assessment is block or no-op only.
+    allowed = {"block", "no-op", *((_RETIRED_STOP_DECISION,) if recorded else ())}
+    if decision not in allowed:
+        raise OrchestratorChannelError("assessment decision must be block or no-op")
     should_block = (
         not value["direction_correct"]
         or not value["desirable_outcome"]
@@ -849,13 +855,8 @@ def _validate_assessment(
         or bool(checked_guidance and checked_guidance["state"] == "noncompliant")
         or bool(checked_guidance and checked_guidance["findings"])
     )
-    if should_block and decision not in {"block", "halt"}:
+    if should_block and decision == "no-op":
         raise OrchestratorChannelError("a divergent or non-adherent assessment must block")
-    if decision == "halt" and not should_block:
-        # Halt is the strongest effect the Orchestrator has: it stops the Validator.
-        # It must carry the same evidence a block does, never be issued on an
-        # aligned, finding-free assessment.
-        raise OrchestratorChannelError("a halt must carry divergence or adherence findings")
     status = value.get("kindex_status")
     context = value.get("kindex_context")
     if status not in {"consulted", "unavailable"} or not isinstance(context, list):
@@ -906,9 +907,7 @@ def _check_signal_class(value: Mapping[str, Any], *, decision: str, questions: l
     signal = _signal_class(value.get("signal_class"), field="assessment signal_class")
     review = _progress_review(value.get("progress_review"))
     floor = "informative"
-    if decision == "halt":
-        floor = "critical"
-    elif questions:
+    if questions:
         floor = "action-required"
     elif decision == "block" or (review is not None and review["trend"] == "stalled"):
         floor = "at-your-convenience"
@@ -932,7 +931,9 @@ def _validate_report_rows(
     for row in rows:
         if set(row) != expected or row.get("schema_version") != _REPORT_SCHEMA:
             raise OrchestratorChannelError("report journal has a malformed row")
-        assessment = _validate_assessment(row.get("assessment"), highwater=highwater)
+        assessment = _validate_assessment(
+            row.get("assessment"), highwater=highwater, recorded=True
+        )
         digest = "sha256:" + hashlib.sha256(_canonical(assessment)).hexdigest()
         if row.get("assessment_digest") != digest:
             raise OrchestratorChannelError("report assessment digest is invalid")
@@ -1003,7 +1004,7 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
                 "assessment_digest": digest,
                 "assessment": assessment,
             }
-            if assessment["decision"] in {"block", "halt"}:
+            if assessment["decision"] == "block":
                 # Publish the monotone effect before the report that can make the
                 # cursor current. A crash may leave a conservative orphaned block,
                 # but can never leave a current BLOCK report with no gate effect.
@@ -1025,8 +1026,6 @@ def record_assessment(root: pathlib.Path, value: object) -> dict[str, Any]:
                     raise OrchestratorChannelError(
                         f"orchestrator block effect could not become durable: {exc}"
                     ) from exc
-            if assessment["decision"] == "halt":
-                halt_validator(root, assessment["summary"])
             _append(report_path, report)
     return report
 
@@ -1061,67 +1060,6 @@ def resident_mode(root: pathlib.Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(metadata, dict) and metadata.get("orchestrator_mode") == "resident-monitoring"
-
-
-def halt_path(root: pathlib.Path) -> pathlib.Path:
-    """The run-wide HALT marker that lane_env and the dispatcher already honor.
-
-    The Orchestrator reports with ``--root .``, so the root is resolved first; a
-    relative root would otherwise put HALT inside the run directory, where
-    nothing looks. The run root must sit directly under a ``runs/`` directory,
-    the layout lane_env and the dispatcher use; anything else is refused.
-    """
-
-    resolved = pathlib.Path(root).resolve()
-    if resolved.parent.name != "runs":
-        raise OrchestratorChannelError(
-            f"halt refused: run root {resolved} is not under a runs/ directory"
-        )
-    return resolved.parent.parent / "HALT"
-
-
-def _run_id(root: pathlib.Path) -> str:
-    resolved = pathlib.Path(root).resolve()
-    try:
-        metadata = json.loads((resolved / "harness.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return resolved.name
-    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
-    return run_id if isinstance(run_id, str) and run_id else resolved.name
-
-
-def halt_validator(root: pathlib.Path, summary: str) -> None:
-    """Stop the Validator: set HALT, then kill its window.
-
-    The Orchestrator has strong authority over every role, including the
-    Validator (founder ruling 2026-09-21). HALT is written before the kill so
-    a crash between the two still leaves the run stopped; lane_env refuses to
-    start any lane while HALT exists, and only a human clears it and re-seats
-    the Validator. An existing HALT (for example a tripwire hit) is preserved,
-    never overwritten. The dispatcher enforces the same kill on its next tick,
-    so a failed immediate kill is not an escape.
-    """
-
-    path = halt_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = "ORCHESTRATOR HALT: " + " ".join(str(summary).split())[:400] + "\n"
-    try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
-        pass
-    else:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(line)
-            stream.flush()
-            os.fsync(stream.fileno())
-    try:
-        subprocess.run(
-            ["tmux", "kill-window", "-t", f"{_run_id(root)}:validator"],
-            capture_output=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        pass
 
 
 def require_resident(root: pathlib.Path) -> None:

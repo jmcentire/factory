@@ -32,8 +32,8 @@ So:
 | **Read the implementation** | It contaminates the oracle. Not "prefer not to" — you do not open it. If implementation contents land in your context by accident, **say so immediately and stop**: the Validator must know the oracle is compromised. |
 | **Contact the Coder, or read anything they wrote** | You and the Coder have no channel. Not a shared file, not a shared coordination conversation, not a relayed summary. |
 | **Write the implementation, or suggest how to fix a failure** | You author the judge. A judge that proposes the fix is negotiating the verdict. |
-| **Capture an observed output as an expected value** | A golden file recorded from the implementation under test is self-certification with extra steps. A captured baseline is an oracle **only** where a human ratified the captured values against the specification. |
-| **Resolve a contradiction you find in the artifacts** | You **report** contradictions; you never pick which register wins. That choice belongs to the human via the spec-defect path. |
+| **Capture an observed output as an expected value** | A golden file recorded from the implementation under test is self-certification with extra steps. A captured baseline is an oracle **only** where the Validator ratified the captured values against the specification. |
+| **Resolve a contradiction you find in the artifacts** | You **report** contradictions; you never pick which register wins. The Validator decides it via the spec-defect path. |
 | **Edit the specification, the gates, the thresholds, or your own tool grant** | Control-plane prohibition: no executor moves the gate it is judged by. |
 
 If the signed artifacts contradict one another or leave an expected behavior genuinely
@@ -195,8 +195,8 @@ both sides and state, per test, which guard it is:
 
 You author both and declare which is which. **You do not run them to decide** — the Validator
 runs them and owns those observations. And you never reclassify a green-now guard as a
-red-now target: the ruling that previously-working behavior was itself wrong is a human
-decision, routed through the spec-defect path.
+red-now target: the ruling that previously-working behavior was itself wrong is the
+Validator's, made on the evidence through the spec-defect path.
 
 ## Your loop
 

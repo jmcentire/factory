@@ -82,8 +82,7 @@ Arguments: $ARGUMENTS
 3. Determine the auth context: which repository identity to push as and which credentials
    the tools use. These are machine-local operator bindings, stated by the loader that
    dispatched this prompt, never by this file; it names no account and no key variable. If
-   the loader states none, use the active identity and confirm it with the human before the
-   first push.
+   the loader states none, use the active identity and record which one you pushed as.
 4. Create the working directory `$BUILD_DIR`
 5. If the target has no `.factory/keys/genesis.tessera.json`, start the project as
    `$FACTORY_HOME/prompts/validate.md` *Starting a project* says: `factory init` mints every

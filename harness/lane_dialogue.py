@@ -26,7 +26,6 @@ from typing import Any
 from factory_core.engagement import (  # noqa: E402 - core decision, imported by path below
     INTERACTIVE,
     EngagementError,
-    blocks_on_questions,
     normalize,
 )
 
@@ -577,19 +576,14 @@ def main() -> int:
             )
         else:
             outstanding = pending_questions(arguments.root, arguments.lane)
-            if outstanding and blocks_on_questions(run_engagement(arguments.root)):
-                identifiers = ",".join(str(row["question_id"]) for row in outstanding)
-                raise LaneDialogueError(
-                    f"unanswered lane questions block this transition: {identifiers}"
-                )
             if outstanding:
-                # Below interactive engagement a question never stops the run:
-                # it is carried into the record the human reads afterwards, and
-                # named here so the transition is not silently unaware of it.
+                # A question never stops the run (the impasse rule): it is carried
+                # into the record the human reads afterwards, and named here so the
+                # transition is not silently unaware of it.
                 identifiers = ",".join(str(row["question_id"]) for row in outstanding)
                 print(
                     "lane-dialogue: carrying unanswered lane questions into the record "
-                    f"({identifiers}); engagement does not block",
+                    f"({identifiers}); a question never blocks",
                     file=sys.stderr,
                 )
             print(

@@ -554,16 +554,23 @@ PY
   ) || exit $?
 
   PROMPT="$TMUX_ROOT/$SLOT-prompt.txt"
+  # The prompt is a short main prompt plus files the lane reads itself (founder, 2026-10-18:
+  # "giving a main prompt and subsequent inputs or references to files"). The verbatim task and
+  # any testing standard go into the lane's own untracked .git/factory-brief/, which its sandbox
+  # reads and its commits never carry; the prompt names each with its byte count and sha256.
+  BRIEF_MANIFEST="$TMUX_ROOT/$SLOT-brief.json"
   # What is left of the cap, as the watcher counts it; the lane runs this itself.
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
   PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
-    "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" <<'PY'
-import hashlib, os, pathlib, sys
+    "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
+    "$REPOSITORY" "$BRIEF_MANIFEST" <<'PY'
+import hashlib, json, os, pathlib, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
-role, slot, standard, environment, wall, wrap, review, resumable, clock = sys.argv[3:]
+role, slot, standard, environment, wall, wrap, review, resumable, clock = sys.argv[3:12]
+repository, manifest = pathlib.Path(sys.argv[12]), pathlib.Path(sys.argv[13])
 task = source.read_bytes()
 protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - You are a real author agent, not a prompt printer. Work the task and use tools.
@@ -608,10 +615,36 @@ if int(review) and resumable == "1":
     )
 if environment:
     protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
-raw = protocol.encode("utf-8")
+git_dir = repository / ".git"
+if not git_dir.is_dir() or git_dir.is_symlink():
+    raise SystemExit("tmux-lane: the lane repository has no .git directory to hold its brief")
+brief_dir = git_dir / "factory-brief"
+brief_dir.mkdir(mode=0o700, exist_ok=True)
+brief = []
+inputs = []
 if standard:
-    raw += b"\n" + pathlib.Path(standard).read_bytes()
-raw += b"\nVERBATIM LANE TASK\n" + task
+    inputs.append(("testing-standard.md", "the testing standard, the Tester doctrine and this "
+                   "run's testing strategy", pathlib.Path(standard).read_bytes()))
+inputs.append(("task.txt", "the verbatim lane task", task))
+for name, what, body in inputs:
+    target = brief_dir / name
+    out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                  0o600)
+    with os.fdopen(out, "wb") as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+    brief.append({"path": str(target), "what": what, "bytes": len(body),
+                  "sha256": "sha256:" + hashlib.sha256(body).hexdigest()})
+protocol += "\nREAD FIRST, IN FULL, BEFORE ANY OTHER STEP\n"
+protocol += ("These files are this lane's inputs. Read every line of each, check its sha256, and "
+             "treat it exactly as if it were written here. Do not edit, move or commit them.\n")
+for item in brief:
+    protocol += f"- {item['path']} ({item['what']}; {item['bytes']} bytes, {item['sha256']})\n"
+raw = protocol.encode("utf-8")
+fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as stream:
+    json.dump(brief, stream, sort_keys=True, separators=(",", ":"))
 fd = os.open(
     destination,
     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -624,12 +657,10 @@ with os.fdopen(fd, "wb") as stream:
 print("sha256:" + hashlib.sha256(raw).hexdigest())
 PY
   ) || exit $?
-  if [ "$PROMPT_VIA" = argv ]; then
-    PROMPT_BYTES=$(wc -c < "$PROMPT" | tr -d ' ')
-    [ "$PROMPT_BYTES" -le 131071 ] || refuse 70 \
-      "$AGENT takes its prompt as one argument and this prompt is $PROMPT_BYTES bytes (limit 131071)" \
-      "shorten the brief, or use --agent codex, which reads its prompt from stdin"
-  fi
+  # Measured against the harness's delivery limit and recorded in the launch row. Over the limit
+  # is never a refusal or a fallback to another agent: lane_agent.py places an oversized argv
+  # turn in .git/factory-brief/ and passes a pointer with its sha256.
+  PROMPT_BYTES=$(wc -c < "$PROMPT" | tr -d ' ')
 
   # A metered round's cap is reserved against the run's objective budget, in the same ledger as
   # dispatch_lane.sh's runner ceilings. A run ignited without --budget cannot start one.
@@ -676,8 +707,9 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$STALL_WINDOW_S" "$FIRST_COMMIT_S" "$MIN_COMMITS" "$BUDGET_RESERVATION" \
     "$STANDARD_RECEIPT" "$LANE_LOG" "$LANE_EXITS" "$QUALIFICATIONS" "$LANE_ENV_RECORD" "$MODEL_SOURCE" \
     "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "${FACTORY_LANE_SANDBOX:-on}" \
+    "$PROMPT_BYTES" "$BRIEF_MANIFEST" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
-import datetime, json, sys
+import datetime, json, pathlib, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
     profile_digest, preflight, agent_version, model, kindex,
@@ -685,9 +717,12 @@ import datetime, json, sys
     cli_contract, auth, spend_cap, rate, wall_cap, read_allowance,
     stall_window, first_commit, min_commits, reservation,
     standard, lane_log, lane_exits, qualifications, lane_env, model_source,
-    wrap_s, review_s, runs_dir, sandbox,
-) = sys.argv[1:41]
-model_config = sys.argv[41:]
+    wrap_s, review_s, runs_dir, sandbox, prompt_bytes, brief_manifest,
+) = sys.argv[1:43]
+model_config = sys.argv[43:]
+# One argv element holds at most 131071 bytes (MAX_ARG_STRLEN - 1); stdin has no such ceiling.
+prompt_limit = 131071 if prompt_via == "argv" else None
+over_limit = prompt_limit is not None and int(prompt_bytes) > prompt_limit
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -707,6 +742,10 @@ print(json.dumps({
     "model_config": model_config,
     "terminal": tty == "terminal",
     "prompt_via": prompt_via,
+    "prompt_bytes": int(prompt_bytes),
+    "prompt_limit": prompt_limit,
+    "prompt_delivery": "file-pointer" if over_limit else prompt_via,
+    "brief": json.loads(pathlib.Path(brief_manifest).read_text(encoding="utf-8")),
     "auth_preflight": auth.strip(),
     "metered": metered == "true",
     # FACTORY_LANE_SANDBOX=off (a host whose kernel gives Codex's sandbox no namespace) runs the

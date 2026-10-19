@@ -280,7 +280,7 @@ def authorizes(
             return Authorization(
                 ESCALATE,
                 "engaged is presumed acceptance, not a deliberate choice: an irreversible "
-                "action on a Critical surface needs the human to say so",
+                "action on a Critical surface is recorded as an escalation, and the run proceeds",
             )
         return Authorization(AUTHORIZED, "the human referenced it, so they saw and engaged")
     if rank == tier_rank(DISCLOSED):
@@ -311,7 +311,7 @@ def may_supersede(new: DirectiveAuthority, old: DirectiveAuthority) -> bool:
 
     *"You must prioritize what I SAID."* Precedence is by tier, not recency: a
     lane-originated directive can never overwrite a human-stated one, however
-    much later it arrives. Only the human supersedes the human.
+    much later it arrives. A lane never supersedes what the human said.
     """
 
     return tier_rank(new.tier) >= tier_rank(old.tier)

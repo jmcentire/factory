@@ -28,8 +28,8 @@
   100-items-of-lingering-work state is almost never wanted). Judgment is the
   resident agent's; deterministic checks remain independent fail-safes. It never sends free-form
   prose into a pane it judges; its only lane message is a generated typed status probe. It never
-  acquires verdict authority. Its closed effect is `block|halt|no-op`; a halt sets HALT and kills the Validator's window
-  (only a human clears it), and a block gates the next
+  acquires verdict authority. Its closed effect is `block|no-op`; nothing stops the run or waits on the founder
+  (P-0001), and a block gates the next
   dispatch until the Validator records an evidence-bound `stop`, `narrow`, `escalate`, `refute`,
   or `resolve` disposition.
 
@@ -225,14 +225,14 @@ names a consuming project:
 - `consume_block.sh` — exact-subject typed disposition of advisory/stall events; it copies the
   supplied run-owned evidence into a content-addressed run artifact before receipting and release.
   A read, stale subject digest, unretained digest string, or acknowledgement cannot clear the gate.
-- `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses HALT,
+- `lane_env.sh` — legacy deterministic-command helper: `env -i` from a manifest; refuses
   stale grounding, and an applicable blocker through the same serialized attention-admission
   protocol as supported producers. Model dispatch uses the stronger `factory run-model` boundary,
   which also removes profile inheritance, qualifies Seatbelt, constrains process trees, and
   receipts config.
 - `receipt.sh` — control 3 substrate: chained execution receipts; absence claims
   need a paired positive control.
-- `tripwire.sh` — control 5: credential-shaped content → HALT, human-cleared only. `ground.sh` scans only this run's seat transcripts (the workdir's Claude project dir and any `<dir>-*` nested ones); a sibling workdir such as `/repo/x-other` for `/repo/x` shares that prefix and is scanned too, because Claude's directory encoding cannot tell them apart. Set `TRANSCRIPTS=<paths>` to pin the scan.
+- `tripwire.sh` — control 5: credential-shaped content → an incident row (`incidents.jsonl`, file and line only) and a failed grounding; the run scrubs the hit, re-grounds and continues, and records the credential's rotation as owed. `ground.sh` scans only this run's seat transcripts (the workdir's Claude project dir and any `<dir>-*` nested ones); a sibling workdir such as `/repo/x-other` for `/repo/x` shares that prefix and is scanned too, because Claude's directory encoding cannot tell them apart. Set `TRANSCRIPTS=<paths>` to pin the scan.
 - `spawn.py start|signal|sweep --root <run> [--name <label>]` — the run's spawn ledger: `start` runs a command in its own process group and records pid, pgid and start time in `<run>/spawns.jsonl` (output in `<run>/spawns/<label>.log`); `signal` addresses only that recorded group and refuses a pid whose start time changed (reused); `sweep` signals every recorded group still alive. Nothing is chosen by pattern.
 - `with_secret.py [--secrets <dir>] [--pass NAME ...] ENV_NAME[=FILE] ... -- <command>` — gives one child a credential from `$HARNESS_SECRETS/FILE` (an owner-controlled regular file, never followed through a link) in a built environment (PATH, HOME, LANG, TMPDIR, TERM, each `--pass` name, the secrets; no ambient credential) only (any name execve accepts, such as `npm_config_//host/:_authToken`), never in argv or a shell, and redacts each value's exact bytes from its stdout and stderr. Errors name secrets, never values. Exit status is the child's.
 - `relay_file.sh <run> <window> [--file <path>]` — relays multi-line text into a seat by file: writes the exact bytes to `<run>/relay/<sha256>.txt` and sends one `FACTORY_RELAY file=… sha256=…` line through `inject.sh` (topology, content guards and receipts still apply). `inject.sh` does the same on its own for any multi-line or oversized message. The seat recomputes the digest before acting. The file is not read-isolated from tmux lanes (docs/HARNESS.md).

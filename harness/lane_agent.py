@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -419,6 +420,46 @@ def _record_session(path: pathlib.Path, session: str) -> None:
     os.replace(temporary, path)
 
 
+#: Where an argv harness's oversized turn is placed: the lane's own untracked .git directory,
+#: which its sandbox can read and its commits never carry.
+BRIEF_DIRECTORY = "factory-brief"
+
+
+def argv_prompt(prompt: pathlib.Path, workdir: pathlib.Path) -> str:
+    """The argument an argv harness receives: the turn itself, or a pointer to its bytes.
+
+    A turn larger than one argv element can hold is never refused and never sent to another
+    agent (founder, 2026-10-18: prompt size is verified on delegation and avoided by reference).
+    Its bytes go, unchanged and content-addressed, into ``<lane>/.git/factory-brief/``, and the
+    harness is told to read that file in full and check its sha256 first.
+    """
+    text = _read_prompt(prompt, 64 * 1024 * 1024)
+    raw = text.encode("utf-8")
+    if len(raw) <= MAX_ARGV_PROMPT:
+        return text
+    git_dir = workdir / ".git"
+    if not git_dir.is_dir() or git_dir.is_symlink():
+        raise ValueError(
+            f"prompt is {len(raw)} bytes and {workdir} has no .git directory to hold it"
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    directory = git_dir / BRIEF_DIRECTORY
+    directory.mkdir(mode=0o700, exist_ok=True)
+    brief = directory / f"turn-{digest[:16]}.txt"
+    descriptor = os.open(
+        brief, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return (
+        f"This turn is the file {brief} ({len(raw)} bytes, sha256:{digest}). Read the whole "
+        "file now, every line, and check its sha256 before doing anything else. It governs "
+        "this lane exactly as if it had been given here. Do not edit or delete it."
+    )
+
+
 def run_lane(
     command: Sequence[str],
     *,
@@ -449,7 +490,7 @@ def run_lane(
     if not argv:
         raise ValueError("lane command is empty")
     if prompt is not None:
-        argv.append(_read_prompt(prompt, MAX_ARGV_PROMPT))
+        argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
     if env_file is not None:
         if env_file.stat().st_mode & 0o077:

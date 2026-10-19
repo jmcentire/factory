@@ -166,7 +166,7 @@ def test_structural_profile_defects_block_and_empty_disturbance_never_passes() -
     assert "standard-flake-budget-invalid:bad-budget" in budget_resolution.blocking_issues
 
 
-def test_profile_from_dict_normalizes_and_cannot_lower_critical_floor() -> None:
+def test_profile_from_dict_normalizes_and_takes_the_targets_own_approver_count() -> None:
     profile = CriticalityProfile.from_dict(
         {
             "surfaces": [
@@ -185,7 +185,9 @@ def test_profile_from_dict_normalizes_and_cannot_lower_critical_floor() -> None:
         }
     )
 
-    assert profile.required_critical_approvers == CRITICAL_APPROVER_FLOOR == 2
+    # P-0001: no named human is a doctrine precondition; a target may still ask for one.
+    assert CRITICAL_APPROVER_FLOOR == 0
+    assert profile.required_critical_approvers == 1
     assert profile.required_gate_ids == frozenset({"tests"})
     assert profile.surfaces[0].surface_id == "display"
     assert profile.surfaces[0].required_evidence_ids == frozenset({"visual-diff"})

@@ -835,13 +835,21 @@ def test_a_tester_prompt_carries_the_testing_standard_itself(tmp_path: Path) -> 
     prompt = (lanes.root / "tmux-lanes" / "tester-prompt.txt").read_text(encoding="utf-8")
     standard = REPO / "docs" / "standards" / "TESTING.md"
     doctrine = REPO / "prompts" / "test.md"
+    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+    # The prompt is a main prompt plus references (founder, 2026-10-18): the standard travels as
+    # a file in the lane's own .git/factory-brief/, named in the prompt with its sha256.
+    (brief,) = [item for item in row["brief"] if item["path"].endswith("testing-standard.md")]
+    body = Path(brief["path"]).read_text(encoding="utf-8")
     for key, path in (("testing-standard", standard), ("tester-doctrine", doctrine),
                       ("testing-strategy", strategy)):
-        assert f"<<<FACTORY_TESTING_STANDARD {key} digest={_sha(path)}>>>" in prompt
-        assert path.read_text(encoding="utf-8").strip() in prompt
-    assert prompt.index("MANDATORY FIRST READING") < prompt.index("VERBATIM LANE TASK")
-    assert prompt.index("FACTORY TMUX LANE PROTOCOL") < prompt.index("MANDATORY FIRST READING")
-    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+        assert f"<<<FACTORY_TESTING_STANDARD {key} digest={_sha(path)}>>>" in body
+        assert path.read_text(encoding="utf-8").strip() in body
+        assert path.read_text(encoding="utf-8").strip() not in prompt
+    assert f"{brief['path']} (" in prompt and brief["sha256"] in prompt
+    assert brief["sha256"] == "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    assert "/.git/factory-brief/" in brief["path"]
+    assert prompt.index("FACTORY TMUX LANE PROTOCOL") < prompt.index("READ FIRST")
+    assert row["prompt_bytes"] == len(prompt.encode("utf-8"))
     assert row["testing_standard"]["sources"]["testing-standard"]["digest"] == _sha(standard)
     # The Coder's prompt does not carry it.
     assert lanes.lane("coder").returncode == 0
@@ -859,7 +867,8 @@ def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
     assert lanes.lane("coder", "--wall-cap-minutes", "60").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert (prompt.index("FACTORY TMUX LANE PROTOCOL")
-            < prompt.index("VERBATIM LANE TASK"))
+            < prompt.index("READ FIRST"))
+    assert "factory-brief/task.txt (the verbatim lane task;" in prompt
     assert "capped at 60 minutes of active time" in prompt
     assert "lane_watchdog.py remaining --root" in prompt
     assert "About 5 minutes before the cap you receive FACTORY_WRAP_UP" in prompt

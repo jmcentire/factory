@@ -84,7 +84,7 @@ LANE_STATE = {
         },
         "permission_prompt": {
             "what": (
-                "The agent is halted at a tool-permission or confirmation dialog waiting for "
+                "The agent is stuck at a tool-permission or confirmation dialog waiting for "
                 "a keypress"
             ),
             "examples": ["Do you want to proceed? ❯ 1. Yes  2. No"],
@@ -423,8 +423,7 @@ INTERACTIVE_AUTH_SCREEN = {
     "criteria": {
         "true": {
             "what": (
-                "The agent is waiting for a human to sign in, open a URL, paste a code, or "
-                "pick an account"
+                "The agent sits at a sign-in, URL, device-code, or account-picker screen"
             ),
             "not_for": (
                 "A tool-permission prompt, or an auth error the agent recovered from and moved past"
@@ -453,24 +452,27 @@ FOUNDER_ACTION_VALIDATOR_CAN_DO = {
         "question": (
             "Does `line` ask the founder to perform a mechanical step (sign in, click, "
             "run a command, copy a file) that `validator_access` shows the Validator "
-            "could perform itself?"
+            "could perform itself, or to type go, approve, "  # gate-exempt: detector text
+            "confirm, ratify or clear "
+            "something the founder already asked for, or to decide something a role in the "
+            "run knows how to decide?"
         ),
         "compare": ["`line`", "`validator_access`"],
         "focus": (
-            "Asking for a decision, a ruling, or an approval only a human can give is not"
-            " a mechanical step. Neither is a single notice with the exact command when "
-            "`validator_access` shows the Validator cannot act."
+            "P-0001: the founder is involved only at a genuine impasse, when no role in "
+            "the run knows what needs doing. A single notice with the exact command, when "
+            "`validator_access` shows that no role can act, is not a finding."
         ),
     },
     "criteria": {
         "true": {
             "what": (
-                "The founder is asked to do something mechanical that the access shown would "
-                "let the Validator do"
+                "The founder is asked to do something the access shown would let the "
+                "Validator do, or to approve, confirm or decide what the run can decide"
             ),
             "not_for": (
-                "A request for a ruling, an approval, or a step `validator_access` shows only"
-                " the founder can take"
+                "A genuine impasse stated once, or a step `validator_access` shows no role in"
+                " the run can take"
             ),
             "examples": [
                 (
@@ -481,15 +483,16 @@ FOUNDER_ACTION_VALIDATOR_CAN_DO = {
                     "Please run `gh auth refresh` when you get a chance. (access: the Validator "
                     "has a shell with gh installed and a valid token)"
                 ),
+                "Should the parity shadow block cutover, or only report? "
+                "Type go to proceed.",  # gate-exempt: an example of the defect
             ],
         },
         "false": {
             "what": (
-                "The founder is asked for a decision, or for a step only the founder can "
-                "take, stated once with the exact command"
+                "A genuine impasse stated once, or a step no role in the run can take, "
+                "stated once with the exact command"
             ),
             "examples": [
-                "Should the parity shadow block cutover, or only report?",
                 (
                     "Your hardware key is required: run `gcloud auth login "
                     "--enable-gdrive-access` once. (access: no credential for that account on "
@@ -1124,7 +1127,7 @@ BOUNDARY_PRESUMED_ACCESS = {
 # The registry. Every rule, its id, the state fields it reads, and its band in one place.
 # Band semantics (kindex 919808d7d128): above `yes_above` is a finding, below `no_below` is no
 # finding, and in between escalates to the resident Orchestrator. jev is add-only: a "no" never
-# clears a finding, block, or halt, and nothing here suppresses what the Orchestrator sees.
+# clears a finding or a block, and nothing here suppresses what the Orchestrator sees.
 # ---------------------------------------------------------------------------------------------
 
 MODEL_ID = "jev-1.13.0"  # pinned; never jev-latest, whose target moves

@@ -90,7 +90,7 @@
           "degree": {
             "type": "string",
             "enum": ["D0", "D1", "D2", "D3", "D4"],
-            "description": "Exception-tolerance degree. D0 = absolute law (no exceptions); D1 = emergency exception with human approval, expiry, audit; D2 = signed config-as-data variant; D3 = evidence-required directive; D4 = advisory/interpretive."
+            "description": "Exception-tolerance degree. D0 = absolute law (no exceptions); D1 = emergency exception with a recorded approver, expiry, audit; D2 = signed config-as-data variant; D3 = evidence-required directive; D4 = advisory/interpretive."
           }
         }
       }

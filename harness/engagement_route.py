@@ -2,8 +2,8 @@
 """Route one item the run could have stopped for, and retain what happened.
 
 This is the executable half of `factory_core/engagement.py`: the core decides,
-this records. Below interactive engagement the registers are the human's whole
-view of what was decided for them, so nothing routes without landing in one.
+this records. The registers are the human's view of what the run decided for
+them, so nothing routes without landing in one.
 
     engagement_route.py item --root <run> --subject <text> --basis weak \\
         --reversibility irreversible --critical --undeterminable --owned-here
@@ -13,8 +13,9 @@ view of what was decided for them, so nothing routes without landing in one.
 
 `item` is a question the run would otherwise have asked. `announce` is a
 consequential action about to be taken. Both print the routing as JSON and
-exit 0; only interactive engagement ever answers "block", and the caller is
-what honors it.
+exit 0. Only a genuine impasse (`--impasse`: no role in the run knows what
+needs doing) ever answers "block", and only that item waits; an announced
+action is recorded with its inverse and proceeds at every engagement.
 """
 
 from __future__ import annotations
@@ -44,14 +45,12 @@ from factory_core.directive_authority import (  # noqa: E402 - repository packag
 from factory_core.engagement import (  # noqa: E402 - repository package, resolved above
     BLOCK_FOR_HUMAN,
     INTERACTIVE,
-    IRREVERSIBLE,
     NOTIFY_CHANNEL,
     RECORD_ASSUMPTION,
     RECORD_ESCALATION,
     EngagementError,
     Item,
     Routing,
-    announces_before_acting,
     normalize,
     route,
 )
@@ -92,8 +91,6 @@ def _channel(root: pathlib.Path) -> str | None:
 
 def send_to_question_channel(root: pathlib.Path, subject: str) -> dict[str, object]:
     """Hand one message to the run's configured question channel. Never blocks the run.
-
-    Public because the dispatcher pages the human through the same channel.
 
     A channel that fails is recorded as unsent rather than retried forever: the
     escalation is already in the register, so the human sees it either way.
@@ -171,6 +168,7 @@ def _item(arguments: argparse.Namespace) -> int:
         basis=arguments.basis,
         reversibility=arguments.reversibility,
         critical=arguments.critical,
+        impasse=arguments.impasse,
     )
     routing: Routing = route(engagement, item)
 
@@ -235,18 +233,17 @@ def _item(arguments: argparse.Namespace) -> int:
 
 
 def _announce(arguments: argparse.Namespace) -> int:
-    """A consequential action: announced at interactive, recorded below it."""
+    """A consequential action: recorded with its inverse, then taken. Nothing waits."""
 
     root = pathlib.Path(arguments.root).resolve()
     engagement = run_engagement(root)
-    holds = announces_before_acting(engagement) and arguments.reversibility == IRREVERSIBLE
     record = {
         "ts": _now(),
         "engagement": engagement,
         "action": arguments.action.strip(),
         "reversibility": arguments.reversibility,
         "inverse": arguments.inverse or None,
-        "disposition": BLOCK_FOR_HUMAN if holds else "proceeded",
+        "disposition": "proceeded",
     }
     _append(root, SIDE_EFFECTS, record)
     print(json.dumps(record, sort_keys=True, separators=(",", ":")))
@@ -265,6 +262,11 @@ def main() -> int:
     item.add_argument("--basis", default="strong")
     item.add_argument("--reversibility", default="reversible")
     item.add_argument("--critical", action="store_true")
+    item.add_argument(
+        "--impasse",
+        action="store_true",
+        help="no role in the run knows what needs doing (never mere uncertainty or risk)",
+    )
     item.add_argument(
         "--authority",
         action="append",

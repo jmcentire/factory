@@ -29,43 +29,44 @@ def test_another_authoritys_fact_is_never_this_runs_question() -> None:
         assert routing.action == eng.DECIDE_LOCALLY, level
 
 
-def test_autonomous_never_asks_and_never_blocks() -> None:
-    assert not eng.blocks_on_questions(eng.AUTONOMOUS)
-    assert eng.route(eng.AUTONOMOUS, item()).action == eng.RECORD_ASSUMPTION
-    # Even the worst case proceeds: irreversible, Critical, weakly founded.
+def test_nothing_but_a_genuine_impasse_ever_waits_on_the_human() -> None:
+    """The impasse rule (founder, 2026-10-18): "Do you know what needs fucking doing?
+    YES. THEN THERE IS NO FUCKING IMPASSE." Uncertainty, risk and Critical surfaces
+    are decided by the run and recorded; none of them waits on anyone."""
     worst = item(basis=eng.WEAK, reversibility=eng.IRREVERSIBLE, critical=True)
-    routing = eng.route(eng.AUTONOMOUS, worst)
-    assert routing.action == eng.RECORD_ESCALATION
-    assert not routing.blocks
+    assert not hasattr(eng, "blocks_on_questions")
+    assert not hasattr(eng, "announces_before_acting")  # no veto window at any level
+    for level in eng.ENGAGEMENTS:
+        assert eng.route(level, item()).action == eng.RECORD_ASSUMPTION, level
+        routing = eng.route(level, worst)
+        assert routing.action == eng.RECORD_ESCALATION, level
+        assert not routing.blocks, level
 
 
 def test_a_weak_basis_is_an_escalation_not_a_confident_assumption() -> None:
     """Sim, 2026-08-27: otherwise the run launders high uncertainty into a
-    documented certainty."""
-    for level in (eng.AUTONOMOUS, eng.SCHEDULED):
+    documented certainty. It is still decided and the run still proceeds."""
+    for level in eng.ENGAGEMENTS:
         routing = eng.route(level, item(basis=eng.WEAK))
         assert routing.action == eng.RECORD_ESCALATION, level
+        assert not routing.blocks
 
 
-def test_scheduled_sends_only_the_exceptional_and_still_does_not_block() -> None:
-    exceptional = item(basis=eng.WEAK, reversibility=eng.IRREVERSIBLE)
-    routing = eng.route(eng.SCHEDULED, exceptional)
-    assert routing.action == eng.NOTIFY_CHANNEL
-    assert not routing.blocks
-    assert eng.route(eng.SCHEDULED, item(basis=eng.WEAK, critical=True)).action == (
-        eng.NOTIFY_CHANNEL
-    )
-    # An ordinary undeterminable item is assumed, not sent.
-    assert eng.route(eng.SCHEDULED, item()).action == eng.RECORD_ASSUMPTION
-    assert not eng.blocks_on_questions(eng.SCHEDULED)
+def test_a_genuine_impasse_reaches_the_human_the_way_the_engagement_says() -> None:
+    impasse = item(impasse=True)
+    assert eng.route(eng.INTERACTIVE, impasse).action == eng.BLOCK_FOR_HUMAN
+    assert eng.route(eng.INTERACTIVE, impasse).blocks
+    assert eng.route(eng.SCHEDULED, impasse).action == eng.NOTIFY_CHANNEL
+    autonomous = eng.route(eng.AUTONOMOUS, impasse)
+    assert autonomous.action == eng.RECORD_ESCALATION
+    assert not autonomous.blocks
 
 
-def test_only_interactive_blocks_or_announces() -> None:
-    assert eng.route(eng.INTERACTIVE, item()).blocks
-    assert eng.blocks_on_questions(eng.INTERACTIVE)
-    assert eng.announces_before_acting(eng.INTERACTIVE)
-    for level in (eng.AUTONOMOUS, eng.SCHEDULED):
-        assert not eng.announces_before_acting(level), level
+def test_a_claimed_impasse_on_a_determinable_item_is_not_one() -> None:
+    """If any role can determine the answer, no role is at an impasse."""
+    for level in eng.ENGAGEMENTS:
+        routing = eng.route(level, item(impasse=True, determinable=True))
+        assert routing.action == eng.DECIDE_LOCALLY, level
 
 
 def test_an_unconfigured_or_unknown_engagement_is_refused_never_guessed() -> None:

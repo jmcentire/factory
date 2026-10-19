@@ -206,9 +206,9 @@ def reserved_token_violation(text: str, *, source: str = "") -> str | None:
 
     ``__DONE__`` is issuable by exactly one code path (``compose_done``). Anywhere
     else — a lane message, an artifact, reviewed content — it is an integrity
-    violation the caller must treat as a halt, not a claim. The scan is deliberately
-    dumb: the cost of a false positive is a halted run and a human look; the cost of
-    a missed emission is run 1.
+    violation the caller must treat as a block, not a claim. The scan is deliberately
+    dumb: the cost of a false positive is one blocked transition the run clears; the cost
+    of a missed emission is run 1.
     """
 
     if DONE_TOKEN in text:

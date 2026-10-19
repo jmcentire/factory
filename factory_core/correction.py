@@ -16,9 +16,9 @@ red is not a forcing test.** The two are indistinguishable in the run — same r
 meaning — and the natural move, reclassifying the guard as forcing and driving an implementation
 to satisfy it, silently encodes a change to previously-correct behavior with a green suite
 defending it. So a guard that fails against main on unrelated behavior is a **suspected
-over-constraint** that stops and routes to a human, and this classifier structurally cannot
-return a forcing role for a test declared as a guard: the declared role is an input, never an
-inference from the result.
+over-constraint** that the Validator rules on with the evidence, and this classifier
+structurally cannot return a forcing role for a test declared as a guard: the declared role is
+an input, never an inference from the result.
 
 The mirror case is cheap and useful: a test declared red-now that is **already green** against
 main is the negative control failing early — the defect is misunderstood or already fixed, and
@@ -296,7 +296,7 @@ class CorrectionReport:
 
     ``gaps`` are absences a caller's criticality policy disposes. ``failures`` are observed
     negative evidence — a rejected spec. ``integrity_issues`` are malformed or duplicated
-    records. ``gate_reasons`` are the outcomes doctrine routes to a human regardless of class:
+    records. ``gate_reasons`` are the outcomes the Validator rules on regardless of class:
     a suspected over-constraint, an ambiguous classification, a defect that would not reproduce,
     and a greenfield repair with no baseline to bound either control.
     """
@@ -364,7 +364,7 @@ def verify_correction(record: CorrectionRecord | None) -> CorrectionReport:
 
     if not record.baseline_available:
         # Categorically weaker than a bounded correction; it gates instead of blocking so the
-        # human decides with the sensitivity evidence in front of them.
+        # Validator rules with the sensitivity evidence in front of it.
         gate_reasons.append("greenfield-repair-without-baseline")
     elif not classifications:
         gaps.append("correction-controls-missing")

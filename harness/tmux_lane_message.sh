@@ -478,14 +478,22 @@ PY
   # before the turn starts: discovery_check.latest_freeze then refuses until the lane is frozen
   # again, instead of passing the mid-run review snapshot as the candidate. Recorded first, so a
   # resume that fails to start still reads as unfrozen (fail closed).
-  "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" <<'PY'
+  # The turn is measured against its delivery limit and recorded; over the limit is never a
+  # refusal (lane_agent.py places an oversized argv turn in .git/factory-brief/ by reference).
+  "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" \
+    "$RETAINED_MESSAGE" "$AGENT" <<'PY'
 import datetime, json, os, sys
-journal, run, role, slot, sender, kind, message_id = sys.argv[1:]
+journal, run, role, slot, sender, kind, message_id, message, agent = sys.argv[1:]
+size = os.path.getsize(message)
+# Codex resumes read the turn from stdin; every registry harness takes it as one argv element.
+limit = None if agent in ("codex", "codex-ollama") else 131071
+delivery = "stdin" if limit is None else ("file-pointer" if size > limit else "argv")
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "run_id": run, "role": role, "slot": slot, "sender": sender,
     "message_kind": kind, "message_id": message_id,
+    "prompt_bytes": size, "prompt_limit": limit, "prompt_delivery": delivery,
 }, sort_keys=True, separators=(",", ":"))
 fd = os.open(journal, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
 try:

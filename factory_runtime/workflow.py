@@ -80,8 +80,8 @@ class StoredRatification:
 
     artifact: PhaseArtifact
     artifact_digest: str
-    #: ``None`` below the interactive engagement: the phase was ratified by the
-    #: Validator alone because the human declared they would not be present.
+    #: ``None`` when no human co-signed: the Validator ratified the phase alone,
+    #: as the run does with everything it knows how to decide (the impasse rule).
     human_receipt: VerifiedReceipt | None
     validator_receipt: VerifiedReceipt
     directory: Path
@@ -1041,15 +1041,16 @@ class FactoryWorkflow:
     ) -> StoredRatification:
         """Ratify one invariant document with independent exact-subject receipts.
 
-        The human co-signature is required at ``interactive`` engagement and at
-        no other, because below it the human already made their decision — once,
-        at ignition, by declaring the engagement. Demanding a signature per
-        phase after that is the ceremony the founder named on 2026-09-23: an
-        operator clicking through three certifications per run is not exercising
-        authority, and a signature nobody reads is theatre. What replaces it is
-        a record: the ratification says plainly that no human co-signed and
-        which engagement allowed it, so the report shows what was decided for
-        them.
+        A human co-signature is never required, at any engagement. The human
+        decided when they asked for the work; demanding a signature per phase
+        afterwards is the ceremony the founder named on 2026-09-23 ("an operator
+        clicking through three certifications per run is not exercising
+        authority") and the false gate they named on 2026-10-18 (a step whose
+        output is a request for the founder to approve what they already asked
+        for). A human receipt, when one is supplied, is verified and recorded.
+        Without one the ratification says plainly that no human co-signed and
+        which engagement the run held, so the report shows what was decided for
+        them and the founder can override it afterwards.
         """
 
         raw_artifact, _ = _read_json_object(artifact_path)
@@ -1071,12 +1072,6 @@ class FactoryWorkflow:
         if action_and_state is None:
             raise WorkflowError(f"unsupported phase artifact: {artifact.phase!r}")
         engagement = self.run_engagement(run_id)
-        human_required = engagement == INTERACTIVE
-        if human_required and human_receipt_path is None:
-            raise WorkflowError(
-                "interactive engagement ratifies a phase with a human receipt; "
-                "declare a lower engagement at ignition to ratify without one"
-            )
         if (
             human_receipt_path is not None
             and artifact.human_ratifier == artifact.validator_ratifier
@@ -1179,12 +1174,11 @@ class FactoryWorkflow:
                     [human_receipt.nonce] if human_receipt is not None else []
                 ),
                 # Said plainly rather than left to be inferred from an absence:
-                # this phase carries no human co-signature, and the engagement
-                # the human declared at ignition is why.
+                # whether a human co-signed this phase, and the engagement held.
                 "engagement": engagement,
                 "human_ratified": human_receipt is not None,
             },
-            human_ratification_required=human_required,
+            human_ratification_required=human_receipt is not None,
             verifier_identity=validator_receipt.signer_identity,
             # No human approved this phase, and the Validator cannot approve its
             # own ratification: segregation between two machine identities is

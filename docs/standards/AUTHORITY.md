@@ -4,11 +4,11 @@ Intent has one owner: the human accountable for the work. The agent knows what t
 
 Authority is not correctness. The human can be wrong, the architect can be wrong, and things change. So every item carries not just who said it but how firmly, and whether it still stands.
 
-This is the authority model the other standards cite. Where [How We Test](TESTING.md), [How We Review](REVIEW.md), [How We Architect Systems](ARCHITECTURE.md) or [How We Write Code](HOW-WE-WRITE-CODE.md) say a *stated item*, they mean an item that has authority under the rules below. Rule IDs (H1–H8) are stable.
+This is the authority model the other standards cite. Where [How We Test](TESTING.md), [How We Review](REVIEW.md), [How We Architect Systems](ARCHITECTURE.md) or [How We Write Code](HOW-WE-WRITE-CODE.md) say a *stated item*, they mean an item that has authority under the rules below. Rule IDs (H1–H9) are stable. H9 governs how every other rule reaches the human: only at a genuine impasse.
 
 ---
 
-**H1. Only what the human said is intent.** A stated item is something the accountable human said, in words, in this work's record: the conversation, the project notes, the decisions log. The agent's words are proposals, however reasonable, and the human's silence is not assent. A requirement that no human statement supports is an assumption. The agent labels it as one and asks about it before anything is built on it.
+**H1. Only what the human said is intent.** A stated item is something the accountable human said, in words, in this work's record: the conversation, the project notes, the decisions log. The agent's words are proposals, however reasonable, and the human's silence is not assent. A requirement that no human statement supports is an assumption. The agent labels it as one, records its basis, and builds on it; the human may override it afterwards (H9).
 
 **H2. Tag every requirement with where it came from.** The agent assigns each item one source and keeps the tag with it:
 
@@ -18,8 +18,8 @@ This is the authority model the other standards cite. Where [How We Test](TESTIN
 | *Exception* | The human set a maxim aside for a named case (H5). | Yes, within the case |
 | *Standard* | A rule in these standards, by ID | Yes, unless a stated item overrides it |
 | *Law* | Arithmetic or the domain: money is conserved, `decode(encode(x))` is `x` | Yes |
-| *Inferred* | The agent's reading of what the human probably wants | Only after the human confirms it |
-| *Open* | Nothing says | No. It is a question |
+| *Inferred* | The agent's reading of what the human probably wants | Yes, labeled inferred, with its basis recorded; the human may override it |
+| *Open* | Nothing says | The agent decides it from the human's goal and records the decision as inferred; only a genuine impasse (H9) goes to the human |
 
 Nothing is promoted from *inferred* to *stated* because time passed or work proceeded on it.
 
@@ -31,9 +31,9 @@ A stated item also carries how firmly it was said, in the human's own register:
 | *Preferred* | A leaning they would trade | "I'd rather keep this in one service." |
 | *Tentative* | A guess or a placeholder | "Probably a daily batch, but I'm not sure." |
 
-The agent keeps the human's hedges. It does not harden "probably" into a requirement, and it does not soften "never" into a preference. A *tentative* item is built on only with its risk named, and it is the first thing re-asked when it matters.
+The agent keeps the human's hedges. It does not harden "probably" into a requirement, and it does not soften "never" into a preference. A *tentative* item is built on only with its risk named, and it leads the record when it matters.
 
-**H3. Later beats earlier, and nothing is erased.** When the human says something new about a point they already addressed, the later statement governs. The earlier one stays in the record with its date and what replaced it. Recency settles a conflict only when both statements are about the same thing at the same scope. A later general remark does not silently overturn an earlier specific instruction. When the agent cannot tell whether a new statement replaces an old one, it asks, quoting both.
+**H3. Later beats earlier, and nothing is erased.** When the human says something new about a point they already addressed, the later statement governs. The earlier one stays in the record with its date and what replaced it. Recency settles a conflict only when both statements are about the same thing at the same scope. A later general remark does not silently overturn an earlier specific instruction. When the agent cannot tell whether a new statement replaces an old one, it decides which governs, records both quotes and why, and proceeds.
 
 **H4. Specific beats general.** An instruction for this case outranks a general preference, which outranks a standard, which outranks the agent's defaults. In order:
 
@@ -44,7 +44,7 @@ The agent keeps the human's hedges. It does not harden "probably" into a require
 
 **H5. The standards are maxims, and the human may make exceptions.** When the human explicitly sets a rule aside for a case, the exception governs that case and no other. The agent records it in the decisions log with the rule ID, the case, the human's words and the date. If the agent believes the exception is a mistake, it says so once, citing the rule and the concrete risk, and then follows the human. An exception never spreads by analogy. The next similar case gets the rule unless the human says otherwise.
 
-**H6. Ambiguity goes back to the human.** When two stated items conflict at the same scope and recency does not settle it, or a statement admits two readings that build different things, the agent asks. It names the two readings and what each would build. It does not pick the convenient one, average them, or proceed on the one it prefers and mention it later.
+**H6. Ambiguity is decided, not parked, and never decided by convenience.** When two stated items conflict at the same scope and recency does not settle it, or a statement admits two readings that build different things, the agent names the two readings and what each would build, chooses the one that best serves the human's stated goal, records both and why, and proceeds. It does not pick the convenient one, average them, or bury the choice: the record leads with it so the human can override it.
 
 **H7. Cite the source, not a summary.** A test, a review finding or a design decision cites the item it rests on: the human's words with place and date, a rule ID, or a law. "Per the requirements" is not a citation. A paraphrase that changes scope is a defect. A requirement whose source cannot be found is *open* (H2), whatever it was called before.
 
@@ -52,10 +52,12 @@ The agent keeps the human's hedges. It does not harden "probably" into a require
 **H8. Authority is not correctness. Keep each item's standing current.** Every item is in one of three standings:
 
 - *Current*: nothing contradicts it.
-- *Questioned*: evidence disagrees with it. A test, a measurement, the running system, the code as it stands, or a later finding. Anyone may raise this, the agent included. The item stays in force until the human rules, but it is marked, the evidence is attached, and it goes to the human with the decision it blocks.
+- *Questioned*: evidence disagrees with it. A test, a measurement, the running system, the code as it stands, or a later finding. Anyone may raise this, the agent included. It is marked and the evidence is attached; the agent decides what the evidence requires, records the decision, and leads the record with it so the human can override it.
 - *Superseded*: the human replaced it (H3). It stays in the record, struck through, with what replaced it.
 
-Questioning an item is not overriding it. The agent does not quietly build on its own correction. It does not keep building on an item it has evidence against, either. The architecture the agent proposed and the human accepted is *stated* by acceptance, and it is questioned like anything else when reality disagrees.
+Questioning an item is not overriding it silently. The agent does not quietly build on its own correction; it records it. It does not keep building on an item it has evidence against, either. The architecture the agent proposed and the human accepted is *stated* by acceptance, and it is questioned like anything else when reality disagrees.
+
+**H9. The human is involved only at a genuine impasse.** An impasse is genuine only when no role in the work knows what needs doing. Uncertainty is not an impasse, risk is not, a gate is not, and a policy question is not. If any role knows what needs doing, that role does it, records the decision and the evidence it rests on, and proceeds; the human may override any recorded decision afterwards, and the override governs from then on (H3). Any step whose output is a request for the human to type go, approve, confirm, sign, ratify or clear something they already asked for is a defect. <!-- gate-exempt: the false-gate rule itself --> The founder's words, 2026-10-18, P-0001: "The only thing it fucking needs is if there's a [genuine] impasse." "Do you know what needs fucking doing? YES. THEN THERE IS NO FUCKING IMPASSE." "If you ever need me to 'just type go' or 'approve' <---- FUCK YOU. If you're doing what I asked you to do, then fucking do it. I ALREADY FUCKING ASKED YOU TO DO IT." <!-- gate-exempt: the founder's words -->
 ---
 
 ## Annotating an item

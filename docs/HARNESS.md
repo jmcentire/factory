@@ -1,6 +1,6 @@
 # The Harness
 
-> Status: ratified 2026-08-14. Lane-start preflights (HALT, grounding, blocking-event) are
+> Status: ratified 2026-08-14. Lane-start preflights (grounding, blocking-event) are
 > available in `harness/lane_env.sh` as compatibility controls. Live Coder/Tester
 > dispatch instead routes through the executable runner boundary: externally anchored resume is
 > re-verified, every admitted context dependency is captured in a closed content-addressed
@@ -107,13 +107,13 @@ line whose enforcement is "advice" is a backlog item, not a control.
 | Policy (what a token may do) | **SPL** (jmcentire/agent-safe) | Total, gas-metered evaluation in-token at the tool boundary; sealed attenuation; expressions are approval rules, so human-signed under I8, never agent-authored into force. |
 | State (what is true now) | **factory_runtime** RunState + **Chess** anchors | Per settled decisions: machine evidence chained in the factory_core ledger; anchor transitions (`*-ratified`, `human-approved`, `promoted`) carry Chess move records — prev/new state hash, actor key, signature over all four, re-execution at the anchor; anchors carry the ledger head digest only. |
 | Capability (what is reachable) | `lane_env` + sandbox + egress allowlist | The environment *is* the grant: `env -i` construction from a manifest, secrets injected by name per-command, never a sourced profile. Seatbelt/containers for filesystem and network. Absence beats instruction. |
-| Cadence (when anything runs) | Runner timers + schedule registry | Agents request schedules; humans grant them; `sched_audit` treats an unregistered timer as hostile and a kill order as immediate. |
+| Cadence (when anything runs) | Runner timers + schedule registry | Durable schedules are registered in the run's schedule registry; `sched_audit` treats an unregistered timer as hostile and a kill order as immediate. |
 | Evidence (what happened) | Receipt chain | A claim is a receipt id or it does not exist: exit code, log digest, tree SHA, dirty-state digest, chained. Absence claims carry a paired positive-control receipt. |
 | Memory (what is remembered) | **kindex** — context, never authority | Provenance-tagged writes; reads are correction-aware (act on a node only with its tail acknowledged); search-before-build enforced as a receipt, not a nag. A role primer is an admitted, hashed context dependency. Resume consults the ledger on disk, never a summary. |
 | Projection (who sees what) | **Cryptogram** | Per-lane sections encrypted to lane keys, orchestrator routes blind. Coder/Tester separation stops being a policy about where Pact's `decompose` output goes and becomes a decryption impossibility. |
 | Budget | Runner objective ledger | Spend accounted per objective against evidence produced and uncertainty removed — "what did the last $100 buy" answerable at any time. Per-turn budgets are forbidden; they reward fragmentation. |
 | Qualification | **Benchie** as configuration CI | `qualification_id = hash(model + prompts + runner + tool schemas + policy + projection + verifier + environment)`; any change requalifies. The session-start canary is a smoke test for gross configuration failure, never certification of the next trajectory. |
-| Verdict | Validator + human gates | Validator executes an oracle it did not author; the judge of the judge is the qualification suite plus the human gate — the gap the Validator postmortem named ("who judges the judge") closes structurally, not with a fourth agent. |
+| Verdict | Validator + mechanical gates | Validator executes an oracle it did not author; the judge of the judge is the qualification suite plus Gate L and the founder's override afterwards — the gap the Validator postmortem named ("who judges the judge") closes structurally, not with a fourth agent. |
 
 One role the map must name explicitly: the **Orchestrator**, one of the Factory's four roles
 (Validator, Orchestrator, Coder, Tester), with two parts that both run for the whole run. The
@@ -129,10 +129,10 @@ checkpoint and shown by `status.sh`. The dispatcher, the pre-dispatch and pre-ve
 checkpoints, and the orchestrator channel refuse a run without it. The dispatcher also watches the
 Orchestrator: if activity keeps arriving and the assessed cursor has not advanced for two check-in
 intervals, it records `orchestrator_unresponsive`, blocks the Validator, and banners the incident.
-An Orchestrator `halt` writes HALT and kills the Validator's window. Residual, stated honestly:
-every seat runs as the same POSIX user, so "only a human clears HALT" rests on the Validator being
-dead and the author lanes being sandboxed, not on file ownership; a separate owner for the HALT
-path is the mechanical fix and is not yet built. The dispatcher samples a bounded last-60-line snapshot whenever a
+Nothing stops the run: there is no run-wide stop file, the Orchestrator never kills a seat, and
+no step waits on the founder (P-0001, 2026-10-18). The dispatcher answers a dialog a seat sits on
+(a folder-trust or permission prompt) and records it; a usage limit is recorded and waited out.
+The dispatcher samples a bounded last-60-line snapshot whenever a
 Validator/Coder/Tester capture changes and appends every sample it obtained plus every
 deterministic signal under a monotonic activity cursor and an independent cadence record. It
 addresses only the Orchestrator's own pane with the complete captured cursor range. It may
@@ -156,9 +156,9 @@ discriminators for competing causal hypotheses, and recommends the least expensi
 model for each concrete chunk. Kindex-backed notes inform planning and narrow dispatch context,
 not authority: `phase_compiler.py` and `run_guidance.py` never select guidance from Kindex. Only
 the exact external-resume checkpoint can select a standard, loop, or recipe for compilation into
-the three ratified authorities. Its effect set is exactly `{block, halt, no-op}`: a block forces an exact-subject
-human/Validator disposition; a halt sets HALT and kills the Validator's window, and only a human
-clears it; no-op grants nothing and can satisfy no gate. Pre-dispatch and
+the three ratified authorities. Its effect set is exactly `{block, no-op}`: a block forces an
+exact-subject Validator disposition once the Validator has fixed what it names; no-op grants
+nothing and can satisfy no gate. Pre-dispatch and
 pre-verdict checkpoints refuse until a retained assessment covers their activity cursor. The
 assessment's observed harness status must match `harness.json`; it cannot call an open run closed.
 For runs carrying `factory-run-guidance/1`, assessment/3 additionally binds the exact current
@@ -193,7 +193,7 @@ producer-enrollment coverage as unknown until the producer inventory is mechanic
 closed enrolled union cannot masquerade as whole-run semantic completeness.
 
 A tmux author that cannot proceed without guessing emits `FACTORY_QUESTION:`. The dispatcher
-retains an occurrence-specific question ID. Only the Validator can bind a human answer or already
+retains an occurrence-specific question ID. Only the Validator can bind an answer or already
 ratified specification to that ID; the Orchestrator can issue only a generated status probe. Both
 travel to the exact retained thread, never through raw terminal input: an answer by `codex exec
 resume` once the lane is idle (a lane mid-turn refuses it, exit 75), a status probe also by
@@ -223,13 +223,13 @@ checkpoint-configured directive sources; missing, corrupt, substituted, or overs
 refuse instead of becoming an empty list. The wake caller cannot supply any of those sections.
 The agent
 starts in a fresh empty working directory and cannot extend that admitted set by asking the
-dispatcher to inspect another path; missing context becomes a blocking question for the human.
+dispatcher to inspect another path; missing context becomes a blocking question for the Validator.
 Context cost then scales with exceptions rather than the run — the inverse of the
 96-cold-loads bill. The projection, capsule, and exact final prompt bytes are retained; the
 outcome receipt binds the prompt schema/assembler plus its byte count and SHA-256. This proves
 what the agent received without claiming deterministic output or opaque provider-session replay.
 Both seats hold zero grant authority:
-manifests, registries, and the ledger are human-signed files they read and cannot write.
+manifests, registries, and the ledger are host-signed files they read and cannot write.
 The executable sink is one-way: a bounded response is labeled `untrusted-advisory` and
 appended only as `validator-blocking-only` data; no parser converts its prose into a broker
 request, signature, ledger transition, or cleanup action.
@@ -319,21 +319,21 @@ corrections accrete at the bottom, and reading stopped above them. A kindex read
 includes the node's tail digest; acting on a node without tail acknowledgment is a defect
 class, and re-read-before-acting (not before theorizing) is the checked behavior.
 
-**5. Secret-exposure tripwire with stop-the-line semantics.** The ~40-key exposure was
-flagged four times as a "watch" and never actioned, because "only the human can fix it" was
-read as deprioritization. Credential-shaped content in any transcript or log halts every
-lane — a `HALT` file that `lane_env` refuses to run past — and produces a single-item
-report. An incident is not a queue entry.
+**5. Secret-exposure tripwire as an incident.** The ~40-key exposure was flagged four times as
+a "watch" and never actioned. Credential-shaped content in any transcript or log is an incident
+row (`incidents.jsonl`, file and line only, never the matched text) and a failed grounding, so the
+next lane does not launch until the run scrubs the hit and re-grounds; rotating the exposed
+credential is recorded as owed. An incident is not a queue entry, and it stops nothing else.
 
 **6. Schedule registry and audit — durable timers vs leased wakeups.** No agent-authored
-*durable* cadence survives its turn: OS timers live in the registry, human-granted, and the
+*durable* cadence survives its turn: OS timers live in the registry, and the
 audit lists every live cron, launchd agent, `at` job, and user timer — anything
 unregistered fails, and the kill path is tested, because the last stray ran eleven hours
 past its kill order. Distinct from that: **leased in-objective wakeups** — the short
 self-pokes that babysit a live deploy. Those are legitimate and necessary; they are bounded
 by objective, count, and expiry, recorded in the runner's own lease table, auto-dead at
-objective close, and never touch the OS scheduler. A strict reading that requires a human
-grant per wakeup kills the babysitting that ships deploys; the lease is the grant. Honest
+objective close, and never touch the OS scheduler. The lease is the grant; no wakeup waits
+on anyone. Honest
 limit: `sched_audit` sees OS timers only — runner-internal scheduling is auditable only if
 the runner's lease table is, which is a runner requirement, not a script.
 
@@ -355,7 +355,7 @@ the broker. The classes that matter most, from the postmortems and the
 research: `POLICY_DENIED` hard-stops with no alternative-path retry (a creative agent
 routing around a 403 is the failure, not the fix); `AUTHORITY_AMBIGUOUS` freezes the branch
 for ratification; `ORACLE_DEFECT` is never the Coder's to resolve; `BASELINE_CONFLICT`
-(green-now gone red) goes to a human, never silently reclassified; `SIDE_EFFECT_UNCERTAIN`
+(green-now gone red) is ruled on by the Validator and recorded, never silently reclassified; `SIDE_EFFECT_UNCERTAIN`
 reconciles external state before any retry; `EVIDENCE_UNAVAILABLE` blocks on critical
 surfaces; repeated same-class failure routes upward instead of buying a third version of
 the same guess.
@@ -502,10 +502,10 @@ machine, before the agent starts and while it runs:
 
 ## Build compilation and convergence
 
-Human negotiation stays upstream of generation. The founder and Validator may go back and forth
-through induced understanding for as many interactions as improve the result, but author lanes do
-not begin until three distinct artifacts are sufficiently deep, agreed, and independently
-ratified:
+The frame stays upstream of generation. The Validator derives it from the founder's words and
+decides what they leave open (the founder may talk it through for as long as they choose, and
+nothing waits on them), but author lanes do not begin until three distinct artifacts are
+sufficiently deep, decided, and independently ratified:
 
 1. **Product Specification** — the requested outcome and user-visible behavioral commitments.
 2. **Architecture Specification** — the major interfaces, boundaries, state/authority ownership,
@@ -534,7 +534,7 @@ independent review of classification and application bound to that exact applica
 obligations into only the relevant portions of the three authorities in a fixed order. As a
 worked infrastructure case, “the package main is named X and exposes entrypoint Y” is
 constructional: it binds Architecture and a conformance-evidence route, reaches the Coder, and does
-not become a Tester-visible product behavior unless the human separately ratifies an observable behavior.
+not become a Tester-visible product behavior unless an observable behavior is separately ratified.
 `not-applicable` is a visible ratified disposition, not omission. The generated state is called
 `routing-verified`; substantive compliance needs observations bound to the exact candidate,
 selection, application, obligation, and raw evidence plus independent judgment. The selected set
@@ -598,8 +598,8 @@ keeps a complete rewrite ordinary; `brownfield` supports a deliberately scoped c
 target ABI and plan both bound authoring attempts, and the ledger will not raise the ceiling after
 generation starts. After the final permitted attempt, remaining defects produce a blocked handoff,
 not another self-authorized specification round. Existing tests remain immutable unless current
-signed authority uniquely supersedes the old same-phase behavior and a separately trusted human
-ruling binds the exact assertion (or frozen family) and exact signed replacement statement.
+signed authority uniquely supersedes the old same-phase behavior and a recorded ruling binds the
+exact assertion (or frozen family) and exact signed replacement statement.
 The runtime binds the construction mode today; mechanical `brownfield` path/surface-ceiling
 enforcement against the produced candidate remains unwired. The adversarial review therefore
 fails closed as `INCOMPLETE` for `brownfield`; only `regenerate` currently supplies a complete
@@ -624,42 +624,27 @@ Three views:
    that discharged it. "Why did it do X" is answered by the chain, never by asking an
    agent to reconstruct.
 
-2. **Ongoing work, announced before it happens.** Every consequential action is stated
-   ahead of execution as verb → object → environment (`deploy` → `staging`), with a short
-   visible timer during which the human can act. The announcement is itself a receipt.
+2. **Ongoing work, recorded as it happens.** Every consequential action is recorded as
+   verb → object → environment (`deploy` → `staging`) with its class and its inverse in the
+   side-effect register, then taken. No action waits in a veto window (P-0001). The record is
+   itself a receipt, and the founder may reverse any action afterwards.
 
-3. **Exceptions.** Errors, issues, and decisions routed to the human by failure class,
-   each carrying its recommendation where one exists.
+3. **Decisions the founder may override, and genuine impasses.** Every decision the run made
+   for the founder, with its basis, and anything no role in the run knew how to do.
 
-Every announced item carries one of three classes, and **the class is data** — resolved
-from the control profile's criticality and reversibility, never assigned by the agent
-whose action it governs; an agent classifying its own action into a timer class is
-self-authorization through the console.
+Every recorded action carries a class, and **the class is data** — resolved from the control
+profile's criticality and reversibility, never assigned by the agent whose action it governs:
+**reversible**, **recoverable**, or **irreversible**. An irreversible action is flagged in the
+register with why it was taken and what recovering from it would take; it is still taken when
+the run knows it needs doing. Oracle silence on a Critical surface is not an action class: it
+blocks the verdict until the oracle is fixed.
 
-- **Announce — act to stop.** Reversible, pre-authorized actions. Timer elapses → proceed.
-  This is the two-way-door grant made structural: the run keeps moving while the human
-  holds a standing veto, instead of the grant living in an agent's memory of a qualifier.
-- **Default — act to override.** Pending decisions with a strong recommendation. Timer
-  elapses → the default applies, and the record says so: *default-applied under policy,
-  window elapsed* — never rendered as approval. A defaulted decision is attributable to
-  the policy that set the default, not to the human who didn't click.
-- **Require — act to proceed.** Sincerely blocking: irreversible, authority-changing, or
-  oracle-silent on a critical surface. No timer, no default; the run holds. A timer here
-  is the waiver path re-entering — fail-closed becoming a speed bump — so the class admits
-  none. Unclassified lands here, for the same reason an unclassified surface is Critical.
-
-Announcement receipts carry
-`{action, target, class, window, announced_at, outcome}` where outcome is one of
-`vetoed | approved | overridden | default_applied | held` — so a human choice and an
-elapsed window are distinguishable forever. A veto or redirect during the window routes as
-a lane event; a redirect that changes what was authorized opens a provisional directive
-(control 1a) rather than being absorbed as chat. Window lengths are short, configurable,
-and consequence-scaled; Announce-class work proceeding while the human is away is the
-point, Require-class work holding while they're away is also the point.
+A redirect from the founder at any time opens a provisional directive cited to their words
+(control 1a), in force at once, rather than being absorbed as chat.
 
 ## Scripts
 
-Layout: `harness/` for the scripts, `.factory/` for state (receipts, HALT, grounding
+Layout: `harness/` for the scripts, `.factory/` for state (receipts, incidents, grounding
 marker, registries, `reconcile.d/`), `DIRECTIVES/` as a git repo for the ledger (signed
 chain `ledger.jsonl` + agent-appendable `provisional.jsonl` side chain). All are
 dependency-free (bash + python3 + git):
@@ -682,14 +667,14 @@ dependency-free (bash + python3 + git):
   dispatch gate. Unrelated malformed legacy event rows are ignored and grant no authority.
   The subject is the whole file (one disposition for every pending event) or one event's
   canonical digest (that event alone is receipted and removed; the rest stay pending).
-- `harness/lane_env.sh` — `env -i` from a manifest; refuses to run past `HALT` or without
-  a fresh grounding marker. It is a compatibility control; live Coder/Tester isolation is
+- `harness/lane_env.sh` — `env -i` from a manifest; refuses to run without a fresh grounding
+  marker. It is a compatibility control; live Coder/Tester isolation is
   owned by `factory_runtime.runner_isolation`, not this script.
 - `harness/receipt.sh` — wraps any command; exit code, log digest, tree SHA, dirty-state
   digest, flock-serialized per-worktree chain.
-- `harness/tripwire.sh` — credential-shaped content (incl. GCP service-account JSON)
-  halts every lane via `HALT`; only a human clears it.
-- `harness/sched_audit.sh` — every OS timer must match the human-approved registry.
+- `harness/tripwire.sh` — credential-shaped content (incl. GCP service-account JSON) is an
+  incident row and a failed grounding; the run scrubs it and re-grounds.
+- `harness/sched_audit.sh` — every OS timer must match the run's schedule registry.
 - `harness/ground.sh` — verifies the runtime-selected target-state, authority ledger, cadence,
   tripwire, channel list, and `reconcile.d/*` declared-vs-live probes; writes the grounding marker.
 - `harness/factory.sh` — ignition only after Stage E; verifies exact task bytes and target-state,
@@ -733,7 +718,7 @@ dependency-free (bash + python3 + git):
   bounded observed activity snapshot under a monotonic cursor; validate the closed strategic
   assessment (goal, input class, trajectory, side effects, adherence, requirement-pressure
   analysis, planning mode, Kindex-backed chunks, causal discriminators, and exact harness
-  lifecycle state plus exact selected-guidance state); and admit only `block|halt|no-op`. Dispatch and
+  lifecycle state plus exact selected-guidance state); and admit only `block|no-op`. Dispatch and
   verdict wait for the checkpoint cursor and the required routing/evidence state.
 - `harness/semantic_union.py` + `phase1_gate.sh` — discover the closed retained source tree,
   require two separately recorded source-digest-bound extraction manifests, preserve every
@@ -937,7 +922,7 @@ suppresses the quiet-time alarm; it is already blocked by the question gate.
    human surface renders from the same chain — task list, pre-action announcements with
    veto windows, exception queue — as the third projection.
 4. **Chess anchors on `human-approved` / `promoted`** — slice 5, per the ratified build
-   order: the staged human decision (approve / request changes / abandon) before merge,
+   order: the staged, recorded decision (approve / request changes / abandon) before merge,
    CI after, both producing signed move records instead of a non-empty actor string.
 5. **Cryptogram projection** in the build loop: per-lane encrypted sections, blind routing;
    oracle independence becomes a decryption impossibility. Sequencing flag, not a decision:

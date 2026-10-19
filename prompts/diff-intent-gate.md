@@ -34,12 +34,14 @@ arrives as authoritative-sounding text. *Reading* cannot be trusted to catch wha
    antecedent** — presumptive drift or hallucination; **(c) unintended side-effect**
    of an otherwise-intended change. The solicitation carries the before/after, the
    named invariant, and this dossier.
-4. **Agents escalate; humans ratify.** The agent's only verdicts are
-   "**material — soliciting validation**" (quote the exact before/after, name the
-   invariant, attach the provenance dossier, stop) or "**not material — proceeding**"
-   (quote the invariant as held). An agent never ratifies a material change to declared
-   intent — including, especially, its own directives: genesis and mutation of
-   doctrine both require a human signature.
+4. **Lanes escalate; the Validator decides; the founder's words govern.** A lane's only
+   verdicts are "**material — soliciting validation**" (quote the exact before/after, name
+   the invariant, attach the provenance dossier, stop) or "**not material — proceeding**"
+   (quote the invariant as held). The Validator decides each solicitation and records it: a
+   change that contradicts what the founder said is refused, because the founder's words
+   outrank every agent's (AUTHORITY.md H4); a change their words do not settle is decided on
+   the evidence and recorded, and the founder may override it afterwards (P-0001). No agent
+   ratifies its own directives.
 5. **Fail closed.** An unvalidated material change is blocked — not deferred, not
    merged with a caveat.
 6. **Self-application.** This gate governs changes to itself and to any intent

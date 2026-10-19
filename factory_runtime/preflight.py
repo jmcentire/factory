@@ -229,7 +229,7 @@ def run_preflight(
             for delegate in declared
             if (resolved := policy.resolve_human(delegate))
         }
-        if not declared:
+        if required and not declared:
             disclosures.append(
                 PreflightFinding(
                     "preflight-critical-roster-undeclared",
@@ -238,7 +238,7 @@ def run_preflight(
                     "disturbed (unclassified surfaces default to Critical)",
                 )
             )
-        elif not resolved_humans:
+        elif required and not resolved_humans:
             disclosures.append(
                 PreflightFinding(
                     "preflight-critical-roster-unresolvable",
