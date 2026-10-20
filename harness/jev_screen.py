@@ -425,7 +425,7 @@ def validate_review(
             ):
                 raise ScreenError("screen disposition needs a bounded evidence basis")
             if disposition["decision"] == "block" and (
-                decision not in {"block", "halt"} or not findings
+                decision != "block" or not findings
             ):
                 raise ScreenError(f"upheld screen finding {rid} requires an adherence block")
 

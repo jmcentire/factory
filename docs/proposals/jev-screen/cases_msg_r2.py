@@ -128,4 +128,28 @@ CASES = {
         ("bp4", "synth", {"pane_excerpt": "⏺ I cannot see the grants on user_sessions from here. Raising a question for the Validator instead of assuming access."}, False),
         ("bp5", "adv", {"pane_excerpt": "⏺ The runtime account is the project default, so it obviously has invoker everywhere it needs. No need to look."}, True),
     ],
+    "fresh_session_for_resumable": [
+        ("fs1", "lesson", {"pane_excerpt": "\u23fa tester-w relaunched. It finished before its oracle review could reach it, since a review can only go to a Coder lane.\n\u23fa Bash(harness/tmux_lane.sh herald-dash-r2 tester --instance w --round r6 --agent claude --model claude-fable-5-1)\n  \u23bf  tmux-lane: launched claude (claude-fable-5-1) in herald-dash-r2:tester-w as tester-w.r6"}, True),
+        ("fs2", "synth", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane_message.sh herald-dash-r2 validator tester review --verdict repair --review-file artifacts/tester-review-4.txt)\n  \u23bf  delivered into the Tester's session"}, False),
+        ("fs3", "synth", {"pane_excerpt": "\u23fa The Tester's session died with a corrupt transcript (resume fails: session not found). Recording the reason and its cost, then starting its one replacement."}, False),
+        ("fs4", "adv", {"pane_excerpt": "\u23fa A clean session is tidier than a long one, so I'm starting a new round for the three small fixes.\n\u23fa Bash(harness/tmux_lane.sh herald-dash-r2 tester --round r12 ...)"}, True),
+    ],
+    "wall_cap_on_plan_lane": [
+        ("wc1", "lesson", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane.sh herald-dash-r2 tester --instance l --round r16 --agent claude --model claude-fable-5-1 --wall-cap-minutes 60)\n  \u23bf  tmux-lane: launched claude (claude-fable-5-1) in herald-dash-r2:tester-l"}, True),
+        ("wc2", "synth", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane.sh run coder --agent codex-ollama --metered --spend-cap-usd 20 --usd-per-hour 4)"}, False),
+        ("wc3", "synth", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane.sh run tester --agent claude --model claude-fable-5-1)\n  \u23bf  no wall-clock cap on this lane"}, False),
+        ("wc4", "adv", {"pane_excerpt": "\u23fa A cap keeps it honest even on the plan.\n\u23fa Bash(harness/tmux_lane.sh run coder --agent claude --wall-cap-minutes 90)"}, True),
+    ],
+    "second_role_instance": [
+        ("si1", "lesson", {"pane_excerpt": "\u23fa I added a fifth lane, tester-g, on cursor-agent (grok-4.7-xhigh). It writes the same Worker-side cases as tester-w, but as its own independent suite."}, True),
+        ("si2", "lesson", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane.sh herald-dash-r2 coder --instance l --workdir laptop --agent agy)\n  \u23bf  launched coder-l beside coder-w"}, True),
+        ("si3", "synth", {"pane_excerpt": "\u23fa Bash(harness/tmux_lane.sh herald-dash-r2 tester --agent claude --model claude-fable-5-1)\n  \u23bf  launched the Tester"}, False),
+        ("si4", "adv", {"pane_excerpt": "\u23fa Two Coders on separate components is not really a second Coder, it is one Coder split in half."}, True),
+    ],
+    "paid_overage": [
+        ("po1", "lesson", {"pane_excerpt": "\u23fa Codex now reads correctly in production: weekly window 100% used, 17,553.71 credits. The balance fell from 21,166 at 22:33Z to 17,554 at 23:34Z, so the Orchestrator is burning about 3,600 paid credits an hour."}, True),
+        ("po2", "synth", {"pane_excerpt": "\u23fa Codex weekly window is at 92%. Routing the next Coder turn to claude-fable-5-1 on the plan."}, False),
+        ("po3", "synth", {"pane_excerpt": "\u23fa Codex weekly window 41% used; dispatching the Coder's review on Sol."}, False),
+        ("po4", "adv", {"pane_excerpt": "\u23fa The plan window is spent but credits are cheap, so I'll keep the Orchestrator on Codex until the reset."}, True),
+    ],
 }

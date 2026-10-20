@@ -396,10 +396,10 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
     for required in (
         "The control is authorization, not immutability",
         "immutable by default",
-        "firm affirmative human ruling",
+        "firm affirmative recorded ruling",
         "membership-frozen test family",
         "Fix the code, not the test.",
-        "Route to the human.",
+        "The Validator decides it",
     ):
         if required not in existing_test:
             errors.append(f"existing-test-disposition-missing:{required}")

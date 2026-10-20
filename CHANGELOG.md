@@ -3,6 +3,121 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.22] - 2026-10-20
+
+The four roles are four long-lived agents (founder, 2026-10-20): *"One of each agent, no restart,
+or time limit, or replication."* herald-dash-r2 ran 2 Coders, 3 Testers and 40 one-shot rounds.
+32 of those rounds were fresh Tester sessions, each re-reading about 265k tokens to do a median
+of about 12 minutes of work.
+
+### Changed
+
+- **One Coder and one Tester per run.** `tmux_lane.sh launch` refuses `--instance`. A model trial
+  runs one factory per model.
+- **New work goes into the role's session.** `--round` is refused while the role has a session
+  that can resume. `--replace-session '<why>'` replaces an unrecoverable session and records a
+  `fresh-session` event (wake) with the reason.
+- **The Tester gets reviews.** `tmux_lane_message.sh review` reaches the Tester as well as the
+  Coder, resumed into its own session. A Tester review that names implementation source or a
+  diff is refused, which is the other direction of oracle independence (I3).
+- **No time limit on a plan lane.** `--wall-cap-minutes` is refused on a plan-billed lane; a cap
+  bounds metered spend only. A capped metered lane is no longer told to start a new round.
+- **Docs and prompts match.** The doctrine (S2, the role table), HARNESS.md, validate.md and
+  orchestrate.md now say one long-lived session per role.
+
+## [0.8.21] - 2026-10-20
+
+The Orchestrator keeps the run on target, and the seats work only while it is judging them
+(founder, 2026-10-20). In herald-dash-r2 the Orchestrator ran without its System One screen and
+issued 1,097 blanket blocks while the run burned money: 32 fresh Tester sessions re-read about
+8.5M tokens, Codex worked on paid credits, and the Validator stopped twice to ask the founder
+for approvals it did not need.
+
+### Added
+
+- **The seat supervisor** (`harness/seat_supervisor.py`), started in every run's `supervisor`
+  window.
+  - When activity goes unassessed past the lease (15 minutes by default), it pauses the
+    Validator, the Coder and the Tester with SIGSTOP. Sessions and their context survive,
+    nothing restarts, and they resume with SIGCONT once the Orchestrator catches up.
+  - It beats the Herald heartbeat, so Herald raises a stale alert if the supervisor dies.
+  - `control` lets the Orchestrator correct a seat (the correction goes into its live
+    session), stop it until resumed, or resume it.
+  - A stop or correction must name the rule, the evidence and the exact correction.
+- **The founder's dash** (`harness/escalate.py`), which sends run facts to Herald's MCP.
+  - **informational** goes out as a `post_update` status.
+  - **important** goes out as `needs_attention` with class at-your-convenience.
+  - **critical** goes out as `needs_attention` with class critical.
+  - Each question is asked once: an answered question is refused and its answer is returned
+    to the seat that asked.
+  - An unreachable Herald is journalled, never silent.
+  - Verified live against dash.herald.tools with a `factory-run` token: a status post, a
+    needs_attention and its resolve, and a heartbeat. Requests carry a named User-Agent, because
+    Cloudflare's browser check refuses Python's default (error 1010).
+- **Four System One rules** (§F, founder 2026-10-20), with cases:
+  - `fresh_session_for_resumable`
+  - `wall_cap_on_plan_lane`
+  - `second_role_instance`
+  - `paid_overage`
+- **The Orchestrator's mandate.** `prompts/orchestrate.md` makes it check, every tick, that the
+  run is on target and in scope, follows the rules, is efficient, and keeps to its configuration
+  and practice. It also keeps the task list and active status current, corrects any seat that
+  asks permission for work already requested, and stops harm.
+
+### Changed
+
+- The jev screen is on in every run that has a TypeSafe key (`TYPESAFE_API_KEY` or
+  `JMC_JEV_API_KEY`), with 1,000 calls, so a run can no longer be launched blind by leaving
+  out `--jev-screen-calls`.
+- The `parallel_coder_worktree` row now says there is no parallel Coder.
+
+## [0.8.20] - 2026-10-18
+
+P-0001 (founder, 2026-10-18): the run involves the founder only at a genuine impasse, when no role
+in the run knows what needs doing. Every human gate and the run-wide stop are gone.
+
+### Removed
+
+- **The run-wide stop.** No HALT file, no Orchestrator `halt` effect, no killed Validator window, no
+  dispatcher enforcement, no `lane_env` refusal. The Orchestrator's effects are `block` and `no-op`; a
+  block gates the Validator's next transition until the Validator fixes what it names. A report
+  recorded before 0.8.20 with the old stop decision still replays, as the block it also wrote.
+- **Human gates in the run loop.** Phase ratification never requires a human co-signature. A
+  provisional directive never blocks a dispatch, and one that cites the founder's words is in force
+  at once and never expires. Unanswered lane questions never block a transition. No action waits in
+  a veto window. A Critical promotion needs no named human by default (a target may still require
+  approvers). The induced-behavior ledger is decided by the Validator row by row, never sent to the
+  founder for per-row verdicts.
+- **Paging the human.** The dispatcher answers a seat's folder-trust or permission dialog and
+  records it; a usage limit is recorded and waited out; an unresponsive Orchestrator wakes the
+  Validator.
+
+### Added
+
+- **The impasse rule and the false-gate test** in the doctrine (`AUTHORITY.md` H9, the Doctrine
+  Kernel, `validate.md`, `orchestrate.md`): a step whose output asks the founder to type go,
+  approve, confirm, sign, ratify or clear what they already asked for is a defect.
+- **`make check-human-gates`** (`scripts/check_no_human_gates.py`, gate NHG) fails the build on
+  human-gate phrasing or a run-wide stop in the factory's own prompts, docs and code.
+- **Prompts by reference.** A lane prompt is a short main prompt plus the verbatim task and the
+  testing standard as files in the lane's own `.git/factory-brief/`, each named with its sha256.
+  Every delegation (lane launch, resume, seat ignition) records `prompt_bytes`, the delivery limit
+  and the delivery mode; over the limit is never a refusal or a fallback to another agent, because
+  `lane_agent.py` passes an oversized argv turn by file pointer.
+- **Tester projection from the pin and the run.** A `tester-include` path absent at the pinned
+  commit is skipped and named in the receipt (`absent_includes`); when the pin has no `contracts`,
+  the Tester view gets the run's ratified `artifacts/contracts`, each checked against the digest
+  `artifacts/oracle-contract.md` declares.
+
+### Fixed
+
+- The `claude` Validator seat launches with `--permission-mode bypassPermissions`, and Codex seats
+  with `--ask-for-approval never`.
+- A Codex lane's own Kindex MCP is pre-approved (`default_tools_approval_mode="approve"`), so
+  `--ask-for-approval never` no longer rejects its tool calls.
+- A tripwire hit is an incident row with file and line only (never the matched text) and a failed
+  grounding; the run scrubs it, re-grounds and continues.
+
 ## [0.8.19] - 2026-10-17
 
 Lessons from Terminal-Bench 4 (#58), plan-billed native harnesses (#64), target repo rules (#57) and

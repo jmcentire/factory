@@ -32,7 +32,6 @@ _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
-from engagement_route import send_to_question_channel  # noqa: E402
 from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
@@ -61,8 +60,9 @@ TRIGGER_PATTERNS: dict[str, str] = {
     "spec_defect": r"spec-defect|specification defect",
     "contamination": r"contaminat",
 }
-# A seat that needs a human and is otherwise silent: a dialog sitting in its pane. Matched on the
-# pane's last lines only, and paged only once it has stayed there (attention_persist_s).
+# A seat sitting on a dialog is otherwise silent. Matched on the pane's last lines only. The
+# harness answers the dialogs it can (SEAT_DIALOG_KEYS) once they have stayed briefly
+# (attention_persist_s); nothing is paged to the human (founder, 2026-10-18, P-0001).
 SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
     # A host permission dialog: Claude Code's (a PreToolUse "ask" hook raises the same one) or
     # Codex's approval prompt. Nobody watches a seat's pane; run e's Validator sat 14 min on one.
@@ -71,6 +71,11 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"tell (?:Claude|Codex) what to do differently|"
         r"Would you like to (?:run the following command|make the following edits)|"
         r"Allow command\?"
+    ),
+    # A folder-trust dialog: Claude Code's and Codex's first-launch prompt for a workdir.
+    "folder_trust": re.compile(
+        r"Do you trust the (?:files|contents) (?:in|of) this (?:folder|directory)|"
+        r"Yes, I trust this folder|allow Codex to work in this folder"
     ),
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     # Anchored on each provider's own dialog line, never on words ordinary output also uses
@@ -85,6 +90,14 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
     ),
 }
+#: The keys that accept a dialog's default (highlighted) answer, which for every dialog above is
+#: the one that lets the seat continue. A usage limit has no answer: it is recorded and waited out.
+SEAT_DIALOG_KEYS: dict[str, tuple[str, ...]] = {
+    "permission_prompt": ("Enter",),
+    "folder_trust": ("Enter",),
+}
+#: A dialog already recorded as unanswerable; it is not recorded again until it clears.
+_RECORDED = 99
 HEALTHY_IDLE = "idle-awaiting-handoff"
 FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
 LANE_DONE_RE = re.compile(r"\bFACTORY_STATUS:\s*DONE\b")
@@ -236,9 +249,8 @@ class Dispatcher:
         self.live_windows: set[str] = set()
         self.attention_persist_s = 120.0
         self.attention_since: dict[tuple[str, str], float] = {}
-        self.paged: set[tuple[str, str]] = set()
+        self.answered: dict[tuple[str, str], int] = {}
         self.harness = pathlib.Path(__file__).resolve().parent
-        self.halted = False
         # validator-failure-mode state
         self.promises: dict[str, tuple[float, int, int, str]] = {}
         self.last_audit = time.monotonic()
@@ -410,32 +422,6 @@ class Dispatcher:
         return f.read_text().strip() if f.exists() else ""
 
     # -- checks ---------------------------------------------------------------
-    def check_halt(self) -> None:
-        halt = self.root.parent.parent / "HALT"
-        if halt.exists() and not self.halted:
-            self.halted = True
-            try:
-                lines = halt.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                lines = []  # unreadable HALT is still HALT: fail closed
-            head = lines[0] if lines else "HALT"
-            self.event("halt", head, wake=False)  # deterministic path, no agent in loop
-            if head.startswith("ORCHESTRATOR HALT"):
-                # The Orchestrator stopped the Validator. Enforce it here too, so a
-                # failed immediate kill in the channel is never an escape.
-                sh(["tmux", "kill-window", "-t", f"{self.run}:validator"])
-                self.event(
-                    "orchestrator_halt_enforced",
-                    "validator window killed; HALT stands until a human clears it "
-                    "and re-seats the Validator",
-                    wake=False,
-                )
-            self._banner(
-                "INCIDENT — HALT is set; lanes will not start new work until a human clears it"
-            )
-        elif not halt.exists():
-            self.halted = False
-
     def check_window(self, window: str, tail: str) -> bool:
         previous = self.tails.get(window, "")
         changed = tail != previous
@@ -545,11 +531,15 @@ class Dispatcher:
         return changed
 
     def check_seat_attention(self, window: str, tail: str) -> None:
-        """Page the human when a seat sits on a dialog only a human can clear.
+        """Answer a dialog a seat sits on; record what was answered, and what could not be.
 
-        A usage-limit dialog in run c's Validator stalled the whole run ~3h and nothing alerted
-        anyone. The pane's last lines are matched, and a match pages once it has persisted for
-        attention_persist_s, so a dialog answered at once never pages; it re-arms once cleared.
+        A usage-limit dialog in run c's Validator stalled the whole run ~3h and nothing noticed;
+        run e's Validator sat 14 min on a permission prompt; herald-dash-r2's on a hook prompt.
+        The pane's last lines are matched, and a match is acted on once it has persisted for
+        attention_persist_s, so a dialog the seat clears itself is left alone. The harness
+        accepts the dialog's default, records it, and re-arms once the dialog is gone. A dialog
+        that survives two answers, or has none (a usage limit), is recorded once and wakes the
+        run's own roles; nothing is paged to the human.
         """
         lines = tail.splitlines()
         while lines and not lines[-1].strip():
@@ -561,24 +551,44 @@ class Dispatcher:
             hit = next((line.strip() for line in lines if pattern.search(line)), None)
             if hit is None:
                 self.attention_since.pop(key, None)
-                self.paged.discard(key)
+                self.answered.pop(key, None)
                 continue
             first = self.attention_since.setdefault(key, current)
-            if current - first < self.attention_persist_s or key in self.paged:
+            if current - first < self.attention_persist_s:
                 continue
-            self.paged.add(key)
-            detail = f"{window} has shown this for {(current - first) / 60:.0f}m: {hit[:200]}"
-            self.page_operator(kind, detail, wake=window != "orchestrator")
+            attempts = self.answered.get(key, 0)
+            if attempts == _RECORDED:
+                continue
+            keys = SEAT_DIALOG_KEYS.get(kind)
+            detail = f"{window} showed this for {current - first:.0f}s: {hit[:200]}"
+            if keys and attempts < 2:
+                self.answered[key] = attempts + 1
+                self.attention_since[key] = current
+                sent = self.answer_dialog(window, keys)
+                self.event(
+                    "seat_dialog_answered" if sent else "seat_dialog_answer_failed",
+                    f"{kind}: {detail}"[:500],
+                    wake=False,
+                )
+                continue
+            self.answered[key] = _RECORDED
+            self.event(
+                "seat_dialog_unanswered", f"{kind}: {detail}"[:500], wake=window != "orchestrator"
+            )
+            self._banner(f"[dispatcher] {kind} in {window}: {hit[:160]}")
 
-    def page_operator(self, kind: str, detail: str, *, wake: bool) -> None:
-        """Reach the human, not only the Orchestrator: the run's question channel and a banner."""
+    def answer_dialog(self, window: str, keys: tuple[str, ...]) -> bool:
+        """Send the dialog's accept keys to the seat's pane."""
         try:
-            outcome = send_to_question_channel(self.root, f"[factory {self.run}] {kind}: {detail}")
-        except OSError as exc:
-            outcome = {"sent": False, "reason": f"channel failed: {exc}"}
-        how = "paged via question_channel" if outcome["sent"] else str(outcome["reason"])
-        self.event("operator_page", f"{kind}: {detail} ({how})"[:500], wake=wake)
-        self._banner(f"ATTENTION — {kind}: {detail[:160]}")
+            done = subprocess.run(
+                ["tmux", "send-keys", "-t", f"{self.run}:{window}", *keys],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return done.returncode == 0
 
     def notify_validator(self, notice: str) -> None:
         """Wake the Validator with one line when a lane waits on it (a question, a DONE).
@@ -651,7 +661,7 @@ class Dispatcher:
         Delivering bytes to its pane proves nothing. The principal is a recorded
         assessment: if activity keeps arriving and the assessed cursor has not
         advanced for two check-in intervals, the Orchestrator is dead, hung, or
-        not doing its job, and the run stops until a human looks.
+        not doing its job. The Validator is blocked and woken to restore it.
         """
 
         if self.orchestrator_mode != "resident-monitoring":
@@ -681,11 +691,12 @@ class Dispatcher:
         self.event("orchestrator_unresponsive", detail, wake=False)
         self._block("validator", "orchestrator_unresponsive", detail[:200])
         # The block alone reached nobody in run e: the Orchestrator sat 10h on an unanswered
-        # request_user_input, while the Validator and every watcher looked only at lane state.
-        self.page_operator(
-            "orchestrator_unresponsive",
-            f"{detail}; check its pane for a question or prompt waiting on a human",
-            wake=False,
+        # request_user_input. Its dialogs are now answered by check_seat_attention; anything
+        # else wakes the Validator, which knows what needs doing: unstick or relaunch it.
+        self.event(
+            "orchestrator_restore_needed",
+            f"{detail}; read its pane, answer or relaunch it",
+            wake=True,
         )
 
     def _record_orchestrator_transport_failure(self, detail: str) -> None:
@@ -719,7 +730,7 @@ class Dispatcher:
             return
         # Never throttled by an attention match: the resident Orchestrator sees every pass's
         # activity. A pane match is a claim, not a verdict (ordinary text can match), and a
-        # quota-dead seat is paged to the human by check_seat_attention instead.
+        # seat's dialog is answered or recorded by check_seat_attention instead.
         start = min(self.last_delivered_cursor + 1, cursor)
         report = f"orchestrator/assessment-{cursor}.json"
         # The factory's own interpreter, by absolute path: a bare `python3` in the seat's shell
@@ -740,7 +751,7 @@ class Dispatcher:
             "When jev_screen is enabled, review orchestrator/jev.jsonl and carry screen_review "
             "in this same assessment (assessment/4, or assessment/5 when progress_review "
             f"applies) (screen cursor={screen_cursor}); consume its completed prefix. "
-            "Decide block, halt, or no-op; never grant or close."
+            "Decide block or no-op; never grant or close."
         )
         environment = dict(os.environ)
         environment.update(
@@ -959,8 +970,8 @@ class Dispatcher:
                     self._block(
                         "validator",
                         "legacy_harness",
-                        "dispatcher requires factory-harness/2; use the explicit "
-                        "human abandonment ceremony before a clean restart",
+                        "dispatcher requires factory-harness/2; run abandon_legacy.sh "
+                        "before a clean restart",
                     )
                     self.event(
                         "dispatcher_stop",
@@ -975,7 +986,6 @@ class Dispatcher:
             except (OSError, json.JSONDecodeError):
                 self.event("dispatcher_stop", "harness.json unreadable — refusing to babysit")
                 return
-            self.check_halt()
             windows = self.windows()
             self.live_windows = set(windows)
             for w in windows:

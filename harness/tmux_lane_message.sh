@@ -199,10 +199,13 @@ elif [ "$KIND" = "wrapup" ]; then
 else
   [ -z "$MINUTES" ] || { echo "lane-message: --minutes belongs to wrapup" >&2; exit 64; }
   if [ "$KIND" = "review" ]; then
-    # The Validator's progress review of a paused or finished Coder (lane_watchdog.py pauses a
-    # Coder every --review-every-minutes): requirement ids and observed behaviour against the
-    # ratified specification, resumed into the Coder's own thread so it keeps its context.
-    [ "$LANE" = coder ] || { echo "lane-message: a progress review goes to a Coder lane" >&2; exit 64; }
+    # The Validator's progress review of a paused or finished Coder or Tester (lane_watchdog.py
+    # pauses a Coder every --review-every-minutes): requirement ids and observed behaviour against
+    # the ratified specification, resumed into the lane's own session so it keeps its context.
+    # Founder, 2026-10-20: each role is one long-lived session; a review never becomes a new round.
+    case "$LANE" in coder|tester) ;; *)
+      echo "lane-message: a progress review goes to the Coder or the Tester" >&2; exit 64 ;;
+    esac
     # A resumed turn of a lane that used up its cap is stopped by its watcher within a poll.
     if "$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" <<'PY'
 import json, pathlib, sys
@@ -213,7 +216,8 @@ except (OSError, ValueError):
 raise SystemExit(0 if isinstance(state, dict) and state.get("status") == "capped" else 1)
 PY
     then
-      echo "lane-message: $RUN:$SLOT reached its cap, so a resumed turn would be stopped at once; launch a new --round with the finding in its brief" >&2
+      echo "lane-message: $RUN:$SLOT reached its metered spend cap, so a resumed turn would be stopped at once." >&2
+      echo "lane-message: plan lanes have no cap; move this work to a plan-billed lane (tmux_lane.sh --replace-session '<metered cap reached>')" >&2
       exit 70
     fi
     [ -z "$QUESTION_ID$ANSWER_FILE$AUTHORITY" ] || {
@@ -227,7 +231,11 @@ PY
     BASIS="${BASIS:-Validator progress review against the ratified specification}"
     MESSAGE_KIND="progress-review"
     VERDICT_WORD=$(printf '%s' "$VERDICT" | tr 'a-z-' 'A-Z_')
-    PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your work against the ratified specification. It names requirements and the behaviour it observed, never the tests."$'\n'
+    if [ "$LANE" = tester ]; then
+      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your tests against the ratified specification. It names requirements, amendments and the behaviour it observed, never the implementation."$'\n'
+    else
+      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your work against the ratified specification. It names requirements and the behaviour it observed, never the tests."$'\n'
+    fi
     if [ "$VERDICT" = repair ]; then
       SUFFIX=$'\n'"Fix what it names, keeping what already works: rerun the checks that passed before and restore any you break. Then commit and end with the lane's done line again."$'\n'
     else
@@ -300,6 +308,16 @@ destination.write_bytes(prefix + (
 print(digest)
 PY
   ) || exit $?
+  if [ "$LANE" = "tester" ] && [ "$MESSAGE_KIND" = "progress-review" ]; then
+    # The other direction of oracle independence (I3): a Tester review names requirements and
+    # observed behaviour, never the implementation. Refuse a diff or a source path outside tests.
+    if grep -E -q '^(diff --git|@@ |\+\+\+ |--- a/)|(^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(py|ts|tsx|js|jsx|mjs|go|rs|rb|java|kt)($|[^A-Za-z0-9_])' \
+        < <(grep -v -E '(^|[^A-Za-z0-9_-])tests?/' "$FULL_TMP"); then
+      echo "lane-message: implementation-leak refusal: a Tester review names implementation source or a diff." >&2
+      echo "Name the requirement and the behaviour observed from the product's outputs, never its code." >&2
+      exit 77
+    fi
+  fi
   if [ "$LANE" = "coder" ]; then
     # The guard judges every byte the lane will read, the file included.
     MESSAGE=$(<"$FULL_TMP")
@@ -478,14 +496,22 @@ PY
   # before the turn starts: discovery_check.latest_freeze then refuses until the lane is frozen
   # again, instead of passing the mid-run review snapshot as the candidate. Recorded first, so a
   # resume that fails to start still reads as unfrozen (fail closed).
-  "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" <<'PY'
+  # The turn is measured against its delivery limit and recorded; over the limit is never a
+  # refusal (lane_agent.py places an oversized argv turn in .git/factory-brief/ by reference).
+  "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" \
+    "$RETAINED_MESSAGE" "$AGENT" <<'PY'
 import datetime, json, os, sys
-journal, run, role, slot, sender, kind, message_id = sys.argv[1:]
+journal, run, role, slot, sender, kind, message_id, message, agent = sys.argv[1:]
+size = os.path.getsize(message)
+# Codex resumes read the turn from stdin; every registry harness takes it as one argv element.
+limit = None if agent in ("codex", "codex-ollama") else 131071
+delivery = "stdin" if limit is None else ("file-pointer" if size > limit else "argv")
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     "run_id": run, "role": role, "slot": slot, "sender": sender,
     "message_kind": kind, "message_id": message_id,
+    "prompt_bytes": size, "prompt_limit": limit, "prompt_delivery": delivery,
 }, sort_keys=True, separators=(",", ":"))
 fd = os.open(journal, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
 try:

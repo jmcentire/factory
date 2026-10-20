@@ -195,8 +195,8 @@ def decide_triage(request: TriageRequest, policy: SegregationPolicy) -> TriageDe
 
     Investigating is always available. Proposing a fix is available and appends its reference to
     the monitor. Deleting, weakening, or silencing is never available to the evaluating party:
-    it requires a human ratification through the specification-defect path, bound to this exact
-    monitor and action, and ratified by someone other than the evaluator.
+    it goes through the specification-defect path, bound to this exact monitor and action, and
+    is decided by someone other than the evaluator.
     """
 
     reasons: list[str] = []

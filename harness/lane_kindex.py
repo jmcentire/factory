@@ -311,8 +311,10 @@ def prepare(
 
     env_table = ",".join(f"{key}={_toml_string(value)}" for key, value in environment.items())
     args = ",".join(_toml_string(part) for part in command[1:])
+    # A Codex lane runs with --ask-for-approval never, which rejects every MCP tool call that
+    # would ask; the lane's own Kindex is pre-approved so it is usable without anyone clicking.
     override = (f"mcp_servers.kindex={{command={_toml_string(command[0])},args=[{args}],"
-                f"env={{{env_table}}}}}")
+                f"env={{{env_table}}},default_tools_approval_mode=\"approve\"}}")
     return {
         "schema_version": SCHEMA,
         "scope": "lane-copy-of-target-kin",

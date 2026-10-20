@@ -62,7 +62,7 @@ def test_a_determinable_item_is_decided_and_not_written_to_a_register(tmp_path: 
     assert register(root, "escalations.jsonl") == []
 
 
-def test_scheduled_sends_the_exceptional_through_the_configured_channel(tmp_path: Path) -> None:
+def test_scheduled_sends_a_genuine_impasse_through_the_configured_channel(tmp_path: Path) -> None:
     sent = tmp_path / "sent.txt"
     script = tmp_path / "channel.py"
     script.write_text(WRITER % str(sent), encoding="utf-8")
@@ -74,6 +74,7 @@ def test_scheduled_sends_the_exceptional_through_the_configured_channel(tmp_path
         "irreversible cutover with a weak basis",
         "--undeterminable",
         "--owned-here",
+        "--impasse",
         "--basis",
         "weak",
         "--reversibility",
@@ -92,6 +93,7 @@ def test_a_failing_channel_records_unsent_and_still_does_not_block(tmp_path: Pat
         "weak basis on a Critical surface",
         "--undeterminable",
         "--owned-here",
+        "--impasse",
         "--basis",
         "weak",
         "--critical",
@@ -105,9 +107,32 @@ def test_an_unconfigured_run_is_interactive_never_dark(tmp_path: Path) -> None:
     root = tmp_path / "bare"
     root.mkdir()
     (root / "harness.json").write_text("{}", encoding="utf-8")
-    record = route(root, "--subject", "unowned decision", "--undeterminable", "--owned-here")
+    record = route(
+        root, "--subject", "no role knows", "--undeterminable", "--owned-here", "--impasse"
+    )
     assert record["engagement"] == "interactive"
     assert record["action"] == "block-for-human"
+
+
+def test_an_interactive_run_decides_a_weak_irreversible_item_without_waiting(
+    tmp_path: Path,
+) -> None:
+    """The impasse rule: the human being present is not a reason to stop and ask."""
+    root = run_root(tmp_path, "interactive")
+    record = route(
+        root,
+        "--subject",
+        "irreversible cutover on a Critical surface",
+        "--undeterminable",
+        "--owned-here",
+        "--basis",
+        "weak",
+        "--reversibility",
+        "irreversible",
+        "--critical",
+    )
+    assert record["action"] == "record-escalation"
+    assert register(root, "escalations.jsonl")[0]["subject"].startswith("irreversible")
 
 
 def test_every_external_action_lands_in_the_side_effect_register(tmp_path: Path) -> None:

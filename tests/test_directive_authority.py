@@ -141,7 +141,8 @@ def test_engagement_stops_short_of_the_irreversible_critical_case() -> None:
     assert da.authorizes(engaged, reversibility=REVERSIBLE, critical=True).allowed
     blocked = da.authorizes(engaged, reversibility=IRREVERSIBLE, critical=True)
     assert not blocked.allowed
-    assert "needs the human to say so" in blocked.reason
+    # Recorded as an escalation; the run proceeds and nothing waits on the founder (P-0001).
+    assert "recorded as an escalation, and the run proceeds" in blocked.reason
 
 
 def test_a_unilateral_decision_carries_only_what_is_determinable() -> None:

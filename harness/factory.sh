@@ -34,7 +34,15 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 # whichever checkout an installed /command or the operator's shell happens to name.
 FACTORY_HOME="$(cd "$D/.." && pwd -P)"
 export FACTORY_HOME
-# Explicit per-run opt-in: captured lane data leaves this host only when selected.
+# The Orchestrator's System One screen is on in every run that has a key (founder, 2026-10-20):
+# a run can no longer be launched blind by leaving the flag out. The operator's personal TypeSafe
+# key may be named JMC_JEV_API_KEY. Captured lane data leaves this host only for this screen.
+if [ -z "${TYPESAFE_API_KEY:-}" ] && [ -n "${JMC_JEV_API_KEY:-}" ]; then
+  TYPESAFE_API_KEY="$JMC_JEV_API_KEY"; export TYPESAFE_API_KEY
+fi
+if [ -z "$JEV_CALLS" ] && [ -n "${TYPESAFE_API_KEY:-}" ]; then
+  JEV_CALLS=1000
+fi
 JEV_CONFIG=$("$FACTORY_PYTHON" - "$D" "$JEV_CALLS" <<'PYJEV'
 import json, os, sys
 sys.path.insert(0, sys.argv[1])
@@ -356,7 +364,7 @@ metadata = {
     "jev_screen": json.loads(jev_config_raw),
     "orchestrator_window": "orchestrator",
     "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
-    "orchestrator_effects": "monotone-block-halt-or-no-op",
+    "orchestrator_effects": "monotone-block-or-no-op",
     "orchestrator_boundary": "operator-owned-tmux-unqualified",
     "agreement_contract_version": "factory-agreement-contract/1",
     "agreement_requirement_region_families": (
@@ -412,11 +420,11 @@ resource_event '{}' planned
 SEAT_ENV="$(factory_seat_env)"
 printf -v CTL_CMD 'exec env %s %q %q --run %q --root %q' \
   "$SEAT_ENV" "$FACTORY_PYTHON" "$D/dispatcher.py" "$RUN" "$ROOT"
-VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Negotiate sufficiently deep product, architecture, and testing/monitoring artifacts with the human; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
+VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Derive sufficiently deep product, architecture, and testing/monitoring artifacts from the founder's words in TASK.md and decide what they leave open, recording each decision and its basis; the founder is involved only at a genuine impasse (no role in the run knows what needs doing), never asked to approve, confirm or ratify what they already asked for; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
-VALIDATOR_PROMPT+=" Before drafting Phase A, snapshot the pinned target's own rule files with python3 $D/repo_rules.py snapshot and read them all; cite every touched rule by path and id in the Product Specification, quote those rules verbatim into both lane briefs (the lanes cannot see the freeze-excluded guidance files), put any needed rule exception to the human instead of coding it, and state per touched rule in the PR body why the change complies."
+VALIDATOR_PROMPT+=" Before drafting Phase A, snapshot the pinned target's own rule files with python3 $D/repo_rules.py snapshot and read them all; cite every touched rule by path and id in the Product Specification, quote those rules verbatim into both lane briefs (the lanes cannot see the freeze-excluded guidance files), decide any needed rule exception yourself and record the rule, the case and the basis, and state per touched rule in the PR body why the change complies."
 VALIDATOR_PROMPT+=" Every Coder lane on a resumable harness pauses every 18 minutes of work and wakes you with lane-review-due: freeze it, review the frozen tree against the ratified specification, and resume it within minutes with tmux_lane_message.sh review (requirement ids and observed behaviour, never the tests); review each Tester lane on the same cadence for oracle quality and coverage against the testing strategy, never against the code; at every slice boundary and at least every 60 minutes write an evidenced debrief to artifacts/debriefs/ (harness/validator_debrief.py check; overdue says when one is owed); send findings after a judge into the Coder's own thread the same way, and reproduce a Tester FAIL from the implementation's own outputs before you route it."
-ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or ask the exact simplifying question and block. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Treat every cross-boundary identifier (principal, role, grant, table, metric or resource type, log field, token audience, env var, service or topic name) as unverified until $ROOT/artifacts/boundary-register.json records it on both sides: read $ROOT/orchestrator/BOUNDARIES.md, run $ROOT/orchestrator/bin/boundary_register.py verify --root $ROOT --workdir <the run's target workdir> whenever lanes touch a boundary, and block on any identifier a lane uses that the register lacks or names differently, or on access presumed without a record. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block, halt, or no-op: block gates the next transition; halt stops the Validator outright (HALT is set and its window is killed, and only a human clears HALT and re-seats it). Use halt when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
+ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or decide the simpler path, record the decision and its basis, and hand it to the Validator; the founder is involved only at a genuine impasse, when no role in the run knows what needs doing. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Treat every cross-boundary identifier (principal, role, grant, table, metric or resource type, log field, token audience, env var, service or topic name) as unverified until $ROOT/artifacts/boundary-register.json records it on both sides: read $ROOT/orchestrator/BOUNDARIES.md, run $ROOT/orchestrator/bin/boundary_register.py verify --root $ROOT --workdir <the run's target workdir> whenever lanes touch a boundary, and block on any identifier a lane uses that the register lacks or names differently, or on access presumed without a record. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block or no-op: a block gates the Validator's next transition until the Validator disposes of it, and nothing stops the run or waits on the founder. Block when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run, and say exactly what it must fix. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
 ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
 # A model the operator named goes on the command line. Without one these stay empty and each
 # agent runs its own configured default.
@@ -434,7 +442,7 @@ fi
 ORCHESTRATOR_MODEL_ARGS+="$(seat_effort_args "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_EFFORT")"
 # On a host whose kernel cannot give Codex's sandbox a namespace, the operator sets
 # FACTORY_LANE_SANDBOX=off and the container is the sandbox (harness/tmux_lane.sh, same switch).
-CODEX_SANDBOX_FLAGS="--sandbox workspace-write"
+CODEX_SANDBOX_FLAGS="--sandbox workspace-write --ask-for-approval never"
 [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
 if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
   # An unsandboxed seat is a fact of the run, recorded where the run's events are read, not only
@@ -460,11 +468,11 @@ case "$VALIDATOR_AGENT" in
       "$VALIDATOR_UNSET" "$SEAT_ENV" "$CODEX_SANDBOX_FLAGS" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   ollama)
-    printf -v VALIDATOR_CMD 'exec env %s ollama launch codex --model %q -- --sandbox workspace-write %q' \
+    printf -v VALIDATOR_CMD 'exec env %s ollama launch codex --model %q -- --sandbox workspace-write --ask-for-approval never %q' \
       "$SEAT_ENV" "$VALIDATOR_MODEL" "$VALIDATOR_PROMPT"
     ;;
   claude)
-    printf -v VALIDATOR_CMD 'exec env %s%s claude %s%q' \
+    printf -v VALIDATOR_CMD 'exec env %s%s claude --permission-mode bypassPermissions %s%q' \
       "$VALIDATOR_UNSET" "$SEAT_ENV" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
     ;;
   claude-ollama)
@@ -495,6 +503,29 @@ case "$VALIDATOR_AGENT" in
     ;;
 esac
 
+# Prompt size is verified on delegation (founder, 2026-10-18): each seat prompt is measured
+# against the one-argv-element limit its CLI receives it under, and the measurement is a run
+# event. The seat prompts are short main prompts that name the files the seat reads itself.
+"$FACTORY_PYTHON" - "$ROOT/events.jsonl" "$VALIDATOR_AGENT" "$VALIDATOR_PROMPT" \
+  "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_PROMPT" <<'PY' || exit 70
+import datetime, json, os, sys
+events, *pairs = sys.argv[1:]
+seats = {}
+for seat, (agent, prompt) in zip(("validator", "orchestrator"), (pairs[0:2], pairs[2:4])):
+    size = len(prompt.encode("utf-8"))
+    seats[seat] = {"agent": agent, "prompt_bytes": size, "prompt_limit": 131071,
+                   "within_limit": size <= 131071}
+row = json.dumps({
+    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "kind": "seat-prompt-size", "class": "seat", "source": "factory.sh", "wake": False,
+    "seats": seats,
+}, sort_keys=True, separators=(",", ":"))
+fd = os.open(events, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+try:
+    os.write(fd, (row + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY
 SAFE_HOME="${HOME:?factory: HOME is required to locate agent authentication}"
 SAFE_USER="${USER:-$(id -un)}"
 SAFE_PATH="${PATH:?factory: PATH is required}"
@@ -550,7 +581,7 @@ cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
 cp -f "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
 cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
-  "$D/boundary_register.py" \
+  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
 # run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
@@ -572,7 +603,8 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py" \
-  "$ROOT/orchestrator/bin/boundary_register.py"
+  "$ROOT/orchestrator/bin/boundary_register.py" "$ROOT/orchestrator/bin/escalate.py" \
+  "$ROOT/orchestrator/bin/seat_supervisor.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2
@@ -602,12 +634,23 @@ if ! tmux new-window -t "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
   echo "factory: dispatcher window failed; created tmux session was terminally accounted" >&2
   exit 70
 fi
+# The seats work only while the Orchestrator judges them (harness/seat_supervisor.py): unassessed
+# activity past the lease pauses the Validator, the Coder and the Tester, and the Orchestrator can
+# correct, stop or resume any of them. It also beats Herald's heartbeat, the run's dead-man switch.
+printf -v SUPERVISOR_CMD 'exec %q %q run --root %q --session %q' \
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" "$ROOT" "$RUN"
+if ! tmux new-window -d -t "$RUN" -n supervisor -c "$ROOT" "$SUPERVISOR_CMD"; then
+  echo "factory: the seat supervisor failed to start; a run without it is refused" >&2
+  tmux kill-session -t "$RUN" 2>/dev/null || true
+  resource_event '{"reason":"seat supervisor window failed","residue":false}' abandoned || true
+  exit 70
+fi
 IGNITION_FILES=""
 tmux select-window -t "$RUN:validator" 2>/dev/null || true
 resource_event '{}' active
 
 echo "factory '$RUN' is live: tmux attach -t $RUN"
-echo "  — accept the folder-trust prompt in each seat window to continue —"
+echo "  — the dispatcher answers each seat's folder-trust and permission prompts —"
 echo "  exact commit : $FACTORY_BASE_COMMIT"
 echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
 echo "  control root : $ROOT"

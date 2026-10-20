@@ -1292,10 +1292,10 @@ def decide_promotion(
         for surface_id, surface in surface_by_id.items()
         if surface.effective_criticality == CRITICALITY_CRITICAL
     }
-    if critical_ids:
-        # The accountable-human seat on a hazard surface is filled from a decided roster. An
-        # undeclared roster means nobody decided who may ratify, which is an absence rather than
-        # a permission; an approver outside a declared roster is an authority failure.
+    if critical_ids and required_approvers:
+        # A target that requires named approvers on a hazard surface fills them from a decided
+        # roster. An undeclared roster then means nobody decided who may approve; an approver
+        # outside a declared roster is an authority failure.
         roster: set[str] = set()
         for delegate in sorted(profile.critical_ratification_delegates):
             resolved_delegate = policy.resolve_human(delegate)

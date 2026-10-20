@@ -141,6 +141,7 @@ def _profile(
     *,
     surfaces: tuple[SurfaceControl, ...] | None = None,
     delegates: frozenset[str] = frozenset({"alice", "bob", "carol"}),
+    min_approvers: int = 2,
 ) -> CriticalityProfile:
     return CriticalityProfile(
         surfaces=surfaces
@@ -150,6 +151,7 @@ def _profile(
             _control("cosmetic-surface", CRITICALITY_COSMETIC),
         ),
         required_gate_ids=frozenset({"tests", "build"}),
+        critical_min_approvers=min_approvers,
         critical_ratification_delegates=delegates,
     )
 
@@ -618,7 +620,7 @@ def test_empty_request_blocks_default_deny() -> None:
     assert decision.disposition == DISPOSITION_BLOCK
     assert "candidate-digest-missing" in decision.reasons
     assert "criticality-profile-invalid:disturbed-surfaces-missing" in decision.reasons
-    assert decision.required_approvers == CRITICAL_APPROVER_FLOOR
+    assert decision.required_approvers == 2
 
 
 def test_standard_and_cosmetic_adequate_oracles_auto_promote_without_clicks() -> None:
@@ -956,14 +958,27 @@ def test_expired_or_wrong_candidate_risk_acceptance_cannot_open_gate() -> None:
     assert "risk-acceptance-candidate-mismatch" in wrong_candidate.reasons
 
 
-def test_critical_happy_path_requires_specialist_review_and_two_humans() -> None:
+def test_critical_happy_path_requires_specialist_review_and_the_targets_approvers() -> None:
     decision = decide_promotion(_critical_request(), _roster(), _profile())
 
     assert decision.allowed is True, decision.reasons
     assert decision.disposition == DISPOSITION_PROMOTE
     assert decision.highest_criticality == CRITICALITY_CRITICAL
-    assert decision.required_approvers == CRITICAL_APPROVER_FLOOR == 2
+    assert decision.required_approvers == 2
     assert decision.approver_count == 2
+
+
+def test_a_critical_promotion_waits_on_no_named_human_by_default() -> None:
+    """P-0001 (founder, 2026-10-18): the run decides its promotions; a Critical surface is
+    gated on its evidence, not on a person. No roster is consulted when no approver is
+    required."""
+    profile = _profile(min_approvers=CRITICAL_APPROVER_FLOOR, delegates=frozenset())
+    decision = decide_promotion(
+        _critical_request(profile=profile, approvers=()), _roster(), profile
+    )
+
+    assert decision.allowed is True, decision.reasons
+    assert decision.required_approvers == CRITICAL_APPROVER_FLOOR == 0
 
 
 def test_critical_oracle_gap_blocks_and_any_critical_waiver_is_prohibited() -> None:

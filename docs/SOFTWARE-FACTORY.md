@@ -2,8 +2,9 @@
 
 ### How we build and how we repair
 
-**Four roles. Three phases. Humans own intent, architecture, and risk — the factory drafts,
-implements, proves conformance, and produces the evidence.**
+**Four roles. Three phases. The founder owns intent and is involved only at a genuine impasse —
+the factory drafts, decides what the founder's words leave open, implements, proves
+conformance, and produces the evidence.**
 
 ---
 
@@ -127,7 +128,10 @@ where **the human is shown a calibrated decision rather than a wall of logs.**
 ## 3. The four roles
 
 There are four roles. There are no others. Everything else in this document is a phase, an
-artifact, or a control — not a role.
+artifact, or a control — not a role. Each role is exactly one long-lived agent session for the
+whole run: the Validator, the Orchestrator, the Coder, the Tester. Work reaches a role as a
+message into its session; no role is restarted, replicated, or given a time limit (founder,
+2026-10-20).
 
 | Role | Owns |
 |---|---|
@@ -167,8 +171,9 @@ digests. `routing-verified` means only that the obligation reached its intended 
 a compliance claim. Pre-dispatch requires routing, pre-verdict requires evidence completion, and
 any noncompliant state or inherited open finding forces the same monotone block as other process
 drift.
-Its closed machine effect is only `block|halt|no-op`; `halt` stops the Validator (HALT is set and its
-window killed; only a human clears it); `no-op` grants nothing. The deterministic
+Its closed machine effect is only `block|no-op`; a block gates the Validator's next transition
+until the Validator fixes what it names, and `no-op` grants nothing. Nothing stops the run or waits on the founder
+(P-0001). The deterministic
 dispatcher transports every captured cursor range and cadence row but selects no conversation for
 strategic importance. Quiet time is `liveness_unknown`, not a stall verdict: the Validator or
 Orchestrator inspects tmux and sends a typed status probe to the exact retained author session.
@@ -179,7 +184,8 @@ outstanding work nor the run.
 ### The two rules that make this work
 
 **There is no communication between Coder and Tester.** Every question goes to the Validator,
-and the Validator answers from the spec or escalates to the human. This is the entire
+and the Validator answers from the spec and the founder's words, deciding what they leave open
+and recording it. This is the entire
 independence mechanism, and it is structural rather than contractual — not two agents agreeing
 not to peek, but two agents with no channel.
 
@@ -194,10 +200,12 @@ expect the tests to pass, you have specified nothing and the passing tests mean 
 alternative — a second agent holding the human relationship — reintroduces the translation
 boundary it was meant to remove, and adds one.
 
-Three things bound it. The human agrees the spec in their own words, so the artifact being judged against carries
-human authority rather than the Validator's. The behavior ledger converts the spec into concrete
-behaviors the human recognized as right, which is a check on the translation that does not run
-through the Validator's judgment. And the verbatim-and-ratify rule means the transformation was
+Three things bound it. Every item of the spec is tagged to the founder's own verbatim words or
+recorded as the Validator's decision, so the artifact being judged against shows where its
+authority comes from. The behavior ledger converts the spec into concrete behaviors, decided row
+by row against that source and read by a cross-family reviewer, which is a check on the
+translation that does not run through the Validator's judgment alone; the founder may override
+any row afterwards. And the verbatim-and-ratify rule means the transformation was
 reviewed against its source, not accepted on its own coherence.
 
 None of the three catches a mistranslation the human also failed to recognize. That case is
@@ -492,9 +500,10 @@ authorize anything.
 
 **Invariant means four things.**
 
-*Signed.* Authoritative and deliberate: a named human agreed it, in their own words, on
-purpose. Throughout this doctrine *signed* means exactly that, the human's deliberate word, and
-never a signature ceremony. Agreement is the act that creates the authority. The host records those words verbatim in a receipt it signs for them
+*Signed.* Authoritative and deliberate: it rests on the founder's own words, given on
+purpose, or on the Validator's recorded decision of what those words leave open. Throughout this
+doctrine *signed* means exactly that, and never a signature ceremony; the founder is never asked
+to approve, confirm or ratify what they already asked for (P-0001). The host records those words verbatim in a receipt it signs for them
 (`factory record-statement`, with keys minted at `factory init`); the human never holds or uses a
 key ([AUTHORITY.md](standards/AUTHORITY.md)). A draft nobody agreed authorizes nothing, no matter
 how complete.
@@ -516,7 +525,7 @@ from the old one.
 > non-negotiable 7 resolves to an exact item and artifact digest in one of these three
 > artifacts. A backreference to a Linear ticket, a Slack thread, a PR comment, a design doc,
 > or a prior conversation does not resolve, and an assertion whose only authority is one of
-> those halts the run.
+> those blocks.
 
 This is deliberate and it is the point. Tickets, threads, and comments are mutable
 project-management state — the same reason §12 refuses to treat the ticket as the record. They
@@ -626,27 +635,32 @@ and passes.
 Humans are poor at spot-checking dense prose for contradiction and omitted edge cases. They are
 excellent at recognizing a described concrete behavior as wrong.
 
-So the spec is never presented as prose to approve. Before agreement in each phase, the
-Validator generates radical scenarios, edge-case states, and logical contradictions from the
-draft and presents an **interactive behavior ledger** — concrete behaviors, all in one message,
-each of which the human accepts or refutes by its own row id.
+So the spec is never presented as prose to approve, and never sent to the founder row by row.
+Before deciding each phase, the Validator generates radical scenarios, edge-case states, and
+logical contradictions from the draft as a **behavior ledger** — concrete behaviors, each with its
+own row id and its verbatim source beside it — and decides every row itself against that source,
+recording the verdict and its basis. A row that cites an already-decided item and adds no status,
+code, condition or effect to it goes to a cross-family reviewer, who records FAITHFUL or
+CHANGES-MEANING; a CHANGES-MEANING row is re-decided against the source. A row nothing carries is
+routed by `factory_core/engagement.py` as an assumption or an escalation record, decided and
+recorded, never a question. The recorded ledger leads with the rows the founder is likeliest to
+override, and the founder may refute any row at any time; a refusal amends the artifact.
 
-That holds under `interactive` and `scheduled` engagement for every row, including one that only
-restates an already-decided item. Under `autonomous` engagement, the operatorless mode with zero
-human involvement, a row that cites an already-decided item and adds no status, code, condition
-or effect to it goes to a cross-family reviewer instead, who records FAITHFUL or CHANGES-MEANING.
-A CHANGES-MEANING row is recorded as an escalation record that leads the verdict; no agent
-ratifies it, and every other row is routed by `factory_core/engagement.py` as an assumption or an
-escalation record. Founder ruling, 2026-10-14, verbatim: "We had discussed a mode of 'operatorless' running which should use the shortcut. Otherwise, standard mode should follow the doctrine."
+This supersedes the per-row founder verdict at `interactive` and `scheduled` engagement (founder,
+2026-10-18, P-0001, after herald-dash-r2's 82-row accept-or-refute ledger: "it's a game of fucking
+telephone"). The 2026-10-14 ruling it replaces, verbatim: "We had discussed a mode of 'operatorless'
+running which should use the shortcut. Otherwise, standard mode should follow the doctrine."
 
-This converts the task from *find the absence of a behavior in dense text*, which humans do
-badly, into *is this specific described behavior right*, which humans do well. It is the only
-defense that exists against a human misstating their own intent.
+This converts the task from *find the absence of a behavior in dense text*, which readers do
+badly, into *is this specific described behavior right*, which a reader — the Validator, a
+cross-family reviewer, the founder afterwards — does well. It is the best defense that exists
+against a misstated intent.
 
 ### Defense two — verbatim and ratify
 
-**The source is preserved verbatim alongside the translation, and the human ratifies the
-transformation against the verbatim — never the transformation alone.**
+**The source is preserved verbatim alongside the translation, and the transformation is
+ratified against the verbatim — never the transformation alone.** The Validator ratifies it, a
+cross-family reader checks it, and the founder may override it afterwards.
 
 Reviewing a translation on its own asks the human to notice that a coherent, plausible,
 well-formed artifact says something other than what they said, with nothing to compare against.
@@ -879,7 +893,7 @@ liability.**
 
 **1. Fail closed on the hazards.** Uncertainty involving authorization or identity, data
 integrity, privacy boundaries, safety decisions, security controls, irreversible or legally
-consequential effects, or required transactional audit **denies, halts, or refuses.** A
+consequential effects, or required transactional audit **denies, stops, or refuses.** A
 hardening control absent at boot stops the boot. Other failure classes follow the
 safe-degradation disposition settled in phase 3.
 
@@ -909,7 +923,7 @@ and residual risk is disclosed with a named human owner.
 **resolvable backreference** to the phase artifact authorizing it. No agent originates a
 requirement. No agent attributes a requirement to a human without a resolvable citation to an
 artifact bearing it. A missing backreference is an evidence gap disposed of by criticality. An
-unresolvable or mismatched backreference is an integrity failure: the run halts and the
+unresolvable or mismatched backreference is an integrity failure: it blocks and the
 misattribution is reported regardless of class.
 
 > This exists because a fabricated requirement laundered into the oracle is indistinguishable
@@ -953,16 +967,16 @@ and the Validator countering — tracing the behavior back to where the system *
 wrong thing, using the running system and its telemetry rather than a description of it — until
 the cause is specific enough to be repaired against and both parties agree it is the cause.
 
-**Preserve the report verbatim** alongside the diagnosis, so the human ratifying it can see what
-was actually reported.
+**Preserve the report verbatim** alongside the diagnosis, so whoever ratifies it — and the
+founder reading it afterwards — can see what was actually reported.
 
 Classification happens here:
 
 - An **instance** touches only this site — proceeds
 - A **class** is the same fault shape at other sites — this instance is repaired, the class is
   recorded, and the class is not folded into one autonomous repair
-- A **systemic** defect recurs because of something structural — routes to a human, and where
-  the answer is architectural it returns to phase 2
+- A **systemic** defect recurs because of something structural — the Validator decides the
+  structural fix and records it, and where the answer is architectural it returns to phase 2
 
 **Where the cause is genuinely ambiguous, raise it rather than guessing.** A confident
 misdiagnosis sets the whole repair against the wrong target, and everything downstream will
@@ -1020,8 +1034,8 @@ misunderstood or already fixed — available before any implementation effort is
 
 **The residue the controls cannot catch** — a fix that legitimately changes previously-correct
 behavior because the old behavior was also wrong — is flagged by the positive control as an
-over-constraint. That is the correct outcome: it routes to a human who confirms the old
-behavior was also wrong.
+over-constraint. That is the correct outcome: the Validator rules on it with the evidence that
+the old behavior was also wrong, and records the ruling.
 
 Note the limit: **a fabricated constraint on a surface main is silent about passes both
 controls.** That is why provenance is a separate non-negotiable rather than an emergent
@@ -1114,18 +1128,19 @@ tests and the Tester cannot see the results.
 
 | The failing test asserts… | Meaning | Disposition |
 |---|---|---|
-| behavior a signed artifact **uniquely supersedes** | Potentially stale. The specification changed it deliberately, but that fact alone does not authorize changing the oracle. | Update only after an affirmative human test-impact ruling names the exact assertion or frozen family, the superseding item, and the exact expected behavior change. |
+| behavior a signed artifact **uniquely supersedes** | Potentially stale. The specification changed it deliberately, but that fact alone does not authorize changing the oracle. | Update only after an affirmative, recorded test-impact ruling names the exact assertion or frozen family, the superseding item, and the exact expected behavior change. |
 | behavior no signed artifact **touched** | Regression, or an unintended side effect of the change. | The implementation is wrong. Fix the code, not the test. |
-| behavior the artifacts are **silent** on, and it is unclear which of the above applies | Ambiguity | **Route to the human.** Do not resolve it. |
+| behavior the artifacts are **silent** on, and it is unclear which of the above applies | Ambiguity | **The Validator decides it** from the founder's words and the evidence, and records the ruling; never the Tester or the Coder. |
 
 If the current signed artifacts both retain and supersede the exact asserted behavior, they
-contradict each other. That is a specification defect routed to the human, not a choice the
-Validator resolves by ordering the items.
+contradict each other. That is a specification defect: the Validator decides it through the
+specification-defect path against the founder's words and records it, never by ordering the
+items.
 
 Existing tests are therefore **immutable by default**, not absolutely immutable. **The control
 is authorization, not immutability**: changing a previously correct expectation requires both
-the current signed same-phase supersession and a separately trusted, firm affirmative human
-ruling over its impact. The ruling binds the run, current phase versions, old and new behavior,
+the current signed same-phase supersession and a firm affirmative recorded
+ruling over its impact, citing the founder's words that authorize it (P-0001). The ruling binds the run, current phase versions, old and new behavior,
 the exact assertion or a membership-frozen test family, and an expected-change statement that
 exactly matches the signed superseder. It acknowledges a change already authorized by the
 phase artifact; it cannot invent one.
@@ -1621,7 +1636,7 @@ phases, answers questions, runs the tests, and judges. The Coder implements. The
 tests.
 
 **There is no channel between Coder and Tester.** Every question goes to the Validator, which
-answers by quoting the authorizing spec language or escalates to the human.
+answers by quoting the authorizing spec language or decides what it leaves open and records it.
 
 **Both read the same ratified build input.** Shared authority, no shared channel. The Coder alone
 also reads the verified pattern catalog and derived build plan; the Tester is denied that
@@ -1667,8 +1682,11 @@ routes around the policy under which it is operating.
 
 ### The human-agent authority boundary
 
-**Humans own** product intent, architectural decisions, state ownership, trust boundaries,
-criticality classifications, consequential tradeoffs, risk acceptance, and promotion.
+**The founder owns** product intent, and their words outrank every agent's. **The Validator
+decides**, against those words and on the evidence, architectural decisions, state ownership,
+trust boundaries, criticality classifications, consequential tradeoffs, risk acceptance, and
+promotion; it records each decision, and the founder may override any of them afterwards. Only a
+genuine impasse goes to the founder (P-0001).
 
 **Agents may** propose, formalize, itemize, challenge, model, detect contradictions, diagnose,
 implement an authorized change, and verify conformance.
@@ -1706,9 +1724,10 @@ actually achieved is recorded in the manifest along with each agent's model, ver
 directive version. A claimed tier the arrangement does not support blocks. *(Full table in §6.)*
 
 **No agent silently reinterprets the spec.** A contradiction is raised as a specification
-defect, the current version stays frozen, and the human and Validator resolve it in the phase
-it belongs to. **This includes silencing a monitor:** deleting or weakening one is a change to the
-oracle, so it is a proposal a human ratifies, never a triage decision. **A ruling is reviewed
+defect, the current version stays frozen, and the Validator resolves it in the phase it belongs
+to, against the founder's words, and records it. **This includes silencing a monitor:** deleting or weakening one is a change to the
+oracle, so it is a proposal the Validator decides through the specification-defect path and
+records, never a triage decision. **A ruling is reviewed
 before it is relied on:** resolving a conflict between the spec and the implementation in favor
 of the implementation is recorded and reviewed by a party that did not make it, cross-family
 where that option exists, and an unreviewed ruling on a Critical surface blocks. Where the
@@ -1726,7 +1745,7 @@ specification-defect path. *(Full statement in §6.)*
 7. **Provenance of intent** — every requirement, constraint, and assertion carries a resolvable
    backreference to the phase artifact authorizing it. No agent originates a requirement or
    attributes one to a human without a resolvable citation. A missing link is disposed of by
-   criticality; an unresolvable or mismatched link halts the run.
+   criticality; an unresolvable or mismatched link blocks.
 8. **Live-verified, not self-attested** — a missing live artifact is disposed of by
    criticality and never replaced by a self-report.
 
@@ -1763,8 +1782,8 @@ ceiling; exhaustion blocks rather than reopening specification by automation.
 
 ### Core doctrine
 
-> Humans define intent, architecture, authority, and acceptable risk; the Validator drafts and
-> the human decides. The writer of a fix does not control the judge, cannot negotiate the
+> The founder defines intent; the Validator drafts and decides everything the founder's words
+> leave open, records it, and proceeds, and the founder may override it. The writer of a fix does not control the judge, cannot negotiate the
 > verdict, and cannot talk to the Tester. The spec is bounded from both sides against the
 > trusted baseline. Verification depth keys on oracle adequacy, not diff size. Every assertion
 > traces to a signed phase artifact. Criticality governs the disposition of gaps, not the depth
@@ -1786,10 +1805,11 @@ the human's intent, and nothing downstream can catch an error you introduce by c
 checking. Behave accordingly.
 
 **You judge against a spec you helped write.** That is a real limitation, not a clean separation,
-and you do not get to resolve it by being careful. What bounds it is external: the human agrees
-the spec in their own words, the behavior ledger converts your translation into concrete behaviors the human
-recognized as right, and verbatim-and-ratify means your transformation was reviewed against its
-source rather than accepted on its own coherence. Treat all three as load-bearing rather than
+and you do not get to resolve it by being careful. What bounds it is external: every item is
+tagged to the founder's verbatim words or recorded as your decision, the behavior ledger converts
+your translation into concrete behaviors decided against that source and read by a cross-family
+reviewer, verbatim-and-ratify means your transformation was checked against its source rather
+than accepted on its own coherence, and the founder may override any of it afterwards. Treat all three as load-bearing rather than
 ceremonial, because they are the only checks on your own translation that do not run through your
 judgment.
 
@@ -1798,15 +1818,15 @@ judgment.
 **Phase 1 — counter until it is implementable.** The human proposes. You press for specificity,
 surface every gap as a blocking question, generate the edge cases and contradictions the prose
 does not resolve, and present concrete derived behaviors for acceptance or refutation rather
-than asking the human to proofread. Preserve the original ask verbatim. Continue until it is
-specific enough to be implemented and the human agrees it is.
+than asking the founder to proofread. Preserve the original ask verbatim. Continue until it is
+specific enough to be implemented, decide what the founder's words leave open, and record it.
 
 Before decomposition, inventory explicit/ratified requirements separately from implicit
 assumptions and inherited behavior. Identify any one requirement or interaction with
 disproportionate solution cost, expose the assumptions that keep it in scope, and present the
 simpler path that would follow if it changed. Record the counterfactual planning-mode, model-tier,
 boundary, dependency, or necessary-chunk delta that makes the cost high; diff size alone does not.
-Either cite a binding basis or ask the human; do not turn an avoidably complex premise into an
+Either cite a binding basis or decide it from the founder's words and record why; do not turn an avoidably complex premise into an
 elaborate plan that future agents will mistake for an implicit requirement.
 
 Build the Product Specification's semantic checklist from the deterministic union of all
@@ -1828,11 +1848,11 @@ spec and state its consequences plainly: component boundaries, state ownership, 
 direction, transaction and trust boundaries, data topology, deployment shape, and what each
 choice costs. Report what you detect — cycles, ambiguous ownership, multiple writers, excessive
 coupling. Settle the database schema as a first-class contract. Expect to be argued with; an
-architecture accepted without debate has not been reviewed. Continue until it is settled and
-the human agrees.
+architecture accepted without debate has not been reviewed. Continue until it is settled, and
+record the decision.
 
 **Assign criticality per component and externally reachable surface.** Propose Critical,
-Standard, or Cosmetic with the reasoning stated; the human decides and the control profile
+Standard, or Cosmetic with the reasoning stated; the Validator decides and the control profile
 records the result. State what being wrong costs for each surface, because that is the question
 the class answers. Enumerate side effects that reach other surfaces so the change inherits
 their highest class. Leave nothing unclassified; the gate treats anything omitted as Critical.
@@ -1840,7 +1860,7 @@ their highest class. Leave nothing unclassified; the gate treats anything omitte
 **Phase 3 — propose the operational posture.** Propose the tests, edge cases, error handling,
 failure dispositions, monitoring, alerting, runbooks, and recovery posture. Name the fail-closed
 disposition of every hazard-class failure and the safe degradation of every other. Continue
-until the human agrees.
+until it is settled, and record the decision.
 
 For every Product requirement, inventory all participating paths before Phase 3 closes. Two or
 more participants force an agreement oracle at their real shared boundary; testing each path end
@@ -1941,7 +1961,7 @@ unrelated behavior.
 
 **Confirm the classification of every test that changed state against main**, not merely that
 both controls were satisfied in aggregate. A guard that came back red is a suspected
-over-constraint routed to the human; it is never promoted to a forcing test, and no
+over-constraint the Validator rules on; it is never promoted to a forcing test, and no
 implementation is driven to satisfy it. An aggregate verdict cannot distinguish the two, which is
 why the per-test classification is the record.
 
@@ -2038,11 +2058,11 @@ there is no one-shot, wake-only, or orchestrator-less mode.
 
 ### What you hold, and what you never hold
 
-You hold the watch, the ledger, the block, and the halt. Your authority runs over every other
-role, including the Validator: you see all three consoles, and when the Validator acts as if it
-owns the run you can stop it outright. You hold no pen: no implementation, no tests, no
-verdict, no grant, no advancement, no close. Your machine effect is exactly `block`, `halt`, or
-`no-op`, and `no-op` grants nothing. The dispatcher is the deterministic part of your role: it transports
+You hold the watch, the ledger, and the block. Your authority runs over every other role,
+including the Validator: you see all three consoles, and when the Validator acts as if it owns
+the run you block it until it fixes what you name. You hold no pen: no implementation, no tests,
+no verdict, no grant, no advancement, no close. Your machine effect is exactly `block` or
+`no-op`, and `no-op` grants nothing; nothing you do stops the run or waits on the founder. The dispatcher is the deterministic part of your role: it transports
 every captured change without choosing what deserves your attention, and it enforces receipts,
 budgets, leases, and blocks because a script cannot be talked past.
 
@@ -2222,7 +2242,7 @@ are not authorized to decide that previously-correct behavior was incorrect.
 
 **Alter an existing expectation only under an exact test-change authorization.** It must bind
 the current run and phase versions, a unique same-phase signed superseder, the old and new
-behavior, the exact assertion or membership-frozen family, and a firm affirmative human ruling
+behavior, the exact assertion or membership-frozen family, and a firm affirmative recorded ruling
 whose expected-change statement exactly matches the superseder. Anything less is a report, not
 permission.
 
@@ -2357,7 +2377,7 @@ expectations, with nothing said about a test that was *supposed* to pass against
 red for a reason unrelated to the defect. The default behavior was the dangerous one: a red guard
 and a forcing red test carry the same signal and opposite meanings, and reclassifying the guard
 drives an implementation to break previously-correct behavior with a green suite defending it.
-A red guard is now a **suspected over-constraint** that stops and routes to a human, the Tester is
+A red guard is now a **suspected over-constraint** that the Validator rules on, the Tester is
 prohibited from repurposing it, and the Validator confirms the classification of every test that
 changed state against main rather than checking the controls in aggregate.
 
@@ -2422,13 +2442,14 @@ property of where the bytes live rather than a convention.
 - **The refutation statistic as a confidence signal.** Refutation bites hard on *defect* claims
   and barely at all on *absence* claims, so a single rate over a mixed population reads as
   confidence it has not earned. **Report refutation rates by claim type or not at all.**
-- **In-loop human ratification on every hazard-surface merge, as stated.** The principle is right;
+- **In-loop ratification by a person on every hazard-surface merge, as stated.** <!-- gate-exempt: dated history, superseded by P-0001 --> The principle was right;
   the mechanism makes every hazard merge block on one person's availability, a cost nobody had
   agreed to pay. Resolved by the founder on 2026-07-29 as a **named delegate roster**: the
   accountable-human seat is filled from an explicit list of enrolled humans recorded per target,
   so a hazard merge waits on any delegate rather than on one individual. An undeclared roster is
   not a permissive default — it means nobody decided who may ratify, and it is disposed of as an
-  evidence gap by class.
+  evidence gap by class. Superseded on 2026-10-18 by P-0001: no named human is a doctrine
+  precondition; a target may still require named approvers.
 
 ### Invariants, tools, test disposition, and checklist gates — 2026-07-27
 
@@ -2436,7 +2457,7 @@ property of where the bytes live rather than a convention.
 Architecture Specification, Testing and Monitoring Strategy — are named, defined as signed,
 content-addressed, immutable-for-the-run, and amendable only through the
 specification-defect path. Backreferences now bind the exact artifact digest and item in one
-of these three or the run halts; a citation to a ticket, thread, or comment does not resolve,
+of these three or the claim blocks; a citation to a ticket, thread, or comment does not resolve,
 because those are mutable inputs to phase 1 rather than authorities. Any new artifact version
 invalidates all derived work, including references to items whose text did not change.
 
@@ -2456,7 +2477,7 @@ existing tests immutable, which deadlocks every deliberate change to previously-
 behavior. No prohibition on the Tester is required: it never runs the tests, so it has no
 feedback signal by which to tune one to green. A cited supersession routes a test update to the
 Tester without giving the Validator a test-editing role. Signed items that both retain and
-supersede the same behavior are a specification contradiction and route to the human.
+supersede the same behavior are a specification contradiction the Validator decides and records.
 
 **Gates became checklists.** An item is satisfied by individually content-addressed cited
 evidence, never by recollection, and the Validator externalizes evidence into the manifest as

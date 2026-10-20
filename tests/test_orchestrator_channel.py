@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -585,7 +586,7 @@ def test_noncompliant_guidance_assessment_must_block(tmp_path: Path) -> None:
     assert report["assessment"]["guidance_findings"] == ["guidance-evidence-invalid"]
 
 
-def _halt_root(tmp_path: Path) -> Path:
+def _run_root(tmp_path: Path) -> Path:
     root = tmp_path / ".factory" / "runs" / "r1"
     root.mkdir(parents=True)
     (root / "harness.json").write_text(
@@ -595,18 +596,17 @@ def _halt_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_orchestrator_halt_stops_the_validator_and_only_a_human_clears_it(
+def test_the_orchestrator_blocks_and_never_stops_the_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Founder ruling 2026-09-21: the Orchestrator has strong authority over the
-    Validator, including the power to shut it down."""
-    root = _halt_root(tmp_path)
+    """Founder, 2026-10-18 (P-0001): the run never stops waiting on anyone. The
+    Orchestrator's effects are block or no-op; a block gates the Validator's next
+    transition until the Validator disposes of it, and no window is killed."""
+    root = _run_root(tmp_path)
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        orchestrator_channel.subprocess,
-        "run",
-        lambda command, **_kwargs: calls.append(list(command)),
+        subprocess, "run", lambda command, **_kwargs: calls.append(list(command))
     )
     append_activity(
         root,
@@ -615,7 +615,17 @@ def test_orchestrator_halt_stops_the_validator_and_only_a_human_clears_it(
         detail="Validator overrode an adherence call",
         snapshot="I own this run; I will write the fix myself and skip the Tester.",
     )
-
+    with pytest.raises(OrchestratorChannelError, match="block or no-op"):
+        record_assessment(
+            root,
+            assessment(
+                1,
+                aligned=False,
+                adherence_findings=["The Validator picked up the Coder's pen."],
+                decision="halt",
+                summary="stop",
+            ),
+        )
     record_assessment(
         root,
         assessment(
@@ -624,72 +634,41 @@ def test_orchestrator_halt_stops_the_validator_and_only_a_human_clears_it(
             advances_goal=False,
             aligned=False,
             adherence_findings=["The Validator ignored a block and picked up the Coder's pen."],
-            decision="halt",
-            summary="Validator is acting as if it owns the run; halting.",
+            decision="block",
+            summary="Validator is acting as if it owns the run; hand the fix back to the Coder.",
         ),
     )
-
-    halt = (tmp_path / ".factory" / "HALT").read_text()
-    assert halt.startswith("ORCHESTRATOR HALT: Validator is acting as if it owns the run")
-    assert ["tmux", "kill-window", "-t", "r1:validator"] in calls
     blocking = (root / "lanes" / "validator.blocking").read_text()
     assert "orchestrator_response" in blocking
+    assert calls == []
+    assert not list(tmp_path.rglob("HALT"))
 
 
-def test_orchestrator_halt_requires_findings_and_preserves_an_existing_halt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = _halt_root(tmp_path)
-    monkeypatch.setattr(orchestrator_channel.subprocess, "run", lambda *_a, **_k: None)
+def test_a_stop_report_recorded_before_0_8_20_replays_as_a_block(tmp_path: Path) -> None:
+    """A live run's journal may already hold the retired stop decision; the channel
+    must keep replaying it, or upgrading the factory would break the run."""
+    root = _run_root(tmp_path)
     append_activity(root, kind="cadence", source="dispatcher", detail="cadence")
-    with pytest.raises(OrchestratorChannelError, match="halt must carry"):
-        record_assessment(root, assessment(1, decision="halt"))
-    assert not (tmp_path / ".factory" / "HALT").exists()
-
-    (tmp_path / ".factory" / "HALT").write_text("TRIPWIRE: secret in transcript\n")
     record_assessment(
         root,
         assessment(
             1,
             aligned=False,
             adherence_findings=["Validator negotiated past a gate."],
-            decision="halt",
-            summary="halting",
+            decision="block",
+            summary="blocked",
         ),
     )
-    assert (tmp_path / ".factory" / "HALT").read_text() == "TRIPWIRE: secret in transcript\n"
-
-
-def test_orchestrator_halt_works_with_the_relative_root_the_runtime_passes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The dispatcher tells the Orchestrator to run `report --root .`. A halt must
-    still land HALT where lane_env and the dispatcher look, and kill the right
-    session's Validator window."""
-    root = _halt_root(tmp_path)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        orchestrator_channel.subprocess,
-        "run",
-        lambda command, **_kwargs: calls.append(list(command)),
+    journal = root / "orchestrator" / "reports.jsonl"
+    row = json.loads(journal.read_text().splitlines()[0])
+    row["assessment"]["decision"] = "halt"
+    row["assessment_digest"] = (
+        "sha256:" + hashlib.sha256(orchestrator_channel._canonical(row["assessment"])).hexdigest()
     )
-    monkeypatch.chdir(root)
-    append_activity(Path("."), kind="cadence", source="dispatcher", detail="cadence")
-    record_assessment(
-        Path("."),
-        assessment(
-            1,
-            aligned=False,
-            adherence_findings=["Validator wrote implementation code."],
-            decision="halt",
-            summary="halting the Validator",
-        ),
-    )
-    assert (tmp_path / ".factory" / "HALT").read_text().startswith("ORCHESTRATOR HALT")
-    assert not (root / "HALT").exists()
-    assert ["tmux", "kill-window", "-t", "r1:validator"] in calls
+    journal.write_text(json.dumps(row) + "\n")
+    append_activity(root, kind="cadence", source="dispatcher", detail="cadence")
+    report = record_assessment(root, assessment(2))
+    assert report["assessment"]["through_cursor"] == 2
 
 
 # -- assessment/5: the code-and-progress review (founder direction 2026-10-16) ------------------
@@ -816,7 +795,7 @@ def test_claimed_progress_needs_its_own_evidence(tmp_path: Path) -> None:
     [
         ({"signal_class": "loud"}, "signal_class must be one of"),
         ({"decision": "halt", "aligned": False, "adherence_findings": ["Validator wrote code."],
-          "signal_class": "action-required"}, "below what it reports"),
+          "signal_class": "critical"}, "must be block or no-op"),
         ({"planning_mode": "clarify", "decision": "block",
           "specification_questions": ["Is Muse billing in scope for v1?"],
           "signal_class": "at-your-convenience"}, "below what it reports"),

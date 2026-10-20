@@ -478,7 +478,7 @@ def verify_tool_policy(
         elif signer is not None:
             reports.append(
                 "tool-policy-single-operator-anchored:"
-                f"{signer}: independent human approval unavailable; "
+                f"{signer}: no independent approver; "
                 "policy digest externally anchored"
             )
     else:

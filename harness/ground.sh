@@ -57,7 +57,7 @@ echo "== 4/6 tripwire =="
 # Scope is this run's seats and this run's leak surfaces. Seats: Claude names a transcript dir
 # after the seat's cwd with every non-alphanumeric byte as "-", so match the workdir's dir and
 # any nested lane cwds. Never widen to the whole machine — an unrelated session's output must not
-# halt this run. Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both
+# block this run. Known limit: the encoding is ambiguous (/repo/x/lane and /repo/x-other are both
 # "-repo-x-lane"), so a sibling workdir like /repo/x-other is also scanned for /repo/x.
 # Leak surfaces (with --run): content that can leave the host or be shared — the run's artifacts,
 # frozen lane snapshots, the shared lane seed, and Kindex stores (the checkout's .kin and every

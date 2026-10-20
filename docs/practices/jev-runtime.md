@@ -8,11 +8,12 @@ clears a block, or substitutes for a missing artifact. The API contract is the
 
 ## Select and bound it
 
-At ignition, add `--jev-screen-calls N` to `harness/factory.sh`, where N is 1–1000.
-`TYPESAFE_API_KEY` must already be in the operator environment. This explicit selection
-allows bounded captured lane text and retained run artifacts to be sent to
-`https://api.typesafe.ai/v1/systemone`. With no selection, metadata records `jev_screen: null`
-and no provider call occurs, even when a credential is present. Selection records the exact
+The screen is on in every run whose operator environment holds a TypeSafe key
+(`TYPESAFE_API_KEY`, or the operator's personal `JMC_JEV_API_KEY`), with 1,000 calls; pass
+`--jev-screen-calls N` (1–1000) to set a different ceiling (founder, 2026-10-20: a run must not
+be launched blind by leaving a flag out). The screen sends bounded captured lane text and retained
+run artifacts to `https://api.typesafe.ai/v1/systemone`. Only with no key at all does metadata
+record `jev_screen: null`, and the Orchestrator then runs every check by hand. Selection records the exact
 rulebook digest, `jev-1.13.0`, and the call ceiling. The key is transferred only to the run's
 tmux session environment, never to metadata, prompts, launch command strings, or receipts;
 the Orchestrator and author lanes use scrubbed environments.
@@ -73,8 +74,8 @@ Every `yes` (>0.7) and `escalate` (0.3–0.7 inclusive) rule requires its own di
 bounded evidence basis. `no` (<0.3) grants nothing. Missing evidence and provider failures are
 grouped under one `unavailable` review per occurrence instead of seventeen false findings.
 A dismissal is the Orchestrator's manual judgment, not a Jev clearance. An upheld finding
-requires an adherence finding and `block` or `halt`; the existing Validator/human disposition
-mechanism remains the only route to resolve a block. Reports that omit, replace, or skip
+requires an adherence finding and `block`; the Validator's evidence-bound disposition,
+once it has fixed what the block names, remains the only route to resolve a block. Reports that omit, replace, or skip
 receipts are refused, including at transition-time revalidation. Exact report retries remain
 idempotent. Disabled runs retain assessment/3 and manual checks.
 

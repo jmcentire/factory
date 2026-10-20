@@ -2,7 +2,7 @@
 
 How an agent reports to the human it works for. The report is the interface between the factory and its owner. The human reads it to decide what happens next, so anything the human has to decode, look up or ask about is a cost the agent passed on.
 
-It binds every lane, and it binds the Validator hardest, because the Validator owns the human relationship ([SOFTWARE-FACTORY.md §3](../SOFTWARE-FACTORY.md)) and its reports are what the human decides on. A report that hedges what was measured, or asserts what was assumed, corrupts the one check no agent can run on itself.
+It binds every lane, and it binds the Validator hardest, because the Validator owns the human relationship ([SOFTWARE-FACTORY.md §3](../SOFTWARE-FACTORY.md)) and its reports are what the founder reads, and overrides, afterwards. A report that hedges what was measured, or asserts what was assumed, corrupts the one check no agent can run on itself.
 
 Three commitments, in priority order: say what is true, say what the human needs, say it in as few words as carry the meaning. Brevity never buys itself at the cost of the first two.
 

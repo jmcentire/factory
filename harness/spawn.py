@@ -6,7 +6,7 @@
     spawn.py sweep  --root <run> [--signal TERM]
 
 Run e's Validator chose a SIGTERM target with ``pgrep -f "deno run --frozen"``, signalled a
-process that was not its child, and retried on the wrong result (HALT 1287); runs also left
+process that was not its child, and retried on the wrong result (incident 1287); runs also left
 orphaned processes behind twice. A process a run starts is therefore started here: in its own
 process group, with its pid, pgid and start time appended to ``<run>/spawns.jsonl`` and its
 output in ``<run>/spawns/<label>.log``. ``signal`` addresses only that recorded group, and only

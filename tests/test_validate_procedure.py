@@ -14,11 +14,10 @@ def test_projection_config_requirement_is_stated_before_phase_a() -> None:
     assert ".factory/projection.conf" in section and "pinned commit" in section
 
 
-def test_ledger_rows_are_batched_with_per_row_verdicts_and_a_citable_restatement_rule() -> None:
+def test_ledger_rows_get_a_verdict_each_and_a_citable_restatement_rule() -> None:
     flat = " ".join(PROCEDURE.split())
-    assert "in one message, each an accept-or-refute decision by row id" in flat
-    assert "verbatim source beside it" in flat
-    assert "a blanket accept ratifies no row" in flat
+    assert "Decide every row yourself, by id, against its verbatim source" in flat
+    assert "Never treat a blanket accept as ratification" in flat
     assert "A row with no citation is never a restatement." in flat
 
 
@@ -28,28 +27,21 @@ RULING = (
 )
 
 
-def test_only_autonomous_engagement_routes_restatements_past_the_human() -> None:
-    """Founder ruling 2026-10-14: the restatement shortcut is for operatorless runs; under
-    interactive and scheduled engagement the human rules on every ledger row by id, and the
-    procedure and the canonical doctrine say the same thing."""
-
-    from factory_core.engagement import AUTONOMOUS, ENGAGEMENTS
+def test_the_validator_decides_every_ledger_row_and_never_sends_rows_to_the_founder() -> None:
+    """P-0001 (founder, 2026-10-18), after herald-dash-r2's 82-row ledger: the Validator decides
+    every row against its source at every engagement; the procedure and the canonical doctrine
+    say the same thing, and the superseded per-row founder verdict is gone from both."""
 
     flat = " ".join(PROCEDURE.split())
     doctrine = " ".join(
         (PROCEDURE_ROOT / "docs" / "SOFTWARE-FACTORY.md").read_text(encoding="utf-8").split()
     )
-    human_reviewed = [level for level in ENGAGEMENTS if level != AUTONOMOUS]
-    assert sorted(human_reviewed) == ["interactive", "scheduled"]
-    assert ("Under `interactive` and `scheduled` engagement the human accepts or refutes every "
-            "row by id, a row that restates an already-decided item included.") in flat
-    assert "Only under `autonomous` engagement" in flat
-    assert RULING in flat and RULING.replace("founder ruling", "Founder ruling") in doctrine
-    assert "every CHANGES-MEANING row comes back to the human" not in flat
-    assert "a CHANGES-MEANING row is an escalation record that leads the verdict" in flat
-    assert ("That holds under `interactive` and `scheduled` engagement for every row, including "
-            "one that only restates an already-decided item.") in doctrine
-    assert "A CHANGES-MEANING row is recorded as an escalation record" in doctrine
+    assert ("never send the ledger to the founder for per-row verdicts") in flat
+    assert "the human accepts or refutes every row by id" not in flat
+    assert "a CHANGES-MEANING row is re-decided against the source" in flat
+    assert "never sent to the founder row by row" in doctrine
+    assert "That holds under `interactive` and `scheduled` engagement for every row" not in doctrine
+    assert RULING.replace("founder ruling, 2026-10-14, verbatim: ", "") in doctrine
 
 
 def test_declared_dependencies_are_cached_read_only_before_dispatch() -> None:

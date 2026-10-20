@@ -684,7 +684,7 @@ def test_receipt_chains_and_propagates_exit(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Control 5 — tripwire / HALT, and lane_env honoring it
+# Control 5 — tripwire incidents, and lane_env never stopping on a stop file
 # --------------------------------------------------------------------------
 
 
@@ -692,17 +692,23 @@ def fake_aws_key() -> str:
     return "AKIA" + "ABCDEFGHIJKLMNOP"  # constructed, never a literal credential
 
 
-def test_tripwire_halts_on_credential_shape(tmp_path: Path) -> None:
+def test_tripwire_records_an_incident_on_credential_shape(tmp_path: Path) -> None:
+    """A hit is an incident row and a failed grounding, never a stop file: the run scrubs
+    the hit, re-grounds and continues (founder, 2026-10-18)."""
     scan = tmp_path / "transcript.log"
     scan.write_text(f"harmless line\nexport AWS_KEY={fake_aws_key()}\n")
     env = {"HARNESS_DIR": str(tmp_path / ".harness")}
     r = run(["bash", str(HARNESS / "tripwire.sh"), str(scan)], tmp_path, env)
     assert r.returncode == 2
-    assert "Credential exposure" in r.stdout and "only item" in r.stdout
-    halt = tmp_path / ".harness" / "HALT"
-    assert halt.exists() and "INCIDENT" in halt.read_text()
+    assert "Credential exposure" in r.stdout and f"{scan}:2" in r.stdout
+    assert fake_aws_key() not in r.stdout
+    incidents = (tmp_path / ".harness" / "incidents.jsonl").read_text()
+    row = json.loads(incidents.splitlines()[0])
+    assert row["kind"] == "credential_exposure" and f"{scan}:2" in row["locations"]
+    assert fake_aws_key() not in incidents
+    assert not (tmp_path / ".harness" / "HALT").exists()
 
-    # Transcripts are JSON: a key right after an escaped newline must still halt,
+    # Transcripts are JSON: a key right after an escaped newline must still trip,
     # and so must one after a colour code (raw or JSON-escaped) or an identifier's _ or -.
     probes = {
         "nl": "\\n", "ansi": "\\u001b[32m", "raw": "\x1b[32m", "sgr": "\\u001b[38:2::255:0:0m",
@@ -712,8 +718,8 @@ def test_tripwire_halts_on_credential_shape(tmp_path: Path) -> None:
         escaped = tmp_path / f"{name}.jsonl"
         escaped.write_text('{"text": "ok' + prefix + "sk-" + "a" * 24 + '"}\n')
         env = {"HARNESS_DIR": str(tmp_path / f".{name}")}
-        halted = run(["bash", str(HARNESS / "tripwire.sh"), str(escaped)], tmp_path, env)
-        assert halted.returncode == 2
+        tripped = run(["bash", str(HARNESS / "tripwire.sh"), str(escaped)], tmp_path, env)
+        assert tripped.returncode == 2
 
 
 def test_tripwire_clean_paths_pass(tmp_path: Path) -> None:
@@ -722,15 +728,15 @@ def test_tripwire_clean_paths_pass(tmp_path: Path) -> None:
     env = {"HARNESS_DIR": str(tmp_path / ".harness")}
     r = run(["bash", str(HARNESS / "tripwire.sh"), str(scan)], tmp_path, env)
     assert r.returncode == 0 and "clean" in r.stdout
-    assert not (tmp_path / ".harness" / "HALT").exists()
+    assert not (tmp_path / ".harness" / "incidents.jsonl").exists()
 
 
-def lane_env_setup(tmp: Path, grounded: bool = True, halt: bool = False) -> dict[str, str]:
+def lane_env_setup(tmp: Path, grounded: bool = True, stop_file: bool = False) -> dict[str, str]:
     h = tmp / ".harness"
     h.mkdir(exist_ok=True)
     if grounded:
         (h / "grounded").write_text("2026-08-09T00:00:00Z\n")
-    if halt:
+    if stop_file:
         (h / "HALT").write_text("INCIDENT test\n")
     secrets = tmp / "secrets"
     secrets.mkdir(exist_ok=True)
@@ -740,14 +746,15 @@ def lane_env_setup(tmp: Path, grounded: bool = True, halt: bool = False) -> dict
     return {"HARNESS_DIR": str(h), "HARNESS_SECRETS": str(secrets)}
 
 
-def test_lane_env_refuses_during_halt(tmp_path: Path) -> None:
-    env = lane_env_setup(tmp_path, halt=True)
+def test_lane_env_never_stops_on_a_leftover_stop_file(tmp_path: Path) -> None:
+    """A stop file left by a pre-0.8.20 run is not a control: nothing stops the run."""
+    env = lane_env_setup(tmp_path, stop_file=True)
     r = run(
         ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"],
         tmp_path,
         env,
     )
-    assert r.returncode == 75 and "HALT" in r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 def test_lane_env_refuses_without_grounding(tmp_path: Path) -> None:
@@ -896,7 +903,7 @@ def test_ground_tripwire_honors_claude_config_dir(tmp_path: Path) -> None:
     assert r.returncode == 2, r.stdout + r.stderr
 
 
-def test_ground_explicit_leak_path_still_halts(tmp_path: Path) -> None:
+def test_ground_explicit_leak_path_still_blocks(tmp_path: Path) -> None:
     """Narrowing the scope must not blunt the tripwire on a real leak surface."""
     env = ground_fixture(tmp_path)
     leak = tmp_path / "export" / "config.env"
@@ -905,7 +912,7 @@ def test_ground_explicit_leak_path_still_halts(tmp_path: Path) -> None:
     env["TRIPWIRE_PATHS"] = str(leak.parent)
     r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
     assert r.returncode == 2, r.stdout + r.stderr
-    assert (tmp_path / ".harness" / "HALT").exists()
+    assert (tmp_path / ".harness" / "incidents.jsonl").exists()
 
 
 def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
@@ -1643,7 +1650,7 @@ def execution_truth_fixture(
                     "orchestrator_mode": "resident-monitoring",
                     "orchestrator_window": "orchestrator",
                     "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
-                    "orchestrator_effects": "monotone-block-halt-or-no-op",
+                    "orchestrator_effects": "monotone-block-or-no-op",
                     "orchestrator_boundary": "operator-owned-tmux-unqualified",
                     "orchestrator_cli_version": "agy 1.1.24-test",
                     "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
@@ -1731,6 +1738,108 @@ def test_tester_projection_is_interface_only(tmp_path: Path) -> None:
         ["git", "log", "--all", "--format=%s"], cwd=dest, capture_output=True, text=True
     ).stdout
     assert "SECRET-CONTEXT" not in log
+
+
+def _tester_projection_source(tmp_path: Path, includes: str) -> tuple[Path, Path, str]:
+    src = projection_fixture(tmp_path)
+    conf = src / ".factory" / "projection.conf"
+    conf.parent.mkdir()
+    conf.write_text(includes)
+    subprocess.run(["git", "add", ".factory/projection.conf"], cwd=src, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "config"],
+        cwd=src,
+        check=True,
+    )
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return src, conf, sha
+
+
+def _run_contracts(tmp_path: Path, *, tamper: bool = False) -> tuple[Path, Path]:
+    contracts = tmp_path / "artifacts" / "contracts"
+    contracts.mkdir(parents=True)
+    body = b'{"type": "object"}\n'
+    (contracts / "api.schema.json").write_bytes(body)
+    digest = "sha256:" + hashlib.sha256(body + (b"x" if tamper else b"")).hexdigest()
+    oracle = tmp_path / "artifacts" / "oracle-contract.md"
+    oracle.write_text(
+        "## 5. Contract file digests\n\n| File | sha256 |\n|---|---|\n"
+        f"| `contracts/api.schema.json` | `{digest}` |\n",
+        encoding="utf-8",
+    )
+    return contracts, oracle
+
+
+def test_a_tester_include_absent_at_the_pin_is_skipped_and_recorded(tmp_path: Path) -> None:
+    """herald-dash-r2 stalled here: tests/acceptance is the Tester's own suite and never exists
+    before the Tester writes it, so `git archive` refused the whole view."""
+    src, conf, sha = _tester_projection_source(
+        tmp_path, "tester-include: impl.py\ntester-include: tests/acceptance\n"
+    )
+    dest = tmp_path / "ws-tester"
+    r = run(
+        ["bash", str(HARNESS / "projection.sh"), "tester", str(src), sha, str(dest)],
+        tmp_path,
+        {"HARNESS_PROJECTION_CONF": str(conf)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert {p.name for p in dest.iterdir() if p.name != ".git"} == {"impl.py"}
+    receipt = json.loads(r.stdout.strip().splitlines()[-1])
+    assert receipt["absent_includes"] == ["tests/acceptance"]
+    assert receipt["run_contracts"] is None
+
+
+def test_the_tester_view_gets_the_runs_ratified_contracts_when_the_pin_has_none(
+    tmp_path: Path,
+) -> None:
+    """The Validator authors contracts/ during Phase A, so the pin cannot hold them; the run's
+    own contracts fill the view, each checked against the oracle contract's declared digest."""
+    src, conf, sha = _tester_projection_source(
+        tmp_path, "tester-include: impl.py\ntester-include: contracts\n"
+    )
+    contracts, oracle = _run_contracts(tmp_path)
+    dest = tmp_path / "ws-tester"
+    r = run(
+        ["bash", str(HARNESS / "projection.sh"), "tester", str(src), sha, str(dest)],
+        tmp_path,
+        {
+            "HARNESS_PROJECTION_CONF": str(conf),
+            "HARNESS_RUN_CONTRACTS": str(contracts),
+            "HARNESS_ORACLE_CONTRACT": str(oracle),
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert (dest / "contracts" / "api.schema.json").read_bytes() == b'{"type": "object"}\n'
+    receipt = json.loads(r.stdout.strip().splitlines()[-1])
+    assert receipt["absent_includes"] == ["contracts"]
+    assert receipt["run_contracts"]["files"] == {
+        "api.schema.json": "sha256:" + hashlib.sha256(b'{"type": "object"}\n').hexdigest()
+    }
+    # The view is a committed tree the manifest digest covers, contracts included.
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=dest, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "contracts/api.schema.json" in tracked
+
+
+def test_a_run_contract_that_differs_from_its_declared_digest_is_refused(tmp_path: Path) -> None:
+    src, conf, sha = _tester_projection_source(
+        tmp_path, "tester-include: impl.py\ntester-include: contracts\n"
+    )
+    contracts, oracle = _run_contracts(tmp_path, tamper=True)
+    r = run(
+        ["bash", str(HARNESS / "projection.sh"), "tester", str(src), sha, str(tmp_path / "ws")],
+        tmp_path,
+        {
+            "HARNESS_PROJECTION_CONF": str(conf),
+            "HARNESS_RUN_CONTRACTS": str(contracts),
+            "HARNESS_ORACLE_CONTRACT": str(oracle),
+        },
+    )
+    assert r.returncode == 66
+    assert "the oracle contract says" in r.stderr
 
 
 def test_projection_refuses_when_the_source_status_cannot_be_read(tmp_path: Path) -> None:
@@ -1964,9 +2073,10 @@ def test_factory_ignition_tripwire_scans_run_kindex_not_conversations(tmp_path: 
     )
 
     assert result.returncode == 2, result.stdout + result.stderr
-    halt_files = list(tmp_path.rglob("HALT"))
-    assert halt_files, "a Kindex leak must set HALT"
-    report = halt_files[0].read_text()
+    incident_files = list(tmp_path.rglob("incidents.jsonl"))
+    assert incident_files, "a Kindex leak must record an incident"
+    assert not list(tmp_path.rglob("HALT"))
+    report = incident_files[0].read_text()
     assert "coder-kindex-home/store.jsonl" in report
     assert ".claude/projects" not in report
 
@@ -2002,7 +2112,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert harness["orchestrator_agent"] == "agy"
     assert harness["orchestrator_mode"] == "resident-monitoring"
     assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
-    assert harness["orchestrator_effects"] == "monotone-block-halt-or-no-op"
+    assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
     assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
     assert harness["agreement_requirement_region_families"] == ["authored-product"]
     assert harness["guidance_contract_version"] == "factory-run-guidance/1"
@@ -2032,12 +2142,16 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         "agreement_contract.py",
         "attention_gate.py",
         "boundary_register.py",
+        "escalate.py",
         "lane_dialogue.py",
         "jev_rules.py",
         "jev_screen.py",
         "orchestrator_channel.py",
         "run_guidance.py",
+        "seat_supervisor.py",
     }
+    supervisor_line = next(ln for ln in tmux_calls.splitlines() if "-n supervisor " in ln)
+    assert "seat_supervisor.py run --root" in supervisor_line
     imported = subprocess.run(
         [sys.executable, str(orchestrator_bin / "orchestrator_channel.py"), "--help"],
         cwd=root,
@@ -2162,6 +2276,12 @@ def test_an_unsandboxed_ignition_is_recorded_as_a_run_event(tmp_path: Path, sand
     events = root / "events.jsonl"
     rows = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
     recorded = [row for row in rows if row.get("kind") == "seat-sandbox-off"]
+    # Prompt size is verified on delegation: each seat prompt is measured at ignition.
+    (sizes,) = [row for row in rows if row.get("kind") == "seat-prompt-size"]
+    assert set(sizes["seats"]) == {"validator", "orchestrator"}
+    assert all(
+        seat["prompt_bytes"] > 0 and seat["within_limit"] for seat in sizes["seats"].values()
+    )
     if sandbox == "off":
         assert "--dangerously-bypass-approvals-and-sandbox" in orchestrator
         assert len(recorded) == 1 and recorded[0]["source"] == "factory.sh"
@@ -2335,8 +2455,10 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
         operator,
         env,
     )
+    # A question never blocks (P-0001): it is carried into the record; this freeze still stops
+    # on the Tester's own unwritten cases.
     assert blocked_freeze.returncode == 70
-    assert "unanswered tester question" in blocked_freeze.stderr
+    assert "a question never blocks" in blocked_freeze.stderr
 
     delivered = run(
         [
@@ -2383,6 +2505,9 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
                 (root / "tmux-lanes" / "tester-launch.jsonl").read_text().splitlines()]
     assert launches[-1]["schema_version"] == "factory-tmux-lane-reopen/1"
     assert launches[-1]["message_kind"] == "spec-answer" and launches[-1]["sender"] == "validator"
+    # Prompt size is verified on delegation: the resumed turn is measured and recorded.
+    assert launches[-1]["prompt_bytes"] > 0
+    assert (launches[-1]["prompt_limit"], launches[-1]["prompt_delivery"]) == (None, "stdin")
 
 
 def test_tmux_lane_message_refuses_orchestrator_specification_answer(
@@ -5031,10 +5156,12 @@ def test_dispatcher_snapshot_minutes_creates_missing_minutes_dir(
     assert "validator said something" in log.read_text()
 
 
-def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
+def test_dispatcher_never_kills_the_validator_over_a_stop_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A stop file is not a control any more (founder, 2026-10-18): the dispatcher
+    neither reads it nor kills a seat over it."""
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
     root.mkdir(parents=True)
@@ -5047,15 +5174,43 @@ def test_dispatcher_enforces_an_orchestrator_halt_by_killing_the_validator(
     monkeypatch.setattr(d, "_banner", lambda _message: None)
     (tmp_path / ".harness" / "HALT").write_text("ORCHESTRATOR HALT: validator went rogue\n")
 
-    d.check_halt()  # type: ignore[attr-defined]
+    assert not hasattr(d, "check_halt")
+    assert not any("kill-window" in command for command in commands)
+    assert (root / "events.jsonl").read_text() == ""
 
-    assert ["tmux", "kill-window", "-t", "r1:validator"] in commands
-    kinds = [
-        json.loads(line)["kind"]
-        for line in (root / "events.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
-    assert kinds == ["halt", "orchestrator_halt_enforced"]
+
+def test_dispatcher_answers_a_seat_dialog_instead_of_paging_the_human(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """herald-dash-r2's Validator sat on a hook permission prompt. The harness accepts the
+    dialog's default and records it; it never pages the founder."""
+    mod = load_dispatcher()
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "events.jsonl").write_text("")
+    d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
+    d.attention_persist_s = 0
+    sent: list[tuple[str, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        d, "answer_dialog", lambda window, keys: sent.append((window, keys)) or True
+    )
+    monkeypatch.setattr(d, "_banner", lambda _message: None)
+    pane = (
+        "Bash(ls)\nDo you want to proceed?\n❯ 1. Yes\n"
+        "  2. No, and tell Claude what to do differently\n"
+    )
+
+    d.check_seat_attention("validator", pane)
+    d.check_seat_attention("validator", pane)
+    d.check_seat_attention("validator", pane)  # survived two answers: recorded, not paged
+    d.check_seat_attention("validator", pane)
+
+    assert sent == [("validator", ("Enter",)), ("validator", ("Enter",))]
+    rows = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
+    kinds = [row["kind"] for row in rows if row["kind"].startswith("seat_dialog")]
+    assert kinds == ["seat_dialog_answered", "seat_dialog_answered", "seat_dialog_unanswered"]
+    assert not hasattr(d, "page_operator")
 
 
 def test_checkpoint_delivers_orchestrator_reminders_into_validator_output(
@@ -5133,72 +5288,74 @@ def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
     assert kinds.count("orchestrator_unresponsive") == 1
 
 
-def paging_dispatcher(
+def dialog_dispatcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[object, object, Path, Path]:
-    """A resident-run dispatcher whose question channel appends each page to pages.txt."""
+) -> tuple[object, object, Path, list[tuple[str, tuple[str, ...]]]]:
+    """A resident-run dispatcher whose dialog answers are recorded instead of sent to tmux."""
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
     root.mkdir(parents=True)
-    pages = tmp_path / "pages.txt"
-    channel = tmp_path / "channel.sh"
-    channel.write_text(f'#!/bin/sh\ncat >> "{pages}"; echo >> "{pages}"\n', encoding="utf-8")
-    channel.chmod(0o755)
     (root / "run.json").write_text(json.dumps({"target_state": {}}))
     (root / "harness.json").write_text(json.dumps({
         "orchestrator_mode": "resident-monitoring", "audit_interval_min": 15,
-        "question_channel": str(channel),
     }))
     d = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
     d.attention_persist_s = 0  # type: ignore[attr-defined]
     monkeypatch.setattr(d, "_banner", lambda _message: None)
-    return mod, d, root, pages
+    answers: list[tuple[str, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        d, "answer_dialog", lambda window, keys: answers.append((window, keys)) or True
+    )
+    return mod, d, root, answers
 
 
-def test_the_dispatcher_pages_through_the_public_question_channel_send() -> None:
-    """Review of #54: the dispatcher and the engagement router share one channel sender, and
-    the dispatcher reaches it through engagement_route's public name, never a private one."""
-    mod = load_dispatcher()
-    route_module = sys.modules["engagement_route"]
-    assert mod.send_to_question_channel is route_module.send_to_question_channel  # type: ignore[attr-defined]
+def dialog_events(root: Path) -> list[dict[str, object]]:
+    path = root / "events.jsonl"
+    if not path.exists():
+        return []
+    rows = [json.loads(ln) for ln in path.read_text().splitlines()]
+    return [row for row in rows if str(row["kind"]).startswith("seat_dialog")]
+
+
+def test_the_dispatcher_pages_nobody() -> None:
+    """P-0001 (founder, 2026-10-18): the run involves the founder only at a genuine impasse.
+    A seat's dialog is the harness's to answer, so the dispatcher has no paging path at all."""
+    load_dispatcher()
     source = (HARNESS / "dispatcher.py").read_text(encoding="utf-8")
-    assert not re.search(r"from engagement_route import[^\n]*\b_\w+", source)
+    assert "send_to_question_channel" not in source
+    assert "page_operator" not in source
 
 
-def page_events(root: Path) -> list[dict[str, object]]:
-    rows = [json.loads(ln) for ln in (root / "events.jsonl").read_text().splitlines()]
-    return [row for row in rows if row["kind"] == "operator_page"]
-
-
-def test_a_usage_limit_dialog_in_a_seat_pages_the_human_once_per_occurrence(
+def test_a_usage_limit_dialog_is_recorded_once_per_occurrence_and_never_paged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#49: run c's Validator sat ~3h on a provider limit dialog and nothing alerted anyone."""
-    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    """#49: run c's Validator sat ~3h on a provider limit dialog and nothing noticed. A usage
+    limit has no answer; it is recorded for the run's own roles and waited out."""
+    _, d, root, answers = dialog_dispatcher(tmp_path, monkeypatch)
     limited = "working...\n You've hit your usage limit · resets 3pm (America/New_York)\n"
 
     d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
     d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
-    assert pages.read_text().count("usage_limit") == 1
-    assert "[factory r1] usage_limit: validator" in pages.read_text()
-    (page,) = page_events(root)
-    assert page["wake"] is True and "paged via question_channel" in str(page["detail"])
+    (event,) = dialog_events(root)
+    assert event["kind"] == "seat_dialog_unanswered" and event["wake"] is True
+    assert "usage_limit: validator" in str(event["detail"])
+    assert answers == []
 
     d.check_seat_attention("validator", "resumed; all clear\n")  # type: ignore[attr-defined]
     d.check_seat_attention("validator", limited)  # type: ignore[attr-defined]
-    assert len(page_events(root)) == 2  # a new occurrence pages again
+    assert len(dialog_events(root)) == 2  # a new occurrence is recorded again
 
 
-def test_a_dialog_above_a_fresh_panes_empty_rows_still_pages(
+def test_a_dialog_above_a_fresh_panes_empty_rows_is_still_seen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Live drill: capture-pane keeps a fresh pane's empty rows, which pushed a dialog near the
     top out of the 15 lines the attention check reads (dogfood #49, #79)."""
-    _, d, _, pages = paging_dispatcher(tmp_path, monkeypatch)
+    _, d, root, _ = dialog_dispatcher(tmp_path, monkeypatch)
     pane = " You've hit your usage limit · resets 3pm (America/New_York)\n" + "\n" * 40
     d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
     d.check_seat_attention("validator", pane)  # type: ignore[attr-defined]
-    assert pages.read_text().count("usage_limit") == 1
+    assert len(dialog_events(root)) == 1
 
 
 def test_a_marker_above_a_fresh_panes_empty_rows_is_within_every_reader(
@@ -5206,7 +5363,7 @@ def test_a_marker_above_a_fresh_panes_empty_rows_is_within_every_reader(
 ) -> None:
     """Codex review: question and DONE detection read the last 25 raw lines, so a marker near
     the top of a fresh 40-row pane was never seen. capture() drops the trailing empty rows."""
-    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    mod, d, _, _ = dialog_dispatcher(tmp_path, monkeypatch)
     pane = "working\nFACTORY_STATUS: DONE - all cases written\n" + "\n" * 40
     monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: pane)
     captured = d.capture("tester")  # type: ignore[attr-defined]
@@ -5218,7 +5375,7 @@ def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Live drill: an 80-column wrap split a trigger word, so capture joins wrapped rows (-J)."""
-    mod, d, _, _ = paging_dispatcher(tmp_path, monkeypatch)
+    mod, d, _, _ = dialog_dispatcher(tmp_path, monkeypatch)
     seen: list[list[str]] = []
     monkeypatch.setattr(mod, "sh", lambda argv, *a, **k: seen.append(argv) or "")
     d.capture("validator")  # type: ignore[attr-defined]
@@ -5227,32 +5384,41 @@ def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
 
 
 @pytest.mark.parametrize(
-    ("window", "dialog"),
+    ("window", "dialog", "kind"),
     [
         ("validator", "Bash command\n  TaskStop monitor-1\nDo you want to proceed?\n❯ 1. Yes\n"
-                      "  2. No, and tell Claude what to do differently (esc)\n"),
+                      "  2. No, and tell Claude what to do differently (esc)\n",
+         "permission_prompt"),
         ("orchestrator", "Would you like to run the following command?\n  $ rm -f x\n"
-                         "› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n"),
+                         "› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n",
+         "permission_prompt"),
+        ("validator", "Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit\n",
+         "folder_trust"),
+        ("coder", "Do you trust the contents of this directory?\n"
+                  "› 1. Yes, allow Codex to work in this folder\n",
+         "folder_trust"),
     ],
 )
-def test_a_seat_waiting_on_a_host_permission_prompt_pages_the_human(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str
+def test_the_harness_answers_a_seats_permission_or_trust_dialog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str, kind: str
 ) -> None:
-    """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched."""
-    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched; the
+    founder had to accept every seat's folder-trust prompt by hand. The harness accepts the
+    dialog's default and records it."""
+    _, d, root, answers = dialog_dispatcher(tmp_path, monkeypatch)
     d.check_seat_attention(window, "earlier output\n" + dialog)  # type: ignore[attr-defined]
-    (page,) = page_events(root)
-    assert str(page["detail"]).startswith(f"permission_prompt: {window} has shown this")
-    assert page["wake"] is (window != "orchestrator")
-    assert "permission_prompt" in pages.read_text()
+    assert answers == [(window, ("Enter",))]
+    (event,) = dialog_events(root)
+    assert event["kind"] == "seat_dialog_answered"
+    assert str(event["detail"]).startswith(f"{kind}: {window} showed this")
 
 
-def test_an_orchestrator_that_stops_assessing_pages_the_human_not_only_the_validator(
+def test_an_orchestrator_that_stops_assessing_wakes_the_validator_to_restore_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#81: run e's Orchestrator sat 10h on an unanswered request_user_input; the block it
-    earned went to the Validator's queue and reached no human."""
-    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    """#81: run e's Orchestrator sat 10h on an unanswered request_user_input. The Validator,
+    which knows what needs doing, is blocked and woken; nobody is paged."""
+    mod, d, root, _ = dialog_dispatcher(tmp_path, monkeypatch)
     monkeypatch.setattr(mod, "activity_highwater", lambda _root: 2900)
     monkeypatch.setattr(mod, "assessed_through", lambda _root: 2873)
     d.last_assessed = 2873  # type: ignore[attr-defined]
@@ -5262,16 +5428,16 @@ def test_an_orchestrator_that_stops_assessing_pages_the_human_not_only_the_valid
     d.check_orchestrator_liveness()  # type: ignore[attr-defined]
 
     assert "orchestrator_unresponsive" in (root / "lanes" / "validator.blocking").read_text()
-    assert pages.read_text().count("[factory r1] orchestrator_unresponsive") == 1
-    (page,) = page_events(root)
-    assert page["wake"] is False
+    rows = [json.loads(ln) for ln in (root / "events.jsonl").read_text().splitlines()]
+    (restore,) = [row for row in rows if row["kind"] == "orchestrator_restore_needed"]
+    assert restore["wake"] is True
 
 
 def _recording_injections(
     mod: object, monkeypatch: pytest.MonkeyPatch, cursor: dict[str, int]
 ) -> list[str]:
-    """Activity notices the dispatcher injects into the Orchestrator; the question channel and
-    everything else still runs for real."""
+    """Activity notices the dispatcher injects into the Orchestrator; everything else still runs
+    for real."""
 
     monkeypatch.setattr(mod, "activity_highwater", lambda _root: cursor["value"])
     monkeypatch.setattr(mod, "screen_pending", lambda _root: None)
@@ -5301,14 +5467,14 @@ def test_an_attention_match_never_throttles_the_orchestrators_activity_feed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead: str
 ) -> None:
     """#50 / review of #54: the resident Orchestrator is always running and sees every pass.
-    A seat dialog in its pane pages the human, and activity still reaches it on every pass that
-    has new activity, exactly as it does with no dialog showing."""
-    mod, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    A seat dialog in its pane is answered or recorded, and activity still reaches it on every
+    pass that has new activity, exactly as it does with no dialog showing."""
+    mod, d, root, _ = dialog_dispatcher(tmp_path, monkeypatch)
     cursor = {"value": 5}
     delivered = _recording_injections(mod, monkeypatch, cursor)
     d.check_seat_attention("orchestrator", dead)  # type: ignore[attr-defined]
-    (page,) = page_events(root)
-    assert page["wake"] is False and "[factory r1]" in pages.read_text()
+    (event,) = dialog_events(root)
+    assert event["wake"] is False
 
     for value in (5, 6, 7):
         cursor["value"] = value
@@ -5328,17 +5494,17 @@ def test_an_attention_match_never_throttles_the_orchestrators_activity_feed(
         "Usage limit reached errors are retried by the client with backoff\n",
     ],
 )
-def test_ordinary_text_about_rate_limits_does_not_page(
+def test_ordinary_text_about_rate_limits_is_not_a_dialog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ordinary: str
 ) -> None:
-    """Review of #54: only a provider's own usage-limit dialog pages; a seat's ordinary output
-    that mentions limits is work, not a dialog waiting on a human."""
-    _, d, root, pages = paging_dispatcher(tmp_path, monkeypatch)
+    """Review of #54: only a provider's own usage-limit dialog matches; a seat's ordinary output
+    that mentions limits is work, not a dialog."""
+    _, d, root, answers = dialog_dispatcher(tmp_path, monkeypatch)
     for window in ("orchestrator", "validator"):
         d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
         d.check_seat_attention(window, "working\n" + ordinary)  # type: ignore[attr-defined]
-    assert not (root / "events.jsonl").exists() or page_events(root) == []
-    assert not pages.exists() or "usage_limit" not in pages.read_text()
+    assert dialog_events(root) == []
+    assert answers == []
 
 
 def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
@@ -9093,7 +9259,7 @@ def _add_current_harness_contract(root: Path) -> dict[str, object]:
             "orchestrator_mode": "resident-monitoring",
             "orchestrator_window": "orchestrator",
             "orchestrator_visibility": "bounded-sampled-pane-snapshots-plus-cadence",
-            "orchestrator_effects": "monotone-block-halt-or-no-op",
+            "orchestrator_effects": "monotone-block-or-no-op",
             "orchestrator_boundary": "operator-owned-tmux-unqualified",
             "orchestrator_cli_version": "agy 1.1.24-test",
             "orchestrator_cli_contract": "agy-resident-new-project-sandbox-v1",
@@ -10693,7 +10859,10 @@ def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
          "FACTORY_ORCHESTRATOR_MODEL": "gpt-orch"},
     )
     calls = tmux_log.read_text().splitlines()
-    assert any("codex --sandbox workspace-write --model gpt-val " in line for line in calls)
+    assert any(
+        "codex --sandbox workspace-write --ask-for-approval never --model gpt-val " in line
+        for line in calls
+    )
     assert any("--no-alt-screen --model gpt-orch " in line for line in calls)
     assert not (root / "model-profile.json").exists()
 

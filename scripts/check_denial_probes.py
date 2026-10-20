@@ -233,6 +233,7 @@ _SHIP_CHAIN_DISPOSITIONS: dict[str, str] = {
     #           "toolchain" (language hygiene, not a factory gate)
     "check-purity": "gate:D",
     "check-doctrine": "meta",
+    "check-human-gates": "gate:NHG",
     "check-wiring": "meta",
     "check-authority": "meta",
     "check-harness": "meta",

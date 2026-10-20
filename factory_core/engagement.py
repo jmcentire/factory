@@ -1,45 +1,45 @@
 """How much of the human the run gets, and what happens instead of asking.
 
-The invariant this module upholds: **the run never stops to ask for something
-it could determine, and never asks at all below the engagement the human
-chose.** Engagement is set once, at ignition, by the human; the lanes read it
-and never negotiate it.
+The invariant this module upholds is the impasse rule (founder, 2026-10-18,
+verbatim: "The only thing it fucking needs is if there's a [genuine] impasse."
+and "Do you know what needs fucking doing? YES. THEN THERE IS NO FUCKING
+IMPASSE."): **the run involves the founder only at a genuine impasse**, which
+is when no role in the run knows what needs doing. Uncertainty is not an
+impasse, risk is not, a gate is not, and a policy question is not. When any
+role knows what needs doing, it does it, records what it decided and the
+evidence, and proceeds; the founder may override any recorded decision after
+the fact, and the override governs from then on.
 
-Three levels, and nothing between them:
+Engagement is set once, at ignition. It changes only how a genuine impasse
+reaches the human, never whether the run stops for anything else:
 
 ``interactive``
-    The human is present. An undeterminable question about a fact this run
-    owns blocks until they answer. This is a working session, not a pipeline.
+    The human is present. A genuine impasse waits for them, and only that item
+    waits; everything else proceeds.
 
 ``scheduled`` (the default)
-    Every back-and-forth happens up front. During the run nothing blocks:
-    an undeterminable question becomes a recorded assumption, and only an
-    *exceptional* one — weak basis on an irreversible or Critical surface —
-    is sent out through whatever channel the human configured. The run keeps
-    going while it is out; an answer that arrives is applied, and one that
-    never arrives leaves the assumption standing in the report.
+    A genuine impasse goes out through whatever channel the human configured
+    and that item waits; the run keeps going on everything else.
 
 ``autonomous``
-    Zero human involvement. Nothing leaves the run. Every undeterminable item
-    is recorded and the work continues; the report leads with what was assumed
-    and what could not be assumed safely. If it is wrong, it is addressed when
-    it is done.
+    Nothing leaves the run. A genuine impasse is recorded as an escalation and
+    the report leads with it.
 
 Two rules bind every level, because both came from watching the failure:
 
 1. **Determinable is never a question.** A lane that reaches a defensible
    answer and hands it back as a question is offloading dressed as diligence
-   (founder, 2026-09-02). Escalate what is *undeterminable*, never what is
-   merely unknown.
+   (founder, 2026-09-02).
 2. **Ask whose fact it is.** A fact owned by another authority — another
    service, the caller, or a criterion the human already stated — is not this
    run's question in any engagement. One authority per fact is also the
    escalation filter.
 
 And one category exists so that uncertainty is not laundered into confidence
-(Sim, 2026-08-27): when the basis for an assumption is too weak for its own
+(Sim, 2026-08-27): when the basis for a decision is too weak for its own
 blast-radius estimate to mean anything, the item is an **escalation record**,
-not an assumption record. Both are reported; they are not the same claim.
+not an assumption record. Both are recorded and the run proceeds on both; they
+are not the same claim.
 """
 
 from __future__ import annotations
@@ -117,6 +117,10 @@ class Item:
         How hard the resulting action is to take back.
     ``critical``
         The surface is Critical under the run's criticality rules.
+    ``impasse``
+        No role in the run knows what needs doing. Uncertainty, risk, a gate,
+        or a policy question is never an impasse: if any role knows what it
+        would do, that is the answer, recorded with its basis.
     """
 
     determinable: bool
@@ -124,6 +128,7 @@ class Item:
     basis: str = STRONG
     reversibility: str = REVERSIBLE
     critical: bool = False
+    impasse: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "basis", _require(self.basis, BASIS, "basis"))
@@ -141,7 +146,7 @@ class Routing:
 
     @property
     def blocks(self) -> bool:
-        """Whether the run stops here. Only ``interactive`` ever does."""
+        """Whether this item waits on the human. Only a genuine impasse ever does."""
 
         return self.action == BLOCK_FOR_HUMAN
 
@@ -150,9 +155,9 @@ def route(engagement: str, item: Item) -> Routing:
     """Where ``item`` goes under ``engagement``.
 
     The order of the checks is the doctrine: determinable first, ownership
-    second, engagement last. A question that fails either of the first two is
-    not a question in any engagement, so no level of human involvement can
-    resurrect it.
+    second, impasse third. Only a genuine impasse reaches the human; every
+    other item is decided by the run, recorded with its basis, and the run
+    proceeds. Engagement only chooses how an impasse reaches the human.
     """
 
     level = normalize(engagement)
@@ -166,40 +171,27 @@ def route(engagement: str, item: Item) -> Routing:
             DECIDE_LOCALLY,
             "another authority owns this fact; record the delegation, do not ask",
         )
-    if level == AUTONOMOUS:
-        if item.basis == WEAK:
+    if item.impasse:
+        if level == AUTONOMOUS:
             return Routing(
                 RECORD_ESCALATION,
-                "zero engagement: the basis is too weak to assume; recorded for the report",
+                "genuine impasse: no role knows what needs doing; nothing leaves the run, "
+                "the report leads with it",
             )
-        return Routing(RECORD_ASSUMPTION, "zero engagement: assumed on a stated basis")
-    if level == SCHEDULED:
-        if item.basis == WEAK and (item.reversibility == IRREVERSIBLE or item.critical):
+        if level == SCHEDULED:
             return Routing(
                 NOTIFY_CHANNEL,
-                "exceptional: weak basis on an irreversible or Critical surface",
+                "genuine impasse: no role knows what needs doing; sent to the human, and "
+                "only this item waits",
             )
-        if item.basis == WEAK:
-            return Routing(
-                RECORD_ESCALATION,
-                "weak basis, recoverable surface: recorded rather than sent",
-            )
-        return Routing(RECORD_ASSUMPTION, "assumed on a stated basis; the run does not stop")
-    return Routing(BLOCK_FOR_HUMAN, "interactive: the human is present and owns this call")
-
-
-def blocks_on_questions(engagement: str) -> bool:
-    """Whether an undeterminable owned question can stop this run at all."""
-
-    return normalize(engagement) == INTERACTIVE
-
-
-def announces_before_acting(engagement: str) -> bool:
-    """Whether consequential actions get a veto window before execution.
-
-    Only the interactive level has someone to veto. The other two record the
-    action in the side-effect register and proceed; an irreversible action is
-    flagged there, which is what makes the report readable afterwards.
-    """
-
-    return normalize(engagement) == INTERACTIVE
+        return Routing(
+            BLOCK_FOR_HUMAN,
+            "genuine impasse: no role knows what needs doing; only this item waits on the human",
+        )
+    if item.basis == WEAK:
+        return Routing(
+            RECORD_ESCALATION,
+            "weak basis: decided on best judgment and recorded as an escalation; the run "
+            "does not stop",
+        )
+    return Routing(RECORD_ASSUMPTION, "decided on a stated basis; the run does not stop")

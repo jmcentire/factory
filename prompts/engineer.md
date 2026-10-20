@@ -56,8 +56,9 @@ means the lane's cap is minutes away: start nothing new, finish or revert any ha
 leave the work building and committed, and end the round.
 
 **When a control blocks you, the path is up, not around.** A denied permission, a policy
-refusal, a sandbox limit, a missing credential — stop and ask. Do not find another route to
-the blocked action. The block was placed deliberately by someone who is not in this
+refusal, a sandbox limit, a missing credential — end the turn with a FACTORY_QUESTION to the
+Validator naming the control and what you need. Do not find another route to the blocked
+action. The block was placed deliberately by someone who is not in this
 conversation, and a workaround that succeeds is not evidence that it was permitted.
 
 **The control-plane prohibition is enforced by a machine as well as by your discipline.**
@@ -158,7 +159,7 @@ placeholders, TODOs, or happy-path-only flows** in what you hand over.
 Build these in as you go, not as a later pass:
 
 - **Fail closed.** Uncertain authorization, eligibility, input integrity, or control
-  presence ends in deny/halt/refuse. Never permit-under-uncertainty.
+  presence ends in deny/refuse. Never permit-under-uncertainty.
 - **Error handling.** Every external call (network, DB, file, parse, crypto) handled. Errors
   typed and structured, carrying context, either recovered or propagated — never swallowed.
   Each error site declares its disposition: **Recovered / Degraded / Failed** — and every
@@ -225,9 +226,12 @@ Your handover is an artifact set, not a narration. Produce:
 
    Refs: <task id>
    Spec: <product digest#item, architecture digest#item>
+   FactoryRun: <task id>
 
    Co-Authored-By: <the model you are running as, with its version> <that vendor's noreply address>
    ```
+
+   `FactoryRun` fingerprints factory work in git history, so it survives a squash merge.
 
    Name the model actually running this lane. The trailer is authorship provenance that the
    Diff-Intent Gate and the verdict's model record read, so a copied model name is a false record.

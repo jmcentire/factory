@@ -336,7 +336,7 @@ from factory_core.triage import (
     decide_triage,
 )
 
-__version__ = "0.8.19"
+__version__ = "0.8.22"
 
 __all__ = [
     "ADAPTER_PROTOCOLS",

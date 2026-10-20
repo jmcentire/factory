@@ -397,7 +397,13 @@ resource_event() {
 if [ "$RECOVER_EXISTING_FAILURE" -eq 0 ]; then
   resource_event "$WORKSPACE_ID" lane-workspace "$WS" planned '{}' "$EVIDENCE"
   set +e
-  PROJ=$(HARNESS_PROJECTION_CONF="$PROJECTION_CONF" \
+  # The run's ratified contracts fill a Tester view whose pin has none (projection.sh).
+  RUN_CONTRACT_ENV=()
+  if [ -d "$ROOT/artifacts/contracts" ] && [ -f "$ROOT/artifacts/oracle-contract.md" ]; then
+    RUN_CONTRACT_ENV=(HARNESS_RUN_CONTRACTS="$ROOT/artifacts/contracts"
+      HARNESS_ORACLE_CONTRACT="$ROOT/artifacts/oracle-contract.md")
+  fi
+  PROJ=$(env ${RUN_CONTRACT_ENV[@]+"${RUN_CONTRACT_ENV[@]}"} HARNESS_PROJECTION_CONF="$PROJECTION_CONF" \
     "$D/projection.sh" "$ROLE" "$FACTORY_SOURCE_ROOT" "$FACTORY_BASE_COMMIT" "$WS")
   PROJ_RC=$?
   set -e
