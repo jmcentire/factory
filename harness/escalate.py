@@ -210,8 +210,8 @@ class Herald:
             return None
         reply = _decode(content_type, body)
         if "error" in reply:
-            error = reply["error"] if isinstance(reply["error"], dict) else {}
-            raise EscalationError(f"Herald refused {method}: {error.get('message', 'error')}")
+            refusal = reply["error"] if isinstance(reply["error"], dict) else {}
+            raise EscalationError(f"Herald refused {method}: {refusal.get('message', 'error')}")
         return reply.get("result")
 
     def open(self) -> None:

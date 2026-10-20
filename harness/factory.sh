@@ -69,9 +69,20 @@ VALIDATOR_MODEL="${FACTORY_VALIDATOR_MODEL:-}"
 ORCHESTRATOR_MODEL="${FACTORY_ORCHESTRATOR_MODEL:-}"
 # Any registered harness (harness/agents.py) may hold either resident seat; ollama is Codex on a
 # local model and stays a Validator option.
+# kickoff: the session that started the run is the Validator (the founder's default, 2026-10-17).
+# No second Validator is launched; the validator window mirrors that session's transcript and
+# queues what the factory types into it in the Validator's inbox (harness/validator_mirror.py).
 case "$VALIDATOR_AGENT" in
   codex|ollama|claude|claude-ollama|agy|muse|cursor-agent|prime-agent) ;;
-  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (codex|ollama|claude|claude-ollama|agy|muse|cursor-agent|prime-agent)" >&2; exit 64 ;;
+  kickoff)
+    VALIDATOR_TRANSCRIPT="${FACTORY_VALIDATOR_TRANSCRIPT:-}"
+    if [ -z "$VALIDATOR_TRANSCRIPT" ] || [ -L "$VALIDATOR_TRANSCRIPT" ] || [ ! -f "$VALIDATOR_TRANSCRIPT" ]; then
+      echo "factory: a kickoff Validator needs FACTORY_VALIDATOR_TRANSCRIPT, the kickoff session's transcript file" >&2
+      exit 64
+    fi
+    VALIDATOR_TRANSCRIPT="$(cd "$(dirname "$VALIDATOR_TRANSCRIPT")" && pwd -P)/$(basename "$VALIDATOR_TRANSCRIPT")"
+    ;;
+  *) echo "factory: unknown validator agent '$VALIDATOR_AGENT' (kickoff|codex|ollama|claude|claude-ollama|agy|muse|cursor-agent|prime-agent)" >&2; exit 64 ;;
 esac
 case "$ORCHESTRATOR_AGENT" in
   agy|codex|claude|claude-ollama|muse|cursor-agent|prime-agent) ;;
@@ -433,8 +444,11 @@ case "$VALIDATOR_AGENT" in
   codex|claude|claude-ollama|agy|muse|cursor-agent|prime-agent)
     [ -z "$VALIDATOR_MODEL" ] || printf -v VALIDATOR_MODEL_ARGS -- '--model %q ' "$VALIDATOR_MODEL" ;;
 esac
-VALIDATOR_MODEL_ARGS+="$(seat_effort_args "$VALIDATOR_AGENT" "$VALIDATOR_EFFORT")"
-VALIDATOR_UNSET="$(seat_unset_args "$VALIDATOR_AGENT")"
+VALIDATOR_UNSET=""
+if [ "$VALIDATOR_AGENT" != kickoff ]; then
+  VALIDATOR_MODEL_ARGS+="$(seat_effort_args "$VALIDATOR_AGENT" "$VALIDATOR_EFFORT")"
+  VALIDATOR_UNSET="$(seat_unset_args "$VALIDATOR_AGENT")"
+fi
 ORCHESTRATOR_MODEL_ARGS=""
 if [ -n "$ORCHESTRATOR_MODEL" ]; then
   printf -v ORCHESTRATOR_MODEL_ARGS -- '--model %q ' "$ORCHESTRATOR_MODEL"
@@ -463,6 +477,16 @@ finally:
 PY
 fi
 case "$VALIDATOR_AGENT" in
+  kickoff)
+    # The kickoff session reads its brief from the run and watches its inbox; nothing launches.
+    VALIDATOR_PROMPT+=" You are the session that kicked off this run; no other Validator exists. Watch $ROOT/validator/inbox.jsonl for the whole run (each line is a notice or an Orchestrator correction the factory typed into your window) and act on every line as it arrives. While the Orchestrator has you stopped, every lane is held: apply the correction, then the Orchestrator resumes you."
+    mkdir -p -m 700 "$ROOT/validator"
+    ( umask 077; printf '%s\n' "$VALIDATOR_PROMPT" > "$ROOT/validator/BRIEF.md" )
+    : > "$ROOT/validator/inbox.jsonl"
+    chmod 600 "$ROOT/validator/inbox.jsonl"
+    printf -v VALIDATOR_CMD 'exec %q %q --transcript %q --inbox %q' \
+      "$FACTORY_PYTHON" "$D/validator_mirror.py" "$VALIDATOR_TRANSCRIPT" "$ROOT/validator/inbox.jsonl"
+    ;;
   codex)
     printf -v VALIDATOR_CMD 'exec env %s%s codex %s %s%q' \
       "$VALIDATOR_UNSET" "$SEAT_ENV" "$CODEX_SANDBOX_FLAGS" "$VALIDATOR_MODEL_ARGS" "$VALIDATOR_PROMPT"
@@ -660,4 +684,8 @@ echo "  model lanes  : QUALIFIED_PR2"
 echo "  sandbox      : ${FACTORY_LANE_SANDBOX:-on}"
 echo "  validator    : operator-owned coordination"
 echo "  validator ai : $VALIDATOR_AGENT${VALIDATOR_MODEL:+ ($VALIDATOR_MODEL)}"
+if [ "$VALIDATOR_AGENT" = kickoff ]; then
+  echo "  kickoff brief: $ROOT/validator/BRIEF.md (read it now)"
+  echo "  kickoff inbox: $ROOT/validator/inbox.jsonl (watch it for the whole run)"
+fi
 echo "  orchestrator : $ORCHESTRATOR_AGENT${ORCHESTRATOR_MODEL:+ ($ORCHESTRATOR_MODEL)} (resident strategic monitor; tmux-unqualified)"

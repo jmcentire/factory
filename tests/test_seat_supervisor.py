@@ -194,3 +194,57 @@ def test_only_live_role_seats_are_controlled(tmp_path: Path) -> None:
             supervisor.control(
                 root, seats, seat=seat, action="correct", rule="r", evidence="e", correction="c"
             )
+
+
+def kickoff_root(tmp_path: Path) -> Path:
+    root = run_root(tmp_path)
+    (root / "harness.json").write_text(json.dumps({"validator_agent": "kickoff"}))
+    return root
+
+
+def test_stopping_the_kickoff_validator_holds_every_lane_and_never_freezes_the_session(
+    tmp_path: Path,
+) -> None:
+    root, seats = kickoff_root(tmp_path), FakeSeats({"validator": 10, "coder": 20, "tester": 30})
+    supervisor.control(
+        root,
+        seats,
+        seat="validator",
+        action="stop",
+        rule="no fresh session",
+        evidence="launched coder round 4 over a live session",
+        correction="resume coder's own session",
+    )
+    assert sorted(seats.signals) == [(20, signal.SIGSTOP), (30, signal.SIGSTOP)]
+    assert seats.delivered and seats.delivered[0][0] == "validator"
+    assert "resume coder's own session" in seats.delivered[0][1]
+    seats.signals.clear()
+    supervisor.control(
+        root, seats, seat="validator", action="resume", rule="", evidence="", correction=""
+    )
+    assert sorted(seats.signals) == [(20, signal.SIGCONT), (30, signal.SIGCONT)]
+    assert supervisor.load_state(root) == {}
+
+
+def test_a_lane_launched_while_the_kickoff_validator_is_stopped_is_held(tmp_path: Path) -> None:
+    root, notified = kickoff_root(tmp_path), []
+    seats = FakeSeats({"validator": 10, "coder": 20})
+    supervisor.control(
+        root, seats, seat="validator", action="stop", rule="r", evidence="e", correction="c"
+    )
+    seats._panes["tester"] = 30
+    seats.signals.clear()
+    tick(root, seats, supervisor.Journal(root), T0, notified)
+    assert seats.signals == [(30, signal.SIGSTOP)]
+
+
+def test_a_lagging_orchestrator_pauses_lanes_and_tells_the_kickoff_validator(
+    tmp_path: Path,
+) -> None:
+    root, notified = kickoff_root(tmp_path), []
+    seats = FakeSeats({"validator": 10, "coder": 20})
+    activity(root, 1, T0)
+    tick(root, seats, supervisor.Journal(root), T0 + datetime.timedelta(minutes=20), notified)
+    assert seats.signals == [(20, signal.SIGSTOP)]
+    assert seats.delivered and seats.delivered[0][0] == "validator"
+    assert "unassessed" in seats.delivered[0][1]

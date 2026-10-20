@@ -10816,6 +10816,53 @@ def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> No
     assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
 
 
+def test_a_kickoff_validator_is_refused_without_its_transcript(tmp_path: Path) -> None:
+    task = "Exercise a kickoff Validator."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    refused = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        {**env, "FACTORY_VALIDATOR_AGENT": "kickoff"},
+    )
+    assert refused.returncode == 64
+    assert "FACTORY_VALIDATOR_TRANSCRIPT" in refused.stderr
+    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
+
+
+def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_path: Path) -> None:
+    """The founder's default: the session that kicked off the run is the Validator. Its window
+    mirrors that session and queues what the factory types into it; no Validator agent starts."""
+
+    task = "Exercise a kickoff Validator."
+    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    transcript = tmp_path / "kickoff-session.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        {
+            **env,
+            "FACTORY_VALIDATOR_AGENT": "kickoff",
+            "FACTORY_VALIDATOR_TRANSCRIPT": str(transcript),
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((root / "harness.json").read_text())["validator_agent"] == "kickoff"
+    validator_line = next(
+        ln for ln in tmux_log.read_text().splitlines() if "-n validator " in ln
+    )
+    assert "validator_mirror.py --transcript" in validator_line
+    assert str(transcript.resolve()) in validator_line
+    assert not any(agent in validator_line for agent in (" codex ", " claude ", " muse "))
+    brief = root / "validator" / "BRIEF.md"
+    assert "inbox.jsonl" in brief.read_text() and "VALIDATION-DIRECTIVE.md" in brief.read_text()
+    assert brief.stat().st_mode & 0o077 == 0
+    assert (root / "validator" / "inbox.jsonl").stat().st_mode & 0o077 == 0
+    assert "kickoff inbox:" in result.stdout
+
+
 def _ignite_and_launcher(
     tmp_path: Path, task: str, env_extra: dict[str, str] | None = None
 ) -> tuple[Path, Path, Path, Callable[..., subprocess.CompletedProcess[str]]]:

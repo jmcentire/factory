@@ -3,6 +3,28 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.23] - 2026-10-20
+
+The session that kicks off a run can be its Validator, with the Orchestrator's oversight
+intact (founder, 2026-10-17: *"assume the LLM kicking it off is the validator"*). Endgame judges
+Git LFS content instead of pointer stubs (#59).
+
+### Added
+
+- **`FACTORY_VALIDATOR_AGENT=kickoff`.** No Validator agent is launched. The `validator` window
+  runs `harness/validator_mirror.py` over the kickoff session's transcript
+  (`FACTORY_VALIDATOR_TRANSCRIPT`): the dispatcher, its Validator failure-mode checks and the
+  Orchestrator see that session's real console, and every line the factory types into the window
+  (dispatcher notices, Orchestrator corrections) is queued in `<run>/validator/inbox.jsonl`,
+  which the kickoff session watches. Its brief is `<run>/validator/BRIEF.md`.
+- **A stop still bites.** The seat supervisor never freezes the founder's own conversation. An
+  Orchestrator stop of a kickoff Validator holds every lane, including lanes launched during the
+  stop, until the Orchestrator resumes it; an Orchestrator that falls behind is reported into
+  the inbox.
+- **Git LFS in the judged checkout (#59).** With a local LFS store, endgame writes each LFS
+  pointer as the content its digest names, verified against the pointer's SHA-256 and size;
+  `lfs: required` in target.conf fails a verdict that leaves a pointer stub.
+
 ## [0.8.22] - 2026-10-20
 
 The four roles are four long-lived agents (founder, 2026-10-20): *"One of each agent, no restart,

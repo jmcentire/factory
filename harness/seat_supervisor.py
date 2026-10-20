@@ -15,6 +15,12 @@ Orchestrator's judgment (and its System One screen). It enforces two things code
    the evidence and the correction; a stop without a correction is refused, because stopping
    corrects nothing.
 
+When the session that kicked off the run is the Validator (harness.json validator_agent
+"kickoff"), its window is validator_mirror.py: what is typed there reaches the Validator's inbox.
+That session is the founder's conversation, so it is never frozen. Stopping it holds every lane
+instead, so it has nothing to drive until the Orchestrator resumes it, and the correction is in
+its inbox.
+
 The supervisor also beats Herald's heartbeat, so if it dies, Herald raises the stale alert.
 """
 
@@ -41,6 +47,7 @@ import escalate  # noqa: E402
 SEAT_PREFIXES = ("validator", "coder", "tester")
 ACTIONS = ("correct", "stop", "resume")
 DOWN = "orchestrator-down"
+HELD = "validator-stopped"
 
 
 class SupervisorError(RuntimeError):
@@ -236,6 +243,44 @@ class Seats:
         )
 
 
+def kickoff_validator(root: pathlib.Path) -> bool:
+    "True when the session that kicked off the run is the Validator."
+    try:
+        metadata = json.loads((root / "harness.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(metadata, dict) and metadata.get("validator_agent") == "kickoff"
+
+
+def _hold_lanes(state: dict[str, list[str]], panes: Mapping[str, int], seats: Seats) -> None:
+    "Pause every lane while the kickoff Validator is stopped, including lanes launched since."
+    for name, pid in panes.items():
+        if name.startswith("validator"):
+            continue
+        reasons = state.setdefault(name, [])
+        if HELD not in reasons:
+            reasons.append(HELD)
+            seats.signal(pid, signal.SIGSTOP)
+
+
+def _release_lanes(state: dict[str, list[str]], panes: Mapping[str, int], seats: Seats) -> None:
+    for name, pid in panes.items():
+        reasons = state.get(name, [])
+        if HELD in reasons:
+            reasons.remove(HELD)
+            if not reasons:
+                seats.signal(pid, signal.SIGCONT)
+
+
+def _validator_stopped(state: Mapping[str, Sequence[str]]) -> bool:
+    return any(
+        r.startswith("stop:")
+        for name, rs in state.items()
+        if name.startswith("validator")
+        for r in rs
+    )
+
+
 def _state_path(root: pathlib.Path) -> pathlib.Path:
     return _folder(root) / "seat-state.json"
 
@@ -299,13 +344,19 @@ def control(
         "correction": correction[:2000],
         "by": by,
     }
+    kickoff = seat.startswith("validator") and kickoff_validator(root)
     if action == "stop":
         if f"stop:{rule}" not in reasons:
             reasons.append(f"stop:{rule}")
-        seats.signal(panes[seat], signal.SIGSTOP)
+        if kickoff:
+            _hold_lanes(state, panes, seats)
+        else:
+            seats.signal(panes[seat], signal.SIGSTOP)
     elif action == "resume":
         state[seat] = [r for r in reasons if not r.startswith("stop:")]
-        if not state[seat]:
+        if kickoff:
+            _release_lanes(state, panes, seats)
+        elif not state[seat]:
             seats.signal(panes[seat], signal.SIGCONT)
     if action in ("correct", "stop"):
         # Typed into the seat's own terminal. A stopped seat holds it in its input until the
@@ -335,8 +386,13 @@ def tick(
     lagging = oldest is not None and now() - oldest > ttl
     panes = seats.panes()
     state = load_state(root)
+    kickoff = kickoff_validator(root)
     was_down = any(DOWN in reasons for reasons in state.values())
+    if kickoff and _validator_stopped(state):
+        _hold_lanes(state, panes, seats)
     for seat, pid in panes.items():
+        if kickoff and seat.startswith("validator"):
+            continue  # the mirror of the founder's own session; its lanes are what pause
         reasons = state.setdefault(seat, [])
         if lagging and DOWN not in reasons:
             reasons.append(DOWN)
@@ -353,6 +409,11 @@ def tick(
             f"paused until the Orchestrator assesses it. Check the orchestrator window."
         )
         _event(root, "seats-paused-orchestrator-lagging", detail)
+        if kickoff and "validator" in panes:
+            try:
+                seats.deliver("validator", f"FACTORY_NOTICE from the seat supervisor. {detail}")
+            except (OSError, subprocess.SubprocessError) as error:
+                _event(root, "validator-notice-failed", str(error), wake=False)
         try:
             notify(
                 root,

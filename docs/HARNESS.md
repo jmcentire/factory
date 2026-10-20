@@ -688,6 +688,14 @@ dependency-free (bash + python3 + git):
   launch prevents an unattended project-trust prompt from swallowing the initial brief. It does
   not pass `--disable-slash-commands`, so host-supported interactive controls such as `/loop`
   remain available to the resident monitor.
+  `FACTORY_VALIDATOR_AGENT=kickoff` makes the session that kicked off the run the Validator (the
+  founder's default): no Validator agent is launched, `FACTORY_VALIDATOR_TRANSCRIPT` names that
+  session's transcript, and the `validator` window runs `harness/validator_mirror.py`, which
+  prints the transcript as it grows (so the dispatcher, its failure-mode checks and the
+  Orchestrator see the Validator's real console) and appends every line typed into the window
+  (dispatcher notices, Orchestrator corrections) to `<run>/validator/inbox.jsonl`, which the
+  kickoff session watches. Its brief is `<run>/validator/BRIEF.md`. The supervisor never freezes
+  that session; an Orchestrator stop of it holds every lane until the Orchestrator resumes it.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
