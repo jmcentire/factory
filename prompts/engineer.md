@@ -226,9 +226,12 @@ Your handover is an artifact set, not a narration. Produce:
 
    Refs: <task id>
    Spec: <product digest#item, architecture digest#item>
+   FactoryRun: <task id>
 
    Co-Authored-By: <the model you are running as, with its version> <that vendor's noreply address>
    ```
+
+   `FactoryRun` fingerprints factory work in git history, so it survives a squash merge.
 
    Name the model actually running this lane. The trailer is authorship provenance that the
    Diff-Intent Gate and the verdict's model record read, so a copied model name is a false record.
