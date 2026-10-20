@@ -25,10 +25,20 @@ This module is the one way harness code runs Git against such a repository:
 Git has no configuration switch that disables a repository-defined ``diff.external`` or
 ``filter`` driver. Nothing here converts content, and a caller that diffs passes
 ``--no-ext-diff``.
+
+Git LFS is the one content substitution ``materialize_commit`` makes, and only when the caller
+names a local LFS object directory. A path whose committed blob is a well-formed LFS v1 pointer
+and whose ``filter`` attribute in the commit is ``lfs`` is written as the store object its
+pointer names, streamed and checked against the pointer's SHA-256 and size. The pointer names
+that content by digest, so what lands on disk is still exactly what the commit names, and no
+LFS program runs. A missing or mismatched object refuses. Every pointer-shaped blob left on
+disk is counted, regardless of attributes, so repository-local attribute overrides cannot hide
+unhydrated content from a caller that requires LFS.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
@@ -61,6 +71,14 @@ _OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _REGULAR_MODES = {"100644": 0o644, "100755": 0o755}
 _SYMLINK_MODE = "120000"
 _GITLINK_MODE = "160000"
+# git-lfs docs/spec.md: a v1 pointer is these three lines, in this order, under 1024 bytes.
+_LFS_POINTER = re.compile(
+    rb"version https://git-lfs\.github\.com/spec/v1\n"
+    rb"oid sha256:(?P<oid>[0-9a-f]{64})\n"
+    rb"size (?P<size>0|[1-9][0-9]*)\n"
+)
+_LFS_POINTER_MAX_BYTES = 1024
+_LFS_COPY_CHUNK = 1024 * 1024
 
 Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 
@@ -75,6 +93,9 @@ class MaterializedCommit:
     tree: str
     file_count: int
     total_bytes: int
+    lfs_hydrated: int = 0
+    lfs_pointers_left: int = 0
+    lfs_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,6 +103,13 @@ class _Entry:
     mode: str
     object_id: str
     path: PurePosixPath
+
+
+@dataclass(frozen=True)
+class _LfsObject:
+    oid: str
+    size: int
+    source: Path
 
 
 def _closed_environment(path: str) -> dict[str, str]:
@@ -144,10 +172,18 @@ def materialize_commit(
     admit_symlinks: bool,
     max_files: int,
     max_total_bytes: int,
+    lfs_objects: str | Path | None = None,
+    max_lfs_bytes: int | None = None,
     runner: Runner = subprocess.run,
 ) -> MaterializedCommit:
-    """Write exactly ``commit``'s tree into a new ``destination`` from raw Git objects."""
+    """Write exactly ``commit``'s tree into a new ``destination`` from raw Git objects.
 
+    With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
+    LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
+    content and is then required."""
+
+    if lfs_objects is not None and max_lfs_bytes is None:
+        raise HostGitError("an LFS store needs a byte ceiling for the content it supplies")
     tree = resolve_commit_tree(repository, commit, runner=runner)
     entries = _tree_entries(
         run_host_git(repository, ("ls-tree", "-rz", "--full-tree", commit), runner=runner),
@@ -155,13 +191,106 @@ def materialize_commit(
         max_files=max_files,
     )
     blobs = _read_blobs(repository, entries, max_total_bytes=max_total_bytes, runner=runner)
-    _write_tree(Path(destination), entries, blobs)
+    pointers = _lfs_pointers(entries, blobs)
+    hydrate: dict[PurePosixPath, _LfsObject] = {}
+    if lfs_objects is not None and pointers:
+        routed = _lfs_routed_pointers(repository, commit, pointers, runner=runner)
+        hydrate = _resolve_lfs_objects(Path(lfs_objects), routed)
+        needed = sum(found.size for found in {o.oid: o for o in hydrate.values()}.values())
+        if max_lfs_bytes is not None and needed > max_lfs_bytes:
+            raise HostGitError(f"LFS content exceeds {max_lfs_bytes} bytes")
+    _write_tree(Path(destination), entries, blobs, hydrate)
     return MaterializedCommit(
         commit=commit,
         tree=tree,
         file_count=len(entries),
         total_bytes=sum(len(blob) for blob in blobs.values()),
+        lfs_hydrated=len(hydrate),
+        lfs_pointers_left=len(pointers) - len(hydrate),
+        lfs_bytes=sum(found.size for found in hydrate.values()),
     )
+
+
+def _lfs_pointers(
+    entries: Sequence[_Entry],
+    blobs: Mapping[str, bytes],
+) -> dict[PurePosixPath, tuple[str, int]]:
+    """All regular pointer-shaped blobs, independent of agent-writable attributes."""
+
+    candidates: dict[PurePosixPath, tuple[str, int]] = {}
+    for entry in entries:
+        if entry.mode not in _REGULAR_MODES:
+            continue
+        blob = blobs[entry.object_id]
+        if len(blob) >= _LFS_POINTER_MAX_BYTES:
+            continue
+        match = _LFS_POINTER.fullmatch(blob)
+        if match:
+            candidates[entry.path] = (match["oid"].decode("ascii"), int(match["size"]))
+    return candidates
+
+
+def _lfs_routed_pointers(
+    repository: str | Path,
+    commit: str,
+    candidates: Mapping[PurePosixPath, tuple[str, int]],
+    *,
+    runner: Runner,
+) -> dict[PurePosixPath, tuple[str, int]]:
+    """Select pointers to hydrate using attributes from ``commit``. Repository-local
+    ``info/attributes`` can override routing, but cannot suppress the unhydrated count."""
+
+    if not candidates:
+        return {}
+    request = b"".join(path.as_posix().encode("utf-8") + b"\0" for path in candidates)
+    listing = run_host_git(
+        repository,
+        ("check-attr", f"--source={commit}", "-z", "--stdin", "filter"),
+        stdin=request,
+        runner=runner,
+    )
+    fields = listing.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) != 3 * len(candidates):
+        raise HostGitError("check-attr did not answer for every LFS pointer")
+    routed: set[PurePosixPath] = set()
+    for index in range(0, len(fields), 3):
+        path, attribute, value = fields[index : index + 3]
+        if attribute != b"filter":
+            raise HostGitError("check-attr answered for an attribute it was not asked about")
+        if value == b"lfs":
+            routed.add(PurePosixPath(path.decode("utf-8")))
+    return {path: pointer for path, pointer in candidates.items() if path in routed}
+
+
+def _resolve_lfs_objects(
+    store: Path, pointers: Mapping[PurePosixPath, tuple[str, int]]
+) -> dict[PurePosixPath, _LfsObject]:
+    """Find every pointer's object before any file is written; a missing one refuses."""
+
+    if not store.is_dir():
+        raise HostGitError(f"LFS store {store} is not a directory")
+    found: dict[PurePosixPath, _LfsObject] = {}
+    missing: list[str] = []
+    for path, (oid, size) in sorted(pointers.items()):
+        source = store / oid[:2] / oid[2:4] / oid
+        try:
+            present = stat.S_ISREG(os.stat(source).st_mode)
+        except OSError:
+            present = False
+        if not present:
+            missing.append(f"{path} ({oid})")
+            continue
+        found[path] = _LfsObject(oid=oid, size=size, source=source)
+    if missing:
+        shown = ", ".join(missing[:5])
+        if len(missing) > 5:
+            shown += f" and {len(missing) - 5} more"
+        raise HostGitError(
+            f"{len(missing)} LFS object(s) are not in the LFS store {store}: {shown}"
+        )
+    return found
 
 
 def resolve_commit_tree(
@@ -306,7 +435,10 @@ def _blob_sizes(check: bytes, wanted: Sequence[str]) -> dict[str, int]:
 
 
 def _write_tree(
-    destination: Path, entries: Sequence[_Entry], blobs: Mapping[str, bytes]
+    destination: Path,
+    entries: Sequence[_Entry],
+    blobs: Mapping[str, bytes],
+    hydrate: Mapping[PurePosixPath, _LfsObject],
 ) -> None:
     """Create ``destination`` and write regular files, then links, never following a link."""
 
@@ -319,6 +451,9 @@ def _write_tree(
         target = destination.joinpath(*entry.path.parts)
         try:
             _make_parents(destination, entry.path)
+            if entry.path in hydrate:
+                _write_lfs_file(target, hydrate[entry.path], _REGULAR_MODES[entry.mode])
+                continue
             data = blobs[entry.object_id]
             if entry.mode == _SYMLINK_MODE:
                 os.symlink(os.fsdecode(data), target)
@@ -337,6 +472,39 @@ def _make_parents(destination: Path, path: PurePosixPath) -> None:
         except FileExistsError:
             if not stat.S_ISDIR(os.lstat(current).st_mode):
                 raise HostGitError(f"{current} is not a directory") from None
+
+
+def _write_lfs_file(target: Path, found: _LfsObject, mode: int) -> None:
+    """Stream one store object into ``target``, keeping it only if its SHA-256 and size are
+    the pointer's."""
+
+    digest = hashlib.sha256()
+    written = 0
+    descriptor = os.open(
+        target,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle, open(found.source, "rb") as source:
+            descriptor = -1
+            while written <= found.size:
+                chunk = source.read(_LFS_COPY_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                written += len(chunk)
+                handle.write(chunk)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if written != found.size or digest.hexdigest() != found.oid:
+        os.unlink(target)
+        raise HostGitError(
+            f"LFS object {found.oid} in the store does not match its pointer "
+            f"({written} bytes, sha256 {digest.hexdigest()})"
+        )
+    os.chmod(target, mode)
 
 
 def _write_file(target: Path, data: bytes, mode: int) -> None:
