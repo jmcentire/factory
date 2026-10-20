@@ -135,8 +135,8 @@ launcher does:
 
     harness/tmux_lane.sh <run> <coder|tester> launch --repo <own clone> --prompt <brief> \
       [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>] \
-      [--instance <name>] [--round <tag>] \
-      [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+      [--metered --spend-cap-usd <usd> --usd-per-hour <usd> [--wall-cap-minutes <m>]] \
+      [--round <tag> --replace-session <why the session cannot resume>]
     harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> ...
     harness/lane_watchdog.py report --root <run root>
 
@@ -149,12 +149,14 @@ launcher does:
   stall stop or cap stop is a refusal event you read like any other.
 - `lane_watchdog.py report` gives each lane's commits, wall time, spend and commits per
   dollar. Recommend cutting a lane whose output per dollar falls below the run's threshold.
-- Parallel instances (`--instance b`) each have their own clone, never a git worktree.
+- A run has one Coder and one Tester, each one session for the whole run. It refuses a second
+  instance, a new round over a session that can still resume, and a time limit on a plan lane.
+  A replacement session for an unrecoverable one is a `fresh-session` event with its reason.
 
 **You do not type free-form prose into a pane you judge.** A `tmux send-keys` injection from you
 into the Validator, Coder, or Tester window is **refused** by Gate F. To resolve liveness, run
 `harness/tmux_lane_message.sh <run> orchestrator <slot> status` (the slot as `tmux_lane.sh`
-printed it: `coder`, `tester-b`, `tester.r2`); the script generates the
+printed it: `coder` or `tester`); the script generates the
 question and queues or resumes the exact Codex thread. It cannot carry your own prose and cannot
 answer a specification question. The dispatcher writes notifications only into your pane, while
 your durable `block|no-op` report is consumed out of band. The pane is a human-observable

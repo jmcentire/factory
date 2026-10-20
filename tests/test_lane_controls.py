@@ -785,38 +785,43 @@ def test_qualify_mode_launches_a_wall_capped_probe_slot(tmp_path: Path) -> None:
     assert row["qualify"]["ledger"] == str(lanes.root.parent / "lane-qualifications.jsonl")
 
 
-# -- 6. parallel instances use clones, never worktrees --------------------------------------
+# -- 6. one Coder and one Tester, each one long-lived session (founder, 2026-10-20) ---------
 
 
-def test_parallel_instances_need_their_own_clone(tmp_path: Path) -> None:
+def test_a_run_has_one_tester_and_refuses_a_second_instance(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     assert lanes.lane("tester").returncode == 0
-    shared = lanes.lane("tester", "--instance", "b", repo=lanes.clone("tester"))
-    assert shared.returncode != 0 and "own copy" in shared.stderr
-    source = lanes.clone("source")
-    subprocess.run(["git", "-C", str(source), "commit", "-q", "--allow-empty", "-m", "base",
-                    "--author", "t <t@t>"], check=True,
-                   env={**os.environ, "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
-    worktree = tmp_path / "worktree-b"
-    subprocess.run(["git", "-C", str(source), "worktree", "add", "-q", str(worktree)],
-                   check=True)
-    refused = lanes.lane("tester", "--instance", "b", repo=worktree)
-    assert refused.returncode == 70 and "never a git worktree" in refused.stderr
-    launched = lanes.lane("tester", "--instance", "b", repo=lanes.clone("tester-b"))
-    assert launched.returncode == 0, launched.stdout + launched.stderr
-    assert len(lanes.windows("tester-b")) == 1
-    row = read_chain(lanes.root / "tmux-lanes" / "tester-b-launch.jsonl")[-1]
-    assert row["lane"] == "tester-b" and row["instance"] == "b"
+    second = lanes.lane("tester", "--instance", "b", repo=lanes.clone("tester-b"))
+    assert second.returncode == 64 and "a run has one tester" in second.stderr
+    assert "tmux_lane_message.sh" in second.stderr and "one factory per model" in second.stderr
+    assert lanes.windows("tester-b") == []
 
 
-def test_a_slot_launches_once_and_a_new_round_gets_its_own(tmp_path: Path) -> None:
+def test_new_work_goes_into_the_session_and_a_round_replaces_only_a_dead_one(
+    tmp_path: Path,
+) -> None:
     lanes = Lanes(tmp_path)
     assert lanes.lane("coder").returncode == 0
     again = lanes.lane("coder")
-    assert again.returncode == 64 and "--round" in again.stderr
-    second = lanes.lane("coder", "--round", "r2")
-    assert second.returncode == 0, second.stdout + second.stderr
+    assert again.returncode == 64 and "tmux_lane_message.sh" in again.stderr
+    (lanes.root / "tmux-lanes" / "coder-thread-id").write_text("thread-1\n")
+    fresh = lanes.lane("coder", "--round", "r2")
+    assert fresh.returncode == 64 and "new work goes into it, not a new round" in fresh.stderr
+    assert not (lanes.root / "tmux-lanes" / "coder.r2-prompt.txt").exists()
+    replaced = lanes.lane("coder", "--round", "r2", "--replace-session", "transcript corrupt")
+    assert replaced.returncode == 0, replaced.stdout + replaced.stderr
     assert (lanes.root / "tmux-lanes" / "coder.r2-prompt.txt").is_file()
+    events = [json.loads(line) for line in (lanes.root / "events.jsonl").read_text().splitlines()]
+    [fresh_event] = [e for e in events if e.get("kind") == "fresh-session"]
+    assert fresh_event["detail"] == "coder.r2 replaces coder's session: transcript corrupt"
+    assert fresh_event["wake"] is True
+
+
+def test_a_plan_lane_has_no_time_limit(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path)
+    refused = lanes.lane("tester", "--wall-cap-minutes", "60")
+    assert refused.returncode == 64 and "a plan-billed lane has no time limit" in refused.stderr
+    assert lanes.windows("tester") == []
 
 
 # -- 7. the testing standard reaches every Tester ------------------------------------------
@@ -860,11 +865,15 @@ def test_a_tester_prompt_carries_the_testing_standard_itself(tmp_path: Path) -> 
 def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
     tmp_path: Path,
 ) -> None:
-    """A capped Coder lane is told its cap, how to read what is left of it, the wrap-up it will
-    get, and that the Validator will pause it for reviews."""
+    """A capped (metered) Coder lane is told its cap, how to read what is left of it, the wrap-up
+    it will get, and that the Validator will pause it for reviews."""
 
-    lanes = Lanes(tmp_path)
-    assert lanes.lane("coder", "--wall-cap-minutes", "60").returncode == 0
+    lanes = Lanes(tmp_path, budget="50")
+    _ollama_stub(lanes.stub, available=True)
+    record_passing_qualification(lanes.root.parent, "coder", "codex-ollama", "glm-test:cloud")
+    launched = lanes.lane("coder", "--agent", "codex-ollama", "--model", "glm-test:cloud",
+                          *METERED_CAPS, "--wall-cap-minutes", "60")
+    assert launched.returncode == 0, launched.stdout + launched.stderr
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert (prompt.index("FACTORY TMUX LANE PROTOCOL")
             < prompt.index("READ FIRST"))
@@ -894,8 +903,7 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    refused = lanes.lane("coder", "--agent", "codex-interactive", "--wall-cap-minutes", "60",
-                         "--wrap-up-minutes", "5")
+    refused = lanes.lane("coder", "--agent", "codex-interactive", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
     assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
