@@ -490,8 +490,12 @@ PY
         "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
         "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
   esac
-  printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life' \
-    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
+  # The new life reads only what the resumed turn writes: the log's size now, before the turn
+  # starts, so the earlier turn's done line is never reported again as this turn's.
+  LOG_OFFSET=0
+  [ ! -f "$LANE_LOG" ] || LOG_OFFSET=$(wc -c < "$LANE_LOG" | tr -d ' ')
+  printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life --log-offset %q' \
+    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT" "$LOG_OFFSET"
   # A resumed turn can change the tree after a review freeze, so the journal records the reopen
   # before the turn starts: discovery_check.latest_freeze then refuses until the lane is frozen
   # again, instead of passing the mid-run review snapshot as the candidate. Recorded first, so a

@@ -3,6 +3,17 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.25] - 2026-10-20
+
+### Fixed
+
+- **A resumed turn's watcher reads only that turn.** `tmux_lane_message.sh` records the lane log's
+  size before it resumes the turn and starts the new watcher life there (`--log-offset`). Before,
+  a new life could re-read the previous turn's done line and wake the Validator minutes into a
+  long turn. Seen in herald-dash-r3.
+- **A done marker followed straight by more text still counts.** The marker ends at its count
+  (`commits=21Top finding...`), as Muse wrote it, so that turn's completion is no longer missed.
+
 ## [0.8.24] - 2026-10-20
 
 ### Fixed
