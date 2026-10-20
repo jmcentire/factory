@@ -153,6 +153,23 @@ def test_declared_freeze_exclude_skips_a_symlink_tree_unread(tmp_path: Path) -> 
     assert export.excluded_entries == (".git", "node_modules")
 
 
+def test_a_declared_name_is_excluded_in_nested_packages_too(tmp_path: Path) -> None:
+    repo = _node_modules_repo(tmp_path)
+    nested = repo / "laptop" / "node_modules" / ".bin"
+    nested.mkdir(parents=True)
+    os.symlink(repo / "app.ts", nested / "tool")
+    (repo / "laptop" / "index.ts").write_text("y", encoding="utf-8")
+    exclude = read_freeze_excludes(_declared(tmp_path, "freeze-exclude: node_modules"))
+
+    export = freeze_lane_repository(
+        repo, tmp_path / "store", durable_through=tmp_path, exclude=exclude
+    )
+
+    manifest = json.loads(export.frozen_tree.manifest_path.read_text(encoding="utf-8"))
+    assert {row["path"] for row in manifest["files"]} == {"app.ts", "laptop/index.ts"}
+    assert set(export.excluded_entries) == {".git", "node_modules", "laptop/node_modules"}
+
+
 def test_undeclared_symlink_is_refused_and_lane_gitignore_has_no_effect(tmp_path: Path) -> None:
     repo = _node_modules_repo(tmp_path)
     (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
