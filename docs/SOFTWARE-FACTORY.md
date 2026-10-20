@@ -128,7 +128,10 @@ where **the human is shown a calibrated decision rather than a wall of logs.**
 ## 3. The four roles
 
 There are four roles. There are no others. Everything else in this document is a phase, an
-artifact, or a control — not a role.
+artifact, or a control — not a role. Each role is exactly one long-lived agent session for the
+whole run: the Validator, the Orchestrator, the Coder, the Tester. Work reaches a role as a
+message into its session; no role is restarted, replicated, or given a time limit (founder,
+2026-10-20).
 
 | Role | Owns |
 |---|---|

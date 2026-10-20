@@ -3,6 +3,28 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.22] - 2026-10-20
+
+The four roles are four long-lived agents (founder, 2026-10-20): *"One of each agent, no restart,
+or time limit, or replication."* herald-dash-r2 ran 2 Coders, 3 Testers and 40 one-shot rounds.
+32 of those rounds were fresh Tester sessions, each re-reading about 265k tokens to do a median
+of about 12 minutes of work.
+
+### Changed
+
+- **One Coder and one Tester per run.** `tmux_lane.sh launch` refuses `--instance`. A model trial
+  runs one factory per model.
+- **New work goes into the role's session.** `--round` is refused while the role has a session
+  that can resume. `--replace-session '<why>'` replaces an unrecoverable session and records a
+  `fresh-session` event (wake) with the reason.
+- **The Tester gets reviews.** `tmux_lane_message.sh review` reaches the Tester as well as the
+  Coder, resumed into its own session. A Tester review that names implementation source or a
+  diff is refused, which is the other direction of oracle independence (I3).
+- **No time limit on a plan lane.** `--wall-cap-minutes` is refused on a plan-billed lane; a cap
+  bounds metered spend only. A capped metered lane is no longer told to start a new round.
+- **Docs and prompts match.** The doctrine (S2, the role table), HARNESS.md, validate.md and
+  orchestrate.md now say one long-lived session per role.
+
 ## [0.8.21] - 2026-10-20
 
 The Orchestrator keeps the run on target, and the seats work only while it is judging them

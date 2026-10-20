@@ -268,9 +268,22 @@ def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
     tester = tmp_path / "tester"
     tester.mkdir()
     operator, root, env, _ = lane_fixture(tester, "tester")
+    # The Tester is one long-lived session too: its review goes into that session, and the other
+    # direction of independence holds (no implementation source or diff).
+    leaky = tmp_path / "leaky-review.txt"
+    leaky.write_text("R-3: worker/src/state.ts:56 resets the client.\n", encoding="utf-8")
     to_tester = message(operator, root, env, "validator", "tester", "review",
-                        "--verdict", "on-track", "--review-file", str(review))
-    assert to_tester.returncode == 64 and "Coder lane" in to_tester.stderr
+                        "--verdict", "repair", "--review-file", str(leaky))
+    assert to_tester.returncode == 77 and "implementation-leak refusal" in to_tester.stderr
+    clean = tmp_path / "tester-review.txt"
+    clean.write_text("R-3.12: a revoked client re-registering is a new pending client; "
+                     "tests/acceptance/w/oauth.test.ts misses it.\n", encoding="utf-8")
+    to_tester = message(operator, root, env, "validator", "tester", "review",
+                        "--verdict", "repair", "--review-file", str(clean), "--wait-idle", "2")
+    assert to_tester.returncode == 0, to_tester.stdout + to_tester.stderr
+    [planned] = [row for row in read_chain(root / "dialogue" / "journal.jsonl")
+                 if row.get("message_kind") == "progress-review"]
+    assert "never the implementation" in planned["text"]
 
 
 def test_only_the_watchdog_sends_the_generated_wrap_up(tmp_path: Path) -> None:
@@ -297,7 +310,7 @@ def test_a_lane_at_its_cap_refuses_a_review_and_status_refuses_stray_arguments(
     review.write_text("R-3: fix the refusal.\n", encoding="utf-8")
     refused = message(operator, root, env, "validator", "coder", "review",
                       "--verdict", "repair", "--review-file", str(review))
-    assert refused.returncode == 70 and "reached its cap" in refused.stderr
-    assert "new --round" in refused.stderr
+    assert refused.returncode == 70 and "reached its metered spend cap" in refused.stderr
+    assert "plan lanes have no cap" in refused.stderr
     stray = message(operator, root, env, "validator", "coder", "status", "--verdict", "redirect")
     assert stray.returncode == 64

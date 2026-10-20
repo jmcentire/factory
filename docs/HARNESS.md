@@ -495,10 +495,11 @@ machine, before the agent starts and while it runs:
   qualified `dispatch_lane.sh` tester task opens with the first two; the ratified strategy
   reaches it through run-model (Gate B). A Tester launch whose standard cannot be read is
   refused.
-- **Parallel instances** (`--instance b`, window `tester-b`) each need their own clone: a git
-  worktree is refused, because the Codex sandbox blocks writes to the parent repository's git
-  directory, and two lanes may not share a repository. `--round <tag>` launches a new round of
-  a lane after its previous round ended.
+- **One Coder and one Tester, each one long-lived session** (founder, 2026-10-20). New work,
+  reviews and answers go into the role's session through `tmux_lane_message.sh`. `--instance` is
+  refused at launch. `--round <tag>` is refused while the role has a session that can resume;
+  `--replace-session '<why>'` replaces an unrecoverable one and records a `fresh-session` event.
+  A plan lane takes no `--wall-cap-minutes`; a cap bounds metered spend only.
 
 ## Build compilation and convergence
 
@@ -755,8 +756,8 @@ dependency-free (bash + python3 + git):
   ```
   harness/tmux_lane.sh <run> <coder|tester> launch --repo <own clone> --prompt <brief>
       [--agent codex|codex-interactive|codex-ollama|cursor-agent] [--model <m>]
-      [--instance <name>] [--round <tag>] [--metered]
-      [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <m>]
+      [--metered --spend-cap-usd <usd> --usd-per-hour <usd> [--wall-cap-minutes <m>]]
+      [--round <tag> --replace-session <why the session cannot resume>]
       [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
       [--read-allowance-minutes 15] [--stall-window-minutes 20]
   harness/tmux_lane.sh <run> <coder|tester> qualify ... [--first-commit-minutes 15] [--min-commits 1]
@@ -765,7 +766,8 @@ dependency-free (bash + python3 + git):
   harness/lane_watchdog.py report --root <run root>
   ```
 
-  A slot is one round of one lane (`tester`, `tester-b`, `tester-b.r2`); every slot has its own
+  A slot is one session of one role (`coder`, `tester`; `coder.r2` only after a recorded
+  replacement); every slot has its own
   prompt, launch journal, thread, log (`<slot>-lane.log`), exits journal and watcher state under
   `tmux-lanes/`. Every lane process runs under `lane_agent.py run`, which tees its output to the
   lane log and records its end. Only `codex` and `codex-ollama` lanes keep a resumable thread

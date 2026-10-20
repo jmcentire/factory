@@ -27,8 +27,9 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
-                  [--instance <name>] [--round <tag>] [--metered]
-                  [--spend-cap-usd <usd> --usd-per-hour <usd>] [--wall-cap-minutes <min>]
+                  [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
+                  [--wall-cap-minutes <min, metered lanes and qualify only>]
+                  [--round <tag> --replace-session <why the session cannot resume>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
                   [--wrap-up-minutes <min, default 5; 0 = none>]
                   [--review-every-minutes <min, Coder launches default 18; 0 = none>]
@@ -51,6 +52,7 @@ MODEL_ARG=""
 EFFORT=""
 INSTANCE=""
 ROUND=""
+REPLACE_REASON=""
 METERED_ARG=0
 SPEND_CAP=""
 RATE=""
@@ -72,6 +74,7 @@ while [ "$#" -gt 0 ]; do
     --effort) EFFORT="$2"; shift 2 ;;
     --instance) INSTANCE="$2"; shift 2 ;;
     --round) ROUND="$2"; shift 2 ;;
+    --replace-session) REPLACE_REASON="$2"; shift 2 ;;
     --metered) METERED_ARG=1; shift ;;
     --spend-cap-usd) SPEND_CAP="$2"; shift 2 ;;
     --usd-per-hour) RATE="$2"; shift 2 ;;
@@ -225,7 +228,42 @@ if [ "$ACTION" != "freeze" ]; then
     exit 70
   }
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
-    "pass --round <tag> to launch a new round of $LANE"
+    "send new work into its session: harness/tmux_lane_message.sh $RUN validator $LANE review|answer ..."
+
+  # Founder, 2026-10-20: the factory is long-lived agents with special roles. A run has one Coder
+  # and one Tester, each one session for the whole run; new work arrives as a message into that
+  # session. No second instance, no fresh round over a session that can still resume, and no
+  # time limit on a plan-billed lane.
+  if [ "$ACTION" = launch ]; then
+    [ -z "$INSTANCE" ] || refuse 64 "a run has one $ROLE; --instance $INSTANCE would make a second" \
+      "send the work into the $ROLE's session with harness/tmux_lane_message.sh; a model trial runs one factory per model"
+    PRIOR_SESSION=""
+    for THREAD in "$TMUX_ROOT/$ROLE-thread-id" "$TMUX_ROOT/$ROLE".*-thread-id; do
+      [ -s "$THREAD" ] && [ ! -L "$THREAD" ] && PRIOR_SESSION="$THREAD"
+    done
+    if [ -n "$PRIOR_SESSION" ]; then
+      [ -n "$REPLACE_REASON" ] || refuse 64 \
+        "the $ROLE already has a session ($(basename "$PRIOR_SESSION" -thread-id)); new work goes into it, not a new round" \
+        "harness/tmux_lane_message.sh $RUN validator $ROLE review|answer ...; only an unrecoverable session is replaced: --replace-session '<why it cannot resume>'"
+      # A replacement re-reads the whole context, so it is a fact of the run with its reason; the
+      # Orchestrator and the founder's dash see every one.
+      "$FACTORY_PYTHON" - "$ROOT/events.jsonl" "$SLOT" "$(basename "$PRIOR_SESSION" -thread-id)" \
+        "$REPLACE_REASON" <<'PY' || refuse 70 "the fresh-session event could not be recorded"
+import datetime, json, os, sys
+path, slot, prior, reason = sys.argv[1:]
+row = json.dumps({
+    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "kind": "fresh-session", "class": "lane", "source": "tmux_lane.sh", "wake": True,
+    "detail": f"{slot} replaces {prior}'s session: {reason}",
+}, sort_keys=True, separators=(",", ":"))
+fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+try:
+    os.write(fd, (row + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY
+    fi
+  fi
 
   # Caps, in one place. A metered agent needs a per-round spend cap AND the rate it bills at:
   # no agent we run exposes live spend, so the watchdog enforces the cap as wall-clock time
@@ -256,6 +294,11 @@ if metered == "true" and (not cap or not rate):
 spend_cap = amount(cap, "--spend-cap-usd") if cap else None
 per_hour = amount(rate, "--usd-per-hour") if rate else None
 caps_s = []
+if wall and metered != "true" and action != "qualify":
+    raise SystemExit(
+        "PLAN LANE: a plan-billed lane has no time limit (founder, 2026-10-20); a cap exists only to "
+        "bound metered spend. Drop --wall-cap-minutes; stall and liveness checks still apply"
+    )
 if wall:
     caps_s.append(amount(wall, "--wall-cap-minutes") * 60)
 if spend_cap is not None and per_hour is not None:

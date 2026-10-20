@@ -683,9 +683,13 @@ two separate claims about two separate parties — keep them apart.**
    `inject.sh --results` carries only the bare PASS/FAIL. Send the finding into the Coder's
    own thread, `tmux_lane_message.sh <run> validator <slot> review --verdict repair
    --review-file <file>`, which the oracle-leak guard still screens: the Coder keeps its context
-   and its earlier checks, where a new `--round` starts from nothing. (`inject.sh` types into a
-   pane, which only a `codex-interactive` lane reads.) Launch a new round only for a lane with no
-   resumable thread, one that reached its cap, or one whose context is spent. **Reproduce before you route.** A Tester FAIL
+   and its earlier checks, where a fresh session starts from nothing and re-reads the whole
+   context. (`inject.sh` types into a pane, which only a `codex-interactive` lane reads.) The
+   Coder and the Tester are each one long-lived session for the whole run (founder, 2026-10-20):
+   every finding, fix and new piece of work goes into that session as a message, to the Tester as
+   to the Coder. `tmux_lane.sh` refuses a new round over a session that can still resume; only a
+   provably unrecoverable session is replaced, with `--replace-session '<why>'`, and the
+   replacement is recorded with its reason. **Reproduce before you route.** A Tester FAIL
    is an allegation until you have observed the behaviour from the implementation's own outputs;
    an unreproduced FAIL is a candidate bad test, never a Coder defect. Repairs driven by
    unreproduced failures broke working code on Terminal-Bench 4.
@@ -698,7 +702,7 @@ two separate claims about two separate parties — keep them apart.**
    - a watcher (`watch-<lane>`, `harness/lane_watchdog.py`) that stops a lane with no commit within its window (20 minutes after a 15-minute read allowance) or at its cap, and wakes you when the lane prints `__LANE_DONE__` or exits: tail `<run root>/tmux-lanes/wake.jsonl`. For a lane on a resumable harness it also sends the wrap-up notice five minutes before the cap (`--wrap-up-minutes`) and pauses a Coder for your review every 18 minutes of work (`--review-every-minutes`); the lane prompt states the cap and the command that prints what is left;
    - the founder's testing standard, `TESTING.md` and the Tester doctrine with the run's TESTING-STRATEGY, injected into every Tester prompt.
 
-   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama`, `cursor-agent`, and the registry harnesses `claude`, `claude-ollama` (Claude Code on a local Ollama model), `agy`, `muse` and `prime-agent` (`harness/agents.py`). `cursor-agent` and every registry harness run on the operator's signed-in plan unless launched `--metered`: a plan lane admits no API key, its preflight proves the plan sign-in, and the wrapper stops a lane whose harness reports per-use billing; a parallel instance (`--instance b`) gets its own clone, never a git worktree; a new round of a lane is `--round <tag>`.
+   A script written for one run bypasses all of them, and prose lessons do not stop the bypass (`docs/practices/lessons-msg-r2-2026-10.md`: about $1,200 of metered credit lost to an unqualified Tester model, and hours lost to unwatched lanes and an interactive login). If the harness lacks an agent or mode the run needs, extend the harness with tests first. The agents are `codex` (`codex exec`, the default), `codex-interactive`, `codex-ollama`, `cursor-agent`, and the registry harnesses `claude`, `claude-ollama` (Claude Code on a local Ollama model), `agy`, `muse` and `prime-agent` (`harness/agents.py`). `cursor-agent` and every registry harness run on the operator's signed-in plan unless launched `--metered`: a plan lane admits no API key, its preflight proves the plan sign-in, and the wrapper stops a lane whose harness reports per-use billing. A run has exactly one Coder and one Tester (founder, 2026-10-20): no `--instance`, no split by component, no new round over a live session, and no wall-clock cap on a plan lane. A model trial runs one factory per model.
 
    Before a model takes a lane, it passes a capped qualification probe, and a metered model cannot launch without one:
    - `harness/tmux_lane.sh <run> <role> qualify --repo <clone> --prompt <3-5 item brief> --agent <agent> --model <model> [--spend-cap-usd <usd> --usd-per-hour <usd>]`, always wall-capped (30 minutes by default);
