@@ -3,6 +3,52 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.21] - 2026-10-20
+
+The Orchestrator keeps the run on target, and the seats work only while it is judging them
+(founder, 2026-10-20). In herald-dash-r2 the Orchestrator ran without its System One screen and
+issued 1,097 blanket blocks while the run burned money: 32 fresh Tester sessions re-read about
+8.5M tokens, Codex worked on paid credits, and the Validator stopped twice to ask the founder
+for approvals it did not need.
+
+### Added
+
+- **The seat supervisor** (`harness/seat_supervisor.py`), started in every run's `supervisor`
+  window.
+  - When activity goes unassessed past the lease (15 minutes by default), it pauses the
+    Validator, the Coder and the Tester with SIGSTOP. Sessions and their context survive,
+    nothing restarts, and they resume with SIGCONT once the Orchestrator catches up.
+  - It beats the Herald heartbeat, so Herald raises a stale alert if the supervisor dies.
+  - `control` lets the Orchestrator correct a seat (the correction goes into its live
+    session), stop it until resumed, or resume it.
+  - A stop or correction must name the rule, the evidence and the exact correction.
+- **The founder's dash** (`harness/escalate.py`), which sends run facts to Herald's MCP.
+  - **informational** goes out as a `post_update` status.
+  - **important** goes out as `needs_attention` with class at-your-convenience.
+  - **critical** goes out as `needs_attention` with class critical.
+  - Each question is asked once: an answered question is refused and its answer is returned
+    to the seat that asked.
+  - An unreachable Herald is journalled, never silent.
+  - Verified live against dash.herald.tools with a `factory-run` token: a status post, a
+    needs_attention and its resolve, and a heartbeat. Requests carry a named User-Agent, because
+    Cloudflare's browser check refuses Python's default (error 1010).
+- **Four System One rules** (§F, founder 2026-10-20), with cases:
+  - `fresh_session_for_resumable`
+  - `wall_cap_on_plan_lane`
+  - `second_role_instance`
+  - `paid_overage`
+- **The Orchestrator's mandate.** `prompts/orchestrate.md` makes it check, every tick, that the
+  run is on target and in scope, follows the rules, is efficient, and keeps to its configuration
+  and practice. It also keeps the task list and active status current, corrects any seat that
+  asks permission for work already requested, and stops harm.
+
+### Changed
+
+- The jev screen is on in every run that has a TypeSafe key (`TYPESAFE_API_KEY` or
+  `JMC_JEV_API_KEY`), with 1,000 calls, so a run can no longer be launched blind by leaving
+  out `--jev-screen-calls`.
+- The `parallel_coder_worktree` row now says there is no parallel Coder.
+
 ## [0.8.20] - 2026-10-18
 
 P-0001 (founder, 2026-10-18): the run involves the founder only at a genuine impasse, when no role
