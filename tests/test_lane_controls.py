@@ -559,6 +559,22 @@ def test_a_resumed_turn_carries_the_lanes_active_time_toward_its_cap(tmp_path: P
     assert watched.at(5000 + 600) == "capped"  # 1200 s + 600 s = $1 at $2/h
 
 
+def test_a_new_life_never_reports_the_earlier_turns_done_line(tmp_path: Path) -> None:
+    """herald-dash-r3: the watcher of a resumed turn re-read the previous turn's done line from
+    the log and woke the Validator two minutes into a twenty-minute turn."""
+
+    watched = Watched(tmp_path)
+    _commit(watched.repo, T0 + 100, "a")
+    watched.log.write_text("__LANE_DONE__ tester commits=1\n", encoding="utf-8")
+    resumed_at = watched.log.stat().st_size
+    watched.clock.value = T0 + 3000
+    watched.watch.arm(new_life=True, log_offset=resumed_at)
+    assert watched.at(3060) == "watching"
+    with watched.log.open("a", encoding="utf-8") as log:
+        log.write("__LANE_DONE__ tester commits=2\n")
+    assert watched.at(3120) == "done"
+
+
 # -- 4b. wrap-up before the cap, and progress-review pauses ----------------------------------
 
 RESUMABLE = {"runs_dir": "/runs", "wrap_s": 300}

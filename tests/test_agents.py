@@ -315,11 +315,14 @@ def test_done_line_is_found_inside_any_harness_event() -> None:
         json.dumps({"type": "result", "result": done}),
         json.dumps({"event": "step_update", "step_update": {"text_delta": done + "\n"}}),
         json.dumps({"item": {"type": "agent_message", "text": done}}),
+        # Muse can run the next message straight on with no newline after the count.
+        json.dumps({"payload": {"text": f"ok\n{done}Top finding: all items hold."}}),
     ):
         assert lane_watchdog._done_in(line)
     # The protocol's unfilled form, echoed back in a prompt event, is not a completion.
     assert not lane_watchdog._done_in(json.dumps(
         {"payload": {"prompt": "end with __LANE_DONE__ coder commits=<n>"}}))
+    assert not lane_watchdog._done_in("__LANE_DONE__ coder commits=")
 
 
 def test_a_plan_codex_lane_refuses_an_api_key_sign_in(tmp_path: Path) -> None:

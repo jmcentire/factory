@@ -111,7 +111,9 @@ REVIEW_EXPIRY_WAITS = 4
 # harness's session (harness/agents.py), recorded by the lane wrapper as soon as it streams.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy", "muse",
                               "cursor-agent", "prime-agent"})
-_DONE = re.compile(r"^\W*__LANE_DONE__\s+\S+\s+commits=\d+\W*$")
+# The count ends the marker: some harnesses run the next message straight on with no newline
+# ("commits=21Top finding"), and that is still a completion.
+_DONE = re.compile(r"^\W*__LANE_DONE__\s+\S+\s+commits=\d+(?!\d)")
 _REFLOG = re.compile(r"^([0-9a-f]{40,64}) ([0-9a-f]{40,64}) [^\t]*> (\d+) [+-]\d{4}\t(.*)$")
 _MAX_REFLOG_BYTES = 4 * 1024 * 1024
 _MAX_LOG_SCAN_BYTES = 1024 * 1024
@@ -415,12 +417,14 @@ class LaneWatch:
         temporary.write_text(json.dumps(state, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(self.state_path)
 
-    def arm(self, *, new_life: bool = False) -> dict[str, Any]:
+    def arm(self, *, new_life: bool = False, log_offset: int | None = None) -> dict[str, Any]:
         """Start this watcher's life, or continue it after the watcher itself restarted.
 
         ``new_life`` is a resumed lane turn (tmux_lane_message.sh): the earlier life's totals
         carry over, so caps count all of the lane's active time, and only exits after this
-        point end the new life."""
+        point end the new life. ``log_offset`` is where the lane log stood when the turn was
+        resumed: the new life reads only what that turn writes, never the earlier turn's done
+        line that the previous life had not yet scanned."""
 
         launch = self.launch()
         prior = _load_json(self.state_path)
@@ -443,7 +447,11 @@ class LaneWatch:
             "active_s_before": earlier,
             "lives": int(prior.get("lives", 0)) + 1,
             "exits_baseline": len(self._exits(launch)),
-            "log_offset": int(prior.get("log_offset", 0)),
+            "log_offset": (
+                int(log_offset)
+                if new_life and log_offset is not None
+                else int(prior.get("log_offset", 0))
+            ),
             "commits": list(prior.get("commits", [])),
             "hold_ts": None,
             "reviews": int(prior.get("reviews", 0)),
@@ -758,7 +766,7 @@ class LaneWatch:
         return "capped"
 
     def run(self, sleep: Callable[[float], None] = time.sleep, *, new_life: bool = False,
-            launch_wait_s: float = 120.0) -> str:
+            launch_wait_s: float = 120.0, log_offset: int | None = None) -> str:
         # tmux_lane.sh starts this window before it records the launch active; wait for it.
         waited = 0.0
         while True:
@@ -770,7 +778,7 @@ class LaneWatch:
                     raise
                 sleep(2.0)
                 waited += 2.0
-        self.arm(new_life=new_life)
+        self.arm(new_life=new_life, log_offset=log_offset)
         poll = float((self.launch().get("watch") or {}).get("poll_s", DEFAULT_POLL_S))
         while True:
             verdict = self.check()
@@ -850,6 +858,8 @@ def main(argv: list[str] | None = None) -> int:
     lane = commands.add_parser("lane", help="watch one launched lane until it ends")
     lane.add_argument("--root", type=pathlib.Path, required=True)
     lane.add_argument("--slot", required=True)
+    lane.add_argument("--log-offset", type=int, default=None,
+                      help="with --new-life: the lane log's size when the turn was resumed")
     lane.add_argument("--new-life", action="store_true",
                       help="a resumed lane turn: carry totals, watch only what follows")
     report = commands.add_parser("report", help="each lane's commits, wall time and spend")
@@ -891,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         verdict = LaneWatch(root=arguments.root, slot=arguments.slot).run(
-            new_life=arguments.new_life
+            new_life=arguments.new_life, log_offset=arguments.log_offset
         )
     except LaneWatchError as error:
         print(f"lane-watchdog: {error}", file=sys.stderr)
