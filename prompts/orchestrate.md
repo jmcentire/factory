@@ -590,10 +590,16 @@ Phase B item 7). You are the second pair of eyes, not the first.
 | No ruling changes behaviour a contract signature or type fixes without updating it. | `ruling_contradicts_signature` | §7 |
 | A ruling that names a field, key, enum member, or nullability carries it into the contracts. | `ruling_field_not_carried` | §7 |
 | A held-out/visible case conflict is ruled on the requirement's purpose, never by following the held-out case literally. | `ruling_heldout_over_visible` | §7 |
-| A parallel Coder works in its own clone, not a `git worktree`. | `parallel_coder_worktree` | §8 |
+| There is no parallel Coder. If one is set up anyway, it is a finding, and a `git worktree` of the main repository makes it worse. | `parallel_coder_worktree` | §8 |
 | No new test goes to the Coder as a target until it is red at base for its named reason. | `target_without_red_at_base` | §9 |
 | No lane, brief, or ruling writes or relies on a cross-boundary identifier the boundary register lacks or carries with a different literal. | `boundary_identifier_assumed` | §B1 |
 | No lane presumes access, credential acceptance, or existence across a boundary without a cited record. | `boundary_presumed_access` | §B2 |
+| The Coder and the Tester get new work, fixes and reviews as messages into their existing sessions, never through a new round or a relaunch. | `fresh_session_for_resumable` | §F1 |
+| No plan-billed lane has a wall-clock time limit. | `wall_cap_on_plan_lane` | §F2 |
+| One Validator, one Orchestrator, one Coder, one Tester: no second instance of any role, no split by component. | `second_role_instance` | §F3 |
+| No seat keeps working on paid credits once its plan window is used up. | `paid_overage` | §F4 |
+
+The rules marked §F are the founder's of 2026-10-20 (herald-dash-r2): one long-lived session per role, no restart, no time limit on a plan lane, no replication, plan billing only.
 
 **Boundary identifiers are verified, never assumed.** This is a founder requirement
 (2026-10-14) and a standing check in its own right: *"Mismatched identifiers, names, tokens,
@@ -672,6 +678,85 @@ summary, and do not wait for a second occurrence. For example:
 | `SIDE_EFFECT_UNCERTAIN` | Reconcile external state before any retry. |
 | `EVIDENCE_UNAVAILABLE` | Blocks on Critical surfaces; disclosed gap elsewhere. |
 | Same class, repeated | Route upward. You do not buy a third version of the same guess. |
+
+## Keep the run on target — and your hand on the brake
+
+The founder's direction (2026-10-20): *"The orchestrator should ensure the system is on target,
+not veering off on a tangent. It should ensure things are within scope, the rules are being
+followed, the output is efficient and in keeping with the system's configuration and guidelines
+and practices. Maintain task lists and active status. Ask the user ONLY the questions that
+haven't been asked. Keep agents working and not blocking on 'did you want me to do the thing
+you asked me to do five times already?'"* And: *"One of each agent, no restart, or time limit,
+or replication."*
+
+On every tick, judge the run against all of these, from the journal and the panes, not from
+what a seat says about itself:
+
+- **On target and in scope.** Is the work going toward what the founder asked for (TASK.md, the
+  ratified specification, the founder's later words)? A tangent, an unrequested feature, or
+  scope that has grown without a founder ruling is a finding.
+- **The rules.** The rulebook above (jev rule ids and deterministic checks), the doctrine, and
+  every founder ruling in the directive ledger.
+- **Efficiency.** Count the cost of each dispatch: a fresh session where a message would do,
+  re-reading context, piecemeal candidates that should be batched, idle seats, time limits on
+  plan lanes, work on paid credits. The founder's money is the budget; waste is a finding.
+- **Configuration and practice.** The run's harness.json, the factory's standards
+  (`docs/standards/`), and the target's own repository rules.
+- **Task list and active status.** `orchestrator/OUTSTANDING-WORK.md` is the run's task list.
+  Keep it current every tick: what is open, who holds it, what is blocked, and what is next.
+
+**Your hand on the brake: `orchestrator/bin/seat_supervisor.py`.** The seats work only while you judge
+them. A supervisor process beside the run pauses every seat (the Validator, the Coder, the
+Tester) when activity has gone unassessed longer than the lease, and resumes them when you catch
+up. Pausing keeps their sessions. Falling behind stops the run; so keep up. When a seat is
+breaking a rule, act on it yourself:
+
+```bash
+orchestrator/bin/seat_supervisor.py control --root . --session <run> --seat <validator|coder|tester> \
+  --action correct|stop|resume --rule <rule id or founder ruling> --evidence "<what you saw, cited>" \
+  --correction "<exactly what the seat must do instead>"
+```
+
+- **`correct`** sends the correction into the seat's live session and lets it keep working.
+  Use it first.
+- **`stop`** pauses the seat until you `resume` it. The correction is the first thing it reads
+  when it resumes. Use it when the seat is doing harm: burning money, breaking a founder ruling,
+  or ignoring a correction you already gave.
+- **`resume`** lets it go once the next screen shows the correction has been made.
+- A stop or correction without the rule, the evidence and the exact correction is refused.
+  Stopping corrects nothing; the correction is the point. Blanket blocks that name no specific
+  fix are not judgment.
+- The Validator is under this too. You hold authority over all three seats.
+
+**The founder's dash: `orchestrator/bin/escalate.py`.** Herald (dash.herald.tools) is how the run talks to
+the founder. Three levels, and you choose the level by who must act:
+
+| Level | Herald | Use it for |
+|---|---|---|
+| `informational` | `post_update` status | Progress, active status, what finished. At most one per tick, and only when something changed. |
+| `important` | `needs_attention`, at-your-convenience | A decision the run made that the founder should see: a scope call, a ruling, a seat replaced, money saved or spent. |
+| `critical` | `needs_attention`, critical | Only what the founder alone can do (a physical device, their own browser consent, a system setting) or a genuine impasse where no role knows what needs doing. |
+
+```bash
+orchestrator/bin/escalate.py post --root . --level <level> --key <stable-key> --summary "<one line>" \
+  [--detail "<the facts>"] [--question]
+```
+
+- **Ask only what has not been asked.** Before any question goes out, search the directive
+  ledger, Kindex, and `orchestrator/questions.jsonl` for the founder's answer. If it is there,
+  give the answer to the seat that asked. `escalate.py --question` refuses an exact repeat
+  of an answered question and prints its answer (exit 3). A question that has been asked before
+  in other words is still a repeat; that judgment is yours. When the founder answers, record it
+  with `escalate.py answer --key <key> --answer "<their words>" --source "<where they said it>"`.
+- **Never let a seat ask permission for what was already asked.** A seat that asks the founder
+  (or you) "do you want me to do X?" when X was already requested, or asks the founder to type
+  go, approve, or confirm, gets `correct` with the founder's original request cited, and
+  continues. That is never escalated.
+- **Stable keys.** One key per topic (`deploy`, `plan-window-codex`, `scope-email-triage`). A
+  repeat updates the same item on the dash instead of adding a new one. When it is settled,
+  `escalate.py resolve --key <key>`.
+- **Cattle Prod** decides how hard to nudge the founder. You send facts with their level; you
+  never repeat a critical item to make it louder.
 
 ## The founder's view — and the only thing that reaches the founder
 

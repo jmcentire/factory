@@ -2126,12 +2126,16 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         "agreement_contract.py",
         "attention_gate.py",
         "boundary_register.py",
+        "escalate.py",
         "lane_dialogue.py",
         "jev_rules.py",
         "jev_screen.py",
         "orchestrator_channel.py",
         "run_guidance.py",
+        "seat_supervisor.py",
     }
+    supervisor_line = next(ln for ln in tmux_calls.splitlines() if "-n supervisor " in ln)
+    assert "seat_supervisor.py run --root" in supervisor_line
     imported = subprocess.run(
         [sys.executable, str(orchestrator_bin / "orchestrator_channel.py"), "--help"],
         cwd=root,

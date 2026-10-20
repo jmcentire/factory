@@ -34,7 +34,15 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 # whichever checkout an installed /command or the operator's shell happens to name.
 FACTORY_HOME="$(cd "$D/.." && pwd -P)"
 export FACTORY_HOME
-# Explicit per-run opt-in: captured lane data leaves this host only when selected.
+# The Orchestrator's System One screen is on in every run that has a key (founder, 2026-10-20):
+# a run can no longer be launched blind by leaving the flag out. The operator's personal TypeSafe
+# key may be named JMC_JEV_API_KEY. Captured lane data leaves this host only for this screen.
+if [ -z "${TYPESAFE_API_KEY:-}" ] && [ -n "${JMC_JEV_API_KEY:-}" ]; then
+  TYPESAFE_API_KEY="$JMC_JEV_API_KEY"; export TYPESAFE_API_KEY
+fi
+if [ -z "$JEV_CALLS" ] && [ -n "${TYPESAFE_API_KEY:-}" ]; then
+  JEV_CALLS=1000
+fi
 JEV_CONFIG=$("$FACTORY_PYTHON" - "$D" "$JEV_CALLS" <<'PYJEV'
 import json, os, sys
 sys.path.insert(0, sys.argv[1])
@@ -573,7 +581,7 @@ cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
 cp -f "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
 cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
-  "$D/boundary_register.py" \
+  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
 # run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
@@ -595,7 +603,8 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/attention_gate.py" "$ROOT/orchestrator/bin/lane_dialogue.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py" \
-  "$ROOT/orchestrator/bin/boundary_register.py"
+  "$ROOT/orchestrator/bin/boundary_register.py" "$ROOT/orchestrator/bin/escalate.py" \
+  "$ROOT/orchestrator/bin/seat_supervisor.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2
@@ -623,6 +632,17 @@ if ! tmux new-window -t "$RUN" -n ctl -c "$FACTORY_WORKDIR" "$CTL_CMD"; then
     resource_event '{"reason":"dispatcher window failed; session cleanup unverified","residue":true}' failed || true
   fi
   echo "factory: dispatcher window failed; created tmux session was terminally accounted" >&2
+  exit 70
+fi
+# The seats work only while the Orchestrator judges them (harness/seat_supervisor.py): unassessed
+# activity past the lease pauses the Validator, the Coder and the Tester, and the Orchestrator can
+# correct, stop or resume any of them. It also beats Herald's heartbeat, the run's dead-man switch.
+printf -v SUPERVISOR_CMD 'exec %q %q run --root %q --session %q' \
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" "$ROOT" "$RUN"
+if ! tmux new-window -d -t "$RUN" -n supervisor -c "$ROOT" "$SUPERVISOR_CMD"; then
+  echo "factory: the seat supervisor failed to start; a run without it is refused" >&2
+  tmux kill-session -t "$RUN" 2>/dev/null || true
+  resource_event '{"reason":"seat supervisor window failed","residue":false}' abandoned || true
   exit 70
 fi
 IGNITION_FILES=""

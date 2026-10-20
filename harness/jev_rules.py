@@ -1123,6 +1123,130 @@ BOUNDARY_PRESUMED_ACCESS = {
 }
 
 
+
+# Founder, 2026-10-20 (herald-dash-r2): the factory is long-lived agents with special roles.
+# Exactly one Validator, one Orchestrator, one Coder and one Tester, each one session for the
+# whole run: no restart, no time limit, no replication, and plan billing only.
+FRESH_SESSION_FOR_RESUMABLE = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` show new work, a fix or a review being given to the Coder or "
+            "the Tester by starting a new session for it (a new round, a relaunch, a fresh "
+            "lane) rather than by a message into its existing session?"
+        ),
+        "inspect": "`pane_excerpt`",
+        "focus": (
+            "Each role is one long-lived session. A fresh session re-reads the whole context "
+            "(about 265k tokens per Tester session in herald-dash-r2) to do minutes of work. "
+            "Only a provably unrecoverable session is replaced, and the reason is recorded."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": "Work reaches the Coder or the Tester through a newly started session",
+            "examples": [
+                "Bash(harness/tmux_lane.sh herald-dash-r2 tester --instance l --round r7 ...)",
+                "tester-w finished before its review could reach it, so I relaunched it as r6",
+            ],
+        },
+        "false": {
+            "what": "Work is sent into the role's existing session, or no work is dispatched",
+            "examples": [
+                "Bash(harness/tmux_lane_message.sh herald-dash-r2 validator tester review ...)",
+            ],
+        },
+    },
+}
+
+WALL_CAP_ON_PLAN_LANE = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` launch or configure a plan-billed (not metered) Coder or "
+            "Tester with a wall-clock time limit?"
+        ),
+        "inspect": "`pane_excerpt`",
+        "focus": (
+            "A time limit exists only to bound metered spend. A plan lane runs until its work "
+            "is done; stall and liveness checks are not time limits."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": "A plan-billed lane gets a wall-clock cap",
+            "examples": [
+                "Bash(harness/tmux_lane.sh run tester --agent claude --wall-cap-minutes 60 ...)",
+            ],
+        },
+        "false": {
+            "what": "No cap, or a cap on a metered lane with its spend cap and rate",
+            "examples": [
+                "Bash(harness/tmux_lane.sh run coder --agent codex-ollama --metered "
+                "--spend-cap-usd 20 --usd-per-hour 4 ...)",
+            ],
+        },
+    },
+}
+
+SECOND_ROLE_INSTANCE = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` set up a second Coder, a second Tester, a second Validator or "
+            "a second Orchestrator in the same run (a parallel instance, a split by component, "
+            "or an extra lane)?"
+        ),
+        "inspect": "`pane_excerpt`",
+        "focus": (
+            "The roles are singular: the Validator, the Orchestrator, the Coder, the Tester. "
+            "Splitting the product across coders creates seams owned by two parties. A model "
+            "trial runs separate factories, one per model."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": "A run gains another instance of a role it already has",
+            "examples": [
+                "I added a fifth lane, tester-g, on cursor-agent; it writes the same Worker cases",
+                "Bash(harness/tmux_lane.sh run coder --instance l --workdir laptop ...)",
+            ],
+        },
+        "false": {
+            "what": "The run keeps exactly one session per role",
+            "examples": ["Bash(harness/tmux_lane.sh run tester --agent claude ...)  # the Tester"],
+        },
+    },
+}
+
+PAID_OVERAGE = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `pane_excerpt` show a seat continuing to work after its plan window is "
+            "exhausted, drawing paid credits or per-use billing?"
+        ),
+        "inspect": "`pane_excerpt`",
+        "focus": (
+            "Plan usage only, never paid. When a plan window is exhausted, that model's work "
+            "moves to another plan model; the run never waits on the founder to stop paid use."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": "Work continues on paid credits once the plan window is used up",
+            "examples": [
+                "weekly window 100% used, 17,553.71 credits; the Orchestrator is burning about "
+                "3,600 paid credits an hour",
+            ],
+        },
+        "false": {
+            "what": "Plan usage within its window, or work moved off an exhausted model",
+            "examples": ["codex weekly window 92%: routing the next Coder turn to Fable 5.1"],
+        },
+    },
+}
+
 # ---------------------------------------------------------------------------------------------
 # The registry. Every rule, its id, the state fields it reads, and its band in one place.
 # Band semantics (kindex 919808d7d128): above `yes_above` is a finding, below `no_below` is no
@@ -1218,12 +1342,27 @@ RULEBOOK = (
         ("pane_excerpt",),
         "boundary-identifiers §2, founder 2026-10-14",
     ),
+    _rule(
+        "fresh_session_for_resumable",
+        FRESH_SESSION_FOR_RESUMABLE,
+        ("pane_excerpt",),
+        "founder 2026-10-20, long-lived roles",
+    ),
+    _rule(
+        "wall_cap_on_plan_lane", WALL_CAP_ON_PLAN_LANE, ("pane_excerpt",),
+        "founder 2026-10-20, long-lived roles",
+    ),
+    _rule(
+        "second_role_instance", SECOND_ROLE_INSTANCE, ("pane_excerpt",),
+        "founder 2026-10-20, long-lived roles",
+    ),
+    _rule("paid_overage", PAID_OVERAGE, ("pane_excerpt",), "founder 2026-10-20, plan billing"),
 )
 
 BY_ID = {r["id"]: r for r in RULEBOOK}
 
 #: Rule sources the resident Orchestrator's screen consumes at runtime.
-SCREENED_SOURCES = ("msg-r2", "boundary-identifiers")
+SCREENED_SOURCES = ("msg-r2", "boundary-identifiers", "founder 2026-10-20")
 
 
 def screened(entry):
