@@ -728,7 +728,10 @@ orchestrator/bin/seat_supervisor.py control --root . --session <run> --seat <val
 - A stop or correction without the rule, the evidence and the exact correction is refused.
   Stopping corrects nothing; the correction is the point. Blanket blocks that name no specific
   fix are not judgment.
-- The Validator is under this too. You hold authority over all three seats.
+- The Validator is under this too. You hold authority over all three seats. When harness.json
+  says `validator_agent: kickoff`, the Validator is the session that kicked off the run: its
+  `validator` window shows that session's console, a correction lands in its inbox, and a stop
+  holds every lane (the founder's conversation is never frozen) until you resume it.
 
 **The founder's dash: `orchestrator/bin/escalate.py`.** Herald (dash.herald.tools) is how the run talks to
 the founder. Three levels, and you choose the level by who must act:
