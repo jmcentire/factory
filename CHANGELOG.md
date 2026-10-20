@@ -3,6 +3,15 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.24] - 2026-10-20
+
+### Fixed
+
+- **`freeze-exclude` applies at any depth.** A declared name (`node_modules`) was excluded only at
+  the lane's top level, so a lane with nested packages (`laptop/node_modules`,
+  `tests/acceptance/l/node_modules`) could not be frozen: their `.bin` symlinks were refused.
+  Seen in herald-dash-r3, where both lanes' freezes were refused.
+
 ## [0.8.23] - 2026-10-20
 
 The session that kicks off a run can be its Validator, with the Orchestrator's oversight
