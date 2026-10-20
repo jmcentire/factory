@@ -103,7 +103,9 @@ def validate_standalone_repository(source: str | pathlib.Path) -> StandaloneRepo
 
 
 def read_freeze_excludes(conf: str | pathlib.Path) -> tuple[str, ...]:
-    """Entry names a target declares unfrozen via ``freeze-exclude:`` in projection.conf, at any depth.
+    """Entry names a target declares unfrozen via ``freeze-exclude:`` in projection.conf.
+
+    A declared name is excluded at any depth, so each nested package's ``node_modules`` is too.
 
     The conf is committed in the target at the pinned commit, so the lane cannot change it.
     It has no inline comments: a value holding whitespace or ``#`` (``node_modules  # deps``) is
