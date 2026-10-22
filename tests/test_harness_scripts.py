@@ -2051,7 +2051,9 @@ def test_factory_ignition_reads_agy_help_from_stderr(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     harness = json.loads((root / "harness.json").read_text())
-    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-sandbox-v1"
+    # R4 supersedes the sandboxed contract id. The assertion stays; the value moves.
+    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R4
+    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-unsandboxed-v2"
 
 
 def test_factory_ignition_tripwire_scans_run_kindex_not_conversations(tmp_path: Path) -> None:
@@ -2129,7 +2131,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert str(target["workdir"]) in tmux_calls
     assert str(operator) not in tmux_calls
     assert "-n orchestrator" in tmux_calls
-    assert "agy --new-project --sandbox" in tmux_calls
+    # R1: resident agy launch is `agy --new-project` and has no standalone `--sandbox`.
+    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R1
+    orchestrator_line = next(ln for ln in tmux_calls.splitlines() if "-n orchestrator " in ln)
+    assert "agy --new-project" in orchestrator_line
+    assert "--sandbox" not in orchestrator_line.split()
     assert "--new-project" in tmux_calls
     assert "--prompt-interactive" in tmux_calls
     assert "--disable-slash-commands" not in tmux_calls
@@ -2168,6 +2174,294 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
+
+
+def orchestrator_tmux_line(tmux_log: Path) -> str:
+    """The tmux argv that starts the resident orchestrator window."""
+    return next(line for line in tmux_log.read_text().splitlines() if "-n orchestrator " in line)
+
+
+def agy_launch_words(orchestrator_line: str) -> list[str]:
+    """Whitespace-delimited words of the agy command on that tmux line.
+
+    The ignition tmux stub logs argv joined by spaces, so a standalone flag is one word.
+    """
+    words = orchestrator_line.split()
+    for index, word in enumerate(words):
+        if word == "agy" or word.endswith("/agy"):
+            return words[index:]
+    return []
+
+
+def write_agy_admission_stub(agy: Path, help_text: str) -> None:
+    """Replace the ignition agy stub's --help text. --version stays a successful probe."""
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        f'echo "{help_text}" >&2; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
+
+
+def prepare_agy_ignition(
+    tmp_path: Path, task: str
+) -> tuple[Path, Path, dict[str, str], Path, dict[str, object]]:
+    """Intake fixture and the shared agy/tmux stubs, before factory.sh runs."""
+    operator, root, target = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status=None,
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    return operator, root, env, tmux_log, target
+
+
+def ignite_prepared(
+    operator: Path, root: Path, env: dict[str, str], task: str
+) -> subprocess.CompletedProcess[str]:
+    return run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+
+def ignite_agy_run(
+    tmp_path: Path,
+    task: str,
+    env_extra: Mapping[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, dict[str, object]]:
+    operator, root, env, tmux_log, target = prepare_agy_ignition(tmp_path, task)
+    if env_extra:
+        env.update(env_extra)
+    return ignite_prepared(operator, root, env, task), root, tmux_log, target
+
+
+# Help text one delta from the igniting stub: `--sandbox` removed. `--disable-slash-commands`
+# stays, as it does on that stub, so the only admission change is the sandbox token (R3).
+_AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX = (
+    "--new-project --prompt-interactive --dangerously-skip-permissions "
+    "--disable-slash-commands --add-dir"
+)
+# One used flag removed. `--sandbox` stays listed so the missing token is the used flag.
+_AGY_HELP_MISSING_DANGEROUSLY_SKIP = (
+    "--new-project --prompt-interactive --sandbox --disable-slash-commands --add-dir"
+)
+_TASK_DIGEST = "9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6"
+_STRATEGY_DIGEST = "9ed96be31d6c9b494f999ab77821ad2a5ddd3f959b29985f6930ae1d19aa9406"
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R1-no-sandbox"], ids=["AGY-R1-no-sandbox"])
+def test_resident_agy_launch_has_no_sandbox_token(case_id: str, tmp_path: Path) -> None:
+    """The resident agy orchestrator launch does not pass a standalone --sandbox token.
+
+    cites: task.txt _TASK_DIGEST #R1
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R1-no-sandbox
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: the orchestrator tmux line still has a standalone --sandbox word
+    (the pinned `agy --new-project --sandbox` launch).
+    """
+    task = "Launch the resident agy orchestrator without a sandbox."
+    result, _root, tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    assert "agy --new-project" in line, case_id
+    assert "--sandbox" not in line.split(), case_id
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R2-workflow-kept"], ids=["AGY-R2-workflow-kept"])
+def test_resident_agy_launch_keeps_workflow_and_hides_billing_keys(
+    case_id: str, tmp_path: Path
+) -> None:
+    """The unsandboxed launch keeps the resident workflow and leaks no billing key.
+
+    cites: task.txt _TASK_DIGEST #R2
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R2-workflow-kept
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: drop exec env -i, a kept flag, or --add-dir of the target workdir;
+    pass standalone -p, --print, or --disable-slash-commands; or copy one of the
+    five billing names or sentinel values onto the orchestrator tmux line.
+    """
+    task = "Keep the resident agy workflow and withhold billing keys."
+    sentinels = {
+        "ANTHROPIC_API_KEY": "marker-anthropic-agy-r2",
+        "OPENAI_API_KEY": "marker-openai-agy-r2",
+        "GEMINI_API_KEY": "marker-gemini-agy-r2",
+        "GOOGLE_API_KEY": "marker-google-agy-r2",
+        "TYPESAFE_API_KEY": "marker-typesafe-agy-r2",
+    }
+    result, _root, tmux_log, target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy", **sentinels},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    words = line.split()
+    agy_words = agy_launch_words(line)
+    assert agy_words, case_id
+    assert "exec env -i" in line, case_id
+    assert "--new-project" in agy_words, case_id
+    assert "--dangerously-skip-permissions" in agy_words, case_id
+    assert "--prompt-interactive" in agy_words, case_id
+    workdir = str(target["workdir"])
+    assert any(
+        words[index] == "--add-dir" and words[index + 1] == workdir
+        for index in range(len(words) - 1)
+    ), case_id
+    for forbidden in ("-p", "--print", "--disable-slash-commands"):
+        assert forbidden not in words, (case_id, forbidden)
+    for name, value in sentinels.items():
+        assert name not in line, (case_id, name)
+        assert value not in line, (case_id, value)
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-help-without-sandbox-accepted"],
+    ids=["AGY-R3-help-without-sandbox-accepted"],
+)
+def test_agy_help_without_sandbox_still_ignites(case_id: str, tmp_path: Path) -> None:
+    """An agy whose --help lists every used flag but not --sandbox ignites.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-help-without-sandbox-accepted
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: admission still requires --sandbox in --help, so ignition does not
+    exit 0. Reach is the orchestrator window on the tmux log after exit 0.
+    """
+    task = "Admit an agy whose help omits sandbox."
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, _AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX)
+    help_body = agy.read_text(encoding="utf-8")
+    assert "--sandbox" not in help_body
+    for flag in (
+        "--new-project",
+        "--prompt-interactive",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+    ):
+        assert flag in help_body
+    result = ignite_prepared(operator, root, env, task)
+    assert result.returncode == 0, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "-n orchestrator " in tmux_log.read_text(), case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-missing-used-flag-refused"],
+    ids=["AGY-R3-missing-used-flag-refused"],
+)
+def test_agy_help_missing_a_used_flag_is_refused(case_id: str, tmp_path: Path) -> None:
+    """Help that lacks a flag the launch uses is refused before a tmux session exists.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-missing-used-flag-refused
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: exit is not 70, the output does not name --dangerously-skip-permissions,
+    or a new-session call is logged.
+    """
+    task = "Refuse an agy whose help omits a flag the launch uses."
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, _AGY_HELP_MISSING_DANGEROUSLY_SKIP)
+    help_body = agy.read_text(encoding="utf-8")
+    assert "--dangerously-skip-permissions" not in help_body
+    for flag in ("--new-project", "--prompt-interactive", "--sandbox", "--add-dir"):
+        assert flag in help_body
+    result = ignite_prepared(operator, root, env, task)
+    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "--dangerously-skip-permissions" in result.stdout + result.stderr, case_id
+    logged = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "new-session" not in logged, case_id
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R4-contract-id"], ids=["AGY-R4-contract-id"])
+def test_agy_ignition_records_unsandboxed_contract(case_id: str, tmp_path: Path) -> None:
+    """harness.json records the unsandboxed resident contract after agy ignition.
+
+    cites: task.txt _TASK_DIGEST #R4
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R4-contract-id
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: orchestrator_cli_contract is still agy-resident-new-project-sandbox-v1
+    or any other id.
+    """
+    task = "Record the unsandboxed agy resident contract."
+    result, root, _tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["orchestrator_agent"] == "agy", case_id
+    assert harness["orchestrator_cli_contract"] == (
+        "agy-resident-new-project-unsandboxed-v2"
+    ), case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R6-channel-runs-on-pinned-interpreter"],
+    ids=["AGY-R6-channel-runs-on-pinned-interpreter"],
+)
+def test_run_owned_channel_status_uses_pinned_interpreter(
+    case_id: str, tmp_path: Path
+) -> None:
+    """The run-owned channel status runs by path when PATH's python3 is not ours.
+
+    cites: task.txt _TASK_DIGEST #R6
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R6-channel-runs-on-pinned-interpreter
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: status is exec'd via PATH python3 (the stub exits 97), stdout is not
+    a JSON object with current, or orchestrator/.channel.lock is not a regular file.
+    """
+    task = "Ask the run-owned channel for status on the pinned interpreter."
+    result, root, _tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    channel = root / "orchestrator" / "bin" / "orchestrator_channel.py"
+    assert channel.is_file(), case_id
+    python_dir = tmp_path / "not-factory-python"
+    python_dir.mkdir()
+    python3 = python_dir / "python3"
+    python3.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    python3.chmod(0o755)
+    home = tmp_path / "channel-home"
+    temp = tmp_path / "channel-tmp"
+    home.mkdir()
+    temp.mkdir()
+    status = subprocess.run(
+        [str(channel), "status", "--root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{python_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "HOME": str(home),
+            "TMPDIR": str(temp),
+        },
+    )
+    assert status.returncode == 0, (case_id, status.returncode, status.stdout, status.stderr)
+    payload = json.loads(status.stdout)
+    assert isinstance(payload, dict) and "current" in payload, case_id
+    lock = root / "orchestrator" / ".channel.lock"
+    assert lock.is_file(), case_id
+    assert stat.S_ISREG(lock.lstat().st_mode), case_id
 
 
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):

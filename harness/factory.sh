@@ -248,14 +248,16 @@ case "$ORCHESTRATOR_AGENT" in
       echo "factory: agy CLI is not runnable" >&2; exit 70;
     }
     ORCHESTRATOR_HELP=$(agy --help 2>&1) || exit 70
-    for REQUIRED in --new-project --prompt-interactive --sandbox \
-      --dangerously-skip-permissions --add-dir; do
-      printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
+    REQUIRED_FLAGS="--new-project --prompt-interactive --dangerously-skip-permissions --add-dir"
+    [ -z "$ORCHESTRATOR_MODEL" ] || REQUIRED_FLAGS="$REQUIRED_FLAGS --model"
+    [ -z "$ORCHESTRATOR_EFFORT" ] || REQUIRED_FLAGS="$REQUIRED_FLAGS --effort"
+    for REQUIRED in $REQUIRED_FLAGS; do
+      printf '%s' "$ORCHESTRATOR_HELP" | grep -Eq -- "(^|[^[:alnum:]_-])$REQUIRED([^[:alnum:]_-]|$)" || {
         echo "factory: agy CLI contract lacks $REQUIRED ($ORCHESTRATOR_VERSION)" >&2
         exit 70
       }
     done
-    ORCHESTRATOR_CLI_CONTRACT="agy-resident-new-project-sandbox-v1"
+    ORCHESTRATOR_CLI_CONTRACT="agy-resident-new-project-unsandboxed-v2"
     ;;
   codex)
     ORCHESTRATOR_VERSION=$(codex --version 2>/dev/null) || {
@@ -559,10 +561,9 @@ SAFE_SHELL="${SHELL:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 case "$ORCHESTRATOR_AGENT" in
   agy)
-    # --sandbox restricts terminal effects; --dangerously-skip-permissions only
-    # prevents unattended tool prompts from neutering the resident monitor. It
-    # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
+    # Founder ruling: omit --sandbox so this seat can reach tmux and monitor the run;
+    # never give the Orchestrator less reach than the Validator.
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
       "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;

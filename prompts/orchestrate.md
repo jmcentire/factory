@@ -271,7 +271,8 @@ Validator decide which governs, quoting both, and record the basis; do not silen
 replacement.
 
 Record the assessment through the run-owned `orchestrator/bin/orchestrator_channel.py report`
-copy (or `harness/orchestrator_channel.py` while developing Factory itself). A run whose
+copy (or `harness/orchestrator_channel.py` while developing Factory itself). Run the
+`orchestrator/bin/*` tools by path, because their first line names the run's interpreter. A run whose
 `harness.json` sets `progress_review` takes assessment/5, shown here; any other run takes
 assessment/3, which is the same object without `screen_review`, `signal_class` and
 `progress_review` (assessment/4 adds only `screen_review`). `screen_review` is null unless
