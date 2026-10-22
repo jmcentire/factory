@@ -187,28 +187,42 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     assert (row["model"], row["model_source"]) == ("", "agent")
 
 
-def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor_agent() -> None:
+def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor_agent(
+    tmp_path: Path,
+) -> None:
     family = lane_agent.model_family
     assert family("muse", "") == "meta" and family("codex", "") == "openai"
-    assert family("codex", "sol-6.1") == "openai" and family("agy", "") == "google"
+    assert family("codex", "gpt-6.1-sol") == "openai" and family("agy", "") == "google"
     assert family("cursor-agent", "grok-4.7-xhigh") == "xai"
     assert family("claude-ollama", "glm-5.3:cloud") == "zhipu"
     assert family("claude", "claude-opus-5-5") == "anthropic"
-    # A multi-vendor agent with no named model does not say.
+    # A multi-vendor agent with no named model, or a named model no prefix recognizes (a custom
+    # provider can serve anything under any name), does not say.
     assert family("cursor-agent", "") == "" and family("prime-agent", "") == ""
+    assert family("codex", "private-model") == ""
+    # A Codex lane with no named model runs the operator's config, provider included.
+    (tmp_path / "config.toml").write_text(
+        'model = "claude-opus-5"\nmodel_provider = "proxy"\n'
+        '[model_providers.proxy]\nname = "Proxy"\nbase_url = "http://127.0.0.1:9/v1"\n',
+        encoding="utf-8")
+    assert lane_agent.lane_family("codex", "", tmp_path) == "anthropic"
+    (tmp_path / "config.toml").write_text(
+        'model = "house"\nmodel_provider = "proxy"\n'
+        '[model_providers.proxy]\nname = "Proxy"\nbase_url = "http://127.0.0.1:9/v1"\n',
+        encoding="utf-8")
+    assert lane_agent.lane_family("codex", "", tmp_path) == ""
 
 
 def test_the_tester_does_not_start_on_the_coders_model_family(tmp_path: Path) -> None:
     """SOFTWARE-FACTORY.md "Across the lanes" (E1, I19): the Coder and the Tester run different
-    model families; a same-family Tester is refused before anything starts."""
+    model families; a same-family or unknown-family Tester is refused before anything starts."""
 
     lanes = Lanes(tmp_path)
     lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
     assert lanes.lane("coder").returncode == 0
     same = lanes.lane("tester")
-    assert same.returncode == 70 and "different model families" in same.stderr
+    assert same.returncode == 70 and "different, known model families" in same.stderr
     assert "openai" in same.stderr and not lanes.windows("tester")
-    # A multi-vendor agent with no named model is an unknown family: also refused.
     _cursor_stub(lanes.stub, signed_in=True)
     unknown = lanes.lane("tester", "--agent", "cursor-agent")
     assert unknown.returncode == 70 and "unknown model family" in unknown.stderr
@@ -217,8 +231,79 @@ def test_the_tester_does_not_start_on_the_coders_model_family(tmp_path: Path) ->
     assert crossed.returncode == 0, crossed.stdout + crossed.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
     assert row["status"] == "active"
-    assert row["independence"] == {"family": "xai", "other_role": "coder",
+    assert row["independence"] == {"family": "xai", "other_role": "coder", "other_slot": "coder",
                                    "other_family": "openai", "tier": "cross-family"}
+    seats = json.loads((lanes.root / "tmux-lanes" / "lane-seats.json").read_text())
+    assert seats["tester"]["status"] == "active" and seats["tester"]["family"] == "xai"
+
+
+def test_a_codex_lane_is_judged_by_the_model_its_config_runs(tmp_path: Path) -> None:
+    """A Codex lane with no --model runs the operator's config; a config that routes Codex to a
+    Claude model through a custom provider is Anthropic, not OpenAI."""
+
+    lanes = Lanes(tmp_path)
+    lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'model = "claude-opus-5"\nmodel_provider = "proxy"\n'
+        '[model_providers.proxy]\nname = "Proxy"\nbase_url = "http://127.0.0.1:9/v1"\n',
+        encoding="utf-8")
+    _cursor_stub(lanes.stub, signed_in=True)
+    assert lanes.lane("tester", "--agent", "cursor-agent", "--model",
+                      "claude-sonnet-5").returncode == 0
+    routed = lanes.lane("coder", env={"CODEX_HOME": str(home)})
+    assert routed.returncode == 70 and "anthropic" in routed.stderr
+    assert not lanes.windows("coder")
+
+
+def test_the_first_lane_needs_a_known_family_and_records_its_tier(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path)
+    lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
+    _cursor_stub(lanes.stub, signed_in=True)
+    unknown = lanes.lane("coder", "--agent", "cursor-agent")
+    assert unknown.returncode == 70 and "unknown model family" in unknown.stderr
+    assert lanes.lane("coder").returncode == 0
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["independence"] == {"family": "openai", "tier": "no-peer"}
+
+
+def test_a_qualification_probe_takes_no_seat_and_masks_nothing(tmp_path: Path) -> None:
+    """A qualify run is a probe, not a seat: it neither masks the production Tester nor is
+    checked against it."""
+
+    lanes = Lanes(tmp_path)
+    lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
+    assert lanes.lane("tester").returncode == 0
+    _cursor_stub(lanes.stub, signed_in=True)
+    lanes.lane("tester", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh", action="qualify",
+               repo=lanes.clone("tester-probe"))
+    seats = json.loads((lanes.root / "tmux-lanes" / "lane-seats.json").read_text())
+    assert seats["tester"]["family"] == "openai"
+    same = lanes.lane("coder")
+    assert same.returncode == 70 and "openai" in same.stderr
+
+
+def test_a_launch_in_progress_holds_its_seat_and_a_dead_one_falls_back(tmp_path: Path) -> None:
+    """Two launches at once see each other: a pending seat in a live process counts. A pending
+    seat whose process is gone falls back to the seat it would have replaced."""
+
+    root = tmp_path / "tmux-lanes"
+    lane_agent.claim_seat(root, role="tester", slot="tester", agent_name="codex", model="",
+                          codex_home=None, gap="", pid=os.getpid())
+    with pytest.raises(SystemExit, match="different, known model families"):
+        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
+                              codex_home=None, gap="", pid=os.getpid())
+    lane_agent.confirm_seat(root, role="tester", slot="tester")
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    # A replacement Tester on xAI that never got going: the OpenAI seat it would have replaced
+    # still stands, so an OpenAI Coder is refused.
+    lane_agent.claim_seat(root, role="tester", slot="tester.r2", agent_name="cursor-agent",
+                          model="grok-4.7-xhigh", codex_home=None, gap="", pid=dead.pid)
+    with pytest.raises(SystemExit, match="openai"):
+        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
+                              codex_home=None, gap="", pid=os.getpid())
 
 
 def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) -> None:
@@ -232,8 +317,20 @@ def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) ->
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
     assert row["independence"]["tier"] == "same-family"
     assert row["independence"]["independence_gap"] == "only Codex configured"
-    first = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
-    assert first["independence"] == {"family": "openai"}
+
+
+def test_an_unknown_peer_is_an_unknown_family_tier_whichever_lane_starts_second(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "tmux-lanes"
+    first = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="cursor-agent",
+                                  model="", codex_home=None, gap="no other family", pid=os.getpid())
+    assert first["tier"] == "unknown-family" and first["independence_gap"] == "no other family"
+    lane_agent.confirm_seat(root, role="coder", slot="coder")
+    second = lane_agent.claim_seat(root, role="tester", slot="tester", agent_name="codex",
+                                   model="", codex_home=None, gap="no other family",
+                                   pid=os.getpid())
+    assert second["tier"] == "unknown-family" and second["other_family"] is None
 
 
 def test_every_lane_agent_is_described_once_and_only_the_per_use_agents_are_metered() -> None:

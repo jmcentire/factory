@@ -7,13 +7,17 @@ public API is still pre-1.0.
 
 ### Fixed
 
-- **The Coder and the Tester do not share a model family.** `tmux_lane.sh` refuses to start a
-  Coder or Tester lane whose model family is the same as the other lane's, or unknown (a
-  multi-vendor agent with no `--model`). The family comes from the named model, else from an agent
-  that runs only its own vendor's models (`lane_agent.py family`). Only where no other family is
-  configured may the operator proceed, by setting `FACTORY_LANE_INDEPENDENCE_GAP` to the reason.
-  Every launch record now carries `independence`: the lane's family and, beside the other lane,
-  the tier achieved (I19). Seen in herald-dash-r3, where Muse ran both lanes and nothing objected.
+- **The Coder and the Tester do not share a model family.** `tmux_lane.sh` refuses to launch a
+  Coder or Tester whose model family is the same as the other seat's, or unknown, unless the operator
+  sets `FACTORY_LANE_INDEPENDENCE_GAP` to the reason no other family is configured. The check runs
+  once the lane's model is fully resolved (a Codex lane with no `--model` is judged by the model and
+  provider its config runs), and atomically with taking the role's seat in the run's
+  `tmux-lanes/lane-seats.json` under a file lock, so two launches at once see each other. A named
+  model no prefix recognizes is an unknown family. A qualification probe takes no seat. A launch that
+  dies before running falls back to the seat it would have replaced. Every launch record carries
+  `independence`: the lane's family, the other seat's, and the tier (`cross-family`, `same-family`,
+  `unknown-family` or `no-peer`), with any gap reason (I19). Seen in herald-dash-r3, where Muse ran
+  both lanes and nothing objected; hardened after an independent review on another model family.
 
 ## [0.8.25] - 2026-10-20
 

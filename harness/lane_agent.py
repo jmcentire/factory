@@ -122,12 +122,13 @@ def agent(name: str) -> Agent:
         ) from None
 
 
-# -- model families ------------------------------------------------------------------------------
+# -- model families and seats --------------------------------------------------------------------
 
 # The Coder and the Tester run different model families wherever the operator has configured more
 # than one (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). A named model says
-# its family by its name; with none named, an agent that runs only its own vendor's models says it.
-# A multi-vendor agent (cursor-agent, prime-agent, the Ollama agents) with no model says nothing.
+# its family by its name, and a name no prefix recognizes says nothing (a custom provider can serve
+# anything under any name). With no model named, an agent that runs only its own vendor's models
+# says it, unless the operator's Codex config routes it to another provider.
 MODEL_FAMILIES = (
     ("claude", "anthropic"), ("opus", "anthropic"), ("sonnet", "anthropic"),
     ("haiku", "anthropic"), ("fable", "anthropic"),
@@ -140,15 +141,114 @@ AGENT_FAMILIES = {
     "codex": "openai", "codex-interactive": "openai", "claude": "anthropic", "agy": "google",
     "muse": "meta",
 }
+SEATS = "lane-seats.json"
+SEATED_ROLES = {"coder": "tester", "tester": "coder"}
 
 
-def model_family(agent_name: str, model: str) -> str:
-    """The family a lane's model belongs to, or "" when neither the model nor the agent says."""
-    name = model.lower().rsplit("/", 1)[-1]
-    for prefix, family in MODEL_FAMILIES:
-        if name.startswith(prefix):
-            return family
-    return AGENT_FAMILIES.get(agent_name, "")
+def model_family(agent_name: str, model: str, *, custom_provider: bool = False) -> str:
+    """The family a lane's model belongs to, or "" when nothing says reliably."""
+    if model:
+        name = model.lower().rsplit("/", 1)[-1]
+        return next((family for prefix, family in MODEL_FAMILIES if name.startswith(prefix)), "")
+    return "" if custom_provider else AGENT_FAMILIES.get(agent_name, "")
+
+
+def lane_family(agent_name: str, model: str, codex_home: pathlib.Path | None) -> str:
+    """The family of what the lane will actually run. A Codex lane with no named model runs the
+    operator's Codex config, model and provider both, so that config decides."""
+    if model or agent_name not in ("codex", "codex-interactive") or codex_home is None:
+        return model_family(agent_name, model)
+    configured, overrides = codex_model_selection(codex_home)
+    custom = any(o.startswith("model_provider=") and o != 'model_provider="openai"'
+                 for o in overrides)
+    return model_family(agent_name, configured, custom_provider=custom)
+
+
+def _alive(pid: object) -> bool:
+    try:
+        os.kill(int(pid), 0)  # type: ignore[arg-type]
+    except (TypeError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _seat(entry: dict[str, object] | None) -> dict[str, object] | None:
+    """The seat an entry stands for: a launch still pending in a live process counts (two lanes
+    starting at once see each other); a pending launch whose process is gone falls back to the
+    seat it would have replaced."""
+    while entry and entry.get("status") == "pending" and not _alive(entry.get("pid")):
+        entry = entry.get("previous")  # type: ignore[assignment]
+    return entry
+
+
+def _locked_seats(root: pathlib.Path):
+    import contextlib
+    import fcntl
+
+    @contextlib.contextmanager
+    def held():
+        root.mkdir(parents=True, exist_ok=True)
+        with open(root / (SEATS + ".lock"), "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            path = root / SEATS
+            seats = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            yield seats
+            tmp = root / (SEATS + ".tmp")
+            tmp.write_text(json.dumps(seats, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+
+    return held()
+
+
+def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, model: str,
+               codex_home: pathlib.Path | None, gap: str, pid: int) -> dict[str, object]:
+    """Check this lane's family against the other seat and take this role's seat, atomically.
+    Raises SystemExit when the pair would share a family, or a family is unknown, with no gap."""
+    family = lane_family(agent_name, model, codex_home)
+    other = SEATED_ROLES[role]
+    with _locked_seats(root) as seats:
+        peer = _seat(seats.get(other))
+        theirs = (peer or {}).get("family") or ""
+        record: dict[str, object] = {"family": family or None}
+        if peer is None:
+            tier = "no-peer" if family else "unknown-family"
+        else:
+            record.update(other_role=other, other_slot=peer.get("slot"),
+                          other_family=theirs or None)
+            tier = ("unknown-family" if not (family and theirs)
+                    else "cross-family" if family != theirs else "same-family")
+        record["tier"] = tier
+        if tier in ("same-family", "unknown-family"):
+            if not gap:
+                mine = family or "an unknown model family"
+                raise SystemExit(
+                    f"tmux-lane: the {role} lane would run {mine}"
+                    + (f" and the {other} lane runs {theirs or 'an unknown model family'}"
+                       if peer is not None else "")
+                    + "; the Coder and the Tester run different, known model families. Launch "
+                    "with --agent/--model from another family, or, only when no other family is "
+                    "configured, set FACTORY_LANE_INDEPENDENCE_GAP to the reason so the gap is "
+                    "recorded"
+                )
+            record["independence_gap"] = gap
+        previous = _seat(seats.get(role))
+        if previous is not None:
+            previous = {k: v for k, v in previous.items() if k != "previous"}
+        seats[role] = {"slot": slot, "agent": agent_name, "model": model,
+                       "family": family or None, "status": "pending", "pid": pid,
+                       "ts": _now(), "previous": previous}
+    return record
+
+
+def confirm_seat(root: pathlib.Path, *, role: str, slot: str) -> None:
+    """The lane is running: its pending seat becomes the role's seat."""
+    with _locked_seats(root) as seats:
+        entry = seats.get(role)
+        if not entry or entry.get("slot") != slot:
+            raise SystemExit(f"tmux-lane: the {role} seat is not {slot}'s to confirm")
+        entry.update(status="active", previous=None)
 
 
 # -- preflight -----------------------------------------------------------------------------------
@@ -689,6 +789,17 @@ def main(argv: list[str] | None = None) -> int:
     family = commands.add_parser("family")
     family.add_argument("--agent", required=True)
     family.add_argument("--model", default="")
+    family.add_argument("--codex-home", type=pathlib.Path)
+    seat = commands.add_parser("seat")
+    seat.add_argument("seat_action", choices=("claim", "confirm"))
+    seat.add_argument("--root", type=pathlib.Path, required=True)
+    seat.add_argument("--role", choices=tuple(SEATED_ROLES), required=True)
+    seat.add_argument("--slot", required=True)
+    seat.add_argument("--agent", default="")
+    seat.add_argument("--model", default="")
+    seat.add_argument("--codex-home", type=pathlib.Path)
+    seat.add_argument("--gap", default="")
+    seat.add_argument("--pid", type=int, default=0)
     selection = commands.add_parser("codex-model")
     selection.add_argument("--codex-home", type=pathlib.Path, required=True)
     check = commands.add_parser("preflight")
@@ -724,7 +835,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "family":
             agent(arguments.agent)
-            print(model_family(arguments.agent, arguments.model))
+            print(lane_family(arguments.agent, arguments.model, arguments.codex_home))
+            return 0
+        if arguments.command == "seat":
+            if arguments.seat_action == "confirm":
+                confirm_seat(arguments.root, role=arguments.role, slot=arguments.slot)
+                return 0
+            agent(arguments.agent)
+            record = claim_seat(arguments.root, role=arguments.role, slot=arguments.slot,
+                                agent_name=arguments.agent, model=arguments.model,
+                                codex_home=arguments.codex_home, gap=arguments.gap,
+                                pid=arguments.pid or os.getppid())
+            print(json.dumps(record, sort_keys=True, separators=(",", ":")))
             return 0
         if arguments.command == "codex-model":
             model, overrides = codex_model_selection(arguments.codex_home)
