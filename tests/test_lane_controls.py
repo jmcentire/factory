@@ -284,26 +284,80 @@ def test_a_qualification_probe_takes_no_seat_and_masks_nothing(tmp_path: Path) -
     assert same.returncode == 70 and "openai" in same.stderr
 
 
-def test_a_launch_in_progress_holds_its_seat_and_a_dead_one_falls_back(tmp_path: Path) -> None:
-    """Two launches at once see each other: a pending seat in a live process counts. A pending
-    seat whose process is gone falls back to the seat it would have replaced."""
+def test_one_seated_launch_at_a_time_and_a_dead_one_falls_back(tmp_path: Path) -> None:
+    """While a seat is pending in a live launch, every other claim waits, so no lane is admitted
+    against a launch that may still fail. A pending seat whose launch is gone falls back to the
+    seat it would have replaced."""
 
     root = tmp_path / "tmux-lanes"
-    lane_agent.claim_seat(root, role="tester", slot="tester", agent_name="codex", model="",
-                          codex_home=None, gap="", pid=os.getpid())
-    with pytest.raises(SystemExit, match="different, known model families"):
-        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
-                              codex_home=None, gap="", pid=os.getpid())
+    claim = lane_agent.claim_seat
+    claim(root, role="tester", slot="tester", agent_name="codex", model="", codex_home=None,
+          gap="", pid=os.getpid())
+    for role, slot in (("coder", "coder"), ("tester", "tester.r2")):
+        with pytest.raises(SystemExit, match="still starting"):
+            claim(root, role=role, slot=slot, agent_name="cursor-agent", model="grok-4.7-xhigh",
+                  codex_home=None, gap="", pid=os.getpid())
     lane_agent.confirm_seat(root, role="tester", slot="tester")
     dead = subprocess.Popen(["true"])
     dead.wait()
     # A replacement Tester on xAI that never got going: the OpenAI seat it would have replaced
     # still stands, so an OpenAI Coder is refused.
-    lane_agent.claim_seat(root, role="tester", slot="tester.r2", agent_name="cursor-agent",
-                          model="grok-4.7-xhigh", codex_home=None, gap="", pid=dead.pid)
+    claim(root, role="tester", slot="tester.r2", agent_name="cursor-agent",
+          model="grok-4.7-xhigh", codex_home=None, gap="", pid=dead.pid)
+    with pytest.raises(SystemExit, match="openai"):
+        claim(root, role="coder", slot="coder", agent_name="codex", model="", codex_home=None,
+              gap="", pid=os.getpid())
+
+
+def test_a_reused_pid_does_not_revive_an_abandoned_launch(tmp_path: Path) -> None:
+    root = tmp_path / "tmux-lanes"
+    lane_agent.claim_seat(root, role="tester", slot="tester", agent_name="codex", model="",
+                          codex_home=None, gap="", pid=os.getpid())
+    lane_agent.confirm_seat(root, role="tester", slot="tester")
+    seats = json.loads((root / "lane-seats.json").read_text())
+    # An abandoned xAI replacement whose PID now belongs to another process (this one).
+    seats["tester"] = {"slot": "tester.r2", "agent": "cursor-agent", "model": "grok-4.7-xhigh",
+                       "family": "xai", "status": "pending", "pid": os.getpid(),
+                       "pid_start": "Thu Jan  1 00:00:00 1970", "previous": seats["tester"]}
+    (root / "lane-seats.json").write_text(json.dumps(seats))
     with pytest.raises(SystemExit, match="openai"):
         lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
                               codex_home=None, gap="", pid=os.getpid())
+
+
+def test_a_run_launched_before_the_seat_file_keeps_its_seats(tmp_path: Path) -> None:
+    """Upgrading the factory mid-run: the seats come from the latest active launches."""
+
+    root = tmp_path / "tmux-lanes"
+    root.mkdir()
+    rows = [
+        {"status": "active", "mode": "launch", "role": "tester", "slot": "tester",
+         "agent": "muse", "model": "", "ts": "2026-10-20T16:08:27+00:00"},
+        {"status": "active", "mode": "launch", "role": "tester", "slot": "tester.sol-1",
+         "agent": "codex", "model": "gpt-6.1-sol", "ts": "2026-10-22T01:39:00+00:00"},
+        {"status": "active", "mode": "qualify", "role": "tester", "slot": "tester-b",
+         "agent": "cursor-agent", "model": "grok-4.7-xhigh", "ts": "2026-10-22T02:00:00+00:00"},
+    ]
+    (root / "tester-launch.jsonl").write_text(json.dumps(rows[0]) + "\n")
+    (root / "tester.sol-1-launch.jsonl").write_text(json.dumps(rows[1]) + "\n")
+    (root / "tester-b-launch.jsonl").write_text(json.dumps(rows[2]) + "\n")
+    with pytest.raises(SystemExit, match="openai"):
+        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
+                              codex_home=None, gap="", pid=os.getpid())
+    record = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="muse", model="",
+                                   codex_home=None, gap="", pid=os.getpid())
+    assert record["tier"] == "cross-family" and record["other_slot"] == "tester.sol-1"
+
+
+def test_only_the_pending_launch_confirms_its_seat(tmp_path: Path) -> None:
+    root = tmp_path / "tmux-lanes"
+    lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
+                          codex_home=None, gap="", pid=os.getpid())
+    with pytest.raises(SystemExit, match="not coder.r2's to confirm"):
+        lane_agent.confirm_seat(root, role="coder", slot="coder.r2")
+    lane_agent.confirm_seat(root, role="coder", slot="coder")
+    with pytest.raises(SystemExit, match="not coder's to confirm"):
+        lane_agent.confirm_seat(root, role="coder", slot="coder")
 
 
 def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) -> None:

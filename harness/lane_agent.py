@@ -164,23 +164,58 @@ def lane_family(agent_name: str, model: str, codex_home: pathlib.Path | None) ->
     return model_family(agent_name, configured, custom_provider=custom)
 
 
-def _alive(pid: object) -> bool:
+def _started(pid: object) -> str:
+    """The start time of a running process, or "" when there is none. A PID alone can be reused
+    by an unrelated process; a PID with its start time names one process."""
     try:
-        os.kill(int(pid), 0)  # type: ignore[arg-type]
-    except (TypeError, ValueError, ProcessLookupError):
-        return False
-    except PermissionError:
-        return True
-    return True
+        number = int(pid)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if number <= 0:
+        return ""
+    probe = subprocess.run(["ps", "-o", "lstart=", "-p", str(number)], capture_output=True,
+                           text=True, check=False)
+    return probe.stdout.strip() if probe.returncode == 0 else ""
 
 
-def _seat(entry: dict[str, object] | None) -> dict[str, object] | None:
-    """The seat an entry stands for: a launch still pending in a live process counts (two lanes
-    starting at once see each other); a pending launch whose process is gone falls back to the
-    seat it would have replaced."""
-    while entry and entry.get("status") == "pending" and not _alive(entry.get("pid")):
-        entry = entry.get("previous")  # type: ignore[assignment]
+def _launching(entry: dict[str, object] | None) -> bool:
+    return bool(entry and entry.get("status") == "pending" and entry.get("pid_start")
+                and _started(entry.get("pid")) == entry.get("pid_start"))
+
+
+def _settled(entry: dict[str, object] | None) -> dict[str, object] | None:
+    """A pending seat whose launch is gone falls back to the seat it would have replaced."""
+    if entry and entry.get("status") == "pending" and not _launching(entry):
+        return entry.get("previous")  # type: ignore[return-value]
     return entry
+
+
+def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
+    """A run launched before the seat file existed: each role's seat is its latest active launch
+    (not a qualify probe), so upgrading the factory mid-run keeps the seats already held."""
+    latest: dict[str, tuple[tuple[str, float], dict[str, object]]] = {}
+    for journal in sorted(root.glob("*-launch.jsonl")):
+        mtime = journal.stat().st_mtime
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            role = row.get("role")
+            if row.get("status") != "active" or row.get("mode") != "launch" \
+                    or role not in SEATED_ROLES:
+                continue
+            order = (str(row.get("ts", "")), mtime)
+            if role not in latest or order >= latest[role][0]:
+                latest[role] = (order, row)
+    seats: dict[str, object] = {}
+    for role, (_, row) in latest.items():
+        agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
+        family = model_family(agent_name, model,
+                              custom_provider=any(str(o).startswith("model_provider=")
+                                                  and o != 'model_provider="openai"'
+                                                  for o in row.get("model_config") or ()))
+        seats[role] = {"slot": row.get("slot"), "agent": agent_name, "model": model,
+                       "family": family or None, "status": "active", "seeded": True,
+                       "ts": row.get("ts"), "previous": None}
+    return seats
 
 
 def _locked_seats(root: pathlib.Path):
@@ -193,7 +228,8 @@ def _locked_seats(root: pathlib.Path):
         with open(root / (SEATS + ".lock"), "a", encoding="utf-8") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             path = root / SEATS
-            seats = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            seats = (json.loads(path.read_text(encoding="utf-8")) if path.is_file()
+                     else _seed_from_launches(root))
             yield seats
             tmp = root / (SEATS + ".tmp")
             tmp.write_text(json.dumps(seats, sort_keys=True, indent=1) + "\n", encoding="utf-8")
@@ -205,11 +241,21 @@ def _locked_seats(root: pathlib.Path):
 def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, model: str,
                codex_home: pathlib.Path | None, gap: str, pid: int) -> dict[str, object]:
     """Check this lane's family against the other seat and take this role's seat, atomically.
-    Raises SystemExit when the pair would share a family, or a family is unknown, with no gap."""
+    One seated launch runs at a time: while either seat is pending in a live launch, every other
+    claim is refused, so no lane is admitted against a launch that may still fail. Raises
+    SystemExit when the pair would share a family, or a family is unknown, with no gap."""
     family = lane_family(agent_name, model, codex_home)
     other = SEATED_ROLES[role]
     with _locked_seats(root) as seats:
-        peer = _seat(seats.get(other))
+        for name in SEATED_ROLES:
+            if _launching(seats.get(name)):
+                busy = seats[name]
+                raise SystemExit(
+                    f"tmux-lane: the {name} launch {busy.get('slot')} is still starting; launch "
+                    "again once it has started or failed"
+                )
+            seats[name] = _settled(seats.get(name))
+        peer = seats.get(other)
         theirs = (peer or {}).get("family") or ""
         record: dict[str, object] = {"family": family or None}
         if peer is None:
@@ -233,12 +279,9 @@ def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, mod
                     "recorded"
                 )
             record["independence_gap"] = gap
-        previous = _seat(seats.get(role))
-        if previous is not None:
-            previous = {k: v for k, v in previous.items() if k != "previous"}
         seats[role] = {"slot": slot, "agent": agent_name, "model": model,
                        "family": family or None, "status": "pending", "pid": pid,
-                       "ts": _now(), "previous": previous}
+                       "pid_start": _started(pid), "ts": _now(), "previous": seats.get(role)}
     return record
 
 
@@ -246,7 +289,7 @@ def confirm_seat(root: pathlib.Path, *, role: str, slot: str) -> None:
     """The lane is running: its pending seat becomes the role's seat."""
     with _locked_seats(root) as seats:
         entry = seats.get(role)
-        if not entry or entry.get("slot") != slot:
+        if not entry or entry.get("slot") != slot or entry.get("status") != "pending":
             raise SystemExit(f"tmux-lane: the {role} seat is not {slot}'s to confirm")
         entry.update(status="active", previous=None)
 

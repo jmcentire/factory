@@ -982,8 +982,15 @@ PY
   fi
   append_event "$(mark active)"
   if [ "$ACTION" = launch ]; then
-    "$FACTORY_PYTHON" "$D/lane_agent.py" seat confirm --root "$TMUX_ROOT" --role "$ROLE" \
-      --slot "$SLOT" || refuse 70 "the $ROLE seat could not be confirmed for $SLOT"
+    # A lane that cannot hold its seat does not run: stop it and its watcher.
+    if ! "$FACTORY_PYTHON" "$D/lane_agent.py" seat confirm --root "$TMUX_ROOT" --role "$ROLE" \
+      --slot "$SLOT"; then
+      for W in "$LANE" "watch-$LANE"; do
+        WID=$(window_id "$W"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
+      done
+      append_event "$(mark launch-failed)"
+      refuse 70 "the $ROLE seat could not be confirmed for $SLOT, so the lane was stopped"
+    fi
   fi
   echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT; watcher in $RUN:watch-$LANE"
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
