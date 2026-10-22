@@ -167,9 +167,11 @@ def lane_family(agent_name: str, model: str, codex_home: pathlib.Path | None) ->
 def _started(pid: object) -> str:
     """The start time of a running process, or "" when there is none. A PID alone can be reused
     by an unrelated process; a PID with its start time names one process."""
+    if not isinstance(pid, (int, str)):
+        return ""
     try:
-        number = int(pid)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        number = int(pid)
+    except ValueError:
         return ""
     if number <= 0:
         return ""
@@ -218,9 +220,11 @@ def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
         for row in rows:
             agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
             # codex-interactive runs the operator's Codex config, which its record does not carry.
-            custom = agent_name == "codex-interactive" and not model or any(
-                str(o).startswith("model_provider=") and o != 'model_provider="openai"'
-                for o in row.get("model_config") or ())
+            config = row.get("model_config")
+            overrides = [str(o) for o in config] if isinstance(config, list) else []
+            custom = (agent_name == "codex-interactive" and not model) or any(
+                o.startswith("model_provider=") and o != 'model_provider="openai"'
+                for o in overrides)
             families.add(model_family(agent_name, model, custom_provider=custom))
         row = rows[-1]
         family = families.pop() if len(families) == 1 else ""
