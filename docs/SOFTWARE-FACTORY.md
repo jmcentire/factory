@@ -792,7 +792,10 @@ the evidence is worth.
 | **Strongest** | Reproducible mechanism — type system, schema validator, policy engine, differential test | Does not have a frame to share. |
 
 **Across the lanes — the Coder and the Tester — different model families are a concrete and
-cheap improvement over same-model separation, and worth taking where the option exists.** It is
+cheap improvement over same-model separation, and required wherever the option exists.** The
+launcher enforces it: `tmux_lane.sh` refuses a lane whose model family matches the other lane's
+or is unknown, unless the operator records why no other family is configured
+(`FACTORY_LANE_INDEPENDENCE_GAP`), and every launch record carries the tier achieved. It is
 not a substitute for the mechanical base; **a frame can be shared through the specification
 itself regardless of what generated the agents.** The *Stronger* row is an argument from
 structure: no completed run has yet produced a verdict from cross-family lanes, and the first

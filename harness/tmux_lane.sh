@@ -419,6 +419,7 @@ print(mine)
 PY
   ) || exit 70
 
+
   # A tmux window per lane: a new round replaces a finished one, never a running one.
   WINDOWS=$(tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null || true)
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 0"; then
@@ -450,6 +451,19 @@ PY
     [ "${#MODEL_CONFIG[@]}" -eq 0 ] || MODEL_SOURCE=codex-config
   fi
   [ -n "$MODEL_SOURCE" ] || MODEL_SOURCE=agent
+
+  # Different families across the lanes: the Coder and the Tester do not run the same model family
+  # (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). Checked here, once the model
+  # the lane will run is fully resolved, and atomically with taking the role's seat in the run's
+  # seat file, so two launches at once see each other. A lane whose family matches the other
+  # seat's, or is unknown, does not start unless the operator records why no other family is
+  # configured (FACTORY_LANE_INDEPENDENCE_GAP). A qualification probe takes no seat.
+  INDEPENDENCE=""
+  if [ "$ACTION" = launch ]; then
+    INDEPENDENCE=$("$FACTORY_PYTHON" "$D/lane_agent.py" seat claim --root "$TMUX_ROOT" \
+      --role "$ROLE" --slot "$SLOT" --agent "$AGENT" --model "$MODEL" \
+      --codex-home "$SAFE_CODEX_HOME" --gap "${FACTORY_LANE_INDEPENDENCE_GAP:-}" --pid $$) || exit 70
+  fi
 
   # The dependency cache and runtime the lane's own commands use (dogfood #31/#61): set in the
   # Codex shell policy, because inherit="core" drops anything else, and recorded in the launch so
@@ -742,7 +756,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
-  PLANNED=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -752,7 +766,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "${FACTORY_LANE_SANDBOX:-on}" \
     "$PROMPT_BYTES" "$BRIEF_MANIFEST" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
-import datetime, json, pathlib, sys
+import datetime, json, os, pathlib, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
     profile_digest, preflight, agent_version, model, kindex,
@@ -783,6 +797,8 @@ print(json.dumps({
     "model": model,
     "model_source": model_source,
     "model_config": model_config,
+    # The lane's model family and, beside the other lane, the independence tier achieved (I19).
+    "independence": json.loads(os.environ.get("LANE_INDEPENDENCE") or "null"),
     "terminal": tty == "terminal",
     "prompt_via": prompt_via,
     "prompt_bytes": int(prompt_bytes),
@@ -963,6 +979,18 @@ PY
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"
+  fi
+  if [ "$ACTION" = launch ]; then
+    # A lane that cannot hold its seat does not run: stop it and its watcher. The seat is
+    # confirmed before the launch is recorded active, so a running lane always holds its seat.
+    if ! "$FACTORY_PYTHON" "$D/lane_agent.py" seat confirm --root "$TMUX_ROOT" --role "$ROLE" \
+      --slot "$SLOT"; then
+      for W in "$LANE" "watch-$LANE"; do
+        WID=$(window_id "$W"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
+      done
+      append_event "$(mark launch-failed)"
+      refuse 70 "the $ROLE seat could not be confirmed for $SLOT, so the lane was stopped"
+    fi
   fi
   append_event "$(mark active)"
   echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT; watcher in $RUN:watch-$LANE"

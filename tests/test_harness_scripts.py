@@ -2014,6 +2014,9 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
             "SCHED_AUDIT_INPUT": str(timers),
             "TRANSCRIPTS": str(transcripts),
             "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
+            # One stub agent stands in for every lane here, so both lanes share a family; the
+            # cross-family rule itself is exercised in test_lane_controls.py without this.
+            "FACTORY_LANE_INDEPENDENCE_GAP": "test fixture: one stub agent for every lane",
         },
         log,
     )

@@ -122,6 +122,195 @@ def agent(name: str) -> Agent:
         ) from None
 
 
+# -- model families and seats --------------------------------------------------------------------
+
+# The Coder and the Tester run different model families wherever the operator has configured more
+# than one (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). A named model says
+# its family by its name, and a name no prefix recognizes says nothing (a custom provider can serve
+# anything under any name). With no model named, an agent that runs only its own vendor's models
+# says it, unless the operator's Codex config routes it to another provider.
+MODEL_FAMILIES = (
+    ("claude", "anthropic"), ("opus", "anthropic"), ("sonnet", "anthropic"),
+    ("haiku", "anthropic"), ("fable", "anthropic"),
+    ("gpt", "openai"), ("codex", "openai"), ("sol", "openai"),
+    ("gemini", "google"), ("argon", "google"),
+    ("grok", "xai"), ("glm", "zhipu"), ("qwen", "alibaba"), ("deepseek", "deepseek"),
+    ("kimi", "moonshot"), ("llama", "meta"), ("muse", "meta"),
+)
+AGENT_FAMILIES = {
+    "codex": "openai", "codex-interactive": "openai", "claude": "anthropic", "agy": "google",
+    "muse": "meta",
+}
+SEATS = "lane-seats.json"
+SEATED_ROLES = {"coder": "tester", "tester": "coder"}
+
+
+def model_family(agent_name: str, model: str, *, custom_provider: bool = False) -> str:
+    """The family a lane's model belongs to, or "" when nothing says reliably."""
+    if model:
+        name = model.lower().rsplit("/", 1)[-1]
+        return next((family for prefix, family in MODEL_FAMILIES if name.startswith(prefix)), "")
+    return "" if custom_provider else AGENT_FAMILIES.get(agent_name, "")
+
+
+def lane_family(agent_name: str, model: str, codex_home: pathlib.Path | None) -> str:
+    """The family of what the lane will actually run. A Codex lane with no named model runs the
+    operator's Codex config, model and provider both, so that config decides."""
+    if model or agent_name not in ("codex", "codex-interactive") or codex_home is None:
+        return model_family(agent_name, model)
+    configured, overrides = codex_model_selection(codex_home)
+    custom = any(o.startswith("model_provider=") and o != 'model_provider="openai"'
+                 for o in overrides)
+    return model_family(agent_name, configured, custom_provider=custom)
+
+
+def _started(pid: object) -> str:
+    """The start time of a running process, or "" when there is none. A PID alone can be reused
+    by an unrelated process; a PID with its start time names one process."""
+    if not isinstance(pid, (int, str)):
+        return ""
+    try:
+        number = int(pid)
+    except ValueError:
+        return ""
+    if number <= 0:
+        return ""
+    # ps renders the start time in the caller's timezone and locale; pin both, so every launcher
+    # reads the same text for the same process.
+    probe = subprocess.run(["ps", "-o", "lstart=", "-p", str(number)], capture_output=True,
+                           text=True, check=False,
+                           env={**os.environ, "TZ": "UTC", "LC_ALL": "C", "LANG": "C"})
+    return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
+def _launching(entry: dict[str, object] | None) -> bool:
+    return bool(entry and entry.get("status") == "pending" and entry.get("pid_start")
+                and _started(entry.get("pid")) == entry.get("pid_start"))
+
+
+def _settled(entry: dict[str, object] | None) -> dict[str, object] | None:
+    """A pending seat whose launch is gone falls back to the seat it would have replaced."""
+    if entry and entry.get("status") == "pending" and not _launching(entry):
+        return entry.get("previous")  # type: ignore[return-value]
+    return entry
+
+
+def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
+    """A run launched before the seat file existed: each role's seat is its latest active launch
+    (not a qualify probe), by recorded time and then journal order. Two latest launches at the same
+    time with different families, or a launch whose record cannot say its family, seed an unknown
+    family, so the next claim needs a gap rather than a guess."""
+    latest: dict[str, list[dict[str, object]]] = {}
+    for journal in sorted(root.glob("*-launch.jsonl")):
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            role = row.get("role")
+            if row.get("status") != "active" or row.get("mode") != "launch" \
+                    or role not in SEATED_ROLES:
+                continue
+            ts = str(row.get("ts", ""))
+            best = latest.get(role)
+            if not best or ts > str(best[0].get("ts", "")):
+                latest[role] = [row]
+            elif ts == str(best[0].get("ts", "")):
+                best.append(row)
+    seats: dict[str, object] = {}
+    for role, rows in latest.items():
+        families = set()
+        for row in rows:
+            agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
+            # codex-interactive runs the operator's Codex config, which its record does not carry.
+            config = row.get("model_config")
+            overrides = [str(o) for o in config] if isinstance(config, list) else []
+            custom = (agent_name == "codex-interactive" and not model) or any(
+                o.startswith("model_provider=") and o != 'model_provider="openai"'
+                for o in overrides)
+            families.add(model_family(agent_name, model, custom_provider=custom))
+        row = rows[-1]
+        family = families.pop() if len(families) == 1 else ""
+        seats[role] = {"slot": row.get("slot"), "agent": row.get("agent"),
+                       "model": row.get("model"), "family": family or None,
+                       "status": "active", "seeded": True, "ts": row.get("ts"),
+                       "previous": None}
+    return seats
+
+
+def _locked_seats(root: pathlib.Path):
+    import contextlib
+    import fcntl
+
+    @contextlib.contextmanager
+    def held():
+        root.mkdir(parents=True, exist_ok=True)
+        with open(root / (SEATS + ".lock"), "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            path = root / SEATS
+            seats = (json.loads(path.read_text(encoding="utf-8")) if path.is_file()
+                     else _seed_from_launches(root))
+            yield seats
+            tmp = root / (SEATS + ".tmp")
+            tmp.write_text(json.dumps(seats, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+
+    return held()
+
+
+def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, model: str,
+               codex_home: pathlib.Path | None, gap: str, pid: int) -> dict[str, object]:
+    """Check this lane's family against the other seat and take this role's seat, atomically.
+    One seated launch runs at a time: while either seat is pending in a live launch, every other
+    claim is refused, so no lane is admitted against a launch that may still fail. Raises
+    SystemExit when the pair would share a family, or a family is unknown, with no gap."""
+    family = lane_family(agent_name, model, codex_home)
+    other = SEATED_ROLES[role]
+    with _locked_seats(root) as seats:
+        for name in SEATED_ROLES:
+            if _launching(seats.get(name)):
+                busy = seats[name]
+                raise SystemExit(
+                    f"tmux-lane: the {name} launch {busy.get('slot')} is still starting; launch "
+                    "again once it has started or failed"
+                )
+            seats[name] = _settled(seats.get(name))
+        peer = seats.get(other)
+        theirs = (peer or {}).get("family") or ""
+        record: dict[str, object] = {"family": family or None}
+        if peer is None:
+            tier = "no-peer" if family else "unknown-family"
+        else:
+            record.update(other_role=other, other_slot=peer.get("slot"),
+                          other_family=theirs or None)
+            tier = ("unknown-family" if not (family and theirs)
+                    else "cross-family" if family != theirs else "same-family")
+        record["tier"] = tier
+        if tier in ("same-family", "unknown-family"):
+            if not gap:
+                mine = family or "an unknown model family"
+                raise SystemExit(
+                    f"tmux-lane: the {role} lane would run {mine}"
+                    + (f" and the {other} lane runs {theirs or 'an unknown model family'}"
+                       if peer is not None else "")
+                    + "; the Coder and the Tester run different, known model families. Launch "
+                    "with --agent/--model from another family, or, only when no other family is "
+                    "configured, set FACTORY_LANE_INDEPENDENCE_GAP to the reason so the gap is "
+                    "recorded"
+                )
+            record["independence_gap"] = gap
+        seats[role] = {"slot": slot, "agent": agent_name, "model": model,
+                       "family": family or None, "status": "pending", "pid": pid,
+                       "pid_start": _started(pid), "ts": _now(), "previous": seats.get(role)}
+    return record
+
+
+def confirm_seat(root: pathlib.Path, *, role: str, slot: str) -> None:
+    """The lane is running: its pending seat becomes the role's seat."""
+    with _locked_seats(root) as seats:
+        entry = seats.get(role)
+        if not entry or entry.get("slot") != slot or entry.get("status") != "pending":
+            raise SystemExit(f"tmux-lane: the {role} seat is not {slot}'s to confirm")
+        entry.update(status="active", previous=None)
+
+
 # -- preflight -----------------------------------------------------------------------------------
 
 
@@ -657,6 +846,20 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     describe = commands.add_parser("describe")
     describe.add_argument("--agent", required=True)
+    family = commands.add_parser("family")
+    family.add_argument("--agent", required=True)
+    family.add_argument("--model", default="")
+    family.add_argument("--codex-home", type=pathlib.Path)
+    seat = commands.add_parser("seat")
+    seat.add_argument("seat_action", choices=("claim", "confirm"))
+    seat.add_argument("--root", type=pathlib.Path, required=True)
+    seat.add_argument("--role", choices=tuple(SEATED_ROLES), required=True)
+    seat.add_argument("--slot", required=True)
+    seat.add_argument("--agent", default="")
+    seat.add_argument("--model", default="")
+    seat.add_argument("--codex-home", type=pathlib.Path)
+    seat.add_argument("--gap", default="")
+    seat.add_argument("--pid", type=int, default=0)
     selection = commands.add_parser("codex-model")
     selection.add_argument("--codex-home", type=pathlib.Path, required=True)
     check = commands.add_parser("preflight")
@@ -689,6 +892,21 @@ def main(argv: list[str] | None = None) -> int:
                 "terminal" if chosen.terminal else "headless",
                 "metered" if chosen.metered else "unmetered",
             )
+            return 0
+        if arguments.command == "family":
+            agent(arguments.agent)
+            print(lane_family(arguments.agent, arguments.model, arguments.codex_home))
+            return 0
+        if arguments.command == "seat":
+            if arguments.seat_action == "confirm":
+                confirm_seat(arguments.root, role=arguments.role, slot=arguments.slot)
+                return 0
+            agent(arguments.agent)
+            record = claim_seat(arguments.root, role=arguments.role, slot=arguments.slot,
+                                agent_name=arguments.agent, model=arguments.model,
+                                codex_home=arguments.codex_home, gap=arguments.gap,
+                                pid=arguments.pid or os.getppid())
+            print(json.dumps(record, sort_keys=True, separators=(",", ":")))
             return 0
         if arguments.command == "codex-model":
             model, overrides = codex_model_selection(arguments.codex_home)
