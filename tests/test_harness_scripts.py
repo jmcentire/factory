@@ -11271,6 +11271,19 @@ def test_an_agy_orchestrator_receives_the_model_the_operator_names(tmp_path: Pat
     task = "Name a model for agy."
     operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
+    # R3 / RUL-1: a named model is a flag the launch uses, so agy --help must list it.
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
+        '--disable-slash-commands --add-dir --model" >&2; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
     launched = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
