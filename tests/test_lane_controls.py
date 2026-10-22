@@ -349,6 +349,27 @@ def test_a_run_launched_before_the_seat_file_keeps_its_seats(tmp_path: Path) -> 
     assert record["tier"] == "cross-family" and record["other_slot"] == "tester.sol-1"
 
 
+def test_a_seeded_seat_never_guesses_its_family(tmp_path: Path) -> None:
+    """Seeding from launch records: a Codex TUI run on the operator's config, or two latest
+    launches at the same second with different families, seed an unknown family."""
+
+    root = tmp_path / "tmux-lanes"
+    root.mkdir()
+    tui = {"status": "active", "mode": "launch", "role": "tester", "slot": "tester",
+           "agent": "codex-interactive", "model": "", "ts": "2026-10-22T01:00:00+00:00"}
+    (root / "tester-launch.jsonl").write_text(json.dumps(tui) + "\n")
+    with pytest.raises(SystemExit, match="unknown model family"):
+        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
+                              codex_home=None, gap="", pid=os.getpid())
+    (root / "lane-seats.json").unlink(missing_ok=True)
+    tie = [dict(tui, agent="muse", slot="tester.a", ts="2026-10-22T02:00:00+00:00"),
+           dict(tui, agent="agy", slot="tester.b", ts="2026-10-22T02:00:00+00:00")]
+    (root / "tester-launch.jsonl").write_text("".join(json.dumps(r) + "\n" for r in tie))
+    with pytest.raises(SystemExit, match="unknown model family"):
+        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
+                              codex_home=None, gap="", pid=os.getpid())
+
+
 def test_only_the_pending_launch_confirms_its_seat(tmp_path: Path) -> None:
     root = tmp_path / "tmux-lanes"
     lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",

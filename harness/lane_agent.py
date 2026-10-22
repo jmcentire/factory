@@ -173,8 +173,11 @@ def _started(pid: object) -> str:
         return ""
     if number <= 0:
         return ""
+    # ps renders the start time in the caller's timezone and locale; pin both, so every launcher
+    # reads the same text for the same process.
     probe = subprocess.run(["ps", "-o", "lstart=", "-p", str(number)], capture_output=True,
-                           text=True, check=False)
+                           text=True, check=False,
+                           env={**os.environ, "TZ": "UTC", "LC_ALL": "C", "LANG": "C"})
     return probe.stdout.strip() if probe.returncode == 0 else ""
 
 
@@ -192,29 +195,39 @@ def _settled(entry: dict[str, object] | None) -> dict[str, object] | None:
 
 def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
     """A run launched before the seat file existed: each role's seat is its latest active launch
-    (not a qualify probe), so upgrading the factory mid-run keeps the seats already held."""
-    latest: dict[str, tuple[tuple[str, float], dict[str, object]]] = {}
+    (not a qualify probe), by recorded time and then journal order. Two latest launches at the same
+    time with different families, or a launch whose record cannot say its family, seed an unknown
+    family, so the next claim needs a gap rather than a guess."""
+    latest: dict[str, list[dict[str, object]]] = {}
     for journal in sorted(root.glob("*-launch.jsonl")):
-        mtime = journal.stat().st_mtime
         for line in journal.read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
             role = row.get("role")
             if row.get("status") != "active" or row.get("mode") != "launch" \
                     or role not in SEATED_ROLES:
                 continue
-            order = (str(row.get("ts", "")), mtime)
-            if role not in latest or order >= latest[role][0]:
-                latest[role] = (order, row)
+            ts = str(row.get("ts", ""))
+            best = latest.get(role)
+            if not best or ts > str(best[0].get("ts", "")):
+                latest[role] = [row]
+            elif ts == str(best[0].get("ts", "")):
+                best.append(row)
     seats: dict[str, object] = {}
-    for role, (_, row) in latest.items():
-        agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
-        family = model_family(agent_name, model,
-                              custom_provider=any(str(o).startswith("model_provider=")
-                                                  and o != 'model_provider="openai"'
-                                                  for o in row.get("model_config") or ()))
-        seats[role] = {"slot": row.get("slot"), "agent": agent_name, "model": model,
-                       "family": family or None, "status": "active", "seeded": True,
-                       "ts": row.get("ts"), "previous": None}
+    for role, rows in latest.items():
+        families = set()
+        for row in rows:
+            agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
+            # codex-interactive runs the operator's Codex config, which its record does not carry.
+            custom = agent_name == "codex-interactive" and not model or any(
+                str(o).startswith("model_provider=") and o != 'model_provider="openai"'
+                for o in row.get("model_config") or ())
+            families.add(model_family(agent_name, model, custom_provider=custom))
+        row = rows[-1]
+        family = families.pop() if len(families) == 1 else ""
+        seats[role] = {"slot": row.get("slot"), "agent": row.get("agent"),
+                       "model": row.get("model"), "family": family or None,
+                       "status": "active", "seeded": True, "ts": row.get("ts"),
+                       "previous": None}
     return seats
 
 

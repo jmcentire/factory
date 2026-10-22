@@ -980,9 +980,9 @@ PY
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"
   fi
-  append_event "$(mark active)"
   if [ "$ACTION" = launch ]; then
-    # A lane that cannot hold its seat does not run: stop it and its watcher.
+    # A lane that cannot hold its seat does not run: stop it and its watcher. The seat is
+    # confirmed before the launch is recorded active, so a running lane always holds its seat.
     if ! "$FACTORY_PYTHON" "$D/lane_agent.py" seat confirm --root "$TMUX_ROOT" --role "$ROLE" \
       --slot "$SLOT"; then
       for W in "$LANE" "watch-$LANE"; do
@@ -992,6 +992,7 @@ PY
       refuse 70 "the $ROLE seat could not be confirmed for $SLOT, so the lane was stopped"
     fi
   fi
+  append_event "$(mark active)"
   echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT; watcher in $RUN:watch-$LANE"
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
   echo "tmux-lane: wakes land in $TMUX_ROOT/wake.jsonl and $ROOT/events.jsonl"
