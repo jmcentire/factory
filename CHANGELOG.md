@@ -3,6 +3,18 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.26] - 2026-10-21
+
+### Fixed
+
+- **The Coder and the Tester do not share a model family.** `tmux_lane.sh` refuses to start a
+  Coder or Tester lane whose model family is the same as the other lane's, or unknown (a
+  multi-vendor agent with no `--model`). The family comes from the named model, else from an agent
+  that runs only its own vendor's models (`lane_agent.py family`). Only where no other family is
+  configured may the operator proceed, by setting `FACTORY_LANE_INDEPENDENCE_GAP` to the reason.
+  Every launch record now carries `independence`: the lane's family and, beside the other lane,
+  the tier achieved (I19). Seen in herald-dash-r3, where Muse ran both lanes and nothing objected.
+
 ## [0.8.25] - 2026-10-20
 
 ### Fixed

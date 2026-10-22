@@ -187,6 +187,55 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     assert (row["model"], row["model_source"]) == ("", "agent")
 
 
+def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor_agent() -> None:
+    family = lane_agent.model_family
+    assert family("muse", "") == "meta" and family("codex", "") == "openai"
+    assert family("codex", "sol-6.1") == "openai" and family("agy", "") == "google"
+    assert family("cursor-agent", "grok-4.7-xhigh") == "xai"
+    assert family("claude-ollama", "glm-5.3:cloud") == "zhipu"
+    assert family("claude", "claude-opus-5-5") == "anthropic"
+    # A multi-vendor agent with no named model does not say.
+    assert family("cursor-agent", "") == "" and family("prime-agent", "") == ""
+
+
+def test_the_tester_does_not_start_on_the_coders_model_family(tmp_path: Path) -> None:
+    """SOFTWARE-FACTORY.md "Across the lanes" (E1, I19): the Coder and the Tester run different
+    model families; a same-family Tester is refused before anything starts."""
+
+    lanes = Lanes(tmp_path)
+    lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
+    assert lanes.lane("coder").returncode == 0
+    same = lanes.lane("tester")
+    assert same.returncode == 70 and "different model families" in same.stderr
+    assert "openai" in same.stderr and not lanes.windows("tester")
+    # A multi-vendor agent with no named model is an unknown family: also refused.
+    _cursor_stub(lanes.stub, signed_in=True)
+    unknown = lanes.lane("tester", "--agent", "cursor-agent")
+    assert unknown.returncode == 70 and "unknown model family" in unknown.stderr
+
+    crossed = lanes.lane("tester", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh")
+    assert crossed.returncode == 0, crossed.stdout + crossed.stderr
+    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+    assert row["status"] == "active"
+    assert row["independence"] == {"family": "xai", "other_role": "coder",
+                                   "other_family": "openai", "tier": "cross-family"}
+
+
+def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) -> None:
+    """Where no other family is configured the doctrine proceeds and records the gap; the
+    operator's reason travels in the launch record."""
+
+    lanes = Lanes(tmp_path)
+    assert lanes.lane("coder").returncode == 0
+    gapped = lanes.lane("tester", env={"FACTORY_LANE_INDEPENDENCE_GAP": "only Codex configured"})
+    assert gapped.returncode == 0, gapped.stdout + gapped.stderr
+    row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
+    assert row["independence"]["tier"] == "same-family"
+    assert row["independence"]["independence_gap"] == "only Codex configured"
+    first = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert first["independence"] == {"family": "openai"}
+
+
 def test_every_lane_agent_is_described_once_and_only_the_per_use_agents_are_metered() -> None:
     """lane_agent.py names each agent tmux_lane.sh admits, and no other; the agents metered by
     construction are the Ollama-backed Codex and prime-agent (OpenRouter, no plan). Any other

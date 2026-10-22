@@ -122,6 +122,35 @@ def agent(name: str) -> Agent:
         ) from None
 
 
+# -- model families ------------------------------------------------------------------------------
+
+# The Coder and the Tester run different model families wherever the operator has configured more
+# than one (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). A named model says
+# its family by its name; with none named, an agent that runs only its own vendor's models says it.
+# A multi-vendor agent (cursor-agent, prime-agent, the Ollama agents) with no model says nothing.
+MODEL_FAMILIES = (
+    ("claude", "anthropic"), ("opus", "anthropic"), ("sonnet", "anthropic"),
+    ("haiku", "anthropic"), ("fable", "anthropic"),
+    ("gpt", "openai"), ("codex", "openai"), ("sol", "openai"),
+    ("gemini", "google"), ("argon", "google"),
+    ("grok", "xai"), ("glm", "zhipu"), ("qwen", "alibaba"), ("deepseek", "deepseek"),
+    ("kimi", "moonshot"), ("llama", "meta"), ("muse", "meta"),
+)
+AGENT_FAMILIES = {
+    "codex": "openai", "codex-interactive": "openai", "claude": "anthropic", "agy": "google",
+    "muse": "meta",
+}
+
+
+def model_family(agent_name: str, model: str) -> str:
+    """The family a lane's model belongs to, or "" when neither the model nor the agent says."""
+    name = model.lower().rsplit("/", 1)[-1]
+    for prefix, family in MODEL_FAMILIES:
+        if name.startswith(prefix):
+            return family
+    return AGENT_FAMILIES.get(agent_name, "")
+
+
 # -- preflight -----------------------------------------------------------------------------------
 
 
@@ -657,6 +686,9 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     describe = commands.add_parser("describe")
     describe.add_argument("--agent", required=True)
+    family = commands.add_parser("family")
+    family.add_argument("--agent", required=True)
+    family.add_argument("--model", default="")
     selection = commands.add_parser("codex-model")
     selection.add_argument("--codex-home", type=pathlib.Path, required=True)
     check = commands.add_parser("preflight")
@@ -689,6 +721,10 @@ def main(argv: list[str] | None = None) -> int:
                 "terminal" if chosen.terminal else "headless",
                 "metered" if chosen.metered else "unmetered",
             )
+            return 0
+        if arguments.command == "family":
+            agent(arguments.agent)
+            print(model_family(arguments.agent, arguments.model))
             return 0
         if arguments.command == "codex-model":
             model, overrides = codex_model_selection(arguments.codex_home)

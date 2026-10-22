@@ -419,6 +419,49 @@ print(mine)
 PY
   ) || exit 70
 
+  # Different families across the lanes: the Coder and the Tester do not run the same model
+  # family (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). A lane whose family
+  # matches the other lane's, or is unknown, does not start unless the operator records why no
+  # other family is configured (FACTORY_LANE_INDEPENDENCE_GAP); the launch record carries the tier.
+  INDEPENDENCE=$("$FACTORY_PYTHON" - "$D" "$TMUX_ROOT" "$ROLE" "$AGENT" "$MODEL" \
+    "${FACTORY_LANE_INDEPENDENCE_GAP:-}" <<'PY'
+import json, pathlib, sys
+
+sys.path.insert(0, sys.argv[1])
+import lane_agent
+
+root, role, agent, model, gap = pathlib.Path(sys.argv[2]), *sys.argv[3:7]
+mine = lane_agent.model_family(agent, model)
+record = {"family": mine or None}
+other = {"coder": "tester", "tester": "coder"}.get(role)
+active = []
+for journal in sorted(root.glob("*-launch.jsonl")) if other else ():
+    for line in journal.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if row.get("status") == "active" and row.get("role") == other:
+            active.append(row)
+if active:
+    latest = max(active, key=lambda row: str(row.get("ts", "")))
+    theirs = latest.get("family") or lane_agent.model_family(
+        str(latest.get("agent") or ""), str(latest.get("model") or ""))
+    record.update(other_role=other, other_family=theirs or None)
+    if mine and theirs and mine != theirs:
+        record["tier"] = "cross-family"
+    else:
+        record["tier"] = "same-family" if mine else "unknown-family"
+        if not gap:
+            raise SystemExit(
+                f"tmux-lane: the {role} lane would run {mine or 'an unknown model family'} and the "
+                f"{other} lane runs {theirs or 'an unknown model family'}; the Coder and the Tester "
+                "run different model families. Launch with --agent/--model from another family, or, "
+                "only when no other family is configured, set FACTORY_LANE_INDEPENDENCE_GAP to the "
+                "reason so the gap is recorded"
+            )
+        record["independence_gap"] = gap
+print(json.dumps(record, sort_keys=True, separators=(",", ":")))
+PY
+  ) || exit 70
+
   # A tmux window per lane: a new round replaces a finished one, never a running one.
   WINDOWS=$(tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null || true)
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 0"; then
@@ -742,7 +785,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
-  PLANNED=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -752,7 +795,7 @@ if (seed.get("digest") or "") != sys.argv[1]:
     "$WRAP_S" "$REVIEW_S" "$FACTORY_RUNS_ROOT" "${FACTORY_LANE_SANDBOX:-on}" \
     "$PROMPT_BYTES" "$BRIEF_MANIFEST" \
     ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"} <<'PY'
-import datetime, json, pathlib, sys
+import datetime, json, os, pathlib, sys
 (
     run, role, agent, repository, prompt, prompt_digest, task_digest,
     profile_digest, preflight, agent_version, model, kindex,
@@ -783,6 +826,8 @@ print(json.dumps({
     "model": model,
     "model_source": model_source,
     "model_config": model_config,
+    # The lane's model family and, beside the other lane, the independence tier achieved (I19).
+    "independence": json.loads(os.environ.get("LANE_INDEPENDENCE") or "null"),
     "terminal": tty == "terminal",
     "prompt_via": prompt_via,
     "prompt_bytes": int(prompt_bytes),
