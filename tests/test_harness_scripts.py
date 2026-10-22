@@ -2464,6 +2464,218 @@ def test_run_owned_channel_status_uses_pinned_interpreter(
     assert stat.S_ISREG(lock.lstat().st_mode), case_id
 
 
+# Igniting stub help: every resident flag except --model and --effort. --sandbox and
+# --disable-slash-commands stay, as on that stub, so a refusal names the omitted flag.
+_AGY_HELP_WITHOUT_MODEL_OR_EFFORT = (
+    "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions "
+    "--disable-slash-commands --add-dir"
+)
+_ENV_ASSIGNMENT_EXACT = frozenset(
+    {
+        "HOME",
+        "USER",
+        "PATH",
+        "TMPDIR",
+        "TERM",
+        "SHELL",
+        "LANG",
+        "DIRECTIVE_LEDGER",
+        "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION",
+    }
+)
+
+
+def _env_assignment_allowed(name: str) -> bool:
+    """R2 v2: HOME/USER/PATH/TMPDIR/TERM/SHELL/LANG, FACTORY_*, HARNESS_*, or two exact names."""
+    return (
+        name in _ENV_ASSIGNMENT_EXACT
+        or name.startswith("FACTORY_")
+        or name.startswith("HARNESS_")
+    )
+
+
+def _assignments_between_env_and_agy(orchestrator_line: str) -> list[str]:
+    """NAME=VALUE tokens between the env command and agy. `-u NAME` is not an assignment."""
+    words = orchestrator_line.split()
+    env_at = next(
+        (index for index, word in enumerate(words) if word == "env" or word.endswith("/env")),
+        None,
+    )
+    if env_at is None:
+        return []
+    agy_at = next(
+        (
+            index
+            for index, word in enumerate(words)
+            if index > env_at and (word == "agy" or word.endswith("/agy"))
+        ),
+        None,
+    )
+    if agy_at is None:
+        return []
+    names: list[str] = []
+    index = env_at + 1
+    while index < agy_at:
+        word = words[index]
+        if word == "-u":
+            index += 2
+            continue
+        if "=" in word:
+            name = word.split("=", 1)[0].strip("\"'")
+            if name and not name.startswith("-"):
+                names.append(name)
+        index += 1
+    return names
+
+
+def _prompt_interactive_argument(orchestrator_line: str) -> str:
+    words = agy_launch_words(orchestrator_line)
+    try:
+        index = words.index("--prompt-interactive")
+    except ValueError:
+        return ""
+    if index + 1 >= len(words):
+        return ""
+    return words[index + 1].strip("\"'")
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R2-env-allowlist-and-prompt"],
+    ids=["AGY-R2-env-allowlist-and-prompt"],
+)
+def test_resident_agy_env_assignments_stay_on_the_allowlist(
+    case_id: str, tmp_path: Path
+) -> None:
+    """Assignments between env and agy stay on the R2 allowlist, and the prompt is set.
+
+    cites: task.txt _TASK_DIGEST #R2
+    cites: testing-strategy v2 #AGY-R2-env-allowlist-and-prompt (review 2, finding F1)
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: a NAME=VALUE between env and agy whose name is outside the allowlist,
+    or the argument after --prompt-interactive is empty.
+    """
+    task = "Keep the resident agy environment on the stated allowlist."
+    result, _root, tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    names = _assignments_between_env_and_agy(line)
+    assert names, case_id
+    disallowed = [name for name in names if not _env_assignment_allowed(name)]
+    assert not disallowed, (case_id, disallowed)
+    assert _prompt_interactive_argument(line), case_id
+
+
+def _ignite_agy_help(
+    tmp_path: Path,
+    task: str,
+    help_text: str,
+    env_extra: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    env.update(env_extra)
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, help_text)
+    return ignite_prepared(operator, root, env, task), tmux_log
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-named-model-flag-required"],
+    ids=["AGY-R3-named-model-flag-required"],
+)
+def test_named_orchestrator_model_requires_model_in_agy_help(
+    case_id: str, tmp_path: Path
+) -> None:
+    """Help that omits --model is refused when the operator names an orchestrator model.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy v2 #AGY-R3-named-model-flag-required (review 2, finding F2)
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: FACTORY_ORCHESTRATOR_MODEL is set, --help has every other used flag
+    and not --model, and ignition does not exit 70 naming --model with no new-session.
+    """
+    task = "Refuse an agy help text that omits --model."
+    help_body_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
+    assert "--model" not in help_body_flags
+    for flag in (
+        "--new-project",
+        "--prompt-interactive",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+    ):
+        assert flag in help_body_flags
+    result, tmux_log = _ignite_agy_help(
+        tmp_path,
+        task,
+        help_body_flags,
+        {"FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
+    )
+    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "--model" in result.stdout + result.stderr, case_id
+    logged = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "new-session" not in logged, case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-named-effort-flag-required"],
+    ids=["AGY-R3-named-effort-flag-required"],
+)
+def test_named_orchestrator_effort_requires_effort_in_agy_help(
+    case_id: str, tmp_path: Path
+) -> None:
+    """A named effort is refused without --effort in help, and kept when help lists it.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy v2 #AGY-R3-named-effort-flag-required (review 2, finding F2)
+    authority: normative. oracle: direct. label: pre-freeze.
+    guard: refusal half red-now; admission half as stated (exit 0 and `--effort high`).
+    falsifier: FACTORY_ORCHESTRATOR_EFFORT=high and help lacks --effort, but the exit
+    is not 70, the output does not name --effort, or new-session is logged; or help
+    lists --effort and the orchestrator line does not carry `--effort high`.
+    """
+    task = "Require --effort when the operator names one."
+    env_extra = {"FACTORY_ORCHESTRATOR_EFFORT": "high"}
+    refused_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
+    assert "--effort" not in refused_flags
+    refused, refused_log = _ignite_agy_help(
+        tmp_path / "refused",
+        task,
+        refused_flags,
+        env_extra,
+    )
+    assert refused.returncode == 70, (
+        case_id,
+        refused.returncode,
+        refused.stdout,
+        refused.stderr,
+    )
+    assert "--effort" in refused.stdout + refused.stderr, case_id
+    refused_logged = refused_log.read_text() if refused_log.exists() else ""
+    assert "new-session" not in refused_logged, case_id
+
+    admitted, admitted_log = _ignite_agy_help(
+        tmp_path / "admitted",
+        task,
+        refused_flags + " --effort",
+        env_extra,
+    )
+    assert admitted.returncode == 0, (
+        case_id,
+        admitted.returncode,
+        admitted.stdout,
+        admitted.stderr,
+    )
+    assert "--effort high" in orchestrator_tmux_line(admitted_log), case_id
+
+
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
     """Execute the command a seat window was given, as tmux would, with stale server env."""
     line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
