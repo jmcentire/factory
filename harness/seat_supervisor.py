@@ -54,6 +54,7 @@ ACTIONS = ("correct", "stop", "resume")
 DOWN = "orchestrator-down"
 HELD = "validator-stopped"
 UNBOUND = "validator-identity-unavailable"
+PAUSE_CONFIRM_SECONDS = 1.0
 
 
 class SupervisorError(RuntimeError):
@@ -218,7 +219,7 @@ class Seats:
         self.session = session
 
     def panes(self) -> dict[str, int]:
-        "Working seats by window name and their pane's process id; the Orchestrator is never one."
+        "Working child identities from wrapper receipts; never pause a tmux pane root."
         try:
             out = subprocess.run(
                 [
@@ -238,13 +239,41 @@ class Seats:
         except (OSError, subprocess.SubprocessError) as error:
             raise SupervisorError("seat inventory unavailable") from error
         seats = {}
+        self.inventory_errors = []
+        self.worker_bindings = {}
+        table = process_snapshot()
+        if table is None:
+            raise SupervisorError("seat process observation unavailable")
         for line in out.splitlines():
             parts = line.split()
             if len(parts) != 3 or parts[2] == "1":
                 continue
             name, pid = parts[0], parts[1]
             if name.startswith(SEAT_PREFIXES) and not name.startswith("watch-") and pid.isdigit():
-                seats[name] = int(pid)
+                if name == "validator" and kickoff_validator(self.root):
+                    continue  # this is the inbox mirror; external() identifies the worker
+                pane_pid = int(pid)
+                matches = []
+                for path in [*self.root.glob("validator-process.json"),
+                             *(self.root / "tmux-lanes").glob(f"{name}*-process.json")]:
+                    receipt = _read_control(path)
+                    wrapper = receipt.get("wrapper", {})
+                    worker = receipt.get("worker", {})
+                    if (receipt.get("schema") != "factory-worker-process/1"
+                            or not isinstance(wrapper, dict) or not isinstance(worker, dict)
+                            or wrapper.get("pid") != pane_pid or pane_pid not in table
+                            or table[pane_pid]["started"] != wrapper.get("started")):
+                        continue
+                    if (worker.get("pid") in table and worker["pid"] != pane_pid
+                            and table[worker["pid"]]["started"] == worker.get("started")
+                            and worker in process_tree(table, [wrapper])):
+                        matches.append(worker["pid"])
+                if len(matches) == 1:
+                    seats[name] = matches[0]
+                    self.worker_bindings[name] = {"pid": matches[0],
+                                                  "started": table[matches[0]]["started"]}
+                else:
+                    self.inventory_errors.append(f"{name}: no unique live wrapped worker identity")
         return seats
 
     def configure(self, root: pathlib.Path) -> None:
@@ -270,6 +299,8 @@ class Seats:
             raise SupervisorError("malformed Validator pane identity")
         if not require_live:
             return identity
+        if identity["pid"] == binding["pane_pid"]:
+            raise SupervisorError("tmux pane-root is not resumable; bind the shell's worker child")
         table = process_snapshot()
         if table is None:
             raise SupervisorError("executing Validator process observation unavailable")
@@ -301,7 +332,8 @@ class Seats:
             if table is None:
                 raise SupervisorError("process observation unavailable")
             external = seat == "validator" and kickoff_validator(self.root)
-            identity = self.external(require_live=False) if external else prior.get("identity")
+            identity = (self.external(require_live=False) if external else
+                        getattr(self, "worker_bindings", {}).get(seat, prior.get("identity")))
             if identity is None and pid in table:
                 identity = {"pid": pid, "started": table[pid]["started"]}
             if identity is None:
@@ -309,17 +341,23 @@ class Seats:
             if identity["pid"] != pid:
                 raise SupervisorError("seat PID changed; refusing to adopt another process")
             if prior.get("identity") and prior["identity"] != identity:
-                raise SupervisorError("seat identity changed; explicit rebind required")
+                old = process_tree(table, prior.get("identities", []))
+                if external or any(i["pid"] in table
+                                   and table[i["pid"]]["started"] == i["started"]
+                                   and not table[i["pid"]]["state"].startswith("Z") for i in old):
+                    raise SupervisorError("seat identity changed before prior workers exited")
+                _append(_folder(self.root) / "seat-process-events.jsonl",
+                        {"seat": seat, "terminal_previous": prior, "new_worker": identity})
+                prior = {}
             if not stopped and not prior:
                 raise SupervisorError("resume refused: no recorded stop")
+            if not stopped and not any(i["pid"] in table
+                                       and table[i["pid"]]["started"] == i["started"]
+                                       and not table[i["pid"]]["state"].startswith("Z")
+                                       for i in prior.get("identities", [])):
+                raise SupervisorError("resume refused: controlled work exited; it is not paused")
             if not stopped and prior.get("requested") == "stop" and not prior.get("acknowledged"):
-                known = process_tree(table, prior.get("identities", []))
-                if not known or any(i["pid"] in table
-                                    and table[i["pid"]]["started"] == i["started"]
-                                    and not any(s in table[i["pid"]]["state"] for s in "TZ")
-                                    for i in known):
-                    raise SupervisorError("resume refused: prior stop is unacknowledged")
-                prior["identities"] = known
+                raise SupervisorError("resume refused: prior stop is unacknowledged")
             if not prior.get("identity") or prior.get("requested") != desired:
                 prior = {"identity": identity, "identities": prior.get("identities", [identity]),
                          "requested": desired, "attempts": {}, "acknowledged": False,
@@ -348,7 +386,23 @@ class Seats:
                     and observed[i["pid"]]["started"] == i["started"]
                     and not observed[i["pid"]]["state"].startswith("Z")]
             prior["identities"] = extended
-            prior["acknowledged"] = all(("T" in i["state"]) == stopped for i in live)
+            matching = all(("T" in i["state"]) == stopped for i in live)
+            prior["acknowledged"] = matching
+            if stopped and live:
+                # A transient T snapshot is not a sustained pause: tmux may immediately
+                # resume a pane root. Require repeated stopped states and unchanged CPU time.
+                fingerprint = [[i["pid"], i["started"], i.get("cpu")] for i in live]
+                stamp = time.time()
+                stable = prior.get("pause_observation", {})
+                if (not matching or any(i.get("cpu") is None for i in live)):
+                    prior.pop("pause_observation", None)
+                    prior["acknowledged"] = False
+                elif (stable.get("fingerprint") != fingerprint
+                      or stamp < float(stable.get("since", stamp))):
+                    prior["pause_observation"] = {"fingerprint": fingerprint, "since": stamp}
+                    prior["acknowledged"] = False
+                else:
+                    prior["acknowledged"] = stamp - stable["since"] >= PAUSE_CONFIRM_SECONDS
             prior["state"] = ("stopped" if stopped else "running") if live else "exited"
             if not prior["acknowledged"]:
                 prior["state"] = "pending"
@@ -396,6 +450,7 @@ def kickoff_validator(root: pathlib.Path) -> bool:
 
 def _targets(root: pathlib.Path, seats: Seats) -> tuple[dict[str, int], str | None]:
     seats.configure(root)
+    fault = None
     try:
         panes = seats.panes()
     except SupervisorError as error:
@@ -403,7 +458,10 @@ def _targets(root: pathlib.Path, seats: Seats) -> tuple[dict[str, int], str | No
         records = _read_control(_folder(root) / "seat-processes.json")
         panes = {name: value["identity"]["pid"] for name, value in records.items()
                  if isinstance(value, dict) and isinstance(value.get("identity"), dict)}
-        return panes, str(error)
+        fault = str(error)
+    errors = getattr(seats, "inventory_errors", [])
+    if errors:
+        fault = "; ".join(errors)
     if kickoff_validator(root):
         panes.pop("validator", None)  # never signal the mirror in place of the real Validator
         try:
@@ -411,7 +469,7 @@ def _targets(root: pathlib.Path, seats: Seats) -> tuple[dict[str, int], str | No
             seats.external()
         except (SupervisorError, OSError, ValueError, subprocess.SubprocessError) as error:
             return panes, str(error)
-    return panes, None
+    return panes, fault
 
 
 def _identity_hold(state: dict[str, list[str]], panes: Mapping[str, int],
@@ -476,6 +534,8 @@ def bind_validator(root: pathlib.Path, session: str, pid: int, started: str, pan
     if not shown.stdout.strip().isdigit():
         raise SupervisorError("Validator pane has no process")
     pane_pid = int(shown.stdout.strip())
+    if pid == pane_pid:
+        raise SupervisorError("tmux pane-root cannot be a resumable Validator; use a shell child")
     if pane_pid not in table:
         raise SupervisorError("Validator pane process is unavailable")
     tree = process_tree(table, [{"pid": pane_pid, "started": table[pane_pid]["started"]}])

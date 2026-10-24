@@ -277,18 +277,18 @@ def process_snapshot() -> dict[int, dict[str, Any]] | None:
     """Read identities without command lines; failure is unknown, not an empty process table."""
     try:
         result = subprocess.run(
-            ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat="], capture_output=True,
+            ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="], capture_output=True,
             text=True, check=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
     except (OSError, subprocess.SubprocessError):
         return None
     rows: dict[int, dict[str, Any]] = {}
     for line in result.stdout.splitlines():
         fields = line.split()
-        if len(fields) != 8 or not fields[0].isdigit() or not fields[1].isdigit():
+        if len(fields) != 9 or not fields[0].isdigit() or not fields[1].isdigit():
             return None
         pid = int(fields[0])
         rows[pid] = {"pid": pid, "ppid": int(fields[1]), "started": " ".join(fields[2:7]),
-                     "state": fields[7]}
+                     "state": fields[7], "cpu": fields[8]}
     return rows or None
 
 

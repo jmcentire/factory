@@ -535,6 +535,18 @@ case "$VALIDATOR_AGENT" in
     ;;
 esac
 
+# Keep the existing lane wrapper as tmux's child; the executing Validator is its child.
+# tmux resumes stopped pane roots, so a directly exec'd model cannot be a resumable seat.
+# claude-ollama already uses this wrapper for its environment; kickoff binds a shell child.
+case "$VALIDATOR_AGENT" in
+  kickoff|claude-ollama) ;;
+  *)
+    printf -v VALIDATOR_CONTROL_WRAPPER 'exec %q %q run --slot validator --log %q --exits %q --terminal -- ' \
+      "$FACTORY_PYTHON" "$D/lane_agent.py" "$ROOT/validator-lane.log" "$ROOT/validator-exits.jsonl"
+    VALIDATOR_CMD="${VALIDATOR_CONTROL_WRAPPER}${VALIDATOR_CMD#exec }"
+    ;;
+esac
+
 # Prompt size is verified on delegation (founder, 2026-10-18): each seat prompt is measured
 # against the one-argv-element limit its CLI receives it under, and the measurement is a run
 # event. The seat prompts are short main prompts that name the files the seat reads itself.

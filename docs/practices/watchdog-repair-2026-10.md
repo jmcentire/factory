@@ -68,3 +68,37 @@ author runs or activate controls in their live sessions.
 The inert bootstrap configuration is not activated by this repair. No global settings,
 credentials, live Signet rules, original repository checkout, deployment or comparison run is
 changed. Signet remains active, and invalid author lanes remain stopped.
+
+## Real tmux activation correction
+
+Commit `ca9ed59` passed its 2129-test ship run, but the subsequent private-tmux activation
+failed: the external Validator and both author fixture counters kept advancing after SIGSTOP.
+The control returned 75 and retained pending holds, so it did not falsely report a pause.
+The standalone-process test had missed tmux's pane-root behavior. tmux 3.8's
+[`server_child_stopped`](https://raw.githubusercontent.com/tmux/tmux/3.8/server.c) sends SIGCONT
+to a stopped pane root/process group (except SIGTTIN/SIGTTOU); those job-control signals did not
+pause the macOS fixture either. A separate native `pid_suspend` probe returned EPERM. It was
+not retried, elevated, or included in the implementation.
+
+The correction uses the existing `lane_agent.py` wrapper, not a new runner or native API.
+The wrapper publishes its own and its worker child's PID/start identities atomically, without
+command lines or credentials. The supervisor verifies the receipt against the current pane
+and ancestry, pauses the worker tree, and leaves the waiting wrapper running. Resident
+Validators use that same wrapper. A kickoff Validator must be the actual child of its terminal
+shell/wrapper: binding a directly exec'd tmux pane root is refused. This matches the ordinary
+`claude ...` terminal workflow; `exec claude ...` is not a resumable binding.
+
+A pause needs repeated stopped-state observations spanning at least one second with unchanged
+CPU time for every observed live worker. One T snapshot cannot acknowledge it. Later progress,
+revival or unavailable observation revokes acknowledgement without releasing the hold. A
+terminal exit is reported as exited, never running or resumably paused; resume of exited work
+is refused. Watchdog SIGTERM/cap/wrap-up termination remains a different operation with its
+existing verified-exit requirement. Failed signal attempts remain recorded without blind retry.
+
+`tests/test_tmux_custody.py` uses a private server, disposable counters and the real installed
+tmux. It reproduces the old root auto-resume, checks sustained stopped state and no counter
+progress, then checks resume, lag/recovery, signal-failure retention, stale identity rejection,
+terminal exit and cleanup. Synthetic assessment records exercise deterministic control only;
+they are not claimed as genuine AG assessments or provider/model acceptance. No live control
+seat is a demonstration target. CPU-time precision, polling gaps, PID/start race limitations
+and the unresolved author information boundary still apply.

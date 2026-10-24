@@ -11355,7 +11355,9 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
     transcript = tmp_path / "kickoff-session.jsonl"
     transcript.write_text("", encoding="utf-8")
     stub = Path(env["PATH"].split(os.pathsep)[0])
-    (stub / "ps").write_text("#!/bin/sh\nprintf '101 1 Sat Oct 24 00:00:00 2026 S\\n'\n")
+    (stub / "ps").write_text(
+        "#!/bin/sh\nprintf '101 1 Sat Oct 24 00:00:00 2026 S 0:00.00\\n"
+        "102 101 Sat Oct 24 00:00:00 2026 S 0:00.00\\n'\n")
     (stub / "ps").chmod(0o755)
     tmux = stub / "tmux"
     tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "101\\n"'))
@@ -11366,7 +11368,7 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
             **env,
             "FACTORY_VALIDATOR_AGENT": "kickoff",
             "FACTORY_VALIDATOR_TRANSCRIPT": str(transcript),
-            "FACTORY_VALIDATOR_PID": "101",
+            "FACTORY_VALIDATOR_PID": "102",
             "FACTORY_VALIDATOR_STARTED": "Sat Oct 24 00:00:00 2026",
             "FACTORY_VALIDATOR_PANE": "%101",
         },

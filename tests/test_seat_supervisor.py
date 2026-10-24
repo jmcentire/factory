@@ -272,8 +272,8 @@ def test_signal_is_pending_until_state_ack_and_survives_restart(tmp_path, monkey
     root = run_root(tmp_path)
     seats = supervisor.Seats('fixture')
     seats.configure(root)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S'},
-             102: {'pid': 102, 'ppid': 101, 'started': 'child', 'state': 'S'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S', 'cpu': '0:00.00'},
+             102: {'pid': 102, 'ppid': 101, 'started': 'child', 'state': 'S', 'cpu': '0:00.00'}}
     sent = []
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     monkeypatch.setattr(supervisor, 'signal_identity', lambda identity, sig:
@@ -287,6 +287,7 @@ def test_signal_is_pending_until_state_ack_and_survives_restart(tmp_path, monkey
     table[101]['state'] = table[102]['state'] = 'T'
     replacement = supervisor.Seats('fixture')
     replacement.configure(root)
+    assert not replacement.transition('coder', 101, True)['acknowledged']
     assert replacement.transition('coder', 101, True)['acknowledged']
     assert len(sent) == 2  # no repeat signals after watcher restart
     resumed = replacement.transition('coder', 101, False)
@@ -300,7 +301,7 @@ def test_stop_failure_and_unknown_observation_remain_pending(tmp_path, monkeypat
     root = run_root(tmp_path)
     seats = supervisor.Seats('fixture')
     seats.configure(root)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S', 'cpu': '0:00.00'}}
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     calls = []
 
@@ -351,9 +352,9 @@ def test_binding_rejects_wrong_start_wrong_pane_and_overwrite(tmp_path, monkeypa
     import subprocess
 
     root = kickoff_root(tmp_path)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S'},
-             102: {'pid': 102, 'ppid': 101, 'started': 'validator', 'state': 'S'},
-             103: {'pid': 103, 'ppid': 1, 'started': 'unrelated', 'state': 'S'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S', 'cpu': '0:00.00'},
+             102: {'pid': 102, 'ppid': 101, 'started': 'validator', 'state': 'S', 'cpu': '0:00.00'},
+             103: {'pid': 103, 'ppid': 1, 'started': 'unrelated', 'state': 'S', 'cpu': '0:00.00'}}
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     monkeypatch.setattr(supervisor.subprocess, 'run', lambda *a, **kw:
                         subprocess.CompletedProcess(a, 0, '101\n', ''))
@@ -363,8 +364,9 @@ def test_binding_rejects_wrong_start_wrong_pane_and_overwrite(tmp_path, monkeypa
         supervisor.bind_validator(root, 'fixture', 103, 'unrelated', '%1')
     bound = supervisor.bind_validator(root, 'fixture', 102, 'validator', '%1')
     assert bound['identity']['pid'] == 102
+    table[103]['ppid'] = 101
     with pytest.raises(supervisor.SupervisorError, match='refusing overwrite'):
-        supervisor.bind_validator(root, 'fixture', 101, 'root', '%1')
+        supervisor.bind_validator(root, 'fixture', 103, 'unrelated', '%1')
     seats = supervisor.Seats('fixture')
     seats.configure(root)
     assert seats.external() == bound['identity']
@@ -401,8 +403,8 @@ def test_observed_orphan_remains_controlled_without_adopting_reused_root(tmp_pat
     root = run_root(tmp_path)
     seats = supervisor.Seats('fixture')
     seats.configure(root)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S'},
-             102: {'pid': 102, 'ppid': 101, 'started': 'child', 'state': 'S'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'root', 'state': 'S', 'cpu': '0:00.00'},
+             102: {'pid': 102, 'ppid': 101, 'started': 'child', 'state': 'S', 'cpu': '0:00.00'}}
     sent = []
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     monkeypatch.setattr(supervisor, 'signal_identity', lambda identity, sig:
@@ -413,6 +415,7 @@ def test_observed_orphan_remains_controlled_without_adopting_reused_root(tmp_pat
     assert not seats.transition('coder', 101, True)['acknowledged']
     assert len(sent) == 2
     table[102]['state'] = 'T'
+    assert not seats.transition('coder', 101, True)['acknowledged']
     result = seats.transition('coder', 101, True)
     assert result['acknowledged'] and result['state'] == 'stopped'
     assert len(sent) == 2
@@ -422,8 +425,8 @@ def test_admission_rejects_stopped_validator_and_reused_pane(tmp_path, monkeypat
     import subprocess
 
     root = kickoff_root(tmp_path)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'pane', 'state': 'S'},
-             102: {'pid': 102, 'ppid': 101, 'started': 'validator', 'state': 'S'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'pane', 'state': 'S', 'cpu': '0:00.00'},
+             102: {'pid': 102, 'ppid': 101, 'started': 'validator', 'state': 'S', 'cpu': '0:00.00'}}
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     monkeypatch.setattr(supervisor.subprocess, 'run', lambda *a, **kw:
                         subprocess.CompletedProcess(a, 0, '101\n', ''))
@@ -443,10 +446,11 @@ def test_inventory_failure_retains_known_custody_and_never_reports_resumed(tmp_p
     root = run_root(tmp_path)
     seats = supervisor.Seats('fixture')
     seats.configure(root)
-    table = {101: {'pid': 101, 'ppid': 1, 'started': 'coder', 'state': 'T'}}
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'coder', 'state': 'T', 'cpu': '0:00.00'}}
     monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
     sent = []
     monkeypatch.setattr(supervisor, 'signal_identity', lambda i, s: sent.append((i, s)) or 'sent')
+    assert not seats.transition('coder', 101, True)['acknowledged']
     assert seats.transition('coder', 101, True)['acknowledged']
 
     def unavailable():
@@ -461,10 +465,44 @@ def test_inventory_failure_retains_known_custody_and_never_reports_resumed(tmp_p
     assert 'seats-resumed' not in events
     receipts = [json.loads(line) for line in
                 (root / 'orchestrator' / 'seat-process-events.jsonl').read_text().splitlines()]
-    assert receipts[0]['seat'] == 'coder' and receipts[0]['state'] == 'stopped'
+    assert receipts[0]['seat'] == 'coder' and receipts[1]['state'] == 'stopped'
 
 
 def test_control_cli_returns_pending_instead_of_success(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, 'control', lambda *a, **kw: {'acknowledged': False})
     assert supervisor.main(['control', '--root', str(tmp_path), '--session', 'fixture',
                             '--seat', 'validator', '--action', 'stop']) == 75
+
+
+@pytest.fixture(autouse=True)
+def simulated_observation_clock(request, monkeypatch):
+    if request.node.name == 'test_real_disposable_process_stop_and_resume_acknowledgements':
+        return
+    clock = [1000.0]
+
+    def advance():
+        clock[0] += 2
+        return clock[0]
+
+    monkeypatch.setattr(supervisor.time, 'time', advance)
+
+
+def test_pause_requires_repeated_state_and_unchanged_cpu(tmp_path, monkeypatch):
+    root = run_root(tmp_path)
+    seats = supervisor.Seats('fixture')
+    seats.configure(root)
+    table = {101: {'pid': 101, 'ppid': 1, 'started': 'worker', 'state': 'T', 'cpu': '0:00.01'}}
+    clock = [1000.0]
+    monkeypatch.setattr(supervisor.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(supervisor, 'process_snapshot', lambda: table)
+    monkeypatch.setattr(supervisor, 'signal_identity', lambda *a: 'sent')
+    assert not seats.transition('coder', 101, True)['acknowledged']
+    clock[0] += .5
+    assert not seats.transition('coder', 101, True)['acknowledged']
+    clock[0] += 2
+    table[101]['cpu'] = '0:00.02'  # made progress between stopped snapshots
+    assert not seats.transition('coder', 101, True)['acknowledged']
+    clock[0] += 2
+    assert seats.transition('coder', 101, True)['acknowledged']
+    table[101]['state'] = 'S'  # later revival revokes acknowledgement, retains hold
+    assert not seats.transition('coder', 101, True)['acknowledged']

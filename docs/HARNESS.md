@@ -699,7 +699,13 @@ dependency-free (bash + python3 + git):
   and `FACTORY_VALIDATOR_PANE` (exact `%id`) for the **executing** Validator. The supervisor
   verifies that PID/start belongs to the pane and persists an immutable per-run binding at
   `orchestrator/validator-process.json`; the mirror is never a substitute signal target.
-  An Orchestrator stop or overdue assessment pauses the bound Validator and the author seats.
+  The bound Validator must be a worker child of its terminal shell/wrapper, not the tmux
+  pane-root process: tmux automatically resumes stopped pane roots. Resident Validators and
+  authors use the existing `lane_agent.py` wrapper's PID/start receipt; supervision pauses the
+  verified worker tree while the wrapper waits. An Orchestrator stop or overdue assessment
+  requests a pause of that worker tree. Acknowledgement requires repeated stopped-state
+  observations over at least one second with unchanged CPU time. Terminal exit is distinct
+  from resumable pause; an exited worker cannot be resumed.
   `seat-state.json` records requested holds; `seat-processes.json` records each signal attempt
   and observed acknowledgement. `status --root <run>` exposes both. Unknown observation,
   changed identity or failed delivery stays pending; a control command returns 75 when not

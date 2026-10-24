@@ -350,3 +350,22 @@ def test_a_plan_codex_lane_refuses_an_api_key_sign_in(tmp_path: Path) -> None:
     assert lane_agent.preflight("codex", environ=environ, billing="metered",
                                 runner=_runner("Logged in using an API key")) == \
         "codex-login-status"
+
+
+def test_worker_identity_failure_terminates_only_the_owned_child(tmp_path, monkeypatch):
+    children = []
+    original = lane_agent.subprocess.Popen
+
+    def record_child(*args, **kwargs):
+        child = original(*args, **kwargs)
+        # _started uses subprocess.run internally; only retain the actual sleeper.
+        if args[0][:2] == [sys.executable, '-c']:
+            children.append(child)
+        return child
+
+    monkeypatch.setattr(lane_agent.subprocess, 'Popen', record_child)
+    monkeypatch.setattr(lane_agent, '_started', lambda pid: '')
+    rc = lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(30)'],
+                             slot='coder', log=tmp_path/'lane.log', exits=tmp_path/'exit.jsonl')
+    assert rc == 127 and len(children) == 1 and children[0].poll() is not None
+    assert 'cannot publish worker process identity' in (tmp_path/'lane.log').read_text()

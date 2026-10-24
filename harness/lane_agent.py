@@ -47,6 +47,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -678,6 +679,8 @@ def run_lane(
         argv = argv[1:]
     if not argv:
         raise ValueError("lane command is empty")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", slot):
+        raise ValueError("invalid process receipt slot")
     if prompt is not None:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -693,6 +696,37 @@ def run_lane(
     session_seen = False
     chosen = agents.harness(session_agent) if session_agent else None
     process: subprocess.Popen[bytes] | None = None
+
+    def record_worker(status: str) -> None:
+        # The tmux pane owns this wrapper; pause the child doing the work, never the pane root
+        # (tmux automatically SIGCONTs that root). No command line or credential is retained.
+        assert process is not None
+        path = log.parent / f"{slot}-process.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wrapper_start = " ".join(_started(os.getpid()).split())
+        worker_start = " ".join(_started(process.pid).split())
+        receipt = {"schema": "factory-worker-process/1", "slot": slot, "status": status,
+                   "wrapper": {"pid": os.getpid(), "started": wrapper_start},
+                   "worker": {"pid": process.pid, "started": worker_start}}
+        if not wrapper_start or not worker_start:
+            if process.poll() is not None:
+                return  # a completed short-lived command needs its exit receipt, not a pause
+            raise OSError("cannot publish worker process identity")
+        fd, temporary = tempfile.mkstemp(prefix=".worker-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as out:
+                json.dump(receipt, out, sort_keys=True)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _watch(raw: bytes) -> None:
         nonlocal session_seen, refused_billing
@@ -721,12 +755,14 @@ def run_lane(
     try:
         if terminal:
             process = subprocess.Popen(argv, env=child_env)
+            record_worker("running")
             rc = process.wait()
         else:
             process = subprocess.Popen(
                 argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 env=child_env,
             )
+            record_worker("running")
             assert process.stdout is not None
             for raw in process.stdout:
                 sys.stdout.buffer.write(raw)
@@ -735,6 +771,15 @@ def run_lane(
                 _watch(raw)
             rc = process.wait()
     except OSError as error:
+        if process is not None and process.poll() is None:
+            # Receipt failure must not leave an untracked model running. This is terminal
+            # cleanup of our own Popen child, not the supervisor's resumable pause operation.
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
         rc = 127
     finally:
