@@ -37,6 +37,10 @@
     "refusal-lane-cap": {
       "class": "bound",
       "description": "watchdog.py lane: the lane reached its spend cap (declared rate x wall clock) or wall-clock cap and the watcher stopped it; a declared bound, never an instrument-rewarded signal"
+    },
+    "lane-review-unverified": {
+      "class": "signal",
+      "description": "A required review's process-exit evidence is absent or no longer holds; delivery and further work remain held pending verification"
     }
   }
 }

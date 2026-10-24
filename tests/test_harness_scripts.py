@@ -2158,6 +2158,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         "orchestrator_channel.py",
         "run_guidance.py",
         "seat_supervisor.py",
+        "lane_watchdog.py",
     }
     supervisor_line = next(ln for ln in tmux_calls.splitlines() if "-n supervisor " in ln)
     assert "seat_supervisor.py run --root" in supervisor_line
@@ -2168,6 +2169,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         text=True,
     )
     assert imported.returncode == 0, imported.stderr
+    copied_control = subprocess.run(
+        [sys.executable, str(orchestrator_bin / "seat_supervisor.py"), "--help"],
+        cwd=root, capture_output=True, text=True,
+    )
+    assert copied_control.returncode == 0, copied_control.stderr
     # The Orchestrator runs these by shebang; it names the interpreter that started the run.
     for tool in orchestrator_bin.glob("*.py"):
         shebang = tool.read_text(encoding="utf-8").split("\n", 1)[0]
@@ -11348,6 +11354,11 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
     env, tmux_log = factory_ignition_env(tmp_path, root)
     transcript = tmp_path / "kickoff-session.jsonl"
     transcript.write_text("", encoding="utf-8")
+    stub = Path(env["PATH"].split(os.pathsep)[0])
+    (stub / "ps").write_text("#!/bin/sh\nprintf '101 1 Sat Oct 24 00:00:00 2026 S\\n'\n")
+    (stub / "ps").chmod(0o755)
+    tmux = stub / "tmux"
+    tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "101\\n"'))
     result = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
@@ -11355,6 +11366,9 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
             **env,
             "FACTORY_VALIDATOR_AGENT": "kickoff",
             "FACTORY_VALIDATOR_TRANSCRIPT": str(transcript),
+            "FACTORY_VALIDATOR_PID": "101",
+            "FACTORY_VALIDATOR_STARTED": "Sat Oct 24 00:00:00 2026",
+            "FACTORY_VALIDATOR_PANE": "%101",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr

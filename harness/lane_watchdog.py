@@ -14,7 +14,8 @@ Validator's attention has no control at all, so the watcher, not a person, does 
 - **Stall stop.** After a read allowance (default 15 minutes) a lane must commit within the
   stall window (default 20 minutes), measured from the allowance's end or its last commit,
   whichever is later. A lane with no commit in that window is stopped (SIGTERM to its pane's
-  process group), a ``refusal-lane-stall`` event is recorded, and the operator is woken. A lane
+  individually verified process tree), a ``refusal-lane-stall`` event is recorded, and the operator
+  is woken. A lane
   waiting on its own unanswered FACTORY_QUESTION is waiting on the Validator, not stalled (the
   LIVE gate), so the window is held open while a question is pending.
 - **Cap stop.** A metered lane runs under a spend cap. None of the agents we run exposes a live
@@ -102,8 +103,6 @@ DEFAULT_REVIEW_WAIT_S = 15 * 60
 # the wrap-up, and an undelivered wrap-up ends the lane after this long.
 REVIEW_HEADROOM_S = 5 * 60
 WRAP_DELIVERY_S = 5 * 60
-# A pause whose stop did not take (the pane is still live this long after it) is cancelled.
-PAUSE_GRACE_S = 60
 # An unanswered review is a stuck required effect: the overdue signal re-emits with its age every
 # review wait, and after this many waits the pause emits expired once. The lane stays paused, so a
 # late review still resumes it; nothing about the lane is destroyed.
@@ -293,6 +292,47 @@ def process_snapshot() -> dict[int, dict[str, Any]] | None:
     return rows or None
 
 
+def process_tree(snapshot: Mapping[int, Mapping[str, Any]],
+                 identities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extend only matching recorded identities; keep orphans and never adopt a reused PID."""
+    known = {(r["pid"], r["started"]): dict(r) for r in identities}
+    live = {pid for pid, started in known if pid in snapshot
+            and snapshot[pid]["started"] == started}
+    while True:
+        children = {pid for pid, row in snapshot.items() if row["ppid"] in live} - live
+        if not children:
+            break
+        for pid in children:
+            row = snapshot[pid]
+            known[(pid, row["started"])] = {"pid": pid, "started": row["started"]}
+        live.update(children)
+    return list(known.values())
+
+
+def signal_identity(identity: Mapping[str, Any], signum: int, *,
+                    processes: Callable[[], dict[int, dict[str, Any]] | None] = process_snapshot,
+                    send: Callable[[int, int], None] = os.kill) -> str:
+    """Revalidate just before an individual signal; never signal a group or guessed PID.
+
+    POSIX PID signalling still has a check-to-signal race: this is not a kernel process handle.
+    Unknown observation refuses. A changed identity is exited, not a new signalling target.
+    """
+    table = processes()
+    if table is None:
+        raise OSError("process identity observation unavailable")
+    pid = identity["pid"]
+    row = table.get(pid)
+    if row is None or row["started"] != identity["started"] or row["state"].startswith("Z"):
+        return "exited"
+    if pid <= 1 or pid == os.getpid():
+        raise OSError("refusing self/system process signal")
+    try:
+        send(pid, signum)
+    except ProcessLookupError:
+        return "exited"
+    return "sent"
+
+
 def window_id(target: str,
               tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux) -> str | None:
     """The unique ``@id`` of ``run:window``, or None when no window has that exact name.
@@ -314,9 +354,10 @@ def window_id(target: str,
     return None
 
 
-def stop_pane(target: str, tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux) -> str:
-    """SIGTERM the process group of the lane's pane; the pane stays (remain-on-exit) so the
-    lane can still be frozen. Returns what was done, for the record."""
+def stop_pane(target: str, tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux, *,
+              expected: Mapping[str, Any] | None = None,
+              known: list[dict[str, Any]] | None = None) -> str:
+    """SIGTERM only observed identities in the pane's tree; exit requires later observation."""
 
     resolved = window_id(target, tmux)
     if resolved is None:
@@ -325,14 +366,26 @@ def stop_pane(target: str, tmux: Callable[..., subprocess.CompletedProcess[str]]
     fields = shown.stdout.split()
     if shown.returncode != 0 or len(fields) != 2 or not fields[0].isdigit():
         return f"pane {target} not found; nothing to stop"
-    if fields[1] == "1":
+    if fields[1] == "1" and not known:
         return f"pane {target} had already exited"
     pid = int(fields[0])
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except ProcessLookupError:
-        return f"pane {target} process {pid} had already exited"
-    return f"sent SIGTERM to the process group of {target} (pid {pid})"
+    table = process_snapshot()
+    if table is None or (fields[1] != "1" and pid not in table):
+        raise OSError("pane process identity is unavailable")
+    if fields[1] != "1" and expected is not None and (expected.get("pid") != pid
+                                 or expected.get("started") != table[pid]["started"]):
+        raise OSError("pane process no longer matches recorded identity")
+    roots = list(known or [])
+    if fields[1] != "1":
+        roots.append({"pid": pid, "started": table[pid]["started"]})
+    identities = process_tree(table, roots)
+    # Refuse a replaced pane, even if its old process is still alive.
+    again = tmux("display-message", "-p", "-t", resolved, "#{pane_pid} #{pane_dead}")
+    if again.returncode or again.stdout.split() != fields:
+        raise OSError("pane identity changed before stop")
+    for identity in identities:
+        signal_identity(identity, signal.SIGTERM)
+    return f"SIGTERM requested for {len(identities)} observed identities of {target}"
 
 
 def _delivery_env(path: pathlib.Path) -> dict[str, str] | None:
@@ -482,17 +535,21 @@ class LaneWatch:
         if snapshot is None:
             state["process_observation"] = "unavailable"
             return False
+        resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
+        if resolved is None or state.get("observed_window_id", resolved) != resolved:
+            state["process_observation"] = "pane unavailable or replaced"
+            return False
+        state["observed_window_id"] = resolved
         known = list(state.get("process_identities", []))
         if not known:
-            resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
-            if resolved is None:
-                return False
             shown = self.tmux("display-message", "-p", "-t", resolved, "#{pane_pid}")
             if shown.returncode != 0 or not shown.stdout.strip().isdigit():
                 return False
             root = snapshot.get(int(shown.stdout.strip()))
             if root is not None:
-                known.append({"pid": root["pid"], "started": root["started"]})
+                identity = {"pid": root["pid"], "started": root["started"]}
+                state["pane_identity"] = identity
+                known.append(identity)
             elif not self._pane_exited(launch):
                 return False
         live = {row["pid"] for row in known if row["pid"] in snapshot
@@ -687,13 +744,20 @@ class LaneWatch:
                      stop_detail=detail, stop_requested_ts=self.now())
         self._write_state(state)
         try:
-            response = self.stop(str(launch.get("tmux_target", "")))
+            target = str(launch.get("tmux_target", ""))
+            if self.stop is stop_pane:
+                if not state.get("pane_identity"):
+                    raise OSError("no recorded pane identity; refusing signal")
+                response = stop_pane(target, self.tmux, expected=state["pane_identity"],
+                                     known=state.get("process_identities", []))
+            else:
+                response = self.stop(target)
         except (OSError, subprocess.SubprocessError) as error:
             response = f"stop failed: {error}"
         state["stop_response"] = response
         self._write_state(state)
         self._wake(launch, "lane-stop-requested", f"{detail}; {response}; exit unverified",
-                   refusal=True)
+                   refusal=False)
         return self._stopping(launch, state)
 
     def _stopping(self, launch: Mapping[str, Any], state: dict[str, Any]) -> str:
@@ -707,6 +771,29 @@ class LaneWatch:
             if rate is not None else None
         state["stop_verified_ts"] = self.now()
         status = str(state["stop_outcome"])
+        if status in {"paused", "wrapping"}:
+            state.update(status=status, active_s=active)
+            if status == "paused":
+                state.update(paused_ts=self.now(), reviews=int(state.get("reviews", 0)) + 1,
+                             review_overdue_count=0, review_expired=False)
+                self._write_state(state)
+                run = launch.get("run_id", "<run>")
+                self._wake(launch, "lane-review-due", f"exit verified; {state['stop_detail']}; "
+                           f"tmux_lane_message.sh {run} validator {self.slot} review "
+                           "--verdict on-track|redirect --review-file <file>",
+                           refusal=False)
+            else:
+                # Publish the verified state before delivery can resume this session. A crash
+                # before/inside delivery leaves an unresumed wrap-up, never a fabricated send.
+                state["wrapup_ts"] = self.now()
+                self._write_state(state)
+                started = self.deliver(list(state["wrapup_argv"]))
+                self._wake(launch, "lane-wrap-up", f"exit verified; wrap-up {started}",
+                           refusal=False)
+                if started.startswith("not started"):
+                    self._finish(launch, state, "capped", active, spend)
+                    return "capped"
+            return status
         output = self._finish(launch, state, status, active, spend)
         self._wake(launch, str(state["stop_kind"]),
                    f"lane exit verified: {state['stop_detail']}"
@@ -823,35 +910,22 @@ class LaneWatch:
 
     def _pause_for_review(self, launch: Mapping[str, Any], state: dict[str, Any], current: float,
                           active: float, idle: float, summary: str) -> str:
-        stopped = self.stop(str(launch.get("tmux_target", "")))
-        reviews = int(state.get("reviews", 0)) + 1
-        state.update(status="paused", paused_ts=current, active_s=active, reviews=reviews,
-                     review_overdue_count=0, review_expired=False, stall_carry_s=idle)
-        self._write_state(state)
-        run = launch.get("run_id", "<run>")
-        self._wake(
-            launch, "lane-review-due",
-            f"paused for progress review {reviews} after {active / 60:.0f} min of work; "
-            f"{summary}; {stopped}. Freeze the lane, review the frozen tree against the ratified "
-            f"specification, then resume it: tmux_lane_message.sh {run} validator {self.slot} "
-            "review --verdict on-track|redirect --review-file <file>",
-            refusal=False,
-        )
-        return "paused"
+        state["stall_carry_s"] = idle
+        return self._request_end(launch, state, "paused", "lane-review-due",
+                                 f"progress review required; {summary}")
 
     def _paused(self, launch: Mapping[str, Any], state: dict[str, Any]) -> str:
         wait = float((launch.get("watch") or {}).get("review_wait_s", DEFAULT_REVIEW_WAIT_S))
         waited = self.now() - float(state.get("paused_ts", self.now()))
-        if waited > PAUSE_GRACE_S and self._pane_live(launch):
-            # The stop did not take: the lane is still working, so it is watched again, its stall
-            # window and caps included, rather than left running unwatched as "paused".
-            state.update(status="watching", life_started=self.now(),
-                         active_s_before=float(state.get("active_s", 0.0)), continued=True)
+        if not state.get("stop_verified_ts") or not self._exit_verified(launch, state):
+            # Legacy/unverified or subsequently revived seats cannot turn a mandatory review
+            # into permission to keep working. Hold delivery and surface uncertainty.
+            state.update(status="stopping", stop_outcome="paused",
+                         stop_kind="lane-review-due", stop_detail="review exit unverified")
             self._write_state(state)
-            self._wake(launch, "lane-review-cancelled",
-                       "the review pause did not stop the lane; it is watched again",
-                       refusal=False)
-            return "watching"
+            self._wake(launch, "lane-review-unverified", "review exit evidence no longer holds",
+                       refusal=True)
+            return "stopping"
         if state.get("review_expired"):
             return "paused"
         expiry = wait * REVIEW_EXPIRY_WAITS
@@ -883,30 +957,14 @@ class LaneWatch:
                  active: float, remaining: float, idle: float, summary: str) -> str:
         minutes = max(1, round(remaining / 60))
         script = pathlib.Path(__file__).resolve().parent / "tmux_lane_message.sh"
-        # The delivery starts first and waits for the pane to die; the turn is ended only once a
-        # delivery is on its way, so a lane is never stopped early for a notice that cannot come.
-        started = self.deliver([
+        state["wrapup_argv"] = [
             str(script), str(launch.get("run_id", "")), "watchdog", self.slot, "wrapup",
             "--minutes", str(minutes), "--wait-idle", "30",
             "--runs", str((launch.get("watch") or {}).get("runs_dir", "")),
-        ])
+        ]
         state["wrapup_sent"] = True
-        if started.startswith("not started"):
-            self._write_state(state)
-            self._wake(launch, "lane-wrap-up",
-                       f"wrap-up notice {started}; the lane runs on to its cap; {summary}",
-                       refusal=False)
-            return "watching"
-        stopped = self.stop(str(launch.get("tmux_target", "")))
-        state.update(status="wrapping", wrapup_ts=current, active_s=active, stall_carry_s=idle)
-        self._write_state(state)
-        self._wake(
-            launch, "lane-wrap-up",
-            f"{minutes} min before its cap: wrap-up notice {started}, turn interrupted; "
-            f"{summary}; {stopped}",
-            refusal=False,
-        )
-        return "wrapping"
+        state["stall_carry_s"] = idle
+        return self._request_end(launch, state, "wrapping", "lane-wrap-up", summary)
 
     def _wrapping(self, launch: Mapping[str, Any], state: dict[str, Any]) -> str:
         if self.now() - float(state.get("wrapup_ts", self.now())) <= WRAP_DELIVERY_S:
@@ -940,7 +998,10 @@ class LaneWatch:
 
 
 def close_superseded(root: pathlib.Path, lane: str, by: str,
-                     now: Callable[[], float] = time.time) -> list[str]:
+                     now: Callable[[], float] = time.time, *,
+                     tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux,
+                     processes: Callable[[], dict[int, dict[str, Any]] | None] = process_snapshot,
+                     ) -> list[str]:
     """Close every slot of ``lane`` left paused or wrapping when a new round replaces its window and
     watcher, so the slot still ends with its output row instead of reading as paused forever."""
 
@@ -949,15 +1010,17 @@ def close_superseded(root: pathlib.Path, lane: str, by: str,
     for state_path in sorted(lanes.glob("*-watch.json")):
         state = _load_json(state_path)
         slot = str(state.get("slot", ""))
-        if state.get("status") not in {"paused", "wrapping"} or not slot or slot == by:
+        if state.get("status") not in {"paused", "wrapping", "stopping"} or not slot or slot == by:
             continue
-        watch = LaneWatch(root=root, slot=slot, now=now)
+        watch = LaneWatch(root=root, slot=slot, now=now, tmux=tmux, processes=processes)
         try:
             launch = watch.launch()
         except LaneWatchError:
             continue
         if (launch.get("lane") or launch.get("role")) != lane:
             continue
+        if state.get("status") == "stopping" or not watch._exit_verified(launch, state):
+            raise LaneWatchError(f"cannot supersede {slot}: stop/exit is unverified")
         active = float(state.get("active_s", 0.0))
         rate = (launch.get("caps") or {}).get("usd_per_hour")
         spend = (
@@ -1032,8 +1095,12 @@ def main(argv: list[str] | None = None) -> int:
     clock.add_argument("--slot", required=True)
     arguments = parser.parse_args(argv)
     if arguments.command == "close":
-        for slot in close_superseded(arguments.root, arguments.lane, arguments.by):
-            print(f"lane-watchdog: {slot} superseded by {arguments.by}")
+        try:
+            for slot in close_superseded(arguments.root, arguments.lane, arguments.by):
+                print(f"lane-watchdog: {slot} superseded by {arguments.by}")
+        except LaneWatchError as error:
+            print(f"lane-watchdog: {error}", file=sys.stderr)
+            return 70
         return 0
     if arguments.command == "remaining":
         try:

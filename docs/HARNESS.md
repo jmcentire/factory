@@ -694,8 +694,21 @@ dependency-free (bash + python3 + git):
   prints the transcript as it grows (so the dispatcher, its failure-mode checks and the
   Orchestrator see the Validator's real console) and appends every line typed into the window
   (dispatcher notices, Orchestrator corrections) to `<run>/validator/inbox.jsonl`, which the
-  kickoff session watches. Its brief is `<run>/validator/BRIEF.md`. The supervisor never freezes
-  that session; an Orchestrator stop of it holds every lane until the Orchestrator resumes it.
+  kickoff session watches. Its brief is `<run>/validator/BRIEF.md`. Ignition requires
+  `FACTORY_VALIDATOR_PID`, `FACTORY_VALIDATOR_STARTED` (the normalized UTC `ps lstart` value),
+  and `FACTORY_VALIDATOR_PANE` (exact `%id`) for the **executing** Validator. The supervisor
+  verifies that PID/start belongs to the pane and persists an immutable per-run binding at
+  `orchestrator/validator-process.json`; the mirror is never a substitute signal target.
+  An Orchestrator stop or overdue assessment pauses the bound Validator and the author seats.
+  `seat-state.json` records requested holds; `seat-processes.json` records each signal attempt
+  and observed acknowledgement. `status --root <run>` exposes both. Unknown observation,
+  changed identity or failed delivery stays pending; a control command returns 75 when not
+  acknowledged. A sent signal alone is not success. Resume requires recorded custody and
+  confirmed process state; author holds survive until the Validator's resume is acknowledged.
+  Author admission checks the binding and unresolved Validator holds. These checks identify
+  processes, not their served models. Individual PID/start revalidation avoids process-group
+  spill and known PID reuse, but POSIX signalling retains a check-to-signal race; observed-tree
+  tracking cannot prove containment of children that detach between polls.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.

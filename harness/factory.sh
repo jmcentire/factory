@@ -289,6 +289,12 @@ esac
 
 # No harness metadata exists yet, so a file here can only be left by an ignition that
 # failed, and is replaced.
+if [ "$VALIDATOR_AGENT" = kickoff ]; then
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" bind-validator --root "$ROOT" --session "$RUN" \
+    --pid "${FACTORY_VALIDATOR_PID:?kickoff needs its executing Validator PID}" \
+    --started "${FACTORY_VALIDATOR_STARTED:?kickoff needs its observed UTC ps lstart identity}" \
+    --pane "${FACTORY_VALIDATOR_PANE:?kickoff needs its exact execution pane ID}" || exit 70
+fi
 IGNITION_FILES=1
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
@@ -606,7 +612,7 @@ cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
 cp -f "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
 cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
-  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" \
+  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" "$D/lane_watchdog.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
 # run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
@@ -629,7 +635,7 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py" \
   "$ROOT/orchestrator/bin/boundary_register.py" "$ROOT/orchestrator/bin/escalate.py" \
-  "$ROOT/orchestrator/bin/seat_supervisor.py"
+  "$ROOT/orchestrator/bin/seat_supervisor.py" "$ROOT/orchestrator/bin/lane_watchdog.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2

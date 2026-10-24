@@ -143,6 +143,11 @@ refuse() {
   exit "$code"
 }
 
+if [ "$ACTION" != freeze ]; then
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || \
+    refuse 70 "executing Validator identity/control is unavailable; refusing author admission"
+fi
+
 # The operator names the lane's agent (--agent, default codex) and, optionally, its model
 # (--model). The factory names no model. MODEL_SOURCE records where the model came from:
 # "operator" when named, "codex-config" when a codex lane carries over the model the operator's
@@ -964,7 +969,8 @@ PY
   fi
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
   # A round its watcher had paused for review, or was wrapping up, ends as superseded.
-  "$FACTORY_PYTHON" "$D/lane_watchdog.py" close --root "$ROOT" --lane "$LANE" --by "$SLOT" || true
+  "$FACTORY_PYTHON" "$D/lane_watchdog.py" close --root "$ROOT" --lane "$LANE" --by "$SLOT" || \
+    refuse 70 "prior round stop/exit is unverified; refusing replacement"
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi

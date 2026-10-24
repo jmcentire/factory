@@ -93,9 +93,15 @@ LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
 # A registry lane's launch shape (harness/agents.py turn-record): how to resume its session.
 TURN_RECORD="$TMUX_ROOT/$SLOT-turn.json"
 
+# Answer exceptions to an Orchestrator report do not release an actual process-control hold.
+"$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || {
+  echo "lane-message: executing Validator identity/control is unavailable; refusing continuation" >&2
+  exit 70
+}
+
 # A pending stop is durable across deliveries. Refuse before any queue/resume/respawn effect;
 # the watcher starting after a model has resumed is too late to enforce this hold.
-"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" <<'PY' || exit 70
+"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" <<'PY' || exit 70
 import json, os, pathlib, stat, sys
 path = pathlib.Path(sys.argv[1])
 try:
@@ -116,6 +122,12 @@ except (OSError, ValueError) as error:
     raise SystemExit(f"lane-message: watcher state unreadable; refusing delivery: {error}")
 if state.get("status") == "stopping":
     raise SystemExit("lane-message: requested stop is unverified; refusing delivery")
+if state.get("status") in {"paused", "wrapping"}:
+    sys.path.insert(0, sys.argv[2])
+    from lane_watchdog import LaneWatch
+    watch = LaneWatch(root=pathlib.Path(sys.argv[3]), slot=sys.argv[4])
+    if not state.get("stop_verified_ts") or not watch._exit_verified(watch.launch(), state):
+        raise SystemExit("lane-message: pause/wrap exit is unverified; refusing delivery")
 PY
 
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {

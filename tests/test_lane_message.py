@@ -341,3 +341,27 @@ def test_a_lane_at_its_cap_refuses_a_review_and_status_refuses_stray_arguments(
     assert "plan lanes have no cap" in refused.stderr
     stray = message(operator, root, env, "validator", "coder", "status", "--verdict", "redirect")
     assert stray.returncode == 64
+
+
+def test_legacy_unverified_pause_cannot_resume(tmp_path: Path) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path)
+    (root / 'tmux-lanes' / 'tester-watch.json').write_text('{"status":"paused"}')
+    before = tmux_log.read_text() if tmux_log.exists() else ''
+    refused = run(
+        ['bash', str(HARNESS / 'tmux_lane_message.sh'), 'r1', 'orchestrator', 'tester',
+         'status', '--runs', str(root.parent)], operator, env)
+    assert refused.returncode == 70 and 'pause/wrap exit is unverified' in refused.stderr
+    after = tmux_log.read_text() if tmux_log.exists() else ''
+    assert 'respawn-pane' not in after[len(before):]
+
+
+def test_kickoff_control_binding_is_required_for_continuation(tmp_path: Path) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path)
+    metadata = json.loads((root / 'harness.json').read_text())
+    metadata['validator_agent'] = 'kickoff'
+    (root / 'harness.json').write_text(json.dumps(metadata))
+    result = run(['bash', str(HARNESS / 'tmux_lane_message.sh'), 'r1', 'validator',
+                  'tester', 'status', '--runs', str(root.parent)], operator, env)
+    assert result.returncode == 70
+    assert 'identity/control is unavailable' in result.stderr
+    assert not tmux_log.exists() or 'respawn' not in tmux_log.read_text()

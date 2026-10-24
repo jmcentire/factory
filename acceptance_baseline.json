@@ -15,7 +15,8 @@
     "construction-no-candidate": true,
     "refusal-tmux-lane": true,
     "refusal-lane-stall": true,
-    "refusal-lane-cap": false
+    "refusal-lane-cap": false,
+    "lane-review-unverified": true
   },
   "excluded_event_kinds": [
     "blocking_written"

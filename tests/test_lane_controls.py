@@ -1061,13 +1061,12 @@ def test_an_undelivered_wrap_up_ends_the_lane_as_capped(tmp_path: Path) -> None:
     assert watched.stops == ["r1:tester", "r1:tester"]
 
 
-def test_a_wrap_up_that_cannot_start_leaves_the_lane_running_to_its_cap(tmp_path: Path) -> None:
+def test_a_wrap_up_that_cannot_start_finishes_only_after_verified_stop(tmp_path: Path) -> None:
     watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=True)
     watched.watch.deliver = lambda argv: "not started: no environment"
     _commit(watched.repo, T0 + 100, "a")
-    assert watched.at(1500) == "watching" and watched.stops == []
-    assert watched.at(1600) == "watching"  # one attempt, not one per poll
-    assert watched.at(1800) == "capped"
+    assert watched.at(1500) == "capped" and watched.stops == ["r1:tester"]
+    assert watched.at(1600) == "capped"  # no restart or repeat delivery
 
 
 def test_the_wrap_up_delivery_runs_in_its_own_session_from_the_recorded_environment(
@@ -1151,7 +1150,9 @@ def test_a_review_pause_carries_the_stall_window_instead_of_resetting_it(tmp_pat
     assert watched.at(5000 + 1021) == "stalled"
 
 
-def test_a_pause_that_did_not_stop_the_lane_is_cancelled(tmp_path: Path) -> None:
+def test_a_review_with_lost_exit_evidence_becomes_pending_not_authorized_work(
+    tmp_path: Path,
+) -> None:
     watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080},
                       thread=True)
     _commit(watched.repo, T0 + 600, "a")
@@ -1159,9 +1160,9 @@ def test_a_pause_that_did_not_stop_the_lane_is_cancelled(tmp_path: Path) -> None
     live = subprocess.CompletedProcess((), 0, "tester @6\n", "")
     watched.watch.tmux = lambda *a: (
         live if a[0] == "list-windows" else subprocess.CompletedProcess(a, 0, "0\n", ""))
-    assert watched.at(1080 + 30) == "paused"  # within the stop's grace
-    assert watched.at(1080 + 61) == "watching"
-    assert [row["kind"] for row in watched.events()].count("lane-review-cancelled") == 1
+    assert watched.at(1080 + 30) == "stopping"
+    assert watched.at(1080 + 61) == "stopping"
+    assert [row["kind"] for row in watched.events()].count("lane-review-unverified") == 1
 
 
 def test_a_new_round_closes_a_slot_left_paused(tmp_path: Path) -> None:
@@ -1169,11 +1170,15 @@ def test_a_new_round_closes_a_slot_left_paused(tmp_path: Path) -> None:
                       thread=True)
     _commit(watched.repo, T0 + 600, "a")
     assert watched.at(1080) == "paused"
-    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == ["tester"]
+    assert lane_watchdog.close_superseded(
+        watched.root, "tester", "tester.r2", tmux=watched.watch.tmux,
+        processes=lambda: {},
+    ) == ["tester"]
     [output] = watched.rows("lane-output.jsonl")
     assert output["outcome"] == "superseded" and output["commits"] == 1
     assert watched.at(9000) == "superseded"
-    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == []
+    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2",
+                                           tmux=watched.watch.tmux, processes=lambda: {}) == []
 
 
 def test_review_schedule_is_independent_of_questions_but_respects_wrap_up_headroom(
@@ -1614,3 +1619,68 @@ def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -
     calls = lanes.tmux_log.read_text().splitlines()
     assert any("set-option -w -t r1:coder remain-on-exit on" in call for call in calls), calls
     assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)
+
+
+@pytest.mark.parametrize('purpose', ['review', 'wrapup'])
+def test_review_and_wrapup_wait_for_exit_before_delivery(tmp_path, purpose):
+    settings = {'runs_dir': '/runs', 'review_every_s': 600} if purpose == 'review' else RESUMABLE
+    watched = Watched(tmp_path, caps={} if purpose == 'review' else {'wall_cap_s': 1800},
+                      watch=settings, thread=True)
+    _commit(watched.repo, T0 + 100, 'a')
+    live = True
+
+    def tmux(*args):
+        return subprocess.CompletedProcess(args, 0, 'tester @1\n' if args[0] == 'list-windows'
+                                           else '0\n' if live else '1\n', '')
+
+    watched.watch.tmux = tmux
+    at = 600 if purpose == 'review' else 1500
+    assert watched.at(at) == 'stopping'
+    assert not watched.delivered
+    assert not any(r['kind'] == 'lane-review-due' for r in watched.events())
+    assert watched.at(at + 1) == 'stopping'
+    assert len(watched.stops) == 1
+    live = False
+    assert watched.at(at + 2) == ('paused' if purpose == 'review' else 'wrapping')
+    assert len(watched.delivered) == (0 if purpose == 'review' else 1)
+    assert json.loads(watched.watch.state_path.read_text())['stop_verified_ts'] == T0 + at + 2
+
+
+def test_supersession_refuses_live_unknown_and_pending_old_round(tmp_path):
+    watched = Watched(tmp_path, watch={'runs_dir': '/runs', 'review_every_s': 600}, thread=True)
+    assert watched.at(600) == 'paused'
+    def alive(*a):
+        return subprocess.CompletedProcess(
+            a, 0, 'tester @1\n' if a[0] == 'list-windows' else '0\n', '')
+    for tmux, processes in [(alive, lambda: {}), (watched.watch.tmux, lambda: None)]:
+        with pytest.raises(lane_watchdog.LaneWatchError, match='unverified'):
+            lane_watchdog.close_superseded(watched.root, 'tester', 'tester.r2',
+                                           tmux=tmux, processes=processes)
+    assert not watched.rows('lane-output.jsonl')
+    state = json.loads(watched.watch.state_path.read_text())
+    state['status'] = 'stopping'
+    watched.watch.state_path.write_text(json.dumps(state))
+    with pytest.raises(lane_watchdog.LaneWatchError, match='unverified'):
+        lane_watchdog.close_superseded(watched.root, 'tester', 'tester.r2',
+                                       tmux=watched.watch.tmux, processes=lambda: {})
+
+
+def test_kickoff_without_actual_process_binding_cannot_admit_an_author(tmp_path):
+    lanes = Lanes(tmp_path)
+    metadata = json.loads((lanes.root / 'harness.json').read_text())
+    metadata['validator_agent'] = 'kickoff'
+    (lanes.root / 'harness.json').write_text(json.dumps(metadata))
+    result = lanes.lane('coder')
+    assert result.returncode == 70
+    assert 'executing Validator identity/control is unavailable' in result.stderr
+    assert not lanes.windows('coder')
+
+
+def test_replaced_window_cannot_certify_old_lane_exit(tmp_path):
+    watched = Watched(tmp_path, watch={'runs_dir': '/runs', 'review_every_s': 600}, thread=True)
+    assert watched.at(600) == 'paused'
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, 'tester @999\n' if a[0] == 'list-windows' else '1\n', '')
+    assert watched.at(601) == 'stopping'
+    assert watched.at(602) == 'stopping'
+    assert not watched.rows('lane-output.jsonl')

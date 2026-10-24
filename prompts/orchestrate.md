@@ -732,7 +732,10 @@ orchestrator/bin/seat_supervisor.py control --root . --session <run> --seat <val
 - The Validator is under this too. You hold authority over all three seats. When harness.json
   says `validator_agent: kickoff`, the Validator is the session that kicked off the run: its
   `validator` window shows that session's console, a correction lands in its inbox, and a stop
-  holds every lane (the founder's conversation is never frozen) until you resume it.
+  controls the explicitly bound executing Validator and holds every author lane until its
+  resume is acknowledged. The mirror is never a substitute process target. Inspect the returned
+  `acknowledged` and per-seat observations: exit 75 means pending, not stopped/resumed. Signal
+  attempts and failures persist; do not erase holds or substitute an inbox notice for a real stop.
 
 **The founder's dash: `orchestrator/bin/escalate.py`.** Herald (dash.herald.tools) is how the run talks to
 the founder. Three levels, and you choose the level by who must act:
