@@ -22,9 +22,10 @@ Validator's attention has no control at all, so the watcher, not a person, does 
   ``usd_per_hour x active time`` (the rate declared at launch) and the lane is stopped
   (``refusal-lane-cap``) when the estimate reaches the cap or the declared wall-clock cap
   passes, whichever comes first.
-- **Completion wake.** When the lane prints ``__LANE_DONE__ <slot> commits=<n>`` or its process
-  ends (the ``lane_agent.py run`` exit record; ``__LANE_EXIT__`` in the log), the operator is
-  woken.
+- **Completion wake.** An agent response may claim ``__LANE_DONE__ <slot> commits=<n>``.
+  Only a matching successful wrapper exit receipt, a confirmed dead pane and absence of the
+  observed process tree make that claim terminal. Tool output is not a response, and an exit
+  without a claim is only ``exited``. This is not proof against children escaping between polls.
 
 Two more apply to a lane whose session can be resumed (a Codex exec thread, or the session a
 registry harness streams: ``RESUMABLE_AGENTS``), because both end the live turn and continue the
@@ -113,11 +114,10 @@ RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama"
                               "cursor-agent", "prime-agent"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
 # ("commits=21Top finding"), and that is still a completion.
-_DONE = re.compile(r"^\W*__LANE_DONE__\s+\S+\s+commits=\d+(?!\d)")
+_DONE = re.compile(r"^\W*__LANE_DONE__\s+(\S+)\s+commits=\d+(?!\d)")
 _REFLOG = re.compile(r"^([0-9a-f]{40,64}) ([0-9a-f]{40,64}) [^\t]*> (\d+) [+-]\d{4}\t(.*)$")
 _MAX_REFLOG_BYTES = 4 * 1024 * 1024
 _MAX_LOG_SCAN_BYTES = 1024 * 1024
-_MAX_PANE_LINES = 2000
 
 
 def _bounded_tail(path: pathlib.Path, ceiling: int, offset: int = 0) -> tuple[bytes, int]:
@@ -166,34 +166,66 @@ def read_commits(repository: pathlib.Path, since: float) -> list[dict[str, Any]]
     return commits
 
 
-def _strings(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [text for item in value.values() for text in _strings(item)]
-    if isinstance(value, list):
-        return [text for item in value for text in _strings(item)]
-    return []
+def _response_text(value: object) -> str | None:
+    """Read known agent response fields, never arbitrary nested tool/prompt strings."""
+    if not isinstance(value, dict):
+        return None
+    if value.get("type") == "result":
+        text = value.get("result") if not value.get("is_error") else ""
+    elif value.get("type") == "item.completed":
+        item = value.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            return None
+        text = item.get("text")
+    elif value.get("payload_type") == "run.terminal.completed":
+        payload = value.get("payload")
+        text = payload.get("text") if isinstance(payload, dict) else None
+    elif value.get("event") == "step_update":
+        step = value.get("step_update")
+        if not isinstance(step, dict) or step.get("step_type") != "agent_response":
+            return None
+        text = step.get("text_delta")
+    elif value.get("type") == "message_end":
+        message = value.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return None
+        parts = message.get("content")
+        return "".join(p["text"] for p in parts if isinstance(p, dict)
+                       and p.get("type") == "text" and isinstance(p.get("text"), str)) \
+            if isinstance(parts, list) else ""
+    else:
+        return None
+    return text if isinstance(text, str) else ""
 
 
-def _done_in(text: str) -> bool:
-    """A ``__LANE_DONE__ <slot> commits=<n>`` line, in plain output or inside any string of a
-    harness's JSON event (a Codex agent message, a Claude or Cursor result, a Muse terminal
-    event, an agy step). The protocol states the form with ``<n>`` unfilled, so an echoed prompt
-    is not a completion."""
+def _done_in(text: str, *, slot: str = "") -> bool:
+    return _claim_in(text, slot=slot) is True
 
+
+def _claim_in(text: str, *, slot: str = "") -> bool | None:
+    """A completion *claim*, from typed response fields.
+
+    A claim alone never proves completion. Unknown event shapes fail closed; recursively
+    searching event strings let a tool's fixture stop supervision of a still-running author.
+    """
+
+    def claimed(line: str) -> bool:
+        match = _DONE.match(line)
+        return match is not None and (not slot or match.group(1) == slot)
+
+    latest = None
     for line in text.splitlines():
-        if _DONE.match(line):
-            return True
         if not line.startswith("{"):
             continue
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
+            latest = False  # an unreadable event cannot preserve an earlier final claim
             continue
-        if any(_DONE.match(part) for string in _strings(value) for part in string.splitlines()):
-            return True
-    return False
+        response = _response_text(value)
+        if response is not None:
+            latest = any(claimed(part) for part in response.splitlines())
+    return latest
 
 
 def _epoch(stamp: object) -> float:
@@ -240,6 +272,25 @@ def _tmux(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["tmux", *arguments], capture_output=True, text=True, check=False, timeout=15
     )
+
+
+def process_snapshot() -> dict[int, dict[str, Any]] | None:
+    """Read identities without command lines; failure is unknown, not an empty process table."""
+    try:
+        result = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat="], capture_output=True,
+            text=True, check=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows: dict[int, dict[str, Any]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 8 or not fields[0].isdigit() or not fields[1].isdigit():
+            return None
+        pid = int(fields[0])
+        rows[pid] = {"pid": pid, "ppid": int(fields[1]), "started": " ".join(fields[2:7]),
+                     "state": fields[7]}
+    return rows or None
 
 
 def window_id(target: str,
@@ -339,6 +390,7 @@ class LaneWatch:
         tmux: Callable[..., subprocess.CompletedProcess[str]] = _tmux,
         echo: Callable[[str], None] = print,
         deliver: Callable[[list[str]], str] | None = None,
+        processes: Callable[[], dict[int, dict[str, Any]] | None] = process_snapshot,
     ) -> None:
         self.root = pathlib.Path(root)
         self.lanes = self.root / "tmux-lanes"
@@ -347,6 +399,7 @@ class LaneWatch:
         self.stop = stop
         self.tmux = tmux
         self.echo = echo
+        self.processes = processes
         self.deliver = deliver or (lambda argv: spawn_delivery(
             argv, self.lanes / f"{slot}-delivery.env", self.lanes / f"{slot}-wrapup.log"))
         self.journal = self.lanes / f"{slot}-launch.jsonl"
@@ -371,22 +424,97 @@ class LaneWatch:
         except Exception:  # noqa: BLE001 - an unreadable journal must not disarm the watch
             return False
 
-    def _scan_output(self, launch: Mapping[str, Any], state: dict[str, Any]) -> bool:
+    def _scan_output(self, launch: Mapping[str, Any], state: dict[str, Any]) -> bool | None:
         log = pathlib.Path(str(launch.get("lane_log", "")))
         raw, offset = _bounded_tail(log, _MAX_LOG_SCAN_BYTES, int(state.get("log_offset", 0)))
-        state["log_offset"] = offset
-        text = raw.decode("utf-8", errors="replace")
+        # Retain an offset, not a partial event: tool output can contain private author code
+        # and must never be copied into the operator's watcher-status metadata.
+        state.pop("log_fragment", None)
+        start = offset - len(raw)
+        if start < int(state.get("log_offset", 0)):
+            state["completion_claim"] = False  # the log was truncated/replaced
+        newline = raw.rfind(b"\n")
+        if newline < 0:
+            text = ""
+            discard = bool(state.get("discard_log_fragment")) or len(raw) >= _MAX_LOG_SCAN_BYTES
+            state["discard_log_fragment"] = discard
+            if discard:
+                state["completion_claim"] = False
+            state["log_offset"] = offset if discard else start
+        else:
+            complete = raw[:newline + 1]
+            if state.get("discard_log_fragment"):
+                # An oversized event is unknown, not a suffix masquerading as a new event.
+                complete = complete.partition(b"\n")[2]
+                state["completion_claim"] = False
+            state["discard_log_fragment"] = False
+            state["log_offset"] = start + newline + 1
+            text = complete.decode("utf-8", errors="replace")
+        try:
+            state["log_drained"] = int(state["log_offset"]) >= log.stat().st_size \
+                and not state["discard_log_fragment"]
+        except OSError:
+            state["log_drained"] = False
         if launch.get("terminal"):
-            # A terminal agent keeps its pane; its output never reaches the log.
-            pane = window_id(str(launch.get("tmux_target", "")), self.tmux)
-            shown = None if pane is None else self.tmux(
-                "capture-pane", "-p", "-t", pane, "-S", f"-{_MAX_PANE_LINES}")
-            if shown is not None and shown.returncode == 0:
-                text += "\n" + shown.stdout
-        return _done_in(text)
+            # Screen text cannot distinguish the assistant from a displayed tool fixture.
+            # Its wrapper can prove exit, but cannot certify an agent completion claim.
+            return None
+        return _claim_in(text, slot=self.slot)
 
     def _exits(self, launch: Mapping[str, Any]) -> list[dict[str, Any]]:
         return _read_rows(pathlib.Path(str(launch.get("lane_exits", ""))))
+
+    def _pane_exited(self, launch: Mapping[str, Any]) -> bool:
+        """Require positive tmux evidence; lookup failure is not proof of process exit."""
+        resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
+        if resolved is None:
+            return False
+        shown = self.tmux("display-message", "-p", "-t", resolved, "#{pane_dead}")
+        return shown.returncode == 0 and shown.stdout.strip() == "1"
+
+    def _observe_processes(self, launch: Mapping[str, Any], state: dict[str, Any]) -> bool:
+        """Retain observed descendants even after reparenting; never signal based on this list.
+
+        This is observed-tree evidence, not confinement: a child that forks and detaches between
+        polls may be unseen. A reused PID is a different identity, never a surviving lane child.
+        """
+        snapshot = self.processes()
+        if snapshot is None:
+            state["process_observation"] = "unavailable"
+            return False
+        known = list(state.get("process_identities", []))
+        if not known:
+            resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
+            if resolved is None:
+                return False
+            shown = self.tmux("display-message", "-p", "-t", resolved, "#{pane_pid}")
+            if shown.returncode != 0 or not shown.stdout.strip().isdigit():
+                return False
+            root = snapshot.get(int(shown.stdout.strip()))
+            if root is not None:
+                known.append({"pid": root["pid"], "started": root["started"]})
+            elif not self._pane_exited(launch):
+                return False
+        live = {row["pid"] for row in known if row["pid"] in snapshot
+                and snapshot[row["pid"]]["started"] == row["started"]}
+        while True:
+            children = {pid for pid, row in snapshot.items() if row["ppid"] in live} - live
+            if not children:
+                break
+            known.extend({"pid": pid, "started": snapshot[pid]["started"]} for pid in children)
+            live.update(children)
+        state["process_identities"] = known
+        state["surviving_processes"] = [row for row in known if row["pid"] in live
+                                       and snapshot[row["pid"]]["started"] == row["started"]
+                                       and not snapshot[row["pid"]]["state"].startswith("Z")]
+        state["process_observation"] = "observed"
+        state["process_observed_ts"] = self.now()
+        return True
+
+    def _exit_verified(self, launch: Mapping[str, Any], state: dict[str, Any]) -> bool:
+        observed = self._observe_processes(launch, state)
+        self._write_state(state)
+        return observed and not state.get("surviving_processes") and self._pane_exited(launch)
 
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
         """A turn this watcher ends can be continued: a session was retained (a Codex thread, or
@@ -429,7 +557,9 @@ class LaneWatch:
         launch = self.launch()
         prior = _load_json(self.state_path)
         current = self.now()
-        if prior.get("status") in {"watching", "paused", "wrapping"} and not new_life:
+        if prior.get("status") == "stopping" and new_life:
+            raise LaneWatchError("cannot resume a lane whose requested stop is unverified")
+        if prior.get("status") in {"watching", "paused", "wrapping", "stopping"} and not new_life:
             return prior
         # A turn resumed after this watcher's own pause or wrap-up continues the same work: the
         # stall window carries on from where it stood, with no fresh read allowance.
@@ -457,6 +587,7 @@ class LaneWatch:
             "reviews": int(prior.get("reviews", 0)),
             "wrapup_sent": bool(prior.get("wrapup_sent", False)),
             "continued": continued,
+            "completion_claim": False,
             "stall_carry_s": float(prior.get("stall_carry_s", 0.0)) if continued else 0.0,
             "status": "watching",
         }
@@ -547,17 +678,56 @@ class LaneWatch:
 
     # -- the check ---------------------------------------------------------------------------
 
+    def _request_end(self, launch: Mapping[str, Any], state: dict[str, Any], status: str,
+                     kind: str, detail: str) -> str:
+        # Persist intent before signalling: a crash must not erase the required stop or make
+        # a subsequent question/completion claim reopen this lane. No repeat blind signalling.
+        self._observe_processes(launch, state)
+        state.update(status="stopping", stop_outcome=status, stop_kind=kind,
+                     stop_detail=detail, stop_requested_ts=self.now())
+        self._write_state(state)
+        try:
+            response = self.stop(str(launch.get("tmux_target", "")))
+        except (OSError, subprocess.SubprocessError) as error:
+            response = f"stop failed: {error}"
+        state["stop_response"] = response
+        self._write_state(state)
+        self._wake(launch, "lane-stop-requested", f"{detail}; {response}; exit unverified",
+                   refusal=True)
+        return self._stopping(launch, state)
+
+    def _stopping(self, launch: Mapping[str, Any], state: dict[str, Any]) -> str:
+        """A sent signal is not an acknowledged stop. Keep watching until exit is observed."""
+        if not self._exit_verified(launch, state):
+            return "stopping"
+        active = float(state["active_s_before"]) + max(
+            0.0, self.now() - float(state["life_started"]))
+        rate = (launch.get("caps") or {}).get("usd_per_hour")
+        spend = decimal.Decimal(str(rate)) * decimal.Decimal(str(active)) / decimal.Decimal(3600) \
+            if rate is not None else None
+        state["stop_verified_ts"] = self.now()
+        status = str(state["stop_outcome"])
+        output = self._finish(launch, state, status, active, spend)
+        self._wake(launch, str(state["stop_kind"]),
+                   f"lane exit verified: {state['stop_detail']}"
+                   + (f"; qualification {output['qualification']}" if "qualification" in output
+                      else ""), refusal=True)
+        return status
+
     def check(self) -> str:
         launch = self.launch()
         state = _load_json(self.state_path)
         if state.get("status") in LANE_FINAL:
             return str(state["status"])
+        if state.get("status") == "stopping":
+            return self._stopping(launch, state)
         if state.get("status") == "paused":
             return self._paused(launch, state)
         if state.get("status") == "wrapping":
             return self._wrapping(launch, state)
         if state.get("status") != "watching":
             state = self.arm()
+        self._observe_processes(launch, state)
         current = self.now()
         active = float(state["active_s_before"]) + max(0.0, current - float(state["life_started"]))
         watch = launch.get("watch") or {}
@@ -573,8 +743,13 @@ class LaneWatch:
         pending = self._pending_question(str(launch.get("lane") or launch.get("role", "")))
         if pending:
             state["hold_ts"] = current
-        done = self._scan_output(launch, state)
-        exits = self._exits(launch)[int(state["exits_baseline"]):]
+        claimed = self._scan_output(launch, state)
+        if claimed is not None:
+            state["completion_claim"] = claimed
+        exits = [row for row in self._exits(launch)[int(state["exits_baseline"]):]
+                 if row.get("schema_version") == "factory-lane-exit/1"
+                 and row.get("slot") == self.slot and type(row.get("rc")) is int
+                 and type(row.get("stopped_by_signal")) is bool]
 
         rate = caps.get("usd_per_hour")
         spend = (
@@ -585,9 +760,10 @@ class LaneWatch:
             f"{len(state['commits'])} commit(s), {active / 60:.1f} min"
             + (f", ~${spend:.2f} spent" if spend is not None else "")
         )
-        if done or exits:
-            status = "done" if done else "exited"
-            rc = f" rc={exits[-1].get('rc')}" if exits else ""
+        if exits and state.get("log_drained") and self._exit_verified(launch, state):
+            successful = exits[-1]["rc"] == 0 and not exits[-1]["stopped_by_signal"]
+            status = "done" if state["completion_claim"] and successful else "exited"
+            rc = f" rc={exits[-1]['rc']}"
             output = self._finish(launch, state, status, active, spend)
             self._wake(
                 launch, f"lane-{status}",
@@ -617,7 +793,7 @@ class LaneWatch:
             return self._wrap_up(launch, state, current, active, float(wall_cap) - active,
                                  idle, summary)
         if (
-            resumable and review_s > 0 and not pending and idle <= window
+            resumable and review_s > 0 and idle <= window
             and active >= review_s * (int(state.get("reviews", 0)) + 1)
             and (wall_cap is None or float(wall_cap) - active > wrap_s + REVIEW_HEADROOM_S)
         ):
@@ -632,26 +808,14 @@ class LaneWatch:
         ):
             reason = f"spend cap of ${spend_cap} reached (declared rate ${rate}/h)"
         if reason:
-            stopped = self.stop(str(launch.get("tmux_target", "")))
-            output = self._finish(launch, state, "capped", active, spend)
-            self._wake(launch, "refusal-lane-cap",
-                       f"lane stopped: {reason}; {summary}; {stopped}"
-                       + (f"; qualification {output['qualification']}"
-                          if "qualification" in output else ""),
-                       refusal=True)
-            return "capped"
+            return self._request_end(launch, state, "capped", "refusal-lane-cap",
+                                     f"{reason}; {summary}")
 
         if not pending and idle > window:
-            stopped = self.stop(str(launch.get("tmux_target", "")))
-            output = self._finish(launch, state, "stalled", active, spend)
-            self._wake(launch, "refusal-lane-stall",
-                       f"lane stopped: no commit for {idle / 60:.0f} min past its "
-                       f"{allowance / 60:.0f} min read allowance and {window / 60:.0f} min "
-                       f"window; {summary}; {stopped}"
-                       + (f"; qualification {output['qualification']}"
-                          if "qualification" in output else ""),
-                       refusal=True)
-            return "stalled"
+            return self._request_end(
+                launch, state, "stalled", "refusal-lane-stall",
+                f"no commit for {idle / 60:.0f} min past its {allowance / 60:.0f} min "
+                f"read allowance and {window / 60:.0f} min window; {summary}")
         self._write_state(state)
         return "watching"
 
@@ -748,22 +912,10 @@ class LaneWatch:
         if self.now() - float(state.get("wrapup_ts", self.now())) <= WRAP_DELIVERY_S:
             return "wrapping"
         # Whatever happened to the notice, nothing runs unwatched past this point.
-        self.stop(str(launch.get("tmux_target", "")))
-        active = float(state.get("active_s", 0.0))
-        rate = (launch.get("caps") or {}).get("usd_per_hour")
-        spend = (
-            decimal.Decimal(str(rate)) * decimal.Decimal(str(active)) / decimal.Decimal(3600)
-            if rate is not None else None
-        )
-        output = self._finish(launch, state, "capped", active, spend)
-        self._wake(launch, "refusal-lane-cap",
-                   f"lane stopped: its wrap-up notice did not resume it within "
-                   f"{WRAP_DELIVERY_S} s; {len(state['commits'])} commit(s), "
-                   f"{active / 60:.1f} min"
-                   + (f"; qualification {output['qualification']}"
-                      if "qualification" in output else ""),
-                   refusal=True)
-        return "capped"
+        return self._request_end(
+            launch, state, "capped", "refusal-lane-cap",
+            f"its wrap-up notice did not resume it within {WRAP_DELIVERY_S} s; "
+            f"{len(state['commits'])} commit(s)")
 
     def run(self, sleep: Callable[[float], None] = time.sleep, *, new_life: bool = False,
             launch_wait_s: float = 120.0, log_offset: int | None = None) -> str:
@@ -829,7 +981,7 @@ def remaining(root: pathlib.Path, slot: str, now: Callable[[], float] = time.tim
         return "no wall-clock cap on this lane"
     state = _load_json(watch.state_path)
     active = float(state.get("active_s", 0.0))
-    if state.get("status") == "watching":
+    if state.get("status") in {"watching", "stopping"}:
         active = float(state.get("active_s_before", 0.0)) + max(
             0.0, now() - float(state.get("life_started", now())))
     left = max(0, int(float(cap) - active))
@@ -844,7 +996,7 @@ def lane_report(root: pathlib.Path) -> list[dict[str, Any]]:
     rows = _read_rows(lanes / "lane-output.jsonl")
     for state_path in sorted(lanes.glob("*-watch.json")):
         state = _load_json(state_path)
-        if state.get("status") in {"watching", "paused", "wrapping"}:
+        if state.get("status") in {"watching", "paused", "wrapping", "stopping"}:
             rows.append({
                 "slot": state.get("slot"), "outcome": state.get("status"),
                 "commits": len(state.get("commits", [])),

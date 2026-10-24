@@ -93,6 +93,31 @@ LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
 # A registry lane's launch shape (harness/agents.py turn-record): how to resume its session.
 TURN_RECORD="$TMUX_ROOT/$SLOT-turn.json"
 
+# A pending stop is durable across deliveries. Refuse before any queue/resume/respawn effect;
+# the watcher starting after a model has resumed is too late to enforce this hold.
+"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" <<'PY' || exit 70
+import json, os, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    if path.is_symlink():
+        raise ValueError("symlinked watcher state")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        state = {}  # pre-watch/legacy launches have no watcher state yet
+    else:
+        with os.fdopen(fd, encoding="utf-8") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("non-regular watcher state")
+            state = json.load(stream)
+    if not isinstance(state, dict):
+        raise ValueError("non-object watcher state")
+except (OSError, ValueError) as error:
+    raise SystemExit(f"lane-message: watcher state unreadable; refusing delivery: {error}")
+if state.get("status") == "stopping":
+    raise SystemExit("lane-message: requested stop is unverified; refusing delivery")
+PY
+
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
   echo "lane-message: no retained session for $RUN:$SLOT yet (a codex-interactive lane has none, and a registry lane has one once its harness starts streaming: launch a new --round instead)" >&2
   exit 70
@@ -449,7 +474,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_SANDBOX=""
   [ "$LANE_SANDBOX" != off ] || RESUME_SANDBOX="--dangerously-bypass-approvals-and-sandbox "
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \

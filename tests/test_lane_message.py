@@ -73,6 +73,32 @@ def answer(
     )
 
 
+def test_unverified_stop_refuses_delivery_before_any_model_resume(tmp_path: Path) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path)
+    (root / "tmux-lanes" / "tester-watch.json").write_text('{"status":"stopping"}')
+    before = tmux_log.read_text() if tmux_log.exists() else ""
+    refused = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "orchestrator", "tester",
+         "status", "--runs", str(root.parent)], operator, env)
+    assert refused.returncode == 70 and "requested stop is unverified" in refused.stderr
+    after = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "respawn-pane" not in after[len(before):]
+    assert "new-window" not in after[len(before):]
+    assert not (root / "dialogue" / "journal.jsonl").exists()
+
+
+def test_dangling_watcher_state_is_not_treated_as_no_stop_state(tmp_path: Path) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path)
+    (root / "tmux-lanes" / "tester-watch.json").symlink_to(tmp_path / "missing-state")
+    before = tmux_log.read_text() if tmux_log.exists() else ""
+    refused = run(
+        ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "orchestrator", "tester",
+         "status", "--runs", str(root.parent)], operator, env)
+    assert refused.returncode == 70 and "symlinked watcher state" in refused.stderr
+    after = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "respawn-pane" not in after[len(before):]
+
+
 def test_an_answer_past_the_inline_ceiling_is_delivered_as_a_digest_pinned_file(
     tmp_path: Path,
 ) -> None:
@@ -195,6 +221,7 @@ def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path
     receipts = [row for row in journal if row["record_type"] == "message-delivered"]
     assert [row["transport"] for row in receipts] == ["resume"]
     assert receipts[0]["message_id"] == journal[1]["message_id"]
+    assert "--disable apps" in tmux_log.read_text()
 
 
 def test_an_orchestrator_status_probe_to_an_idle_lane_exits_cleanly(tmp_path: Path) -> None:

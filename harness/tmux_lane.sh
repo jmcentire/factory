@@ -889,15 +889,17 @@ PY
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
   [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
+  # Ignore-user-config does not disable Codex's built-in app connector surface. Authors must
+  # use their explicitly scoped local Kindex server, not a same-named operator connector.
   case "$AGENT" in
     codex|codex-ollama)
       [ -z "$CODEX_SANDBOX_ARG" ] || LOCAL_ARGS="$CODEX_SANDBOX_ARG${LOCAL_ARGS:+ $LOCAL_ARGS}"
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s -C %q -c %q -c %q -c %q -c %q' \
+      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
