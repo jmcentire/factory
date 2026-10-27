@@ -16,8 +16,10 @@ import os
 import pathlib
 import re
 import shlex
+import socket
 import subprocess
 import sys
+import uuid
 from typing import Any
 
 SCHEMA = "factory-signet-hook/1"
@@ -133,6 +135,11 @@ def translate(client: str, output: Any, event: str = "preToolUse") -> dict[str, 
 
 
 def evaluate(client: str, payload: Any, fixed: dict[str, Any]) -> dict[str, Any]:
+    return evaluate_with_health(client, payload, fixed)[0]
+
+
+def evaluate_with_health(client: str, payload: Any,
+                         fixed: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = normalize(client, payload, fixed)
     # Do not inherit a private Cursor HOME, policy-path override or arbitrary secret variables.
     environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG") if key in os.environ}
@@ -157,14 +164,58 @@ def evaluate(client: str, payload: Any, fixed: dict[str, Any]) -> dict[str, Any]
                                timeout=15, cwd=fixed["project"], env=environment)
     if completed.returncode:
         raise ValueError("Signet evaluation failed; action remains blocked")
-    return translate(client, json.loads(completed.stdout), payload["hook_event_name"])
+    return translate(client, json.loads(completed.stdout), payload["hook_event_name"]), advertised
 
 
-def configuration(client: str, path: pathlib.Path, expected: str, python: pathlib.Path) -> dict:
+def evaluate_host(client: str, payload: Any, address: str, plan_digest: str) -> dict[str, Any]:
+    """The only alternative evaluator is the pinned, already-authorized local custody service.
+
+    A disconnected/invalid service is a denial, never fallback to stateless local evaluation.
+    Raw tool data travels only over this local socket and is not printed or journaled.
+    """
+    if (not pathlib.Path(address).is_absolute()
+            or not re.fullmatch(r"[0-9a-f]{64}", plan_digest)):
+        raise ValueError("invalid policy custody binding")
+    import lane_custody
+    request = {"kind": "policy", "request_id": uuid.uuid4().hex,
+               "plan_digest": plan_digest, "payload": payload}
+    raw = json.dumps(request).encode() + b"\n"
+    if len(raw) > MAX_INPUT:
+        raise ValueError("policy request exceeds bound")
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(22)
+        connection.connect(address)
+        connection.sendall(raw)
+        result = lane_custody._receive(connection, timeout=22, maximum=MAX_INPUT)
+    if (not isinstance(result, dict) or set(result) != {"status", "output"}
+            or result["status"] != "policy"):
+        raise ValueError("policy custody unavailable or refused")
+    output = result["output"]
+    # The host is bound to one client; reject incompatible responses, never reinterpret them.
+    if client == "cursor-agent":
+        if (not isinstance(output, dict) or output.get("permission") not in {"allow", "deny", "ask"}
+                or set(output) - {"permission", "user_message", "agent_message", "updated_input"}
+                or any(not isinstance(output[k], str) for k in
+                       ("user_message", "agent_message") if k in output)
+                or ("updated_input" in output and not isinstance(output["updated_input"], dict))):
+            raise ValueError("invalid policy custody response")
+        return output
+    return translate(client, output, payload["hook_event_name"])
+
+
+def configuration(client: str, path: pathlib.Path, expected: str, python: pathlib.Path,
+                  *, custody_socket: str | None = None,
+                  custody_digest: str | None = None) -> dict:
     """Build candidate client settings; does not install them or approve hook trust."""
     contract(path, expected)
-    command = shlex.join([str(python), str(pathlib.Path(__file__).resolve()),
-                          "--client", client, "--contract", str(path), "--digest", expected])
+    arguments = [str(python), str(pathlib.Path(__file__).resolve()),
+                 "--client", client, "--contract", str(path), "--digest", expected]
+    if custody_socket is not None or custody_digest is not None:
+        if (not custody_socket or not pathlib.Path(custody_socket).is_absolute()
+                or not custody_digest or not re.fullmatch(r"[0-9a-f]{64}", custody_digest)):
+            raise ValueError("policy custody settings must be a complete host binding")
+        arguments += ["--custody-socket", custody_socket, "--custody-digest", custody_digest]
+    command = shlex.join(arguments)
     if client == "cursor-agent":
         base = {"command": command, "timeout": 25, "failClosed": True}
         return {"version": 1, "hooks": {
@@ -183,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--client", choices=CLIENTS)
     parser.add_argument("--contract", type=pathlib.Path)
     parser.add_argument("--digest")
+    parser.add_argument("--custody-socket")
+    parser.add_argument("--custody-digest")
     parser.add_argument("--resume-record", type=pathlib.Path)
     parser.add_argument("--render-codex", action="store_true",
                         help="render one explicit Codex config override; does not approve trust")
@@ -202,7 +255,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("Codex settings requested for a different client")
             from lane_agent import _toml_value
             settings = configuration(args.client, args.contract, args.digest,
-                                     pathlib.Path(sys.executable))
+                                     pathlib.Path(sys.executable),
+                                     custody_socket=args.custody_socket,
+                                     custody_digest=args.custody_digest)
             print("hooks.PreToolUse=" + _toml_value(settings["hooks"]["PreToolUse"]))
             return 0
         except (OSError, ValueError, TypeError):
@@ -213,7 +268,13 @@ def main(argv: list[str] | None = None) -> int:
         raw = sys.stdin.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise ValueError("hook input exceeds bound")
-        output = evaluate(args.client, json.loads(raw), fixed)
+        if args.custody_socket is not None or args.custody_digest is not None:
+            if not args.custody_socket or not args.custody_digest:
+                raise ValueError("incomplete policy custody binding")
+            output = evaluate_host(args.client, json.loads(raw),
+                                   args.custody_socket, args.custody_digest)
+        else:
+            output = evaluate(args.client, json.loads(raw), fixed)
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         # Do not echo input, evaluator stderr, credential values or arbitrary exception text.
         output = denial(args.client, "Factory Signet hook unavailable or invalid; action blocked.")

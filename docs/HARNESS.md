@@ -738,6 +738,29 @@ dependency-free (bash + python3 + git):
   Validator and a Codex Orchestrator (agy takes no model flag; select its model inside agy), and
   `tmux_lane.sh --model` names a lane's. Unset, each agent runs its own configured default. The
   qualified dispatch path takes its model from the runner manifest.
+- `harness/policy_custody.py` — optional host-bound Signet evaluation in the existing
+  `lane_custody.py` service. The admitted seat sends tool metadata for evaluation, never
+  execution. The host pins the client, evaluator contract, implementation hashes and run.
+  A non-prerequisite denial persists a hold before returning; a failed evaluation leaves an
+  uncertain hold. Subsequent tool requests and fixed custody operations cannot proceed by
+  changing spelling, tool or request ID. The journal contains identity, digests and outcomes,
+  not tool inputs. A prerequisite exception must name an exact owner policy revision and
+  recovery reason: the original DENY remains, and the real recovery call still goes through
+  Signet. This is not a Kindex success marker or an exemption from other checks.
+  Only the host's `lane_custody.py release-policy` command can release a named hold against
+  a current accepted Orchestrator no-op assessment covering its incident notice, with no
+  unresolved Validator attention block. A cadence no-op cannot override a prior block. There is no
+  release socket operation. A missing notice after a crash is recorded first and requires a
+  subsequent assessment; release never silently treats the crash as success. Old receipts
+  remain after release, and every later request is evaluated again.
+  Activation is explicit: a protected custody plan's `policy` binding and the session hook's
+  `--custody-socket` / `--custody-digest` must agree. Existing stateless hooks do not acquire
+  this protection merely because code is present. A missing or invalid endpoint blocks,
+  without falling back to local evaluation. Host receipt/control paths must be outside the
+  seat's writable boundary and actual provider hook loading must be qualified separately.
+  This guards calls reaching that hook, not unobserved provider refusals, already executing
+  actions, model text generation or an unconfined alternate executor. Actual process pause
+  remains the supervisor's separate acknowledged control.
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;

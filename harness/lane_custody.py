@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Host-owned, fixed-operation custody for a kernel-bounded Factory seat.
 
-The client sends an operation ID and a unique request ID, never argv, paths or shell text.
+Execution requests send an operation ID and a unique request ID, never argv or shell text.
+An optional host-bound policy endpoint accepts tool metadata only for evaluation, never execution.
 The host freezes each operation's canonical entry point and arguments before admission.
 The kernel supplies the connecting PID; only the bound seat or its current descendants may
 request work. The service must live outside that seat's process tree. A persisted started
@@ -75,8 +76,9 @@ class Plan:
 
     @classmethod
     def parse(cls, value: Any) -> Plan:
-        if (not isinstance(value, dict) or set(value) != {
-                "schema", "seat", "factory_home", "python", "cwd", "operations"}
+        fields = {"schema", "seat", "factory_home", "python", "cwd", "operations"}
+        if (not isinstance(value, dict) or not fields <= set(value)
+                or set(value) - fields - {"policy"}
                 or value["schema"] != SCHEMA):
             raise CustodyError("invalid custody plan")
         _identity(value["seat"])
@@ -108,6 +110,9 @@ class Plan:
                 raise CustodyError("canonical entry point is absent or changed")
             if hashlib.sha256(script.read_bytes()).hexdigest() != operation["source_sha256"]:
                 raise CustodyError("canonical entry point is absent or changed")
+        if "policy" in value:
+            import policy_custody
+            policy_custody.validate(value["policy"], home)
         return cls(value)
 
     @property
@@ -162,15 +167,16 @@ def authorized_peer(plan: Plan, pid: int, server_pid: int) -> None:
         raise CustodyError("request did not originate in the admitted seat")
 
 
-def _receive(connection: socket.socket, timeout: float = 5) -> Any:
+def _receive(connection: socket.socket, timeout: float = 5,
+             maximum: int = _MAX_MESSAGE) -> Any:
     connection.settimeout(timeout)
     body = bytearray()
     while b"\n" not in body:
-        block = connection.recv(min(4096, _MAX_MESSAGE + 1 - len(body)))
+        block = connection.recv(min(4096, maximum + 1 - len(body)))
         if not block:
             raise CustodyError("incomplete request")
         body.extend(block)
-        if len(body) > _MAX_MESSAGE:
+        if len(body) > maximum:
             raise CustodyError("request too large")
     line, trailing = bytes(body).split(b"\n", 1)
     if trailing.strip():
@@ -208,9 +214,16 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
     if (not isinstance(request, dict) or set(request) != {"request_id", "operation", "plan_digest"}
             or not isinstance(request["request_id"], str)
             or not _ID.fullmatch(request["request_id"])
+            or request["request_id"].startswith("policy-")
             or not isinstance(request["operation"], str)
             or request["plan_digest"] != plan.digest):
         raise CustodyError("request does not match the admitted plan")
+    if "policy" in plan.document:
+        import policy_custody
+        with policy_custody.locked(receipts):
+            if policy_custody.holds(receipts):
+                raise CustodyError(
+                    "policy hold prevents execution; supervised disposition required")
     command = plan.command(request["operation"])
     stem = receipts / request["request_id"]
     started = stem.with_suffix(stem.suffix + ".started.json")
@@ -225,6 +238,8 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
     # A new request ID does not resolve an earlier uncertain effect of the same operation.
     # This is checked before creating a new started receipt, not after executing again.
     for index, pending in enumerate(receipts.glob("*.started.json")):
+        if "policy" in plan.document and pending.name.startswith("policy-"):
+            continue  # validated policy outcomes/holds above, not execution receipts
         if index >= 4096:
             raise CustodyError("custody receipt bound exceeded; inspect before further work")
         previous = _read_receipt(pending).get("request")
@@ -296,8 +311,12 @@ def serve(plan: Plan, address: pathlib.Path, receipts: pathlib.Path, *, once: bo
                 with connection:
                     try:
                         authorized_peer(plan, peer_pid(connection), os.getpid())
-                        request = _receive(connection)
-                        result = execute(plan, request, receipts)
+                        request = _receive(connection, maximum=2 * 1024 * 1024)
+                        if isinstance(request, dict) and request.get("kind") == "policy":
+                            import policy_custody
+                            result = policy_custody.evaluate(plan, request, receipts)
+                        else:
+                            result = execute(plan, request, receipts)
                     except (CustodyError, OSError, ValueError, TypeError,
                             subprocess.SubprocessError) as error:
                         result = {"status": "refused", "reason": str(error)}
@@ -320,6 +339,12 @@ def main(argv: list[str] | None = None) -> int:
     host.add_argument("--digest", required=True)
     host.add_argument("--socket", required=True, type=pathlib.Path)
     host.add_argument("--receipts", required=True, type=pathlib.Path)
+    release = sub.add_parser("release-policy", help="host-only supervised hold disposition")
+    release.add_argument("--plan", required=True, type=pathlib.Path)
+    release.add_argument("--digest", required=True)
+    release.add_argument("--receipts", required=True, type=pathlib.Path)
+    release.add_argument("--denial-id", required=True)
+    release.add_argument("--assessment-digest", required=True)
     client = sub.add_parser("request")
     client.add_argument("--socket", required=True, type=pathlib.Path)
     client.add_argument("--digest", required=True)
@@ -327,11 +352,16 @@ def main(argv: list[str] | None = None) -> int:
     client.add_argument("--request-id", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.action == "serve":
+        if args.action in {"serve", "release-policy"}:
             plan = Plan.parse(json.loads(args.plan.read_text()))
             if plan.digest != args.digest:
                 raise CustodyError("host custody plan changed")
-            serve(plan, args.socket, args.receipts)
+            if args.action == "serve":
+                serve(plan, args.socket, args.receipts)
+            else:
+                import policy_custody
+                print(json.dumps(policy_custody.release(plan, args.receipts, args.denial_id,
+                                                       args.assessment_digest)))
         else:
             with socket.socket(socket.AF_UNIX) as connection:
                 connection.connect(str(args.socket))
