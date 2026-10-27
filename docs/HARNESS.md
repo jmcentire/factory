@@ -769,6 +769,19 @@ dependency-free (bash + python3 + git):
   This guards calls reaching that hook, not unobserved provider refusals, already executing
   actions, model text generation or an unconfined alternate executor. Actual process pause
   remains the supervisor's separate acknowledged control.
+  Claude's native modules can reject `classic.PreToolUse` without invoking ordinary settings
+  hooks. A settings-only custody hook therefore cannot retain those denials. The optional
+  `harness/claude_custody.py` generator prepares a session-local native module with an explicit
+  dependency on the existing native Signet owner, placing custody before that owner. It uses
+  the same pinned custody endpoint and adapter; it neither edits nor replaces the installed
+  owner. An allow still invokes downstream policy, host checks and redaction. Ask/deny and
+  adapter failures do not invoke the next handler. The generator refuses to overwrite an
+  existing plugin directory and does not activate anything. Host-protect the generated files
+  and qualify actual dependency ordering in the installed client, including a real denial
+  followed by a different tool, before claiming coverage. Earlier built-in/managed guards
+  can still reject before this module: their outcomes are not thereby custody-observed.
+  See [Claude module ordering](https://code.claude.com/docs/en/plugins/mods/events#the-order-mods-run-in)
+  and [settings-hook placement](https://code.claude.com/docs/en/plugins/mods/events#where-settings-hooks-run-in-the-order).
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
