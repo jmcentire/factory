@@ -34,6 +34,8 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
                   [--wrap-up-minutes <min, default 5; 0 = none>]
                   [--review-every-minutes <min, Coder launches default 18; 0 = none>]
                   [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
+                  [--boundary-contract <host JSON> --boundary-digest <sha256>]
+                  [--signet-contract <host JSON> --signet-digest <sha256>]
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
   all             [--runs <runs dir>]'
@@ -64,6 +66,10 @@ MIN_COMMITS=1
 WRAP_UP_MINUTES=""
 REVIEW_EVERY_MINUTES=""
 LANE_ENV_ARGS=()
+BOUNDARY_ARG_PATH=""
+BOUNDARY_ARG_DIGEST=""
+SIGNET_ARG_PATH=""
+SIGNET_ARG_DIGEST=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -87,8 +93,33 @@ while [ "$#" -gt 0 ]; do
     --review-every-minutes) REVIEW_EVERY_MINUTES="$2"; shift 2 ;;
     --cache-env) LANE_ENV_ARGS+=(--cache-env "$2"); shift 2 ;;
     --runtime-dir) LANE_ENV_ARGS+=(--runtime-dir "$2"); shift 2 ;;
+    --boundary-contract) BOUNDARY_ARG_PATH="$2"; shift 2 ;;
+    --boundary-digest) BOUNDARY_ARG_DIGEST="$2"; shift 2 ;;
+    --signet-contract) SIGNET_ARG_PATH="$2"; shift 2 ;;
+    --signet-digest) SIGNET_ARG_DIGEST="$2"; shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
+done
+# Closed host custody operations pass each role's fixed pins without changing the server's
+# shared environment. A CLI pin may fill an absent setting, never replace a conflicting one.
+for FAMILY in BOUNDARY SIGNET; do
+  PATH_ARG="${FAMILY}_ARG_PATH"; DIGEST_ARG="${FAMILY}_ARG_DIGEST"
+  if [ -n "${!PATH_ARG}" ] || [ -n "${!DIGEST_ARG}" ]; then
+    [ -n "${!PATH_ARG}" ] && [ -n "${!DIGEST_ARG}" ] || {
+      echo "tmux-lane: $FAMILY contract and digest must be supplied together" >&2; exit 64;
+    }
+    PATH_ENV="FACTORY_${FAMILY}_CONTRACT"; DIGEST_ENV="FACTORY_${FAMILY}_DIGEST"
+    for PAIR in PATH DIGEST; do
+      ARG_NAME="${PAIR}_ARG"; ENV_NAME="${PAIR}_ENV"
+      ARG_NAME="${!ARG_NAME}"; ENV_NAME="${!ENV_NAME}"
+      [ -z "${!ENV_NAME:-}" ] || [ "${!ENV_NAME}" = "${!ARG_NAME}" ] || {
+        echo "tmux-lane: $FAMILY CLI setting conflicts with host binding" >&2; exit 77;
+      }
+      printf -v "$ENV_NAME" '%s' "${!ARG_NAME}"
+      export "$ENV_NAME"
+    done
+    export "FACTORY_REQUIRE_${FAMILY}=1"
+  fi
 done
 AGENT="${AGENT_ARG:-codex}"
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -742,11 +773,30 @@ PY
   git -C "$REPOSITORY" config user.name "Factory ${ROLE}"
   git -C "$REPOSITORY" config user.email "factory-${ROLE}@local"
 
+  BOUNDARY_RECORD=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
+    --role "$ROLE" --cwd "$REPOSITORY") || refuse 77 "author boundary admission failed"
+  KINDEX_HOME="$TMUX_ROOT/$SLOT-kindex-home"
+  AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
+  if [ "$BOUNDARY_RECORD" != null ]; then
+    # Mutable client/Kindex state belongs to this lane, not the host control tree that its
+    # kernel profile protects. .git is already verified standalone and excluded from commits.
+    PRIVATE_RUNTIME=$("$FACTORY_PYTHON" - "$REPOSITORY" "$SLOT" <<'PY'
+import pathlib, sys
+git = pathlib.Path(sys.argv[1]) / ".git"
+root = git / "factory-runtime" / sys.argv[2]
+if git.is_symlink() or not git.is_dir() or root.resolve() != root:
+    raise SystemExit("tmux-lane: private runtime path is aliased or unavailable")
+print(root)
+PY
+    ) || refuse 77 "author private runtime cannot be isolated"
+    KINDEX_HOME="$PRIVATE_RUNTIME/kindex"
+    AGENT_HOME="$PRIVATE_RUNTIME/agent"
+  fi
   # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
   SEED_ARGS=()
   [ ! -e "$ROOT/lane-seed.jsonl" ] || SEED_ARGS=(--seed "$ROOT/lane-seed.jsonl")
   KINDEX=$("$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
-    --home "$TMUX_ROOT/$SLOT-kindex-home" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
+    --home "$KINDEX_HOME" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
   # The seed may not move between the check above and the load: the store must hold what was checked.
   printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c '
 import json, sys
@@ -761,8 +811,6 @@ if (seed.get("digest") or "") != sys.argv[1]:
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
-  BOUNDARY_RECORD=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
-    --role "$ROLE" --cwd "$REPOSITORY") || refuse 77 "author boundary admission failed"
   BOUNDARY_MODEL_ARGS=""
   BOUNDARY_CODEX_ARGS=""
   if [ "$BOUNDARY_RECORD" != null ]; then
@@ -951,7 +999,6 @@ PY
       # and the wrapper stops it if the harness reports per-use billing anyway.
       BILLING=plan
       [ "$METERED" != true ] || BILLING=metered
-      AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
       CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
       SETUP_OUT="$TMUX_ROOT/$SLOT-lane-setup.nul"
       "$FACTORY_PYTHON" "$D/agents.py" lane-setup --agent "$AGENT" --billing "$BILLING" \

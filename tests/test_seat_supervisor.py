@@ -44,8 +44,9 @@ class FakeSeats:
     def signal(self, pid: int, signum: int) -> None:
         self.signals.append((pid, signum))
 
-    def deliver(self, seat: str, text: str) -> None:
+    def deliver(self, seat: str, text: str) -> dict:
         self.delivered.append((seat, text))
+        return {"state": "durable-queued", "agent_acknowledged": False}
 
 
 def run_root(tmp_path: Path) -> Path:
@@ -189,7 +190,7 @@ def test_resume_does_not_override_a_lagging_orchestrator(tmp_path: Path) -> None
 
 def test_correct_delivers_without_pausing(tmp_path: Path) -> None:
     root, seats = run_root(tmp_path), FakeSeats({"validator": 10, "tester": 30})
-    supervisor.control(
+    result = supervisor.control(
         root,
         seats,
         seat="tester",
@@ -199,6 +200,60 @@ def test_correct_delivers_without_pausing(tmp_path: Path) -> None:
         correction="Deploy; the founder asked for it on 2026-10-16.",
     )
     assert seats.signals == [] and seats.delivered[0][0] == "tester"
+    assert result["accepted"] and not result["acknowledged"]
+    assert result["acknowledgements"] == {}  # an empty process result proves no agent read
+
+
+def test_kickoff_correction_avoids_tty_limit_and_reaches_existing_inbox(tmp_path, monkeypatch):
+    root = kickoff_root(tmp_path)
+    (root / "validator").mkdir()
+    seats = supervisor.Seats("fixture")
+    seats.configure(root)
+    monkeypatch.setattr(seats, "external", lambda: {"pid": 11, "started": "fixture"})
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda *a, **k: pytest.fail(
+        "kickoff correction must not depend on terminal input"))
+    text = "FACTORY_CORRECTION synthetic fixture " + "x" * 6000
+    result = seats.deliver("validator", text)
+    row = json.loads((root / "validator/inbox.jsonl").read_text())
+    assert row["text"] == text and row["message_digest"] == result["message_digest"]
+    assert result["state"] == "durable-queued" and not result["agent_acknowledged"]
+    assert (root / "validator/inbox.jsonl").stat().st_mode & 0o077 == 0
+
+
+def test_correction_inbox_alias_is_refused_without_changing_target(tmp_path, monkeypatch):
+    root = kickoff_root(tmp_path)
+    (root / "validator").mkdir()
+    target = tmp_path / "outside"
+    target.write_text("unchanged")
+    (root / "validator/inbox.jsonl").symlink_to(target)
+    seats = supervisor.Seats("fixture")
+    seats.configure(root)
+    monkeypatch.setattr(seats, "external", lambda: {"pid": 11, "started": "fixture"})
+    with pytest.raises(OSError):
+        seats.deliver("validator", "FACTORY_CORRECTION synthetic")
+    assert target.read_text() == "unchanged"
+
+
+def test_correction_write_failure_is_not_accepted_or_acknowledged(tmp_path):
+    root, seats = run_root(tmp_path), FakeSeats({"validator": 10})
+
+    def fail(*args):
+        raise OSError("inbox write failed")
+
+    seats.deliver = fail
+    result = supervisor.control(root, seats, seat="validator", action="correct",
+                                rule="fixture", evidence="fixture", correction="fixture")
+    assert not result["accepted"] and not result["acknowledged"]
+    assert result["delivery_error"] == "inbox write failed"
+
+
+@pytest.mark.parametrize("action,expected", [("correct", 0), ("stop", 75), ("resume", 75)])
+def test_queued_notice_does_not_satisfy_process_acknowledgement(tmp_path, monkeypatch,
+                                                              action, expected):
+    monkeypatch.setattr(supervisor, "control", lambda *a, **k: {
+        "accepted": True, "acknowledged": False})
+    assert supervisor.main(["control", "--root", str(tmp_path), "--session", "fixture",
+                            "--seat", "validator", "--action", action]) == expected
 
 
 def test_only_live_role_seats_are_controlled(tmp_path: Path) -> None:

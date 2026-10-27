@@ -11,6 +11,14 @@ receipt retains the role, contract path and digest. Continuations reuse that rec
 contract drift or role mismatch, and cannot replace it with ambient configuration. A missing
 legacy binding remains explicitly unqualified. It does not become qualified by enabling the
 requirement on a later continuation.
+The equivalent paired `--boundary-contract`/`--boundary-digest` and
+`--signet-contract`/`--signet-digest` launch arguments let a closed custody operation select
+each role's configuration without a shared mutable service environment. They refuse conflicts
+with existing host pins; all normal admission and configuration validation still applies.
+Bound author lanes keep mutable Kindex/client state under their own standalone
+`.git/factory-runtime/<slot>/`, outside the protected host control root and outside commits.
+The host must pin each role's hook/settings files there as protected writes; the database and
+session-state directories remain writable. Legacy lanes keep their original paths.
 
 The kernel wrapper applies to the actual model subprocess. Codex's event/session driver and
 the registry client's process/exit writer stay on the trusted host, outside the model's process
@@ -78,6 +86,13 @@ Before live reliance, the host must:
 - Verify supervisor control and required stop acknowledgement against that actual session.
   OS service/IPC escape coverage, runtime guard failure detection and automatic activation are
   not established by the tests of these modules alone.
+
+Kickoff corrections and lag notices use the existing Validator inbox directly. They do not
+depend on a long terminal line surviving the operating system's input buffer. A correction
+receipt distinguishes accepted/queued transport from agent acknowledgement; it cannot prove
+that the Validator read or applied the text. Stop/resume success still requires observed process
+state, never merely a queued correction. Existing historical acknowledgement claims are not
+rewritten by this change.
 
 No locked evaluator rules, global hooks, credentials or provider safety settings are changed by
 these components. The historical denied script and real restricted transcripts are not test

@@ -30,6 +30,7 @@ import argparse
 import datetime
 import fcntl
 import functools
+import hashlib
 import json
 import os
 import pathlib
@@ -416,7 +417,7 @@ class Seats:
         _append(_folder(self.root) / "seat-process-events.jsonl", {"seat": seat, **prior})
         return dict(prior)
 
-    def deliver(self, seat: str, text: str) -> None:
+    def deliver(self, seat: str, text: str) -> dict[str, Any]:
         # Into the Validator's terminal directly. A headless lane reads no terminal, so its
         # correction goes to the Validator, which owns delivery into lane sessions.
         target, body = seat, text
@@ -425,6 +426,20 @@ class Seats:
                 "validator",
                 f"{text} Deliver this correction into {seat}'s own session now.",
             )
+        if kickoff_validator(self.root):
+            # A macOS canonical tty can discard the newline on a long correction. Writing
+            # the existing kickoff inbox directly avoids that transport, and preserves the
+            # notice while the executing Validator is stopped. Queued is not read/applied.
+            self.external()
+            folder = self.root / "validator"
+            if folder.is_symlink() or not folder.is_dir():
+                raise SupervisorError("Validator inbox directory is unavailable or aliased")
+            path = folder / "inbox.jsonl"
+            digest = hashlib.sha256(body.encode()).hexdigest()
+            _append(path, {"at": _iso(_now()), "text": body, "source": "seat-supervisor",
+                           "message_digest": digest})
+            return {"state": "durable-queued", "inbox": str(path),
+                    "message_digest": digest, "agent_acknowledged": False}
         subprocess.run(
             ["tmux", "send-keys", "-t", f"{self.session}:{target}", "-l", body],
             check=True,
@@ -433,6 +448,7 @@ class Seats:
         subprocess.run(
             ["tmux", "send-keys", "-t", f"{self.session}:{target}", "Enter"], check=True, timeout=10
         )
+        return {"state": "terminal-submitted", "agent_acknowledged": False}
 
 
 def kickoff_validator(root: pathlib.Path) -> bool:
@@ -629,14 +645,21 @@ def control(
         # Typed into the seat's own terminal. A stopped seat holds it in its input until the
         # Orchestrator resumes it, so the correction is the first thing it reads.
         try:
-            seats.deliver(
+            row["delivery"] = seats.deliver(
                 seat, f"FACTORY_CORRECTION from the Orchestrator. Rule: {rule}. "
                 f"Evidence: {evidence} Correction: {correction}")
-        except (OSError, subprocess.SubprocessError) as error:
+        except (OSError, subprocess.SubprocessError, SupervisorError) as error:
             row["delivery_error"] = str(error)
     save_state(root, state)
-    row["acknowledged"] = not fault and "delivery_error" not in row and all(
+    row["acknowledged"] = action != "correct" and not fault and "delivery_error" not in row and all(
         result["acknowledged"] for result in row["acknowledgements"].values())
+    # A successful correct operation queues a notice; it cannot attest that an agent read
+    # or applied it. Keep command acceptance separate from process-state acknowledgements.
+    delivery = row.get("delivery")
+    row["accepted"] = (
+        not fault and "delivery_error" not in row and isinstance(delivery, dict)
+        and delivery.get("state") in {"durable-queued", "terminal-submitted"}
+    ) if action == "correct" else row["acknowledged"]
     _append(_folder(root) / "seat-control.jsonl", row)
     _event(root, f"seat-{action}",
            f"{seat}: {rule or action}; acknowledged={row['acknowledged']}")
@@ -693,7 +716,7 @@ def tick(
         if kickoff and "validator" in panes:
             try:
                 seats.deliver("validator", f"FACTORY_NOTICE from the seat supervisor. {detail}")
-            except (OSError, subprocess.SubprocessError) as error:
+            except (OSError, subprocess.SubprocessError, SupervisorError) as error:
                 _event(root, "validator-notice-failed", str(error), wake=False)
         try:
             notify(
@@ -829,7 +852,8 @@ def main(argv: list[str] | None = None) -> int:
                 correction=args.correction,
             )
             print(json.dumps(row, sort_keys=True))
-            return 0 if row["acknowledged"] else 75
+            succeeded = row.get("accepted" if args.action == "correct" else "acknowledged")
+            return 0 if succeeded is True else 75
         print(json.dumps({"holds": load_state(args.root),
                           "processes": _read_control(_folder(args.root) / "seat-processes.json")},
                          sort_keys=True))

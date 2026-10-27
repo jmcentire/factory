@@ -109,23 +109,62 @@ def test_missing_required_boundary_refuses_author_window(tmp_path):
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS boundary admission")
-def test_launch_retains_model_child_binding(tmp_path):
+@pytest.mark.parametrize("route", ["environment", "fixed-arguments"])
+def test_launch_retains_model_child_binding(tmp_path, route):
     record = binding(tmp_path)
+    pins = {"FACTORY_BOUNDARY_CONTRACT": record["contract"],
+            "FACTORY_BOUNDARY_DIGEST": record["digest"]}
     root, _, tmux_log, launch = _ignite_and_launcher(
         tmp_path, "Retain the admitted author boundary.", {
             "FACTORY_REQUIRE_BOUNDARY": "1",
-            "FACTORY_BOUNDARY_CONTRACT": record["contract"],
-            "FACTORY_BOUNDARY_DIGEST": record["digest"],
+            **(pins if route == "environment" else {}),
         })
-    result = launch("coder")
+    args = (["--boundary-contract", record["contract"], "--boundary-digest", record["digest"]]
+            if route == "fixed-arguments" else [])
+    result = launch("coder", *args)
     assert result.returncode == 0, result.stdout + result.stderr
     rows = [json.loads(row) for row in
             (root / "tmux-lanes/coder-launch.jsonl").read_text().splitlines()]
     assert rows[-1]["kernel_boundary"] == record
+    assert rows[-1]["kindex"]["home"] == str(
+        tmp_path / "standalone-coder/.git/factory-runtime/coder/kindex")
+    assert not (root / "tmux-lanes/coder-kindex-home").exists()
     command = next(row for row in tmux_log.read_text().splitlines() if "-n coder" in row)
     assert command.count("--boundary-record") == 1
     assert command.index("codex_lane_session.py") < command.index("--boundary-record")
     assert "--boundary-role" not in command  # outer trusted writer is not the model child
+
+
+@pytest.mark.parametrize("family", ["boundary", "signet"])
+def test_cli_configuration_cannot_replace_host_pin(tmp_path, family):
+    _, _, tmux_log, launch = _ignite_and_launcher(
+        tmp_path, "Refuse a conflicting role configuration.", {
+            f"FACTORY_{family.upper()}_CONTRACT": "/host-selected",
+            f"FACTORY_{family.upper()}_DIGEST": "a" * 64,
+        })
+    result = launch("coder", f"--{family}-contract", "/replacement",
+                    f"--{family}-digest", "b" * 64)
+    assert result.returncode == 77 and "conflicts with host binding" in result.stderr
+    assert not any("-n coder" in row for row in tmux_log.read_text().splitlines())
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS boundary admission")
+def test_private_runtime_cannot_alias_another_directory(tmp_path):
+    record = binding(tmp_path)
+    _, _, tmux_log, launch = _ignite_and_launcher(
+        tmp_path, "Keep mutable client state inside its own lane.", {
+            "FACTORY_BOUNDARY_CONTRACT": record["contract"],
+            "FACTORY_BOUNDARY_DIGEST": record["digest"],
+        })
+    lane = tmp_path / "standalone-coder"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    elsewhere = tmp_path / "another-runtime"
+    elsewhere.mkdir()
+    (lane / ".git/factory-runtime").symlink_to(elsewhere)
+    result = launch("coder")
+    assert result.returncode == 77 and "private runtime" in result.stderr
+    assert not list(elsewhere.iterdir())
+    assert not any("-n coder" in row for row in tmux_log.read_text().splitlines())
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS boundary admission")
