@@ -181,7 +181,7 @@ def release(plan: custody.Plan, receipts: pathlib.Path, denial_id: str,
         orchestrator_channel.require_current(root)
         # A later cadence no-op can coexist with an earlier unresolved BLOCK. Use the
         # existing receipted attention gate, not the latest report's label alone.
-        check_lane_admission(root, "validator")
+        check_lane_admission(root, plan.document.get("author_role", "validator"))
         rows = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
         report = rows[-1] if rows else {}
         assessment = report.get("assessment", {})

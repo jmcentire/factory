@@ -205,11 +205,24 @@ def evaluate_host(client: str, payload: Any, address: str, plan_digest: str) -> 
 
 def configuration(client: str, path: pathlib.Path, expected: str, python: pathlib.Path,
                   *, custody_socket: str | None = None,
-                  custody_digest: str | None = None) -> dict:
+                  custody_digest: str | None = None,
+                  author_config: str | None = None,
+                  author_digest: str | None = None) -> dict:
     """Build candidate client settings; does not install them or approve hook trust."""
     contract(path, expected)
     arguments = [str(python), str(pathlib.Path(__file__).resolve()),
                  "--client", client, "--contract", str(path), "--digest", expected]
+    if author_config is not None or author_digest is not None:
+        if custody_socket is not None or custody_digest is not None:
+            raise ValueError("author and Validator custody must not be combined")
+        import author_custody
+        if not author_config or not author_digest:
+            raise ValueError("incomplete author custody binding")
+        configured = author_custody.configuration(pathlib.Path(author_config), author_digest)
+        if (configured["client"] != client or configured["policy"]["contract"] != str(path)
+                or configured["policy"]["contract_digest"] != expected):
+            raise ValueError("author hook differs from its custody policy")
+        arguments += ["--author-config", author_config, "--author-digest", author_digest]
     if custody_socket is not None or custody_digest is not None:
         if (not custody_socket or not pathlib.Path(custody_socket).is_absolute()
                 or not custody_digest or not re.fullmatch(r"[0-9a-f]{64}", custody_digest)):
@@ -236,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--digest")
     parser.add_argument("--custody-socket")
     parser.add_argument("--custody-digest")
+    parser.add_argument("--author-config")
+    parser.add_argument("--author-digest")
     parser.add_argument("--resume-record", type=pathlib.Path)
     parser.add_argument("--render-codex", action="store_true",
                         help="render one explicit Codex config override; does not approve trust")
@@ -263,7 +278,9 @@ def main(argv: list[str] | None = None) -> int:
             settings = configuration(args.client, args.contract, args.digest,
                                      pathlib.Path(sys.executable),
                                      custody_socket=args.custody_socket,
-                                     custody_digest=args.custody_digest)
+                                     custody_digest=args.custody_digest,
+                                     author_config=args.author_config,
+                                     author_digest=args.author_digest)
             override = "hooks.PreToolUse=" + _toml_value(settings["hooks"]["PreToolUse"])
             if args.check_codex_cwd:
                 from codex_hook_admission import check_command
@@ -280,7 +297,15 @@ def main(argv: list[str] | None = None) -> int:
         raw = sys.stdin.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise ValueError("hook input exceeds bound")
-        if args.custody_socket is not None or args.custody_digest is not None:
+        if args.author_config is not None or args.author_digest is not None:
+            if (not args.author_config or not args.author_digest
+                    or args.custody_socket is not None or args.custody_digest is not None):
+                raise ValueError("invalid author custody binding")
+            import author_custody
+            output = author_custody.evaluate(
+                pathlib.Path(args.author_config), args.author_digest, args.client,
+                json.loads(raw), args.contract, args.digest)
+        elif args.custody_socket is not None or args.custody_digest is not None:
             if not args.custody_socket or not args.custody_digest:
                 raise ValueError("incomplete policy custody binding")
             output = evaluate_host(args.client, json.loads(raw),

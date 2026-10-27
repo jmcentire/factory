@@ -613,11 +613,16 @@ def prepare_lane(name: str, *, billing: str, home: Path, model: str,
     guard_path = environ.get("FACTORY_SIGNET_CONTRACT", "")
     guard_digest = environ.get("FACTORY_SIGNET_DIGEST", "")
     if bool(guard_path) != bool(guard_digest) or (
-            environ.get("FACTORY_REQUIRE_SIGNET") == "1" and not guard_path):
+            (environ.get("FACTORY_REQUIRE_SIGNET") == "1"
+             or environ.get("FACTORY_REQUIRE_AUTHOR_CUSTODY") == "1"
+             or environ.get("FACTORY_AUTHOR_CUSTODY_CONFIG")
+             or environ.get("FACTORY_AUTHOR_CUSTODY_DIGEST")) and not guard_path):
         raise ValueError("required Signet hook contract and digest are missing")
     if guard_path:
         settings = signet_hooks.configuration(name, Path(guard_path), guard_digest,
-                                             Path(sys.executable))
+                                             Path(sys.executable),
+            author_config=environ.get("FACTORY_AUTHOR_CUSTODY_CONFIG"),
+            author_digest=environ.get("FACTORY_AUTHOR_CUSTODY_DIGEST"))
         if name == "claude":
             filename = _write(home / "signet-settings.json", json.dumps(settings))
             setup = LaneSetup(env=setup.env, argv=(*setup.argv, "--settings", str(filename)))

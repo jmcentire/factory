@@ -203,6 +203,14 @@ validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
 PY
 BOUNDARY_MODEL_ARGS=""
 BOUNDARY_CODEX_ARGS=""
+AUTHOR_CUSTODY=$("$FACTORY_PYTHON" - "$D" "$ROOT" "$SLOT" "$LANE" "$AGENT" "$REPOSITORY" "$BOUNDARY_RECORD" <<'PY'
+import json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import author_custody
+print(json.dumps(author_custody.retained(pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+    sys.argv[5], pathlib.Path(sys.argv[6]), json.loads(sys.argv[7]))))
+PY
+) || { echo "lane-message: author custody hold or binding prevents continuation" >&2; exit 77; }
 if [ "$BOUNDARY_RECORD" != null ]; then
   printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$LANE"
   printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
@@ -557,6 +565,12 @@ PY
         "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
         "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
   esac
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    AUTHOR_CONFIG=$(printf '%s' "$AUTHOR_CUSTODY" | "$FACTORY_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["config"])')
+    AUTHOR_DIGEST=$(printf '%s' "$AUTHOR_CUSTODY" | "$FACTORY_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+    printf -v RESUME_CMD '%q %q --config %q --digest %q --shell-command %q' \
+      "$FACTORY_PYTHON" "$D/author_custody.py" "$AUTHOR_CONFIG" "$AUTHOR_DIGEST" "$RESUME_CMD"
+  fi
   # The new life reads only what the resumed turn writes: the log's size now, before the turn
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0

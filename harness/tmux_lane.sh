@@ -70,6 +70,8 @@ BOUNDARY_ARG_PATH=""
 BOUNDARY_ARG_DIGEST=""
 SIGNET_ARG_PATH=""
 SIGNET_ARG_DIGEST=""
+AUTHOR_CUSTODY_ARG_PATH=""
+AUTHOR_CUSTODY_ARG_DIGEST=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -97,18 +99,21 @@ while [ "$#" -gt 0 ]; do
     --boundary-digest) BOUNDARY_ARG_DIGEST="$2"; shift 2 ;;
     --signet-contract) SIGNET_ARG_PATH="$2"; shift 2 ;;
     --signet-digest) SIGNET_ARG_DIGEST="$2"; shift 2 ;;
+    --author-custody-contract) AUTHOR_CUSTODY_ARG_PATH="$2"; shift 2 ;;
+    --author-custody-digest) AUTHOR_CUSTODY_ARG_DIGEST="$2"; shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 # Closed host custody operations pass each role's fixed pins without changing the server's
 # shared environment. A CLI pin may fill an absent setting, never replace a conflicting one.
-for FAMILY in BOUNDARY SIGNET; do
+for FAMILY in BOUNDARY SIGNET AUTHOR_CUSTODY; do
   PATH_ARG="${FAMILY}_ARG_PATH"; DIGEST_ARG="${FAMILY}_ARG_DIGEST"
   if [ -n "${!PATH_ARG}" ] || [ -n "${!DIGEST_ARG}" ]; then
     [ -n "${!PATH_ARG}" ] && [ -n "${!DIGEST_ARG}" ] || {
       echo "tmux-lane: $FAMILY contract and digest must be supplied together" >&2; exit 64;
     }
     PATH_ENV="FACTORY_${FAMILY}_CONTRACT"; DIGEST_ENV="FACTORY_${FAMILY}_DIGEST"
+    [ "$FAMILY" != AUTHOR_CUSTODY ] || PATH_ENV="FACTORY_AUTHOR_CUSTODY_CONFIG"
     for PAIR in PATH DIGEST; do
       ARG_NAME="${PAIR}_ARG"; ENV_NAME="${PAIR}_ENV"
       ARG_NAME="${!ARG_NAME}"; ENV_NAME="${!ENV_NAME}"
@@ -817,7 +822,21 @@ if (seed.get("digest") or "") != sys.argv[1]:
     printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$ROLE"
     printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
   fi
-  PLANNED=$(LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  AUTHOR_CUSTODY=$("$FACTORY_PYTHON" - "$D" "$ROLE" "$AGENT" "$REPOSITORY" "$BOUNDARY_RECORD" "$ROOT" <<'PY'
+import json, os, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import author_custody
+print(json.dumps(author_custody.select(dict(os.environ), sys.argv[2], sys.argv[3],
+    pathlib.Path(sys.argv[4]), json.loads(sys.argv[5]), pathlib.Path(sys.argv[6]))))
+PY
+  ) || refuse 77 "required author custody admission failed"
+  AUTHOR_HOOK_ARGS=()
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] && [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || \
+      refuse 77 "author custody requires its Signet hook binding"
+    AUTHOR_HOOK_ARGS=(--author-config "$FACTORY_AUTHOR_CUSTODY_CONFIG" --author-digest "$FACTORY_AUTHOR_CUSTODY_DIGEST")
+  fi
+  PLANNED=$(LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -911,6 +930,7 @@ print(json.dumps({
     "repository_preflight": json.loads(preflight),
     "boundary": "operator-owned-tmux-unqualified",
     "kernel_boundary": json.loads(os.environ["LANE_KERNEL_BOUNDARY"]),
+    "author_custody": json.loads(os.environ["LANE_AUTHOR_CUSTODY"]),
     "host_git_after_agent_start": "forbidden",
 }, sort_keys=True, separators=(",", ":")))
 PY
@@ -928,7 +948,7 @@ PY
       codex|codex-interactive)
         SIGNET_OVERRIDE=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/signet_hooks.py" --client codex \
           --contract "$FACTORY_SIGNET_CONTRACT" --digest "$FACTORY_SIGNET_DIGEST" \
-          --render-codex --check-codex-cwd "$REPOSITORY") || \
+          --render-codex --check-codex-cwd "$REPOSITORY" ${AUTHOR_HOOK_ARGS[@]+"${AUTHOR_HOOK_ARGS[@]}"}) || \
           refuse 77 "required Signet hook configuration or exact Codex hook trust is unavailable" \
             "review the host-pinned hook with Codex /hooks; no lane was started"
         printf -v SIGNET_ARGS -- '-c %q -c %q' 'features.hooks=true' "$SIGNET_OVERRIDE"
@@ -1026,6 +1046,11 @@ PY
       printf -v LANE_CMD '%s %s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
         "$ENV_PREFIX" "$WRAP" "$CREDENTIALS" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$PROMPT" "$QUOTED_TURN" ;;
   esac
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    printf -v LANE_CMD '%q %q --config %q --digest %q --shell-command %q' \
+      "$FACTORY_PYTHON" "$D/author_custody.py" "$FACTORY_AUTHOR_CUSTODY_CONFIG" \
+      "$FACTORY_AUTHOR_CUSTODY_DIGEST" "$LANE_CMD"
+  fi
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
 

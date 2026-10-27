@@ -754,6 +754,32 @@ dependency-free (bash + python3 + git):
   Validator and a Codex Orchestrator (agy takes no model flag; select its model inside agy), and
   `tmux_lane.sh --model` names a lane's. Unset, each agent runs its own configured default. The
   qualified dispatch path takes its model from the runner manifest.
+- `harness/author_custody.py` binds a Coder or Tester to its own policy-only custody
+  service. The canonical tmux launch takes `--author-custody-contract PATH` and
+  `--author-custody-digest SHA256` (or the fixed `FACTORY_AUTHOR_CUSTODY_CONFIG` /
+  `FACTORY_AUTHOR_CUSTODY_DIGEST` environment). A conflicting CLI pin is refused.
+  `FACTORY_REQUIRE_AUTHOR_CUSTODY=1`, or a kernel-bound lane requiring Signet,
+  refuses admission without that binding. Legacy direct hooks are not evidence of
+  persistent custody. The host configuration pins the role, client, repository,
+  run-specific policy binding, boundary, source hashes, private state directory and
+  allowed Unix socket. It must protect the configuration, state, socket directory
+  and enforcement source directories from author writes.
+  The host holds the new child behind a pipe until PID/start identity and immutable
+  runtime receipts exist and the separate broker responds. The broker is outside
+  that child's process tree; it accepts policy evaluation only, never execution.
+  Hooks carry explicit `--author-config` / `--author-digest` pins and use the protected
+  runtime binding rather than model-controlled environment. Missing/stale bindings,
+  wrong clients, foreign peers and unavailable brokers fail closed. Resume uses the
+  retained launch binding and the same receipt store; unresolved denials or unknown
+  previous shutdown prevent continuation. A store cannot be reassigned to another
+  role, client, project or run. Release uses the existing genuine Orchestrator
+  disposition and that author's attention gate, not the Validator's custody identity.
+  Cleanup records actual outcomes for observed PID/start identities, including retained
+  orphans. Unknown observations remain unverified. This is sampled process custody,
+  not a kernel job object: a descendant that forks and detaches entirely between
+  observations is not thereby proven stopped. Provider hook loading/coverage and
+  kernel information separation still require actual qualification. Changed hook
+  definitions require the client's normal exact trust review; this code grants no trust.
 - `harness/policy_custody.py` — optional host-bound Signet evaluation in the existing
   `lane_custody.py` service. The admitted seat sends tool metadata for evaluation, never
   execution. The host pins the client, evaluator contract, implementation hashes and run.

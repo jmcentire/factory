@@ -78,7 +78,7 @@ class Plan:
     def parse(cls, value: Any) -> Plan:
         fields = {"schema", "seat", "factory_home", "python", "cwd", "operations"}
         if (not isinstance(value, dict) or not fields <= set(value)
-                or set(value) - fields - {"policy"}
+                or set(value) - fields - {"policy", "author_role"}
                 or value["schema"] != SCHEMA):
             raise CustodyError("invalid custody plan")
         _identity(value["seat"])
@@ -89,8 +89,12 @@ class Plan:
             raise CustodyError("custody runtime is unavailable")
         if cwd != home:
             raise CustodyError("custody must execute from the protected Factory checkout")
+        author = value.get("author_role")
+        if author is not None and (author not in ("coder", "tester") or "policy" not in value):
+            raise CustodyError("invalid author policy-only binding")
         operations = value["operations"]
-        if not isinstance(operations, dict) or not operations or len(operations) > 256:
+        if (not isinstance(operations, dict) or len(operations) > 256
+                or (not operations and author is None) or (author is not None and operations)):
             raise CustodyError("host must supply a bounded nonempty operation registry")
         for name, operation in operations.items():
             if not isinstance(name, str) or not _ID.fullmatch(name):
@@ -315,8 +319,10 @@ def serve(plan: Plan, address: pathlib.Path, receipts: pathlib.Path, *, once: bo
                         if isinstance(request, dict) and request.get("kind") == "policy":
                             import policy_custody
                             result = policy_custody.evaluate(plan, request, receipts)
-                        else:
+                        elif "author_role" not in plan.document:
                             result = execute(plan, request, receipts)
+                        else:
+                            raise CustodyError("author custody accepts policy evaluation only")
                     except (CustodyError, OSError, ValueError, TypeError,
                             subprocess.SubprocessError) as error:
                         result = {"status": "refused", "reason": str(error)}
