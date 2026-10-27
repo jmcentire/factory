@@ -670,8 +670,9 @@ def run_lane(
 
     With ``session_agent``, the first session id the harness streams is written to
     ``session_file`` the moment it appears, so a turn the watchdog ends mid-flight can be resumed.
-    With ``plan_only``, a harness that announces per-use API billing in its stream is stopped at
-    once and the run ends ``BILLING_REFUSED``: a plan lane never spends on an API key.
+    With ``plan_only``, reject the selected harness's API-routing variables before starting it.
+    A later stream announcement of per-use API billing also stops the lane with
+    ``BILLING_REFUSED``. Neither check proves containment of credentials in host files or shells.
     """
 
     argv = list(command)
@@ -681,6 +682,11 @@ def run_lane(
         raise ValueError("lane command is empty")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", slot):
         raise ValueError("invalid process receipt slot")
+    chosen = agents.harness(session_agent) if session_agent else None
+    if plan_only:
+        if chosen is None:
+            raise ValueError("plan-only lane requires a registered session agent")
+        chosen.admitted_env("plan")  # Reject harnesses without a subscription route.
     if prompt is not None:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -691,10 +697,15 @@ def run_lane(
             name, sep, value = line.partition("=")
             if sep and name.isidentifier():
                 child_env[name] = value
+    if plan_only and chosen is not None:
+        forbidden = sorted(name for name in chosen.api_env if child_env.get(name))
+        if forbidden:
+            # Inspect the final environment, including env_file overrides. Never log values.
+            raise ValueError("plan-only lane contains API-routing variables: "
+                             + ", ".join(forbidden))
     stopped = False
     refused_billing = ""
     session_seen = False
-    chosen = agents.harness(session_agent) if session_agent else None
     process: subprocess.Popen[bytes] | None = None
 
     def record_worker(status: str) -> None:

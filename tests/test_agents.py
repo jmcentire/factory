@@ -237,6 +237,45 @@ def _streaming_child(lines: list[str]) -> list[str]:
     return [sys.executable, "-c", body]
 
 
+@pytest.mark.parametrize(("agent", "variable"), [
+    (name, variable) for name, harness in agents.HARNESSES.items() if harness.plan
+    for variable in harness.api_env
+])
+@pytest.mark.parametrize("source", ["inherited", "env-file"])
+def test_plan_wrapper_refuses_api_route_before_child_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str, variable: str, source: str,
+) -> None:
+    marker = tmp_path / "started"
+    secret = "synthetic-credential-not-for-logs"
+    env_file = None
+    if source == "inherited":
+        monkeypatch.setenv(variable, secret)
+    else:
+        env_file = tmp_path / "creds.env"
+        env_file.write_text(f"{variable}={secret}\n", encoding="utf-8")
+        env_file.chmod(0o600)
+    with pytest.raises(ValueError, match="API-routing variables") as raised:
+        lane_agent.run_lane(
+            [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent=agent, plan_only=True, env_file=env_file,
+        )
+    assert variable in str(raised.value) and secret not in str(raised.value)
+    assert not marker.exists()
+    assert not (tmp_path / "coder-process.json").exists()
+    assert not (tmp_path / "exits.jsonl").exists()
+
+
+@pytest.mark.parametrize("agent", ["", "prime-agent"])
+def test_plan_wrapper_requires_a_subscription_capable_identity(tmp_path: Path, agent: str) -> None:
+    with pytest.raises(ValueError, match="session agent|signed-in plan"):
+        lane_agent.run_lane(
+            [sys.executable, "-c", "raise AssertionError('must not start')"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent=agent, plan_only=True,
+        )
+
+
 def test_wrapper_records_the_session_as_soon_as_it_streams(tmp_path: Path) -> None:
     session_file = tmp_path / "coder-thread-id"
     rc = lane_agent.run_lane(
