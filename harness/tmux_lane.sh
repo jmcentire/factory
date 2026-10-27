@@ -861,6 +861,25 @@ PY
   append_event "$PLANNED"
 
   LOCAL_ARGS=""
+  # Carry only the approved evaluator hook, never the operator's full hook/MCP configuration.
+  # This settings selection does not waive Codex's hook trust review or attest runtime loading.
+  if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
+      [ -n "${FACTORY_SIGNET_DIGEST:-}" ]; then
+    [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] && [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || \
+      refuse 77 "required Signet hook contract and digest are missing"
+    case "$AGENT" in
+      codex|codex-interactive)
+        SIGNET_OVERRIDE=$("$FACTORY_PYTHON" "$D/signet_hooks.py" --client codex \
+          --contract "$FACTORY_SIGNET_CONTRACT" --digest "$FACTORY_SIGNET_DIGEST" \
+          --render-codex) || refuse 77 "required Signet hook configuration is invalid"
+        printf -v SIGNET_ARGS -- '-c %q -c %q' 'features.hooks=true' "$SIGNET_OVERRIDE"
+        ;;
+      claude|cursor-agent) SIGNET_ARGS="" ;;
+      *) refuse 77 "required Signet client adapter is not qualified" ;;
+    esac
+  else
+    SIGNET_ARGS=""
+  fi
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
   elif [ "$MODEL_SOURCE" = operator ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
@@ -870,10 +889,15 @@ PY
     printf -v QUOTED -- '-c %q' "$OVERRIDE"
     LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$QUOTED"
   done
+  [ -z "$SIGNET_ARGS" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$SIGNET_ARGS"
   # A Codex lane's --effort travels as a config override, last so it wins; one closed-set word.
-  if [ "$AGENT" = codex ] && [ -n "$EFFORT" ]; then
-    LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
+  if [ "$AGENT" = codex ]; then
+    [ -z "$EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
     : > "$TMUX_ROOT/$SLOT-lane-setup.nul"
+    if [ -n "$SIGNET_ARGS" ]; then
+      printf '%s\0' '-c' 'features.hooks=true' '-c' "$SIGNET_OVERRIDE" > \
+        "$TMUX_ROOT/$SLOT-lane-setup.nul"
+    fi
     "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
       --agent codex --model "$MODEL" --effort "$EFFORT" --billing plan \
       --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" || \

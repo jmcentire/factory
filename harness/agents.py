@@ -36,6 +36,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+_HARNESS_ROOT = str(Path(__file__).resolve().parent)
+if _HARNESS_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_ROOT)
+import signet_hooks  # noqa: E402
+
 BILLINGS = ("plan", "metered")
 TURN_RECORD = "factory-lane-turn/1"
 # The address Ollama serves its Anthropic-compatible Messages API on; claude-ollama talks to
@@ -605,6 +610,21 @@ def prepare_lane(name: str, *, billing: str, home: Path, model: str,
     setup = chosen.lane_setup(home, model=model, server=server,
                               operator_home=Path(environ.get("HOME") or Path.home()),
                               environ=environ)
+    guard_path = environ.get("FACTORY_SIGNET_CONTRACT", "")
+    guard_digest = environ.get("FACTORY_SIGNET_DIGEST", "")
+    if bool(guard_path) != bool(guard_digest) or (
+            environ.get("FACTORY_REQUIRE_SIGNET") == "1" and not guard_path):
+        raise ValueError("required Signet hook contract and digest are missing")
+    if guard_path:
+        settings = signet_hooks.configuration(name, Path(guard_path), guard_digest,
+                                             Path(sys.executable))
+        if name == "claude":
+            filename = _write(home / "signet-settings.json", json.dumps(settings))
+            setup = LaneSetup(env=setup.env, argv=(*setup.argv, "--settings", str(filename)))
+        elif name == "cursor-agent":
+            _write(Path(setup.env["CURSOR_CONFIG_DIR"]) / "hooks.json", json.dumps(settings))
+        else:
+            raise ValueError("required Signet client adapter is not qualified")
     values = {variable: environ[variable] for variable in admitted if environ.get(variable)}
     values.update(setup.env)
     write_env_file(env_file, values)

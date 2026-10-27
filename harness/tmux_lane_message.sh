@@ -424,6 +424,12 @@ if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) t
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
+  # Retain only the launch's explicit guard configuration. Do not re-read operator hooks or
+  # accept arbitrary extra arguments as a way around resume's fixed permission profile.
+  GUARD_RESUME=$("$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD") || {
+    echo "lane-message: retained Signet configuration is malformed" >&2; exit 70;
+  }
+  [ -z "$GUARD_RESUME" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$GUARD_RESUME"
 fi
 RESUME_ARGS="$LOCAL_ARGS"
 for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do

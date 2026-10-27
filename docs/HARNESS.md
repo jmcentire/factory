@@ -459,6 +459,17 @@ machine, before the agent starts and while it runs:
   claude-ollama, an `XDG_CONFIG_HOME` for Muse, and for cursor-agent and agy a private `HOME`
   whose `Library` is the operator's (the keychain sign-in) and whose dot-files are the lane's.
   `--effort` sets the reasoning effort; `<slot>-turn.json` records how to resume the session.
+  When `FACTORY_REQUIRE_SIGNET=1`, admission also requires `FACTORY_SIGNET_CONTRACT` and
+  `FACTORY_SIGNET_DIGEST`. `signet_hooks.py` carries that exact installed-evaluator binding into
+  Claude's explicit settings, Cursor's private hooks file, or Codex's explicit configuration
+  overrides, including resume. It never copies the operator's other hooks or changes policy.
+  Unsupported clients refuse a required binding. Missing/changed evaluator, invalid output and
+  evaluator failure produce a denial; an ASK stays blocked on events that cannot enforce ASK.
+  Cursor uses dedicated shell/MCP hooks so MCP server identity reaches Kindex's prerequisite
+  rule without duplicate evaluation; its shell hook can still request a genuine scoped approval.
+  **This is configuration plumbing, not runtime qualification.** Actual hook loading, Codex's
+  hook trust and failure semantics, and scoped Kindex use still require client receipts. Codex
+  can fail open when the hook process itself fails, so hooks alone are not a security boundary.
 - **Every resumable lane, not only Codex.** The wrapper records the session id the harness streams
   first (`--session-agent`, `<slot>-thread-id`), so the watcher's wrap-up and review pauses, and
   every lane message, resume a registry lane's own session (`--resume`, `--session-id` or
