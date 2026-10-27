@@ -533,13 +533,8 @@ def _state_path(root: pathlib.Path) -> pathlib.Path:
     return _folder(root) / "seat-state.json"
 
 
-@_locked
-def bind_validator(root: pathlib.Path, session: str, pid: int, started: str, pane: str) -> dict:
-    """Bind an explicitly named execution process, never infer it from a transcript/mirror.
-
-    The caller supplies the observed start identity and exact pane ID. This records custody,
-    not model/role attestation. A different binding cannot overwrite this run's history.
-    """
+def _validator_binding(root: pathlib.Path, session: str, pid: int,
+                       started: str, pane: str) -> dict:
     if not pane.startswith("%") or not pane[1:].isdigit() or pid <= 1:
         raise SupervisorError("binding needs an exact %pane and non-system PID")
     table = process_snapshot()
@@ -558,15 +553,99 @@ def bind_validator(root: pathlib.Path, session: str, pid: int, started: str, pan
     identity = {"pid": pid, "started": started}
     if identity not in tree:
         raise SupervisorError("Validator process is not in the named pane")
-    binding = {"schema": "factory-validator-process/1", "root": str(root.resolve()),
-               "session": session, "identity": identity, "pane": pane, "pane_pid": pane_pid,
-               "pane_started": table[pane_pid]["started"]}
+    return {"schema": "factory-validator-process/1", "root": str(root.resolve()),
+            "session": session, "identity": identity, "pane": pane, "pane_pid": pane_pid,
+            "pane_started": table[pane_pid]["started"]}
+
+
+@_locked
+def bind_validator(root: pathlib.Path, session: str, pid: int, started: str, pane: str) -> dict:
+    """Initial binding cannot overwrite custody. Maintenance uses explicit rebind instead."""
+    binding = _validator_binding(root, session, pid, started, pane)
     path = _folder(root) / "validator-process.json"
     previous = _read_control(path)
     if previous and previous != binding:
         raise SupervisorError("different Validator binding already exists; refusing overwrite")
     _store(path, binding)
     return binding
+
+
+@_locked
+def rebind_validator(root: pathlib.Path, session: str, pid: int, started: str, pane: str,
+                     previous_pid: int, previous_started: str, assessment_digest: str) -> dict:
+    """Host-only handoff to a paused incarnation; retain old custody and all stop reasons.
+
+    This neither launches nor resumes a worker, nor clears attention/policy holds. All known
+    prior descendants must be gone. The caller separately qualifies model, account and hooks.
+    """
+    import orchestrator_channel
+    from lane_custody import _save_once
+
+    binding = _validator_binding(root, session, pid, started, pane)
+    old_identity = {"pid": previous_pid, "started": previous_started}
+    if old_identity == binding["identity"]:
+        raise SupervisorError("rebind requires a different process incarnation")
+    subject = {"previous_identity": old_identity, "binding": binding}
+    digest = hashlib.sha256(json.dumps(subject, sort_keys=True).encode()).hexdigest()
+    folder = _folder(root)
+    receipt_path = folder / f"validator-rebind-{digest}.json"
+    retained = _read_control(receipt_path)
+    current = _read_control(folder / "validator-process.json")
+    records = _read_control(folder / "seat-processes.json")
+    previous = retained.get("previous_custody", records.get("validator", {}))
+    old_binding = retained.get("previous_binding", current)
+    if (old_binding.get("identity") != old_identity
+            or old_binding.get("session") != session
+            or old_binding.get("root") != str(root.resolve())
+            or previous.get("identity") != old_identity
+            or not isinstance(previous.get("identities"), list)
+            or old_identity not in previous["identities"]
+            or current not in (old_binding, binding)):
+        raise SupervisorError("rebind does not match retained Validator custody")
+    if retained and retained.get("subject") != subject:
+        raise SupervisorError("rebind receipt does not match requested handoff")
+    table = process_snapshot()
+    if table is None:
+        raise SupervisorError("rebind requires observed prior exit and paused replacement")
+    known = process_tree(table, previous["identities"])
+    if any(i["pid"] in table and table[i["pid"]]["started"] == i["started"]
+           and not table[i["pid"]]["state"].startswith("Z") for i in known):
+        raise SupervisorError("prior Validator or tracked descendants remain live")
+    new_tree = process_tree(table, [binding["identity"]])
+    if not new_tree or any(i["pid"] not in table
+                           or table[i["pid"]]["started"] != i["started"]
+                           or "T" not in table[i["pid"]]["state"] for i in new_tree):
+        raise SupervisorError("replacement Validator tree must already be paused")
+    try:
+        orchestrator_channel.require_current(root)
+    except orchestrator_channel.OrchestratorChannelError as error:
+        raise SupervisorError("rebind supervision is not current") from error
+    reports = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
+    latest = reports[-1] if reports else {}
+    if (latest.get("assessment_digest") != assessment_digest
+            or latest.get("assessment", {}).get("decision") != "no-op"):
+        raise SupervisorError("rebind requires the current accepted supervision disposition")
+    if not retained:
+        retained = {"subject": subject, "previous_binding": old_binding,
+                    "previous_custody": previous, "observed_exited": known,
+                    "assessment_digest": assessment_digest, "at": _iso(_now())}
+        _save_once(receipt_path, retained)
+    if current == binding:
+        return {"receipt": str(receipt_path), "binding": binding, "replayed": True}
+    state = load_state(root)
+    reasons = state.setdefault("validator", [])
+    if "stop:validator-rebind-validation" not in reasons:
+        reasons.append("stop:validator-rebind-validation")
+    save_state(root, state)
+    # Receipt first, then pending custody, then binding. A crash at any point leaves the
+    # replacement paused, and exact retry completes from the immutable prior-custody receipt.
+    records["validator"] = {"identity": binding["identity"], "identities": new_tree,
+                            "requested": "stop", "attempts": {}, "acknowledged": False,
+                            "state": "pending", "requested_at": _iso(_now()),
+                            "rebind_receipt": str(receipt_path)}
+    _store(folder / "seat-processes.json", records)
+    _store(folder / "validator-process.json", binding)
+    return {"receipt": str(receipt_path), "binding": binding, "replayed": False}
 
 
 def load_state(root: pathlib.Path) -> dict[str, list[str]]:
@@ -816,11 +895,25 @@ def main(argv: list[str] | None = None) -> int:
     bind.add_argument("--pid", required=True, type=int)
     bind.add_argument("--started", required=True)
     bind.add_argument("--pane", required=True)
+    rebind = sub.add_parser("rebind-validator", help="host-only paused process handoff")
+    rebind.add_argument("--root", required=True, type=pathlib.Path)
+    rebind.add_argument("--session", required=True)
+    rebind.add_argument("--pid", required=True, type=int)
+    rebind.add_argument("--started", required=True)
+    rebind.add_argument("--pane", required=True)
+    rebind.add_argument("--previous-pid", required=True, type=int)
+    rebind.add_argument("--previous-started", required=True)
+    rebind.add_argument("--assessment-digest", required=True)
     check = sub.add_parser("check-validator")
     check.add_argument("--root", required=True, type=pathlib.Path)
     check.add_argument("--session", required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command == "rebind-validator":
+            print(json.dumps(rebind_validator(
+                args.root, args.session, args.pid, args.started, args.pane,
+                args.previous_pid, args.previous_started, args.assessment_digest), sort_keys=True))
+            return 0
         if args.command == "bind-validator":
             print(json.dumps(bind_validator(args.root, args.session, args.pid, args.started,
                                             args.pane), sort_keys=True))

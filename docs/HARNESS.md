@@ -726,6 +726,14 @@ dependency-free (bash + python3 + git):
   processes, not their served models. Individual PID/start revalidation avoids process-group
   spill and known PID reuse, but POSIX signalling retains a check-to-signal race; observed-tree
   tracking cannot prove containment of children that detach between polls.
+  `rebind-validator` is the host-only maintenance path for a client that must restart to load
+  updated session hooks. It requires the exact prior identity/custody, observed exit of every
+  tracked prior descendant, an already paused replacement tree in the declared pane, and a
+  current accepted Orchestrator no-op disposition. Before moving the binding it durably retains
+  the old binding/custody and handoff subject. Existing holds remain, and a new validation hold
+  keeps the replacement paused until separately qualified. Interrupted persistence can be
+  completed against that same immutable subject with fresh supervision. This operation never
+  launches/resumes the client, clears an attention/policy block, or attests its model/account.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.

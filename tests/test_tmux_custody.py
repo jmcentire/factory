@@ -243,3 +243,40 @@ def test_real_tmux_terminal_exit_is_never_acknowledged_as_resumable_pause(fixtur
     seats.configure(fixture.root)
     assert 'not paused' in seats.transition('validator', identity['pid'], False)['error']
     assert fixture.tick()['holds']
+
+
+def test_real_tmux_rebind_preserves_holds_until_explicit_validation_resume(fixture):
+    from tests.test_orchestrator_channel import assessment
+    channel = importlib.import_module('orchestrator_channel')
+    fixture.setup_roles()
+    fixture.control('stop')
+    wait_for(lambda: set(fixture.tick()['paused']) == {'validator', 'coder', 'tester'})
+    old = fixture.workers['external']
+    w.signal_identity(old, signal.SIGKILL)  # only a recorded disposable counter
+    wait_for(lambda: old['pid'] not in w.process_snapshot())
+    new = fixture.launch('replacement')
+    w.signal_identity(new, signal.SIGSTOP)
+    wait_for(lambda: 'T' in w.process_snapshot()[new['pid']]['state'])
+    metadata = json.loads((fixture.root/'harness.json').read_text())
+    metadata.update(orchestrator_mode='resident-monitoring', status='open')
+    (fixture.root/'harness.json').write_text(json.dumps(metadata))
+    cursor = channel.append_activity(fixture.root, kind='deterministic_signal', source='dispatcher',
+                                     detail='synthetic paused process replacement')
+    channel.record_assessment(fixture.root, assessment(cursor))
+    digest = channel._read_jsonl(fixture.root/'orchestrator/reports.jsonl')[-1]['assessment_digest']
+    result = fixture.cli('rebind-validator', '--pid', str(new['pid']), '--started', new['started'],
+                         '--pane', fixture.panes['replacement'][0],
+                         '--previous-pid', str(old['pid']),
+                         '--previous-started', old['started'], '--assessment-digest', digest)
+    receipt = json.loads(pathlib.Path(json.loads(result.stdout)['receipt']).read_text())
+    assert receipt['previous_binding']['identity'] == old
+    assert 'stop:validator-rebind-validation' in s.load_state(fixture.root)['validator']
+    wait_for(lambda: set(fixture.tick()['paused']) == {'validator', 'coder', 'tester'})
+    before = {name: fixture.count(name) for name in ('replacement', 'coder', 'tester')}
+    time.sleep(1.1)
+    assert all(fixture.count(name) == count for name, count in before.items())
+    fixture.cli('check-validator', codes=(64,))
+    fixture.control('resume')
+    wait_for(lambda: not fixture.tick()['holds'])
+    fixture.cli('check-validator')
+    wait_for(lambda: all(fixture.count(name) > count for name, count in before.items()))
