@@ -119,6 +119,87 @@ def test_admission_rejects_existing_alias_without_reading_contents(tmp_path, ali
         Boundary.parse(contract(tmp_path)).check_topology()
 
 
+def shared_runtime(tmp_path):
+    from harness.agents import _keychain_home
+    peer = tmp_path / "private/author"
+    operator = tmp_path / "operator"
+    (operator / "Library").mkdir(parents=True)
+    home = _keychain_home(peer / ".git/factory-runtime/tester/agent", operator)
+    link = home / "Library"
+    value = contract(tmp_path)
+    value["shared_read_aliases"] = {str(link): str(operator / "Library")}
+    return value, link, peer, operator / "Library"
+
+
+def test_existing_private_login_home_needs_exact_host_alias_declaration(tmp_path):
+    value, link, _, target = shared_runtime(tmp_path)
+    with pytest.raises(BoundaryError, match="must not contain symlinks"):
+        Boundary.parse(contract(tmp_path)).check_topology()
+    boundary = Boundary.parse(value)
+    boundary.check_topology()
+    assert boundary.document()["shared_read_aliases"] == {str(link): str(target)}
+    assert Boundary.parse(boundary.document()).digest == boundary.digest
+    # A declaration changes the admission digest, not the kernel read/write policy.
+    link.unlink()
+    plain = Boundary.parse(contract(tmp_path))
+    assert boundary.profile() == plain.profile()
+    assert boundary.digest != plain.digest
+
+
+@pytest.mark.parametrize("change", ["retarget", "regular", "undeclared"])
+def test_shared_runtime_does_not_admit_changed_or_additional_links(tmp_path, change):
+    value, link, peer, _ = shared_runtime(tmp_path)
+    boundary = Boundary.parse(value)
+    if change == "undeclared":
+        (peer / "other-link").symlink_to(tmp_path / "elsewhere")
+    else:
+        link.unlink()
+        if change == "retarget":
+            link.symlink_to(tmp_path / "elsewhere")
+        else:
+            link.mkdir()
+    with pytest.raises(BoundaryError):
+        boundary.check_topology()
+
+
+@pytest.mark.parametrize("change", ["outside", "target-peer", "target-parent", "not-mapping"])
+def test_shared_runtime_mapping_cannot_declare_peer_content_shared(tmp_path, change):
+    value, link, peer, target = shared_runtime(tmp_path)
+    destination = peer if change == "target-peer" else (
+        tmp_path if change == "target-parent" else target)
+    value["shared_read_aliases"] = (
+        [] if change == "not-mapping" else
+        {str(tmp_path / "outside" if change == "outside" else link):
+         str(destination)}
+    )
+    with pytest.raises(BoundaryError):
+        Boundary.parse(value)
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual private-home kernel boundary")
+def test_shared_login_alias_keeps_peer_content_and_link_mutation_denied(tmp_path):
+    value, link, peer, shared = shared_runtime(tmp_path)
+    (peer / "implementation").write_text("synthetic private work")
+    (shared / "login-fixture").write_text("synthetic shared runtime")
+    outside = tmp_path / "outside-peer-alias"
+    outside.symlink_to(peer)
+    script = '''import pathlib,sys
+peer,link,shared,outside=map(pathlib.Path,sys.argv[1:])
+for path in (peer/'implementation',outside/'implementation'):
+ try: path.read_text(); sys.exit(41)
+ except PermissionError: pass
+try: link.unlink(); sys.exit(42)
+except PermissionError: pass
+assert (shared/'login-fixture').read_text()=='synthetic shared runtime'
+'''
+    boundary = Boundary.parse(value)
+    ran = subprocess.run(boundary.invocation(
+        [sys.executable, "-c", script, str(peer), str(link), str(shared), str(outside)],
+        cwd=tmp_path), capture_output=True, text=True, timeout=10)
+    assert ran.returncode == 0, ran.stderr
+    assert link.is_symlink() and (peer / "implementation").read_text() == "synthetic private work"
+
+
 @pytest.mark.parametrize("protected_target", [False, True])
 def test_runtime_alias_requires_separately_protected_target(tmp_path, protected_target):
     control = tmp_path / "control"

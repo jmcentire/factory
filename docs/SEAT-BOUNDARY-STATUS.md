@@ -19,6 +19,13 @@ Bound author lanes keep mutable Kindex/client state under their own standalone
 `.git/factory-runtime/<slot>/`, outside the protected host control root and outside commits.
 The host must pin each role's hook/settings files there as protected writes; the database and
 session-state directories remain writable. Legacy lanes keep their original paths.
+Some subscription clients use a private-home link to already shared login/runtime data. A host
+may declare that exact link and its disjoint target in `shared_read_aliases`. This is a metadata
+admission exception, not a kernel permission: the generated read/write policy is unchanged.
+Unlisted links, retargeting, replacements and targets containing peer roots still refuse.
+The declaring seat cannot mutate the link inside its denied peer tree. The host is responsible
+for establishing that the shared target holds no peer work; there is no automatic Library or
+credential-directory exception and no copying or inspection of credentials.
 
 The kernel wrapper applies to the actual model subprocess. Codex's event/session driver and
 the registry client's process/exit writer stay on the trusted host, outside the model's process

@@ -93,11 +93,13 @@ class Boundary:
     denied_reads: tuple[pathlib.Path, ...]
     protected_writes: tuple[pathlib.Path, ...]
     allowed_sockets: tuple[pathlib.Path, ...] = ()
+    shared_read_aliases: tuple[tuple[pathlib.Path, pathlib.Path], ...] = ()
 
     @classmethod
     def parse(cls, value: Any) -> Boundary:
         fields = {"schema", "role", "denied_reads", "protected_writes", "allowed_sockets"}
-        if not isinstance(value, dict) or set(value) != fields or value["schema"] != SCHEMA:
+        if (not isinstance(value, dict) or not fields <= set(value)
+                or set(value) - fields - {"shared_read_aliases"} or value["schema"] != SCHEMA):
             raise BoundaryError("invalid boundary contract shape")
         if not isinstance(value["role"], str) or value["role"] not in ROLES:
             raise BoundaryError("unknown boundary role")
@@ -114,13 +116,31 @@ class Boundary:
                 raise BoundaryError("socket exception overlaps a denied root")
             if not any(_within(sock, root) for root in paths["protected_writes"]):
                 raise BoundaryError("socket exception must be owned by the protected control plane")
-        return cls(role=value["role"], **paths)
+        shared = value.get("shared_read_aliases", {})
+        if not isinstance(shared, dict) or len(shared) > 32:
+            raise BoundaryError("shared read aliases must be a bounded host mapping")
+        links: list[tuple[pathlib.Path, pathlib.Path]] = []
+        for raw, destination in shared.items():
+            _path(raw)  # validate spelling, but retain the final symlink's lexical path
+            link = _path(str(pathlib.Path(raw).parent)) / pathlib.Path(raw).name
+            target = _path(destination)
+            if (not any(_within(link, root) for root in paths["denied_reads"])
+                    or any(_within(target, root) or _within(root, target)
+                           for root in paths["denied_reads"])):
+                raise BoundaryError("shared alias must leave a denied tree for a disjoint target")
+            if not target.is_dir() or any(link == prior for prior, _ in links):
+                raise BoundaryError("shared alias target unavailable or alias mapping ambiguous")
+            links.append((link, target))
+        return cls(role=value["role"], shared_read_aliases=tuple(sorted(links)), **paths)
 
     def document(self) -> dict[str, Any]:
-        return {"schema": SCHEMA, "role": self.role,
+        value: dict[str, Any] = {"schema": SCHEMA, "role": self.role,
                 "denied_reads": [str(p) for p in self.denied_reads],
                 "protected_writes": [str(p) for p in self.protected_writes],
                 "allowed_sockets": [str(p) for p in self.allowed_sockets]}
+        if self.shared_read_aliases:
+            value["shared_read_aliases"] = {str(p): str(t) for p, t in self.shared_read_aliases}
+        return value
 
     def profile(self) -> str:
         aliases = self.check_topology()
@@ -185,6 +205,7 @@ class Boundary:
         pending = list((*self.denied_reads, *self.protected_writes))
         seen = set()
         aliases: set[pathlib.Path] = set()
+        shared = dict(self.shared_read_aliases)
         while pending:
             path = pending.pop()
             try:
@@ -192,7 +213,18 @@ class Boundary:
             except FileNotFoundError:
                 continue
             key = (metadata.st_dev, metadata.st_ino)
+            if path in shared and not stat.S_ISLNK(metadata.st_mode):
+                raise BoundaryError("shared read alias is no longer a symlink")
             if stat.S_ISLNK(metadata.st_mode):
+                if path in shared:
+                    # A host may identify a login/runtime link to already shared data. This
+                    # changes no kernel read permission: the peer tree and its files remain
+                    # denied, and this seat cannot replace the link inside that tree.
+                    target = shared[path]
+                    if (path.readlink() != target or not target.is_dir()
+                            or target.resolve() != target):
+                        raise BoundaryError("shared read alias changed or target is unavailable")
+                    continue
                 if any(_within(path, root) for root in self.denied_reads):
                     raise BoundaryError("denied-read trees must not contain symlinks")
                 try:
