@@ -154,7 +154,8 @@ if len(active) != 1:
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
           (active[0].get("kindex") or {}).get("mcp_override", ""),
           json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])),
-          "off" if active[0].get("sandbox") == "off" else "on")
+          "off" if active[0].get("sandbox") == "off" else "on",
+          json.dumps(active[0].get("kernel_boundary")))
 # The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -184,9 +185,28 @@ IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
 IFS= read -r -d '' LANE_SANDBOX <&3 || {
   echo "lane-message: retained lane sandbox is missing or malformed" >&2; exit 70;
 }
+IFS= read -r -d '' BOUNDARY_RECORD <&3 || {
+  echo "lane-message: retained boundary is missing or malformed" >&2; exit 70;
+}
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
+# Reuse only the launch's binding. Ambient configuration cannot replace or drop it.
+"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" <<'PY' || exit 77
+import json, os, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from validator_boundary import validate_lane_record
+record = json.loads(sys.argv[2])
+if record is None and os.environ.get("FACTORY_REQUIRE_BOUNDARY") == "1":
+    raise SystemExit("lane-message: required retained author boundary is absent")
+validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+PY
+BOUNDARY_MODEL_ARGS=""
+BOUNDARY_CODEX_ARGS=""
+if [ "$BOUNDARY_RECORD" != null ]; then
+  printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$LANE"
+  printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
+fi
 case "$AGENT" in
   codex|codex-ollama) ;;
   cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
@@ -492,10 +512,10 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_SANDBOX=""
   [ "$LANE_SANDBOX" != off ] || RESUME_SANDBOX="--dangerously-bypass-approvals-and-sandbox "
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$REPOSITORY" \
     "$RESUME_SANDBOX" 'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
@@ -529,9 +549,9 @@ PY
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
       PLAN_FLAG=""
       [ "$TURN_BILLING" != plan ] || PLAN_FLAG="--plan-only"
-      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
+      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q%s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
         "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
-        "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
+        "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
   esac
   # The new life reads only what the resumed turn writes: the log's size now, before the turn
   # starts, so the earlier turn's done line is never reported again as this turn's.

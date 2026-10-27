@@ -5,6 +5,20 @@ These modules are local implementation components. They are not automatically in
 The ordinary tmux route retains its documented unqualified status until a host actually binds
 and verifies these components. No additional human signature ceremony is implied.
 
+Author launch accepts a host-pinned boundary via `FACTORY_BOUNDARY_CONTRACT` and
+`FACTORY_BOUNDARY_DIGEST`; `FACTORY_REQUIRE_BOUNDARY=1` refuses a missing binding. The launch
+receipt retains the role, contract path and digest. Continuations reuse that receipt, reject
+contract drift or role mismatch, and cannot replace it with ambient configuration. A missing
+legacy binding remains explicitly unqualified. It does not become qualified by enabling the
+requirement on a later continuation.
+
+The kernel wrapper applies to the actual model subprocess. Codex's event/session driver and
+the registry client's process/exit writer stay on the trusted host, outside the model's process
+tree. Host-selected protected paths must include those records and their implementation.
+Synthetic child-process tests demonstrate that the model cannot read an excluded peer file or
+forge an exit record while the host still captures its real exit and session. Shell integration
+tests exercise retained bindings through launch and resume. Neither is provider acceptance.
+
 `harness/validator_boundary.py` compiles an explicit role/path contract into a per-process
 macOS kernel profile. Denied paths cannot be read through shell/interpreter or symlink access;
 control records cannot be overwritten or renamed through their parent. Unix sockets are denied

@@ -58,6 +58,7 @@ if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
 import agents  # noqa: E402  (harness/agents.py, the harness registry)
+import validator_boundary  # noqa: E402
 
 EXIT_SCHEMA = "factory-lane-exit/1"
 REFUSED = 77
@@ -662,6 +663,8 @@ def run_lane(
     session_agent: str = "",
     session_file: pathlib.Path | None = None,
     plan_only: bool = False,
+    boundary_record: object = None,
+    boundary_role: str = "",
 ) -> int:
     """Run one lane process to its end and record that end.
 
@@ -703,6 +706,8 @@ def run_lane(
             # Inspect the final environment, including env_file overrides. Never log values.
             raise ValueError("plan-only lane contains API-routing variables: "
                              + ", ".join(forbidden))
+    argv = validator_boundary.model_command(
+        argv, boundary_record, boundary_role, pathlib.Path.cwd())
     stopped = False
     refused_billing = ""
     session_seen = False
@@ -937,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--session-agent", default="")
     runner.add_argument("--session-file", type=pathlib.Path)
     runner.add_argument("--plan-only", action="store_true")
+    runner.add_argument("--boundary-record", type=json.loads, default=None)
+    runner.add_argument("--boundary-role", choices=("coder", "tester"), default="")
     runner.add_argument("lane_command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     try:
@@ -995,6 +1002,8 @@ def main(argv: list[str] | None = None) -> int:
             session_agent=arguments.session_agent,
             session_file=arguments.session_file,
             plan_only=arguments.plan_only,
+            boundary_record=arguments.boundary_record,
+            boundary_role=arguments.boundary_role,
         )
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)

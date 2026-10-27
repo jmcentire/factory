@@ -761,7 +761,15 @@ if (seed.get("digest") or "") != sys.argv[1]:
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
-  PLANNED=$(LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  BOUNDARY_RECORD=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
+    --role "$ROLE" --cwd "$REPOSITORY") || refuse 77 "author boundary admission failed"
+  BOUNDARY_MODEL_ARGS=""
+  BOUNDARY_CODEX_ARGS=""
+  if [ "$BOUNDARY_RECORD" != null ]; then
+    printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$ROLE"
+    printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
+  fi
+  PLANNED=$(LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -854,6 +862,7 @@ print(json.dumps({
     "cli_contract": cli_contract,
     "repository_preflight": json.loads(preflight),
     "boundary": "operator-owned-tmux-unqualified",
+    "kernel_boundary": json.loads(os.environ["LANE_KERNEL_BOUNDARY"]),
     "host_git_after_agent_start": "forbidden",
 }, sort_keys=True, separators=(",", ":")))
 PY
@@ -914,6 +923,9 @@ PY
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
     "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS"
+  # Codex's trusted event/session driver stays outside the model boundary. Other clients
+  # are direct children of lane_agent, which retains their process/exit evidence on the host.
+  case "$AGENT" in codex|codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
   # On a host whose kernel will not give Codex's own sandbox a namespace (a gVisor container,
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
@@ -923,9 +935,9 @@ PY
   case "$AGENT" in
     codex|codex-ollama)
       [ -z "$CODEX_SANDBOX_ARG" ] || LOCAL_ARGS="$CODEX_SANDBOX_ARG${LOCAL_ARGS:+ $LOCAL_ARGS}"
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
+        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
       printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s --disable apps -C %q -c %q -c %q -c %q -c %q' \

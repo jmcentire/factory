@@ -214,14 +214,75 @@ class Boundary:
         return tuple(sorted(aliases))
 
 
+def validate_lane_record(value: Any, role: str, cwd: pathlib.Path) -> dict[str, str] | None:
+    """Validate a host-retained author binding before launch and every continuation."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "role", "contract", "digest"}
+            or value["schema"] != "factory-lane-boundary/1"
+            or role not in {"coder", "tester"} or value["role"] != role):
+        raise BoundaryError("lane boundary role or record is invalid")
+    path = _path(value["contract"])
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)) as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
+            raise BoundaryError("lane boundary contract is not a bounded regular file")
+        boundary = Boundary.parse(json.load(stream))
+    if boundary.role != role or boundary.digest != value["digest"]:
+        raise BoundaryError("lane boundary identity or configuration changed")
+    if not any(_within(path, root) for root in boundary.protected_writes):
+        raise BoundaryError("lane boundary contract is not host write-protected")
+    boundary.invocation(["/usr/bin/true"], cwd=cwd)  # validate backend/topology; no execution
+    return dict(value)
+
+
+def select_lane_record(environment: dict[str, str], role: str,
+                       cwd: pathlib.Path) -> dict[str, str] | None:
+    path = environment.get("FACTORY_BOUNDARY_CONTRACT", "")
+    digest = environment.get("FACTORY_BOUNDARY_DIGEST", "")
+    if not path and not digest and environment.get("FACTORY_REQUIRE_BOUNDARY") != "1":
+        return None  # explicitly unqualified legacy route; never an enforcement receipt
+    if not path or not digest:
+        raise BoundaryError("required author boundary contract and digest are missing")
+    return validate_lane_record({"schema": "factory-lane-boundary/1", "role": role,
+                                 "contract": path, "digest": digest}, role, cwd)
+
+
+def model_command(command: list[str], record: Any, role: str,
+                  cwd: pathlib.Path) -> list[str]:
+    """Bound only the model child; trusted session/exit writers stay outside its tree."""
+    checked = validate_lane_record(record, role, cwd)
+    if checked is None:
+        return command
+    return [sys.executable, str(pathlib.Path(__file__).resolve()),
+            "--contract", checked["contract"], "--digest", checked["digest"],
+            "--expected-role", role, "--", *command]
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["select-lane"]:
+        select = argparse.ArgumentParser()
+        select.add_argument("--role", required=True, choices=("coder", "tester"))
+        select.add_argument("--cwd", required=True, type=pathlib.Path)
+        args = select.parse_args(argv[1:])
+        try:
+            print(json.dumps(select_lane_record(dict(os.environ), args.role, args.cwd)))
+            return 0
+        except (OSError, ValueError, TypeError) as error:
+            print(f"lane-boundary: {error}", file=sys.stderr)
+            return 77
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=pathlib.Path, required=True)
     parser.add_argument("--digest", required=True, help="host-pinned boundary SHA256")
+    parser.add_argument("--expected-role", choices=sorted(ROLES))
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
         boundary = Boundary.parse(json.loads(args.contract.read_text()))
+        if args.expected_role and boundary.role != args.expected_role:
+            raise BoundaryError("boundary role differs from the admitted lane")
         if boundary.digest != args.digest:
             raise BoundaryError("boundary contract changed after host admission")
         contract = args.contract.resolve()
