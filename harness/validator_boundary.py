@@ -66,6 +66,27 @@ def _within(path: pathlib.Path, root: pathlib.Path) -> bool:
     return path == root or path.is_relative_to(root)
 
 
+def _alias_links(path: pathlib.Path) -> set[pathlib.Path]:
+    """Collect every intermediate link, including directory aliases, using metadata only."""
+    pending = list(path.parts[1:])
+    cursor = pathlib.Path("/")
+    links: set[pathlib.Path] = set()
+    traversals = 0
+    while pending:
+        cursor /= pending.pop(0)
+        if cursor.is_symlink():
+            traversals += 1
+            if traversals > 40:
+                raise BoundaryError("protected alias chain is cyclic or too long")
+            links.add(cursor)
+            target = cursor.readlink()
+            if not target.is_absolute():
+                target = cursor.parent / target
+            pending = list(pathlib.Path(os.path.normpath(target)).parts[1:]) + pending
+            cursor = pathlib.Path("/")
+    return links
+
+
 @dataclass(frozen=True)
 class Boundary:
     role: str
@@ -102,9 +123,10 @@ class Boundary:
                 "allowed_sockets": [str(p) for p in self.allowed_sockets]}
 
     def profile(self) -> str:
+        aliases = self.check_topology()
         reads = "\n    ".join(f"(subpath {_quoted(p)})" for p in self.denied_reads)
         writes = "\n    ".join(f"(subpath {_quoted(p)})" for p in
-                             (*self.denied_reads, *self.protected_writes))
+                             (*self.denied_reads, *self.protected_writes, *aliases))
         # Deny Unix-domain host services, including other tmux servers. Only host-approved
         # exact sockets (the closed custody broker, or a qualified private client IPC) pass.
         exceptions = " ".join(f"(remote unix-socket (path-literal {_quoted(p)}))"
@@ -113,7 +135,7 @@ class Boundary:
         executables = "\n    ".join(f"(literal {_quoted(pathlib.Path(p).resolve())})"
                                     for p in _SPAWNERS)
         ancestors: set[pathlib.Path] = set()
-        for root in (*self.denied_reads, *self.protected_writes):
+        for root in (*self.denied_reads, *self.protected_writes, *aliases):
             ancestors.update(root.parents)
         anchors = "\n    ".join(f"(literal {_quoted(p)})" for p in sorted(ancestors))
         return f'''(version 1)
@@ -153,15 +175,16 @@ class Boundary:
         self.check_topology()
         return ["/usr/bin/sandbox-exec", "-p", self.profile(), *command]
 
-    def check_topology(self) -> None:
+    def check_topology(self) -> tuple[pathlib.Path, ...]:
         """Path rules cannot cover pre-existing inode aliases outside a protected tree.
 
-        Inspect metadata only, never file contents or symlink targets. The trusted host must
+        Inspect metadata only, never file contents. The trusted host must
         keep this invariant when it later creates protected workspaces. The bounded seat
         cannot create new aliases of these objects because file-write* denies link creation.
         """
         pending = list((*self.denied_reads, *self.protected_writes))
         seen = set()
+        aliases: set[pathlib.Path] = set()
         while pending:
             path = pending.pop()
             try:
@@ -170,12 +193,25 @@ class Boundary:
                 continue
             key = (metadata.st_dev, metadata.st_ino)
             if stat.S_ISLNK(metadata.st_mode):
-                raise BoundaryError("protected trees must not contain symlinks")
+                if any(_within(path, root) for root in self.denied_reads):
+                    raise BoundaryError("denied-read trees must not contain symlinks")
+                try:
+                    target = path.resolve(strict=True)
+                except (OSError, RuntimeError) as error:
+                    raise BoundaryError("protected alias target cannot be resolved") from error
+                if not any(_within(target, root) for root in
+                           (*self.protected_writes, *self.denied_reads)):
+                    raise BoundaryError("protected alias target is outside the boundary")
+                # Its target is covered by a separately declared root. Every intermediate
+                # link must also be immutable, including a package-manager directory alias.
+                aliases.update(_alias_links(path))
+                continue
             if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
                 raise BoundaryError("protected file has an unbounded hard-link alias")
             if stat.S_ISDIR(metadata.st_mode) and key not in seen:
                 seen.add(key)
                 pending.extend(path.iterdir())
+        return tuple(sorted(aliases))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -119,6 +119,83 @@ def test_admission_rejects_existing_alias_without_reading_contents(tmp_path, ali
         Boundary.parse(contract(tmp_path)).check_topology()
 
 
+@pytest.mark.parametrize("protected_target", [False, True])
+def test_runtime_alias_requires_separately_protected_target(tmp_path, protected_target):
+    control = tmp_path / "control"
+    control.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.write_text("synthetic executable")
+    (control / "python").symlink_to(runtime)
+    value = contract(tmp_path)
+    if protected_target:
+        value["protected_writes"].append(str(runtime))
+        Boundary.parse(value).check_topology()
+    else:
+        with pytest.raises(BoundaryError, match="outside the boundary"):
+            Boundary.parse(value).check_topology()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="real macOS alias protection")
+def test_kernel_protects_both_runtime_alias_and_its_declared_target(tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.write_text("synthetic immutable runtime")
+    alias = control / "python"
+    alias.symlink_to(runtime)
+    value = contract(tmp_path)
+    value["protected_writes"].append(str(runtime))
+    boundary = Boundary.parse(value)
+    script = '''import pathlib,sys
+alias,target=map(pathlib.Path,sys.argv[1:])
+operations=(alias.unlink,lambda:target.write_text('changed'),lambda:alias.write_text('changed'))
+for operation in operations:
+ try: operation(); sys.exit(42)
+ except PermissionError: pass
+'''
+    ran = subprocess.run(boundary.invocation(
+        [sys.executable, "-c", script, str(alias), str(runtime)], cwd=tmp_path),
+        capture_output=True, text=True, timeout=5)
+    assert ran.returncode == 0, ran.stderr
+    assert alias.is_symlink() and runtime.read_text() == "synthetic immutable runtime"
+
+
+@pytest.mark.parametrize("kind", ["missing", "cyclic"])
+def test_unresolved_runtime_alias_is_refused(tmp_path, kind):
+    control = tmp_path / "control"
+    control.mkdir()
+    alias = control / "alias"
+    alias.symlink_to(alias if kind == "cyclic" else control / "missing")
+    with pytest.raises(BoundaryError, match="cannot be resolved"):
+        Boundary.parse(contract(tmp_path)).check_topology()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="real macOS alias protection")
+def test_intermediate_runtime_directory_alias_cannot_be_retargeted(tmp_path):
+    control = tmp_path / "control"
+    control.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python").write_text("synthetic executable")
+    intermediate = tmp_path / "package-manager-alias"
+    intermediate.symlink_to(runtime, target_is_directory=True)
+    (control / "python").symlink_to(intermediate / "python")
+    value = contract(tmp_path)
+    value["protected_writes"].append(str(runtime))
+    boundary = Boundary.parse(value)
+    assert intermediate in boundary.check_topology()
+    script = '''import pathlib,sys
+link=pathlib.Path(sys.argv[1])
+try: link.unlink(); sys.exit(42)
+except PermissionError: pass
+'''
+    ran = subprocess.run(boundary.invocation(
+        [sys.executable, "-c", script, str(intermediate)], cwd=tmp_path),
+        capture_output=True, text=True, timeout=5)
+    assert ran.returncode == 0, ran.stderr
+    assert intermediate.is_symlink()
+
+
 @pytest.mark.skipif(platform.system() != "Darwin", reason="real macOS Seatbelt qualification")
 def test_sibling_environment_is_not_exposed(tmp_path):
     # Inspect only this test-owned process, started with a closed entirely synthetic env.

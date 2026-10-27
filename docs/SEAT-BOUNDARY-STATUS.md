@@ -19,9 +19,16 @@ the child must not source a login profile again and reintroduce unrelated creden
 The contract records role, denied-read roots, protected-write roots and allowed socket paths.
 Its digest binds those fields, the generated profile and allowed environment names. Existing
 hard links can escape path-based rules: metadata admission therefore refuses multiply-linked
-protected files and symlinks inside protected trees. It does not read their contents. Host setup
+protected files and symlinks inside denied-read trees. It does not read their contents. Host setup
 must retain that invariant when creating later workspaces; this is not a claim against another
 unconfined host process modifying the filesystem after admission.
+
+Denied-read trees still reject aliases. A write-protected runtime tree may contain a symlink
+only when its resolved target is also inside an explicitly protected root. This permits a
+protected virtualenv and separately protected interpreter, without leaving either the alias
+entry or its target writable. All intermediate links, including directory aliases, are added
+to the write-denial profile and its digest. Missing, cyclic and outward unprotected targets
+are refused.
 
 `harness/lane_custody.py` is the host-side fixed-operation endpoint. Kernel peer PID and observed
 PID/start ancestry bind a request to a seat. The service must be outside that seat's process
