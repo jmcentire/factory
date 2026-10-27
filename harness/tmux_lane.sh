@@ -926,9 +926,11 @@ PY
       refuse 77 "required Signet hook contract and digest are missing"
     case "$AGENT" in
       codex|codex-interactive)
-        SIGNET_OVERRIDE=$("$FACTORY_PYTHON" "$D/signet_hooks.py" --client codex \
+        SIGNET_OVERRIDE=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/signet_hooks.py" --client codex \
           --contract "$FACTORY_SIGNET_CONTRACT" --digest "$FACTORY_SIGNET_DIGEST" \
-          --render-codex) || refuse 77 "required Signet hook configuration is invalid"
+          --render-codex --check-codex-cwd "$REPOSITORY") || \
+          refuse 77 "required Signet hook configuration or exact Codex hook trust is unavailable" \
+            "review the host-pinned hook with Codex /hooks; no lane was started"
         printf -v SIGNET_ARGS -- '-c %q -c %q' 'features.hooks=true' "$SIGNET_OVERRIDE"
         ;;
       claude|cursor-agent) SIGNET_ARGS="" ;;

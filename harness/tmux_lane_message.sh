@@ -446,8 +446,12 @@ if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) t
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
   # Retain only the launch's explicit guard configuration. Do not re-read operator hooks or
   # accept arbitrary extra arguments as a way around resume's fixed permission profile.
-  GUARD_RESUME=$("$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD") || {
-    echo "lane-message: retained Signet configuration is malformed" >&2; exit 70;
+  GUARD_RESUME=$(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" \
+    TMPDIR="$SAFE_TMPDIR" CODEX_HOME="$SAFE_CODEX_HOME" \
+    "$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD" \
+    --check-codex-cwd "$REPOSITORY") || {
+    echo "lane-message: retained Signet configuration or exact Codex hook trust unavailable" >&2
+    exit 70
   }
   [ -z "$GUARD_RESUME" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$GUARD_RESUME"
 fi

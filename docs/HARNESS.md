@@ -470,6 +470,14 @@ machine, before the agent starts and while it runs:
   **This is configuration plumbing, not runtime qualification.** Actual hook loading, Codex's
   hook trust and failure semantics, and scoped Kindex use still require client receipts. Codex
   can fail open when the hook process itself fails, so hooks alone are not a security boundary.
+  Required Codex hooks now have a pre-model admission check: `codex_hook_admission.py` queries
+  the installed client's read-only `hooks/list` API for the exact session-flag handler and
+  refuses absent, disabled, modified or untrusted hooks. Launch and continuation check it;
+  the headless turn wrapper checks again before starting either an initial or resumed turn.
+  Timeout, malformed metadata and source errors refuse admission. No thread/model is started
+  by this check, and no trust is granted or changed. Review the exact host-pinned hook through
+  the client's supported `/hooks` flow when needed; configuration presence is insufficient.
+  Metadata admission still requires a live denial probe before claiming provider acceptance.
 - **Every resumable lane, not only Codex.** The wrapper records the session id the harness streams
   first (`--session-agent`, `<slot>-thread-id`), so the watcher's wrap-up and review pauses, and
   every lane message, resume a registry lane's own session (`--resume`, `--session-id` or

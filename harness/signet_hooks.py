@@ -239,11 +239,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume-record", type=pathlib.Path)
     parser.add_argument("--render-codex", action="store_true",
                         help="render one explicit Codex config override; does not approve trust")
+    parser.add_argument("--check-codex-cwd", type=pathlib.Path,
+                        help="require the exact existing Codex hook trust before returning args")
     args = parser.parse_args(argv)
     if args.resume_record:
         try:
             value = json.loads(args.resume_record.read_text())
-            print(resume_arguments(value))
+            retained = resume_arguments(value)
+            if retained and args.check_codex_cwd:
+                from codex_hook_admission import check_command
+                check_command(["codex", *shlex.split(retained)], args.check_codex_cwd)
+            print(retained)
             return 0
         except (OSError, ValueError, TypeError):
             return 77
@@ -258,10 +264,16 @@ def main(argv: list[str] | None = None) -> int:
                                      pathlib.Path(sys.executable),
                                      custody_socket=args.custody_socket,
                                      custody_digest=args.custody_digest)
-            print("hooks.PreToolUse=" + _toml_value(settings["hooks"]["PreToolUse"]))
+            override = "hooks.PreToolUse=" + _toml_value(settings["hooks"]["PreToolUse"])
+            if args.check_codex_cwd:
+                from codex_hook_admission import check_command
+                check_command(["codex", "-c", "features.hooks=true", "-c", override],
+                              args.check_codex_cwd)
+            print(override)
             return 0
         except (OSError, ValueError, TypeError):
-            print("required Signet hook configuration invalid", file=sys.stderr)
+            print("required Signet hook configuration or Codex trust unavailable; "
+                  "review the exact hook with Codex /hooks", file=sys.stderr)
             return 77
     try:
         fixed = contract(args.contract, args.digest)

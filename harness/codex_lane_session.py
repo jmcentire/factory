@@ -16,6 +16,7 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
+import codex_hook_admission  # noqa: E402
 import validator_boundary  # noqa: E402
 from lane_dialogue import (  # noqa: E402
     MAX_TEXT_BYTES,
@@ -204,6 +205,10 @@ def run_turn(
         command = command[1:]
     if not command:
         raise SessionError("Codex command is empty")
+    try:
+        codex_hook_admission.check_command(command, pathlib.Path.cwd())
+    except codex_hook_admission.HookAdmissionError as exc:
+        raise SessionError(str(exc)) from exc
     command = validator_boundary.model_command(
         command, boundary_record, (role or "").split("-", 1)[0], pathlib.Path.cwd())
     event_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
