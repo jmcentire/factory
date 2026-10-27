@@ -9,6 +9,8 @@ and verifies these components. No additional human signature ceremony is implied
 macOS kernel profile. Denied paths cannot be read through shell/interpreter or symlink access;
 control records cannot be overwritten or renamed through their parent. Unix sockets are denied
 except exact host-owned endpoints; ordinary IP networking and permitted files remain usable.
+The fixed root-owned macOS DNS socket is also allowed: denying it made public HTTPS fail
+name resolution despite allowing IP networking. Arbitrary Unix sockets remain denied.
 Sibling process inspection and signalling are denied; the process may inspect itself and stop
 its children. Inherited nonstandard file descriptors and ambient credential variables are
 removed before exec. Authentication-directory paths and the exported `cl` function are retained;

@@ -22,6 +22,9 @@ from typing import Any
 SCHEMA = "factory-seat-boundary/1"
 ROLES = {"validator", "orchestrator", "coder", "tester"}
 _SPAWNERS = ("/bin/launchctl", "/usr/bin/osascript", "/usr/bin/open")
+# macOS resolves external DNS through this root-owned service. Keeping IP networking
+# useful requires this exact endpoint, not access to arbitrary host Unix sockets.
+_DNS_SOCKET = pathlib.Path("/private/var/run/mDNSResponder")
 # Preserve terminal/plan-login locations and scoped Factory/Kindex wiring, not the operator's
 # arbitrary environment. A caller must not source a login profile again inside the seat.
 ENVIRONMENT_KEYS = frozenset({
@@ -104,11 +107,9 @@ class Boundary:
                              (*self.denied_reads, *self.protected_writes))
         # Deny Unix-domain host services, including other tmux servers. Only host-approved
         # exact sockets (the closed custody broker, or a qualified private client IPC) pass.
-        sockets = "(remote unix-socket)"
-        if self.allowed_sockets:
-            exceptions = " ".join(f"(remote unix-socket (path-literal {_quoted(p)}))"
-                                  for p in self.allowed_sockets)
-            sockets = f"(require-all {sockets} (require-not (require-any {exceptions})))"
+        exceptions = " ".join(f"(remote unix-socket (path-literal {_quoted(p)}))"
+                              for p in (_DNS_SOCKET, *self.allowed_sockets))
+        sockets = f"(require-all (remote unix-socket) (require-not (require-any {exceptions})))"
         executables = "\n    ".join(f"(literal {_quoted(pathlib.Path(p).resolve())})"
                                     for p in _SPAWNERS)
         ancestors: set[pathlib.Path] = set()
@@ -146,6 +147,9 @@ class Boundary:
             raise BoundaryError("boundary command must be nonempty argv")
         if any(_within(cwd.resolve(), p) for p in self.denied_reads):
             raise BoundaryError("seat working directory is inside a denied root")
+        dns = _DNS_SOCKET.lstat()
+        if dns.st_uid != 0 or not stat.S_ISSOCK(dns.st_mode):
+            raise BoundaryError("system DNS endpoint is not the root-owned socket")
         self.check_topology()
         return ["/usr/bin/sandbox-exec", "-p", self.profile(), *command]
 

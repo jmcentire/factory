@@ -53,6 +53,17 @@ def test_environment_preserves_terminal_and_plan_paths_without_ambient_credentia
     assert original["ANTHROPIC_API_KEY"] == "synthetic-key"  # parent/persisted env untouched
 
 
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS DNS service")
+def test_system_dns_socket_remains_reachable_without_allowing_general_host_ipc(tmp_path):
+    boundary = Boundary.parse(contract(tmp_path))
+    command = [sys.executable, "-c",
+        "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); "
+        "s.connect('/private/var/run/mDNSResponder'); s.close()"]
+    ran = subprocess.run(boundary.invocation(command, cwd=tmp_path),
+                         capture_output=True, text=True, timeout=5)
+    assert ran.returncode == 0, ran.stderr
+
+
 @pytest.mark.skipif(platform.system() != "Darwin", reason="real macOS Seatbelt qualification")
 def test_kernel_blocks_interpreter_alias_and_parent_rename_but_keeps_useful_access(tmp_path):
     private = tmp_path / "private"
