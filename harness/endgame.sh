@@ -30,6 +30,8 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 FACTORY_CLI="${FACTORY_CLI:-factory}"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
+# shellcheck source=harness/tmux_resource.sh
+source "$D/tmux_resource.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 ROOT="$FACTORY_CONTROL_ROOT"
 # Phase 0.1 (remediation plan): refusal exits leave a derivable events.jsonl signal
@@ -324,7 +326,7 @@ while IFS=$'\t' read -r resource_id resource_type identifier; do
       if ! command -v tmux >/dev/null 2>&1; then
         say "   $resource_id: tmux unavailable; resource absence cannot be proved"
         FAILED=1
-      elif tmux display-message -p -t "$identifier" '#{session_name}:#{window_name}' \
+      elif factory_tmux_resource_exists "$resource_type" "$identifier" \
            >/dev/null 2>&1; then
         say "   $resource_id: tmux resource is still live; close it before Gate L"
         FAILED=1
