@@ -435,17 +435,20 @@ for journal in sorted(root.glob("*-launch.jsonl")):
                 f"tmux-lane: the {other} lane already works in {theirs}; give each lane its own copy"
             )
 PY
-  # Shared means shared: every lane starts from the same seed, or the later one does not start.
+  # Productive peers share a seed; earlier qualification probes are not product inputs.
   OTHER_ROLE=$([ "$ROLE" = coder ] && echo tester || echo coder)
-  SEED_DIGEST=$("$FACTORY_PYTHON" - "$TMUX_ROOT" "$ROOT/lane-seed.jsonl" "$OTHER_ROLE" <<'PY'
+  SEED_DIGEST=$("$FACTORY_PYTHON" - "$TMUX_ROOT" "$ROOT/lane-seed.jsonl" "$OTHER_ROLE" "$ACTION" <<'PY'
 import hashlib, json, pathlib, sys
 
 root, seed, other = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+action = sys.argv[4]
 mine = "sha256:" + hashlib.sha256(seed.read_bytes()).hexdigest() if seed.is_file() else ""
 active = []
 for journal in sorted(root.glob("*-launch.jsonl")):
     for line in journal.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
+        if action == "launch" and row.get("mode") == "qualify":
+            continue
         if row.get("status") == "active" and row.get("role") == other:
             active.append(row)
 if active:

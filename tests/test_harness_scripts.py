@@ -11688,7 +11688,10 @@ def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> 
     assert helped.returncode == 0, helped.stderr
 
 
-def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prior_mode", ["qualify", "launch", None])
+def test_coder_and_tester_lanes_get_separate_scoped_kindex(
+    tmp_path: Path, prior_mode: str | None,
+) -> None:
     """Each lane's Kindex is built from its own repository copy's committed .kin, under its own
     private HOME. Two lanes may not share a repository: that would share files and memory."""
 
@@ -11724,6 +11727,19 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> No
 
     seed = root / "lane-seed.jsonl"
     seed.write_text('{"title":"shared research"}\n', encoding="utf-8")
+    # A completed qualification used no product seed. Only its explicit recorded
+    # mode excludes it: a productive or legacy peer still enforces seed equality.
+    old_probe = root / "tmux-lanes" / "tester.probe-launch.jsonl"
+    old_probe.parent.mkdir(exist_ok=True)
+    old_probe.write_text(json.dumps({
+        "status": "active", "role": "tester", "mode": prior_mode,
+        "ts": "2026-01-01T00:00:00Z", "kindex": {"seed": None},
+    }) + "\n")
+    if prior_mode != "qualify":
+        refused = launch("coder", lanes["coder"])
+        assert refused.returncode != 0 and "same lane-seed.jsonl" in refused.stderr
+        assert not any("-n coder" in line for line in tmux_log.read_text().splitlines())
+        return
     assert launch("coder", lanes["coder"]).returncode == 0
     shared = launch("tester", lanes["coder"])
     assert shared.returncode != 0 and "own copy" in shared.stderr
