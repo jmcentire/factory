@@ -99,7 +99,7 @@ SEAT_DIALOG_KEYS: dict[str, tuple[str, ...]] = {
 #: A dialog already recorded as unanswerable; it is not recorded again until it clears.
 _RECORDED = 99
 HEALTHY_IDLE = "idle-awaiting-handoff"
-FACTORY_QUESTION_RE = re.compile(r"\bFACTORY_QUESTION:\s*(?P<question>\S.*)$")
+FACTORY_QUESTION_RE = re.compile(r"^[ \t]*FACTORY_QUESTION:[ \t]*(?P<question>\S.*)$")
 LANE_DONE_RE = re.compile(r"\bFACTORY_STATUS:\s*DONE\b")
 
 # Validator failure modes the Orchestrator audits (founder, 2026-08-09): announces
@@ -431,6 +431,9 @@ class Dispatcher:
         lanes = self.lane_windows()
         if window in lanes:
             for line in fresh.splitlines()[-25:]:
+                # JSON tool results can echo the brief's protocol examples. They are data,
+                # not the author's questions. The typed session wrapper records assistant
+                # messages independently; the pane fallback accepts only a direct marker.
                 matched = FACTORY_QUESTION_RE.search(line)
                 if matched is None:
                     continue

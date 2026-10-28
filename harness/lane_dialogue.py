@@ -188,6 +188,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
     planned: dict[str, Mapping[str, object]] = {}
     planned_answers: dict[str, str] = {}
     delivered: set[str] = set()
+    corrected: set[str] = set()
     for sequence, row in enumerate(rows, 1):
         if row.get("schema_version") != _SCHEMA or row.get("sequence") != sequence:
             raise LaneDialogueError("dialogue journal sequence or schema is invalid")
@@ -212,6 +213,24 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
             if row.get("text_sha256") != _digest(value):
                 raise LaneDialogueError("dialogue question digest is invalid")
             questions[identifier] = row
+        elif record_type == "question-corrected":
+            expected = {"schema_version", "sequence", "ts", "record_type", "question_id",
+                        "question_digest", "reason", "source", "source_digest", "event_line",
+                        "event_digest", "assessment_digest"}
+            identifier = str(row.get("question_id"))
+            question = questions.get(identifier)
+            if (set(row) != expected or question is None or identifier in corrected
+                    or identifier in planned_answers
+                    or row.get("reason") != "quoted-tool-placeholder"
+                    or row.get("question_digest") != question["text_sha256"]
+                    or not _placeholder_echo(str(question["text"]))
+                    or not _source_name(row.get("source"), str(question["lane"]))
+                    or type(row.get("event_line")) is not int or int(str(row["event_line"])) < 1
+                    or any(not isinstance(row.get(k), str)
+                           or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(row[k]))
+                           for k in ("source_digest", "event_digest", "assessment_digest"))):
+                raise LaneDialogueError("invalid question correction receipt")
+            corrected.add(identifier)
         elif record_type == "message-planned":
             expected = {
                 "schema_version",
@@ -252,7 +271,8 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                 question_id = row.get("question_id")
                 if sender != "validator" or authority not in {"human-answer", "ratified-spec"}:
                     raise LaneDialogueError("only the Validator may plan a specification answer")
-                if question_id not in questions or questions[str(question_id)]["lane"] != lane:
+                if (question_id not in questions or str(question_id) in corrected
+                        or questions[str(question_id)]["lane"] != lane):
                     raise LaneDialogueError("specification answer does not bind a lane question")
                 if str(question_id) in planned_answers:
                     raise LaneDialogueError(
@@ -308,6 +328,135 @@ def _answered_question_ids(rows: Sequence[Mapping[str, object]]) -> set[str]:
     }
 
 
+def _corrected_question_ids(rows: Sequence[Mapping[str, object]]) -> set[str]:
+    return {str(row["question_id"]) for row in rows
+            if row.get("record_type") == "question-corrected"}
+
+
+def _placeholder_echo(text: str) -> bool:
+    # Deliberately narrow: ordinary questions, even questions mentioning a placeholder,
+    # cannot be administratively dismissed with this operation.
+    return text.startswith(("<question>` instead of guessing.",
+                            "<one concrete question>` instead of guessing."))
+
+
+def _source_name(value: object, lane: str) -> bool:
+    return isinstance(value, str) and re.fullmatch(
+        re.escape(lane) + r"\.[A-Za-z0-9][A-Za-z0-9_-]{0,39}-codex-events\.jsonl", value
+    ) is not None
+
+
+def _tool_echo_evidence(root: pathlib.Path, source: str, question: Mapping[str, Any]) -> dict:
+    """Verify the exact legacy pane match came from a completed tool event, not an author.
+
+    Read only the named run-local stream, never a provider's private session store. Keep
+    hashes/locations in the receipt, not arbitrary tool output or command payloads.
+    """
+    if not _source_name(source, str(question["lane"])):
+        raise LaneDialogueError("source must name this lane's retained event stream")
+    directory = root / "tmux-lanes"
+    if directory.is_symlink():
+        raise LaneDialogueError("event directory may not be a symlink")
+    path = directory / source
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or not 0 < before.st_size <= 16 * 1024 * 1024):
+            raise LaneDialogueError("event stream must be a bounded regular file")
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1
+            body = stream.read(16 * 1024 * 1024 + 1)
+            after = os.fstat(stream.fileno())
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise LaneDialogueError("event stream changed during correction review")
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if not body.endswith(b"\n"):
+        raise LaneDialogueError("event stream is incomplete")
+    legacy = re.compile(r"\bFACTORY_QUESTION:\s*(\S.*)$")
+    matches = []
+    try:
+        lines = body.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise LaneDialogueError("event stream is not UTF-8") from error
+    for number, raw in enumerate(lines, 1):
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise LaneDialogueError("event stream contains invalid JSON") from error
+        if not isinstance(event, dict):
+            raise LaneDialogueError("event stream contains a non-object")
+        item = event.get("item", {})
+        if not isinstance(item, dict):
+            raise LaneDialogueError("event item is malformed")
+        if item.get("type") == "agent_message" and "FACTORY_QUESTION:" in str(item.get("text")):
+            # An actual author asking about the same placeholder makes attribution
+            # ambiguous. Retain the question; this is not a general dismissal command.
+            if any(token in str(item.get("text"))
+                   for token in ("<question>", "<one concrete question>")):
+                raise LaneDialogueError("author message makes placeholder attribution ambiguous")
+        match = legacy.search(raw)
+        if match and match.group(1).strip() == question["text"]:
+            output = item.get("aggregated_output")
+            if (event.get("type") != "item.completed"
+                    or item.get("type") != "command_execution"
+                    or not isinstance(output, str)
+                    or not any("FACTORY_QUESTION: " + token in output
+                               for token in ("<question>", "<one concrete question>"))):
+                raise LaneDialogueError("matching event is not a quoted tool placeholder")
+            matches.append((number, _digest(raw)))
+    if len(matches) != 1:
+        raise LaneDialogueError("correction requires one exact retained tool event")
+    return {"source": source, "source_digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+            "event_line": matches[0][0], "event_digest": matches[0][1]}
+
+
+def correct_tool_echo(root: pathlib.Path, question_id: str, source: str,
+                      assessment_digest: str) -> dict[str, Any]:
+    """Host-only append-only classification repair; never answer, deliver, resume or grant.
+
+    The current accepted AG review must have observed this pending question. A later
+    independent assessment and all normal process/attention gates still govern rebind.
+    """
+    import orchestrator_channel
+
+    root = pathlib.Path(root)
+    orchestrator_channel.require_current(root)
+    reports = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
+    review = reports[-1] if reports else {}
+    if review.get("assessment_digest") != assessment_digest:
+        raise LaneDialogueError("correction requires the current accepted assessment")
+    with _locked(root) as directory:
+        path = directory / "journal.jsonl"
+        rows = _read(path)
+        _validate(rows)
+        question = next((r for r in rows if r.get("record_type") == "question"
+                         and r.get("question_id") == question_id), None)
+        if question is None or not _placeholder_echo(str(question["text"])):
+            raise LaneDialogueError("question is not an eligible quoted placeholder")
+        if any(r.get("record_type") == "message-planned" and r.get("question_id") == question_id
+               for r in rows):
+            raise LaneDialogueError("a planned answer prevents classification correction")
+        evidence = _tool_echo_evidence(root, source, question)
+        existing = next((r for r in rows if r.get("record_type") == "question-corrected"
+                         and r.get("question_id") == question_id), None)
+        if existing:
+            if any(existing[k] != value for k, value in evidence.items()):
+                raise LaneDialogueError("retained correction evidence changed")
+            return existing
+        if question["text"] not in review.get("assessment", {}).get("specification_questions", []):
+            raise LaneDialogueError("assessment has not reviewed this pending question")
+        row = {"schema_version": _SCHEMA, "sequence": len(rows) + 1, "ts": _now(),
+               "record_type": "question-corrected", "question_id": question_id,
+               "question_digest": question["text_sha256"], "reason": "quoted-tool-placeholder",
+               **evidence, "assessment_digest": assessment_digest}
+        _validate([*rows, row])
+        _append(path, row)
+        return row
+
+
 def record_question(root: pathlib.Path, lane: str, question: str) -> tuple[dict[str, Any], bool]:
     if not _is_lane(lane):
         raise LaneDialogueError("question lane must be coder or tester[-instance]")
@@ -316,7 +465,7 @@ def record_question(root: pathlib.Path, lane: str, question: str) -> tuple[dict[
         path = directory / "journal.jsonl"
         rows = _read(path)
         _validate(rows)
-        answered = _answered_question_ids(rows)
+        answered = _answered_question_ids(rows) | _corrected_question_ids(rows)
         for row in reversed(rows):
             if (
                 row.get("record_type") == "question"
@@ -381,6 +530,8 @@ def plan_message(
                 raise LaneDialogueError("answer does not bind an existing question for this lane")
             if str(question_id) in _answered_question_ids(rows):
                 raise LaneDialogueError("question already has a delivered answer")
+            if str(question_id) in _corrected_question_ids(rows):
+                raise LaneDialogueError("question was corrected as a tool echo")
         else:
             raise LaneDialogueError(
                 "message kind must be status-probe, spec-answer, progress-review or wrap-up"
@@ -486,7 +637,7 @@ def pending_questions(root: pathlib.Path, lane: str | None = None) -> list[dict[
     with _locked(pathlib.Path(root)) as directory:
         rows = _read(directory / "journal.jsonl")
         _validate(rows)
-    answered = _answered_question_ids(rows)
+    answered = _answered_question_ids(rows) | _corrected_question_ids(rows)
     return [
         dict(row)
         for row in rows
@@ -541,6 +692,12 @@ def main() -> int:
     clear = commands.add_parser("require-clear")
     clear.add_argument("--root", type=pathlib.Path, required=True)
     clear.add_argument("--lane", type=_lane_argument)
+    correction = commands.add_parser("correct-tool-echo",
+                                    help="host-only audited placeholder repair")
+    correction.add_argument("--root", type=pathlib.Path, required=True)
+    correction.add_argument("--question-id", required=True)
+    correction.add_argument("--source", required=True, help="retained lane event filename")
+    correction.add_argument("--assessment-digest", required=True)
     arguments = parser.parse_args()
     try:
         if arguments.command == "question":
@@ -574,6 +731,9 @@ def main() -> int:
                     separators=(",", ":"),
                 )
             )
+        elif arguments.command == "correct-tool-echo":
+            print(json.dumps(correct_tool_echo(arguments.root, arguments.question_id,
+                                              arguments.source, arguments.assessment_digest)))
         else:
             outstanding = pending_questions(arguments.root, arguments.lane)
             if outstanding:

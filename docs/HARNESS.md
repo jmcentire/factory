@@ -742,6 +742,17 @@ dependency-free (bash + python3 + git):
   keeps the replacement paused until separately qualified. Interrupted persistence can be
   completed against that same immutable subject with fresh supervision. This operation never
   launches/resumes the client, clears an attention/policy block, or attests its model/account.
+  A legacy pane parser could misclassify a quoted question placeholder inside a serialized
+  tool result. `lane_dialogue.py correct-tool-echo --root <run> --question-id <id>
+  --source <lane.round-codex-events.jsonl> --assessment-digest <current-AG-digest>` is the
+  host-only, append-only repair for that exact case. It requires a current accepted AG review
+  containing the pending question and one matching completed tool event in the named run-local
+  stream. Ordinary questions, ambiguous author messages, changed evidence and planned answers
+  are refused. The receipt retains source/event hashes and the original question stays in the
+  journal; it is neither answered nor falsely marked delivered. A fresh AG assessment and every
+  existing custody, attention and process-control check still govern rebind and continuation.
+  The pane fallback now accepts only direct question-marker lines, never embedded JSON/quoted
+  examples. Typed provider session wrappers remain responsible for structured author messages.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
