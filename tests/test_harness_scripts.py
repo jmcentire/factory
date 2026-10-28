@@ -2806,6 +2806,65 @@ def test_an_unsandboxed_ignition_is_recorded_as_a_run_event(tmp_path: Path, sand
         assert not recorded
 
 
+@pytest.mark.parametrize("mode", ["qualify", "launch"])
+def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Owner Oct 28: a qualification export is not the product acceptance suite.
+
+    The same missing Critical case must refuse productive freeze. Real freeze/export
+    and traceability run; established fixture seams replace tmux and model execution.
+    """
+    task = "Separate qualification evidence from product acceptance."
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task=task, harness_status=None,
+        projection_conf="coder-exclude: tests\ntester-include: tests\n",
+    )
+    env, _ = factory_ignition_env(tmp_path, root)
+    result = run(["bash", str(HARNESS / "factory.sh"), "r1", task,
+                  "--runs", str(root.parent)], operator, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (root / "artifacts").mkdir(exist_ok=True)
+    (root / "artifacts" / "testing-strategy.md").write_text(
+        "planned-case: BOOK-LOCK Critical\ntest-modules: tests/test_*.py\n"
+    )
+    lane = tmp_path / "tester"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    prompt = tmp_path / "tester-prompt.txt"
+    prompt.write_text("Test the shared contract; retain independent evidence.\n")
+    result = run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", mode,
+                  "--agent", "codex", "--repo", str(lane), "--prompt", str(prompt),
+                  "--round", "probe", "--runs", str(root.parent)], operator, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (lane / "tests").mkdir()
+    (lane / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n")
+    freeze = ["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
+              "--round", "probe", "--runs", str(root.parent)]
+    result = run(freeze, operator, env)
+    events = root / "tmux-lanes" / "tester.probe-launch.jsonl"
+    if mode == "launch":
+        assert result.returncode == 70, result.stdout + result.stderr
+        assert "BOOK-LOCK" in result.stderr
+        assert not any(r.get("schema_version") == "factory-tmux-lane-freeze/1"
+                       for r in read_chain(events))
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = read_chain(events)[-1]
+    assert record["mode"] == "qualify" and record["traceability_gaps"] is None
+    assert (Path(record["export"]["files_directory"]) / "tests/test_probe.py").is_file()
+    # Missing/ambiguous recorded mode must not become a qualification exemption.
+    original = events.read_text()
+    for bad_mode in (None, "unknown", ["qualify"]):
+        rows = [json.loads(line) for line in original.splitlines()]
+        for row in rows:
+            if row.get("status") == "active":
+                row["mode"] = bad_mode
+        events.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        refused = run(freeze, operator, env)
+        assert refused.returncode != 0
+        assert "launch mode" in refused.stderr
+
+
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     tmp_path: Path,
 ) -> None:

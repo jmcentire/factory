@@ -1126,7 +1126,7 @@ fi
   echo "tmux-lane: no retained launch record for $SLOT" >&2
   exit 70
 }
-REPOSITORY=$("$FACTORY_PYTHON" - "$EVENTS" "$RUN" "$ROLE" <<'PY'
+FREEZE_LAUNCH=$("$FACTORY_PYTHON" - "$EVENTS" "$RUN" "$ROLE" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 run, role = sys.argv[2:]
@@ -1134,9 +1134,15 @@ rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip
 active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or active[0].get("run_id") != run or active[0].get("role") != role:
     raise SystemExit("tmux-lane: retained active launch record is missing or ambiguous")
+mode = active[0].get("mode")
+if mode not in ("qualify", "launch"):
+    raise SystemExit("tmux-lane: retained launch mode is missing or invalid")
+print(mode)
 print(active[0]["repository"])
 PY
 ) || exit $?
+LAUNCH_MODE=${FREEZE_LAUNCH%%$'\n'*}
+REPOSITORY=${FREEZE_LAUNCH#*$'\n'}
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
   --lane "$LANE" >/dev/null || {
   echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
@@ -1157,12 +1163,15 @@ EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repo
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}" \
   --control-root "$ROOT" --target-manifest-digest "$FACTORY_TARGET_MANIFEST_DIGEST") || exit $?
-# A Tester freezes only when its modules mention every Critical planned case of the Strategy
-# (dogfood #73, traceability only); refused, the lane stays open to write them. That the cases are
+# A productive Tester freezes only when its modules mention every Critical planned case
+# of the Strategy (dogfood #73, traceability only).
+# Qualification exports retain their mode; a capped probe is not product acceptance evidence.
+# This is selected by the retained launch receipt, never a round name or a freeze-time flag.
+# Refused, the lane stays open to write them. That the cases are
 # runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,
 # whose receipt endgame.sh requires before any verdict.
 PLAN_GAPS=null
-if [ "$ROLE" = tester ]; then
+if [ "$ROLE" = tester ] && [ "$LAUNCH_MODE" = launch ]; then
   TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.load(sys.stdin)["files_directory"])')
   PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" traceability \
@@ -1172,10 +1181,11 @@ if [ "$ROLE" = tester ]; then
   PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.dumps(json.load(sys.stdin)["traceability_gaps"]))')
 fi
-FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" <<'PY'
+FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" "$LAUNCH_MODE" <<'PY'
 import datetime, json, sys
-run, role, export, slot, traceability_gaps = sys.argv[1:]
+run, role, export, slot, traceability_gaps, mode = sys.argv[1:]
 print(json.dumps({
+    "mode": mode,
     "traceability_gaps": json.loads(traceability_gaps),
     "schema_version": "factory-tmux-lane-freeze/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
