@@ -7,6 +7,7 @@ import importlib
 import json
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,52 @@ supervisor = importlib.import_module("seat_supervisor")
 escalate = importlib.import_module("escalate")
 
 T0 = datetime.datetime(2026, 10, 20, 12, 0, tzinfo=datetime.UTC)
+
+
+@pytest.mark.parametrize("case", [
+    "direct", "nested", "unrelated-wrapper", "reused-wrapper", "reused-worker",
+    "ambiguous", "wrapper-as-worker", "missing-pane",
+])
+def test_seat_inventory_binds_only_exact_worker_beneath_its_pane(tmp_path, monkeypatch, case):
+    root = run_root(tmp_path)
+    folder = root / "tmux-lanes"
+    folder.mkdir()
+    table = {
+        10: {"pid": 10, "ppid": 1, "started": "pane"},
+        20: {"pid": 20, "ppid": 10, "started": "wrapper"},
+        30: {"pid": 30, "ppid": 20, "started": "worker"},
+    }
+    wrapper = {"pid": 20, "started": "wrapper"}
+    worker = {"pid": 30, "started": "worker"}
+    if case == "direct":
+        wrapper = {"pid": 10, "started": "pane"}
+        table[30]["ppid"] = 10
+    elif case == "unrelated-wrapper":
+        table[20]["ppid"] = 1
+    elif case == "reused-wrapper":
+        table[20]["started"] = "replacement"
+    elif case == "reused-worker":
+        table[30]["started"] = "replacement"
+    elif case == "wrapper-as-worker":
+        worker = dict(wrapper)
+    elif case == "missing-pane":
+        del table[10]
+    receipt = {"schema": "factory-worker-process/1", "wrapper": wrapper, "worker": worker}
+    (folder / "coder-process.json").write_text(json.dumps(receipt))
+    if case == "ambiguous":
+        (folder / "coder.other-process.json").write_text(json.dumps(receipt))
+    monkeypatch.setattr(supervisor, "process_snapshot", lambda: table)
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda *a, **kw:
+                        SimpleNamespace(stdout="coder 10 0\n"))
+    seats = supervisor.Seats("fixture")
+    seats.configure(root)
+    if case in ("direct", "nested"):
+        assert seats.panes() == {"coder": 30}
+        assert seats.worker_bindings == {"coder": worker}
+        assert seats.inventory_errors == []
+    else:
+        assert seats.panes() == {}
+        assert seats.inventory_errors == ["coder: no unique live wrapped worker identity"]
 
 
 class FakeSeats:

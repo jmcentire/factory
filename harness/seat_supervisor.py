@@ -254,6 +254,9 @@ class Seats:
                 if name == "validator" and kickoff_validator(self.root):
                     continue  # this is the inbox mirror; external() identifies the worker
                 pane_pid = int(pid)
+                pane_tree = (process_tree(table, [{"pid": pane_pid,
+                                                   "started": table[pane_pid]["started"]}])
+                             if pane_pid in table else [])
                 matches = []
                 for path in [*self.root.glob("validator-process.json"),
                              *(self.root / "tmux-lanes").glob(f"{name}*-process.json")]:
@@ -262,10 +265,15 @@ class Seats:
                     worker = receipt.get("worker", {})
                     if (receipt.get("schema") != "factory-worker-process/1"
                             or not isinstance(wrapper, dict) or not isinstance(worker, dict)
-                            or wrapper.get("pid") != pane_pid or pane_pid not in table
-                            or table[pane_pid]["started"] != wrapper.get("started")):
+                            or type(wrapper.get("pid")) is not int
+                            or wrapper["pid"] not in table
+                            or table[wrapper["pid"]]["started"] != wrapper.get("started")
+                            or wrapper not in pane_tree):
                         continue
-                    if (worker.get("pid") in table and worker["pid"] != pane_pid
+                    # Custody may add an outer pane process. Trust the recorded
+                    # wrapper only beneath that pane, then its exact worker child.
+                    if (type(worker.get("pid")) is int and worker["pid"] in table
+                            and worker["pid"] not in (pane_pid, wrapper["pid"])
                             and table[worker["pid"]]["started"] == worker.get("started")
                             and worker in process_tree(table, [wrapper])):
                         matches.append(worker["pid"])
