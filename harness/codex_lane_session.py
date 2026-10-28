@@ -206,6 +206,7 @@ def run_turn(
     if not command:
         raise SessionError("Codex command is empty")
     try:
+        command = codex_hook_admission.preserve_trust_with_scoped_mcp(command, pathlib.Path.cwd())
         codex_hook_admission.check_command(command, pathlib.Path.cwd())
     except codex_hook_admission.HookAdmissionError as exc:
         raise SessionError(str(exc)) from exc

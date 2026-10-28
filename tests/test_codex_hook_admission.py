@@ -9,6 +9,7 @@ import pytest
 from harness.codex_hook_admission import (
     HookAdmissionError,
     check_command,
+    preserve_trust_with_scoped_mcp,
     required_override,
     validate_listing,
 )
@@ -75,6 +76,52 @@ def test_disabled_and_ambiguous_overrides_cannot_evade_admission():
             required_override(base + more)
     assert required_override(["python", "-c", "pass"]) is None
     assert required_override(["codex", "exec", "--config=" + OVERRIDE]) == OVERRIDE
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_normal_hook_trust_does_not_restore_ambient_mcp(tmp_path, monkeypatch, resume):
+    import subprocess
+
+    servers = [{"name": name, "enabled": True,
+                "transport": {"type": kind, "env": {"PRIVATE": "hidden"}}}
+               for name, kind in (("kindex", "stdio"), ("computer-use", "stdio"),
+                                  ("kindex-2", "streamable_http"))]
+    observed = []
+
+    def metadata(command, **kwargs):
+        observed.append(command)
+        return subprocess.CompletedProcess(command, 0, json.dumps(servers), "")
+
+    monkeypatch.setattr(subprocess, "run", metadata)
+    scoped = 'mcp_servers.kindex={command="/approved/local-kindex"}'
+    command = ["codex", "exec", *(["resume"] if resume else []), "--ignore-user-config",
+               "--ignore-rules", "--strict-config", "--disable", "apps",
+               "-c", OVERRIDE, "-c", scoped, *(["existing-session"] if resume else []), "-"]
+    fixed = preserve_trust_with_scoped_mcp(command, tmp_path)
+    assert observed == [["codex", "mcp", "list", "--json"]]
+    assert fixed == [
+        "codex", "-c", 'mcp_servers.computer-use={enabled=false,command="/usr/bin/false"}',
+        "-c", 'mcp_servers.kindex-2={enabled=false,url="http://127.0.0.1:1"}',
+        *(arg for arg in command[1:] if arg != "--ignore-user-config")]
+    assert "hidden" not in str(fixed)
+
+
+@pytest.mark.parametrize("servers", [{}, [{"name": "bad.name"}], [{"name": "x"}, {"name": "x"}],
+                                      [{"enabled": True}]])
+def test_ambiguous_ambient_mcp_prevents_config_correction(tmp_path, monkeypatch, servers):
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a[0], 0, json.dumps(servers), ""))
+    with pytest.raises(HookAdmissionError, match="cannot verify scoped MCP"):
+        preserve_trust_with_scoped_mcp(["codex", "exec", "--ignore-user-config", "-c", OVERRIDE,
+                                      "-c", 'mcp_servers={kindex={command="local"}}', "-"],
+                                     tmp_path)
+
+
+def test_no_required_hook_keeps_existing_command(tmp_path):
+    command = ["codex", "exec", "--ignore-user-config", "-"]
+    assert preserve_trust_with_scoped_mcp(command, tmp_path) == command
 
 
 def fake_codex(tmp_path, monkeypatch, *, trust="untrusted", behavior="normal"):

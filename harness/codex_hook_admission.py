@@ -22,6 +22,54 @@ class HookAdmissionError(ValueError):
     """The required hook is not demonstrably active under its existing trust."""
 
 
+def preserve_trust_with_scoped_mcp(command: list[str], cwd: pathlib.Path) -> list[str]:
+    """Keep persisted hook trust without restoring the operator's extra MCP connections.
+
+    exec's ignore-user-config also drops the trust that hooks/list inspected. MCP
+    tables merge, so the lane's Kindex override alone cannot exclude ambient servers.
+    This changes only this invocation, never user settings, hook trust or hook state.
+    """
+    if "--ignore-user-config" not in command or required_override(command) is None:
+        return command
+    overrides = [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-c"]
+    try:
+        scoped = [tomllib.loads(value).get("mcp_servers") for value in overrides
+                  if value.startswith(("mcp_servers=", "mcp_servers."))]
+    except ValueError:
+        raise HookAdmissionError("invalid scoped Kindex configuration") from None
+    if len(scoped) != 1 or not isinstance(scoped[0], dict) or set(scoped[0]) != {"kindex"}:
+        raise HookAdmissionError("required hook launch needs scoped Kindex configuration")
+    try:
+        result = subprocess.run([command[0], "mcp", "list", "--json"], cwd=cwd,
+                                capture_output=True, text=True, timeout=10, check=True)
+        if len(result.stdout) > 1024 * 1024:
+            raise ValueError("metadata exceeds bound")
+        servers = json.loads(result.stdout)
+        if not isinstance(servers, list):
+            raise ValueError("invalid server metadata")
+        names = [server["name"] for server in servers]
+        if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name)
+               for name in names) or len(names) != len(set(names)):
+            raise ValueError("invalid server names")
+        kinds = {server["name"]: server["transport"]["type"] for server in servers}
+        if any(kind not in ("stdio", "streamable_http") for kind in kinds.values()):
+            raise ValueError("unsupported MCP transport")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        raise HookAdmissionError(
+            "cannot verify scoped MCP configuration; no model started") from None
+    narrowed = []
+    for name in sorted(names):
+        if name != "kindex":
+            # Plugin entries need a valid transport even when disabled. Never copy
+            # command arguments, headers, credentials or endpoint values from metadata.
+            transport = ('command="/usr/bin/false"' if kinds[name] == "stdio"
+                         else 'url="http://127.0.0.1:1"')
+            narrowed += ["-c", f"mcp_servers.{name}={{enabled=false,{transport}}}"]
+    # Global config arguments precede the subcommand/prompt, including on resume.
+    return [command[0], *narrowed,
+            *(arg for arg in command[1:] if arg != "--ignore-user-config")]
+
+
 def required_override(command: list[str]) -> str | None:
     if not command or pathlib.Path(command[0]).name != "codex":
         return None
