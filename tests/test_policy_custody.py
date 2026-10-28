@@ -73,11 +73,16 @@ def test_denial_holds_changed_calls_and_fixed_operations_without_payload_logging
 
 
 @pytest.mark.parametrize('matching', [True, False])
-def test_only_exact_owner_prerequisite_allows_genuine_recovery(fixture, monkeypatch, matching):
+@pytest.mark.parametrize('reason', ['Use Kindex first',
+                                  'Signet policy context must be received: search before edit',
+                                  'Unrelated refusal'])
+def test_only_exact_owner_prerequisite_allows_genuine_recovery(
+        fixture, monkeypatch, matching, reason):
     plan, receipts, _ = fixture
-    plan.document['policy']['prerequisite'] = {'reason': 'Use Kindex first',
+    plan.document['policy']['prerequisite'] = {'reason': [
+        'Use Kindex first', 'Signet policy context must be received: search before edit'],
                                              'policy_revision': 'policy-1'}
-    evaluator(monkeypatch, reason='Use Kindex first',
+    evaluator(monkeypatch, reason=reason,
               revision='policy-1' if matching else 'changed-policy')
     result = policy.evaluate(plan, tool_request(plan), receipts)
     assert result['output']['hookSpecificOutput']['permissionDecision'] == 'deny'
@@ -85,9 +90,52 @@ def test_only_exact_owner_prerequisite_allows_genuine_recovery(fixture, monkeypa
     recovery = tool_request(plan, 'recovery')
     recovery['payload'].update(tool_name='mcp__kindex__search', tool_input={'query': 'rules'})
     next_result = policy.evaluate(plan, recovery, receipts)
-    assert len(calls) == int(matching)
+    recoverable = matching and reason != 'Unrelated refusal'
+    assert len(calls) == int(recoverable)
     assert next_result['output']['hookSpecificOutput']['permissionDecision'] == (
-        'allow' if matching else 'deny')
+        'allow' if recoverable else 'deny')
+
+
+@pytest.mark.parametrize('case', ['question-only', 'unreviewed', 'wrong-request',
+                                  'substantive', 'extra-question'])
+def test_reviewed_question_recovery_preserves_author_admission_block(fixture, monkeypatch, case):
+    from harness.attention_gate import BlockingEventPending, check_lane_admission
+    from harness.lane_dialogue import record_question
+
+    plan, receipts, root = fixture
+    evaluator(monkeypatch)
+    policy.evaluate(plan, tool_request(plan), receipts)
+    question = 'Where does the comment stay after a split?'
+    record_question(root, 'coder', question)
+    notice = json.loads((receipts / 'policy-first.notice.json').read_text())
+    pending = policy.holds(receipts)[0]
+    reviewed = f"Review policy-first request {pending['request_digest']} for recovery."
+    if case == 'wrong-request':
+        reviewed = 'Review policy-first request ' + '0' * 64
+    report = policy.orchestrator_channel.record_assessment(root, assessment(
+        notice['cursor'], decision='block', planning_mode='clarify',
+        specification_questions=[question] + (['An unrelated decision?']
+                                             if case == 'extra-question' else []),
+        aligned=case != 'substantive',
+        summary=reviewed if case != 'unreviewed' else 'Unrelated review.'))
+    with pytest.raises(BlockingEventPending):
+        check_lane_admission(root, 'coder')
+    if case != 'question-only':
+        with pytest.raises(ValueError, match='does not dispose'):
+            policy.release(plan, receipts, 'policy-first', report['assessment_digest'])
+        assert policy.holds(receipts)
+        return
+    terminal = (receipts / 'policy-first.terminal.json').read_bytes()
+    policy.release(plan, receipts, 'policy-first', report['assessment_digest'])
+    assert not policy.holds(receipts)
+    assert (receipts / 'policy-first.terminal.json').read_bytes() == terminal
+    with pytest.raises(BlockingEventPending):
+        check_lane_admission(root, 'coder')
+    calls = evaluator(monkeypatch, 'allow')
+    recovery = tool_request(plan, 'fresh-kindex')
+    recovery['payload'].update(tool_name='mcp__kindex__search', tool_input={'query': 'rules'})
+    policy.evaluate(plan, recovery, receipts)
+    assert calls == [recovery['payload']]
 
 
 def accept(root, cursor):

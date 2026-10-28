@@ -47,9 +47,21 @@ def validate(value: Any, home: pathlib.Path) -> dict[str, Any]:
     if prerequisite is not None and (
             not isinstance(prerequisite, dict)
             or set(prerequisite) != {"policy_revision", "reason"}
-            or any(not isinstance(v, str) or not v.strip() for v in prerequisite.values())):
+            or not isinstance(prerequisite.get("policy_revision"), str)
+            or not prerequisite["policy_revision"].strip()
+            or not _recovery_reasons(prerequisite.get("reason"))):
         raise custody.CustodyError("prerequisite must bind the exact owner revision and reason")
     return value
+
+
+def _recovery_reasons(value: Any) -> list[str]:
+    """Exact pinned messages, including client-translated prerequisite guidance."""
+    reasons = [value] if isinstance(value, str) else value
+    if (not isinstance(reasons, list) or not 1 <= len(reasons) <= 4
+            or any(not isinstance(v, str) or not v.strip() for v in reasons)
+            or len(set(reasons)) != len(reasons)):
+        return []
+    return reasons
 
 
 @contextlib.contextmanager
@@ -130,7 +142,7 @@ def evaluate(plan: custody.Plan, request: Any, receipts: pathlib.Path) -> dict[s
         prerequisite = binding["prerequisite"]
         if decision == "deny" and prerequisite is not None and (
                 health.get("policy_revision") == prerequisite["policy_revision"]
-                and reason == prerequisite["reason"]):
+                and reason in _recovery_reasons(prerequisite["reason"])):
             # This is an owner-pinned recovery instruction, not an ALLOW or evidence of
             # completed retrieval. The original denial is returned unchanged; Kindex must
             # actually be called and Signet must independently permit the next action.
@@ -149,6 +161,26 @@ def evaluate(plan: custody.Plan, request: Any, receipts: pathlib.Path) -> dict[s
                 "disposition. No raw tool input or evaluator output is logged.")
             custody._save_once(receipts / (stem + ".notice.json"), {"cursor": cursor})
         return {"status": "policy", "output": output}
+
+
+def _clarification_recovery(root: pathlib.Path, assessment: dict[str, Any],
+                            denial_id: str, request_digest: str) -> bool:
+    """Restore evaluated tools to answer questions, never clear work/admission blocks."""
+    questions = {str(row["text"]) for row in orchestrator_channel.pending_questions(root)}
+    reviewed = assessment.get("summary", "") + "\n" + assessment.get("recommended_strategy", "")
+    return bool(
+        questions and assessment.get("decision") == "block"
+        and assessment.get("planning_mode") == "clarify"
+        and set(assessment.get("specification_questions", [])) == questions
+        and all(assessment.get(key) is True for key in (
+            "direction_correct", "advances_goal", "desirable_outcome", "aligned"))
+        and assessment.get("adherence_findings") == []
+        and not assessment.get("guidance_findings")
+        and assessment.get("guidance_state") != "noncompliant"
+        and not any(h.get("clarifying_question")
+                    for h in assessment.get("complexity_hotspots", []))
+        and denial_id in reviewed and request_digest in reviewed
+    )
 
 
 def release(plan: custody.Plan, receipts: pathlib.Path, denial_id: str,
@@ -179,16 +211,20 @@ def release(plan: custody.Plan, receipts: pathlib.Path, denial_id: str,
         # Use canonical channel validation; an arbitrary JSON or stale/no-longer-current
         # no-op is not an accepted supervision disposition.
         orchestrator_channel.require_current(root)
-        # A later cadence no-op can coexist with an earlier unresolved BLOCK. Use the
-        # existing receipted attention gate, not the latest report's label alone.
-        check_lane_admission(root, plan.document.get("author_role", "validator"))
         rows = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
         report = rows[-1] if rows else {}
         assessment = report.get("assessment", {})
+        clarification = _clarification_recovery(
+            root, assessment, denial_id, pending[denial_id]["request_digest"])
         if (report.get("assessment_digest") != assessment_digest
-                or assessment.get("decision") != "no-op"
+                or (assessment.get("decision") != "no-op" and not clarification)
                 or assessment.get("through_cursor", 0) < notice["cursor"]):
             raise custody.CustodyError("current assessment does not dispose of this denial")
+        # A question-only block must not prevent the tools needed to deliver its answer.
+        # Its attention receipts remain untouched: author dispatch still checks admission.
+        # Other releases retain the original clear-admission requirement.
+        if not clarification:
+            check_lane_admission(root, plan.document.get("author_role", "validator"))
         result = {"denial_id": denial_id,
                   "request_digest": pending[denial_id]["request_digest"],
                   "assessment_digest": assessment_digest,
