@@ -1,4 +1,4 @@
-"""Spec-derived monitors: resolvable authority, class-scoped authorship, recorded density."""
+"""Spec-derived monitors: resolvable authority, truthful authorship, recorded density."""
 
 from __future__ import annotations
 
@@ -169,12 +169,13 @@ def test_without_working_authority_an_unresolved_reference_is_an_absence() -> No
     assert report.integrity_issues == ()
 
 
-def test_critical_surfaces_carry_human_authored_monitors() -> None:
+def test_generated_monitors_can_cover_critical_surfaces_without_claiming_human_authorship() -> None:
     critical = _surface("critical-surface", CRITICALITY_CRITICAL)
     standard = _surface("standard-surface", CRITICALITY_STANDARD)
 
     generated_on_critical = _verify(
-        (_monitor("critical-surface", authorship=MONITOR_AUTHORSHIP_GENERATED),),
+        (_monitor("critical-surface", authorship=MONITOR_AUTHORSHIP_GENERATED,
+                  author_identity="factory-agent"),),
         (critical,),
     )
     generated_on_standard = _verify(
@@ -182,11 +183,7 @@ def test_critical_surfaces_carry_human_authored_monitors() -> None:
         (standard,),
     )
 
-    assert (
-        "critical-surface",
-        "critical-monitor-not-human-authored:monitor-critical-surface",
-    ) in generated_on_critical.surface_gaps
-    # Standard and cosmetic surfaces take generated monitors without a finding.
+    assert generated_on_critical.satisfied is True
     assert generated_on_standard.satisfied is True
 
 

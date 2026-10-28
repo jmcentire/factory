@@ -12,10 +12,8 @@ because the artifact is a monitor. So this module enforces, mechanically:
 * every monitor resolves a backreference to the exact phase-artifact item it watches — an
   unresolvable backreference is an unauthorized assertion about production, not an absence;
 * a monitor recorded as implementation-derived cannot satisfy the obligation at all;
-* monitor authorship is class-scoped — a Critical surface carries human-authored monitors,
-  because the instrument you reach for when something goes seriously wrong must be one you can
-  read under pressure, and "human-authored" must resolve to an enrolled human rather than being
-  a label;
+* authorship is recorded honestly: generated monitors are valid on every class under
+  AUTHORITY H9 / P-0001; a claim of human authorship still resolves to an enrolled human;
 * a monitor that notifies a human carries a human-actionable conclusion, because detection is
   cheap and exhaustive while notification is expensive and earned; and
 * monitor **density is recorded and never gated** — one monitor per N lines is a diagnostic and
@@ -32,11 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from factory_core.criticality import (
-    CRITICALITY_CRITICAL,
-    ResolvedSurface,
-    normalize_label,
-)
+from factory_core.criticality import ResolvedSurface, normalize_label
 from factory_core.manifest import SegregationPolicy
 from factory_core.provenance import IntentBackreference
 
@@ -232,7 +226,7 @@ def verify_monitor_set(
 
         _verify_derivation(monitor, surface_gaps, integrity)
         _verify_backreference(monitor, resolved, authority_available, surface_gaps, integrity)
-        _verify_authorship(monitor, surface, policy, surface_gaps, integrity)
+        _verify_authorship(monitor, policy, surface_gaps, integrity)
         _verify_notification(monitor, surface_gaps)
 
     for surface_id in sorted(surface_by_id):
@@ -301,7 +295,6 @@ def _verify_backreference(
 
 def _verify_authorship(
     monitor: Monitor,
-    surface: ResolvedSurface,
     policy: SegregationPolicy,
     surface_gaps: list[tuple[str, str]],
     integrity: list[str],
@@ -318,12 +311,8 @@ def _verify_authorship(
         if policy.resolve_human(monitor.author_identity) is None:
             integrity.append(f"monitor-author-not-enrolled-human:{monitor.monitor_id}")
         return
-    if surface.effective_criticality == CRITICALITY_CRITICAL:
-        # No waiver on this class: the only instrument on a hazard surface may not be one nobody
-        # can read under pressure.
-        surface_gaps.append(
-            (monitor.surface_id, f"critical-monitor-not-human-authored:{monitor.monitor_id}")
-        )
+    # AUTHORITY H9 / P-0001 removes a mandatory human author, not the specification,
+    # provenance, coverage or truthful-authorship checks above.
 
 
 def _verify_notification(monitor: Monitor, surface_gaps: list[tuple[str, str]]) -> None:

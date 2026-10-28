@@ -265,12 +265,11 @@ it is deliberate: cosmetic must be an assertion someone made, never a default ar
 omission. Given the enumeration failure class in §14, a surface nobody classified is precisely
 the surface nobody thought about.
 
-**Monitor authorship is class-scoped.** A Critical surface carries **human-authored monitors**,
-because an auto-generated monitor is opaque, and when something goes seriously wrong the
-instrumentation you reach for must be instrumentation you understand. Standard and cosmetic
-surfaces take generated monitors. This is the same reason the critical class has no waiver — not
-distrust of the generator, but a refusal to have the only instrument on a hazard surface be one
-nobody can read under pressure.
+**Monitor authorship is truthful, not a human gate.** Under AUTHORITY H9 / P-0001,
+generated monitors may cover Critical, Standard and cosmetic surfaces. Record their actual
+authorship; a claim of human authorship must still resolve to an enrolled human. Every monitor
+must remain spec-derived, understandable and bound to the criterion it watches. Critical
+coverage and evidence requirements are unchanged.
 
 Criticality is not a claim about how likely a change is to be wrong. It is a claim about **what
 being wrong costs**, which is why it governs disposition rather than depth. The factory
@@ -1271,7 +1270,9 @@ touched blocks, and no amount of smallness, urgency, or confidence changes that.
 
 Every surface in the **Critical** class defined in §3.5 receives mandatory specialist review.
 That class table is the one authoritative list; this section does not maintain a second
-enumeration that can drift.
+enumeration that can drift. The specialist may be an enrolled human or a recorded agent/service
+identity (AUTHORITY H9 / P-0001), distinct from the implementer and verifier. Its verdict remains
+bound to the exact candidate, surface and criticality profile; agent review is never relabeled human.
 
 ### A gate is a checklist, not a recollection
 
@@ -1975,7 +1976,8 @@ accepting the step as skipped.
 
 **Verify the monitor set.** Each monitor resolves its backreference to the criterion or invariant
 it watches; a monitor that resolves to nothing is an unauthorized assertion about production and
-blocks. Each monitor is spec-derived, and each Critical surface carries human-authored monitors.
+blocks. Each monitor is spec-derived and truthfully attributed, including on Critical surfaces
+(AUTHORITY H9 / P-0001); generated authorship does not waive any evidence requirement.
 A triage proposal to delete or weaken a monitor is a specification defect for the human, never a
 change you accept. Record monitor density; never gate on it.
 
@@ -2404,8 +2406,9 @@ Validator's mutation-check obligation, stated in the decision package.
 the code does and cannot catch behavior that was wrong on day one; a monitor derived from a
 criterion or invariant is an oracle. Each monitor carries a resolvable backreference under
 non-negotiable 7 exactly as a test assertion does, and one that does not resolve is an
-unauthorized assertion about production. Monitor authorship is class-scoped: Critical surfaces
-carry human-authored monitors.
+unauthorized assertion about production. Monitor authorship is recorded truthfully. The original
+requirement for human authorship on Critical surfaces was superseded by AUTHORITY H9 / P-0001;
+generated monitors retain the same provenance obligations.
 
 **Prohibited the triage agent from silencing the monitor.** Routing a firing monitor to an agent
 that may delete or tune it is the writer controlling the judge, relocated to the observability

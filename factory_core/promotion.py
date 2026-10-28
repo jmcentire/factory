@@ -12,13 +12,14 @@ only the doctrine:
 * gate items count only when individually cited by subject-bound evidence;
 * the independence tier is derived from the recorded arrangement, and a claim above it is false
   rather than weak;
-* every monitor is spec-derived and resolves its own authority, and a Critical surface's monitors
-  are human-authored;
+* every monitor is spec-derived, truthfully attributed and resolves its own authority
+  (generated monitors are valid on Critical surfaces under H9 / P-0001);
 * a correction shows both controls, per-test, plus a reproduction recorded before the repair;
 * missing oracle/evidence links are gaps disposed by class;
 * malformed, mismatched, or negative evidence blocks every class;
 * Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
-  retry-free, live, specialist-reviewed, and approved by at least two distinct enrolled humans;
+  retry-free, live and independently specialist-reviewed; targets may additionally require
+  named human approvers, but H9 / P-0001 sets no doctrine approval floor;
 * Standard gaps require a candidate-bound, expiring risk acceptance from an enrolled human;
 * Cosmetic gaps are reported and promoted past; and
 * Standard/Cosmetic changes with adequate oracles need no discretionary human click.
@@ -205,7 +206,6 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "risk-acceptance-surface-missing",
     "specialist-review-authority-equals-implementer",
     "specialist-review-authority-equals-verifier",
-    "specialist-review-authority-is-agent",
     "specialist-review-authority-not-enrolled",
     "specialist-review-candidate-mismatch",
     "specialist-review-duplicate",
@@ -392,7 +392,7 @@ class SurfaceObservation:
 
 @dataclass(frozen=True)
 class SpecialistReview:
-    """Candidate-bound human specialist verdict for one surface."""
+    """Candidate-bound independent specialist verdict for one surface (H9 / P-0001)."""
 
     surface_id: str
     reviewer: str
@@ -1529,12 +1529,21 @@ def _validate_specialist_review(
     hard_reasons: list[str],
     surface_gaps: list[str] | None,
 ) -> None:
-    _, authority_issue = _record_human(
-        review.reviewer,
-        policy=policy,
-        implementer=request.implementer,
-        verifier=request.verifier,
-    )
+    # AUTHORITY H9 / P-0001: a specialist need not be human. Keep identity and
+    # independence: accept an enrolled human or a recorded service/agent identity,
+    # never an unknown name, the implementer, or the verifier. The service list
+    # excludes identities from HUMAN authority; it does not prohibit agent review.
+    reviewer = policy.canonical(review.reviewer)
+    authority_issue = None
+    if not normalize_label(reviewer) or not (
+        policy.resolve_human(review.reviewer) is not None
+        or policy.is_excluded(review.reviewer) or policy.is_excluded(reviewer)
+    ):
+        authority_issue = f"authority-not-enrolled:{normalize_label(review.reviewer)}"
+    elif reviewer == policy.canonical(request.implementer):
+        authority_issue = f"authority-equals-implementer:{normalize_label(review.reviewer)}"
+    elif reviewer == policy.canonical(request.verifier):
+        authority_issue = f"authority-equals-verifier:{normalize_label(review.reviewer)}"
     if authority_issue:
         hard_reasons.append(f"specialist-review-{authority_issue}:{surface_id}")
     if review.candidate_digest != request.candidate_digest:
