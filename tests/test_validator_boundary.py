@@ -77,10 +77,17 @@ def test_kernel_blocks_interpreter_alias_and_parent_rename_but_keeps_useful_acce
     alias.symlink_to(author, target_is_directory=True)
     public = tmp_path / "shared"
     public.write_text("permitted shared contract")
+    # Owner correction 2026-10-28: ordinary peer runtime links must not prevent
+    # startup; direct and aliased reads of peer work must still be denied.
+    (author / "internal-link").symlink_to("content")
+    (author / "shared-link").symlink_to(public)
+    (author / "dangling-link").symlink_to("absent-runtime")
+    (author / "cyclic-link").symlink_to("cyclic-link")
     boundary = Boundary.parse(contract(tmp_path))
     script = '''import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]); result={}
-for name,path in [('direct',root/'private/author/content'),('alias',root/'alias/content')]:
+for name,path in [('direct',root/'private/author/content'),('alias',root/'alias/content'),
+                  ('internal',root/'alias/internal-link')]:
  try: path.read_text(); result[name]=False
  except PermissionError: result[name]=True
 try: (root/'new-hardlink').hardlink_to(root/'private/author/content'); result['hardlink']=False
@@ -99,22 +106,18 @@ print(json.dumps(result))
                          capture_output=True, text=True, timeout=15)
     assert ran.returncode == 0, ran.stderr
     assert json.loads(ran.stdout) == dict.fromkeys(
-        ["direct", "alias", "hardlink", "control_write", "parent_rename", "shared_read",
+        ["direct", "alias", "internal", "hardlink", "control_write", "parent_rename", "shared_read",
          "ordinary_write"],
         True)
     assert (control / "receipt").read_text() == "host-owned"
 
 
-@pytest.mark.parametrize("alias", ["hardlink", "symlink"])
-def test_admission_rejects_existing_alias_without_reading_contents(tmp_path, alias):
+def test_admission_rejects_existing_hardlink_without_reading_contents(tmp_path):
     private = tmp_path / "private" / "author"
     private.mkdir(parents=True)
     data = private / "content"
     data.write_text("synthetic")
-    if alias == "hardlink":
-        (tmp_path / "outside").hardlink_to(data)
-    else:
-        (private / "alias").symlink_to(tmp_path / "outside")
+    (tmp_path / "outside").hardlink_to(data)
     with pytest.raises(BoundaryError):
         Boundary.parse(contract(tmp_path)).check_topology()
 
@@ -131,10 +134,9 @@ def shared_runtime(tmp_path):
     return value, link, peer, operator / "Library"
 
 
-def test_existing_private_login_home_needs_exact_host_alias_declaration(tmp_path):
+def test_existing_private_login_home_link_does_not_change_kernel_permissions(tmp_path):
     value, link, _, target = shared_runtime(tmp_path)
-    with pytest.raises(BoundaryError, match="must not contain symlinks"):
-        Boundary.parse(contract(tmp_path)).check_topology()
+    Boundary.parse(contract(tmp_path)).check_topology()
     boundary = Boundary.parse(value)
     boundary.check_topology()
     assert boundary.document()["shared_read_aliases"] == {str(link): str(target)}
@@ -146,18 +148,15 @@ def test_existing_private_login_home_needs_exact_host_alias_declaration(tmp_path
     assert boundary.digest != plain.digest
 
 
-@pytest.mark.parametrize("change", ["retarget", "regular", "undeclared"])
-def test_shared_runtime_does_not_admit_changed_or_additional_links(tmp_path, change):
+@pytest.mark.parametrize("change", ["retarget", "regular"])
+def test_shared_runtime_does_not_admit_changed_declared_links(tmp_path, change):
     value, link, peer, _ = shared_runtime(tmp_path)
     boundary = Boundary.parse(value)
-    if change == "undeclared":
-        (peer / "other-link").symlink_to(tmp_path / "elsewhere")
+    link.unlink()
+    if change == "retarget":
+        link.symlink_to(tmp_path / "elsewhere")
     else:
-        link.unlink()
-        if change == "retarget":
-            link.symlink_to(tmp_path / "elsewhere")
-        else:
-            link.mkdir()
+        link.mkdir()
     with pytest.raises(BoundaryError):
         boundary.check_topology()
 

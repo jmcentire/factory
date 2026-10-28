@@ -226,7 +226,11 @@ class Boundary:
                         raise BoundaryError("shared read alias changed or target is unavailable")
                     continue
                 if any(_within(path, root) for root in self.denied_reads):
-                    raise BoundaryError("denied-read trees must not contain symlinks")
+                    # A symlink here does not give a denied inode another name:
+                    # unlike a hard link, it points to a separately checked path.
+                    # Keep the kernel denial on this tree; do not follow links
+                    # into shared runtimes (or fail on normal venv/npm links).
+                    continue
                 try:
                     target = path.resolve(strict=True)
                 except (OSError, RuntimeError) as error:
