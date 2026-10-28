@@ -1680,7 +1680,7 @@ oracle, or survive a change to any bound input.
 Every tool, credential, route, and integration is Allowed, Sign-off required, or Verboten in a
 signed, content-addressed policy whose rules cite phase 2 or phase 3. Unknown is Verboten.
 Allowed does not mean unscoped. Sign-off authority is human, scoped, recorded, and expiring.
-Verboten means the capability is absent, and a denial probe proves the resource refuses it.
+Verboten means the capability is absent. A denial probe can provide evidence that the resource refuses it; additional probe receipts are not a release prerequisite (TESTING T43). Live tool-policy admission and actual access restrictions are unchanged.
 The policy and candidate bind the same exact phase-artifact versions. No agent changes or
 routes around the policy under which it is operating.
 
@@ -1954,8 +1954,7 @@ refutation method that could actually fail and attempt to refute rather than con
 carries the constraint asserted. An assertion that traces to nothing, or to an item that does
 not carry it, blocks promotion regardless of whether the suite is green.
 
-**Own mutation evidence.** Remove each high-consequence control and confirm at least one test
-fails. This is yours because an agent mutation-testing its own work defeats the separation.
+**Own selected mutation evidence.** Apply TESTING T43 to select required sensitivity checks for demonstrated damaging failure risks; do not start a blanket campaign. For each selected check, remove its control and confirm the named test fails. This is yours because an agent mutation-testing its own work defeats the separation.
 **Confirm the red came from the test that carries the requirement**, not from a neighbor: a red
 elsewhere in the suite proves the suite is alive and proves nothing about the requirement.
 
@@ -1979,7 +1978,7 @@ it watches; a monitor that resolves to nothing is an unauthorized assertion abou
 blocks. Each monitor is spec-derived and truthfully attributed, including on Critical surfaces
 (AUTHORITY H9 / P-0001); generated authorship does not waive any evidence requirement.
 A triage proposal to delete or weaken a monitor is a specification defect for the human, never a
-change you accept. Record monitor density; never gate on it.
+change you accept without authority. TESTING T43 governs whether additional coverage is required; existing monitors and their integrity checks remain intact. Record monitor density; never gate on it.
 
 **Record the independence tier and the verifier identities.** Write into the manifest the model
 and version of every agent that produced or judged the change, the directive version each ran
@@ -1987,9 +1986,9 @@ under, and the tier of the arrangement they ran in. A claimed tier the recorded 
 not support blocks. Where the Tester forwent structural mode for lack of a signed interface
 contract, the branch-level depth it would have bought is yours: run mutation checks on the
 critical controls and state plainly in the decision package that structural depth was not
-purchased.
+purchased. Additional mutation receipts are required only when explicitly selected under TESTING T43.
 
-**Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
+**Gate on oracle adequacy for required checks.** Confirm the suite exercises the surfaces the change disturbs,
 including side effects. Do not let diff size stand in for that judgment.
 
 **Then gate on oracle quality**, which coverage does not establish. For each requirement, take
@@ -2000,10 +1999,7 @@ reason present at the time. A test that could not fail for that reason leaves th
 and the class disposition applies.
 
 **Dispose of gaps by class.** Determine every surface the change disturbs, including those its
-side effects reach, and take the highest class among them. Where the oracle is silent on a
-disturbed surface: block if Critical, gate if Standard, report if Cosmetic. Where a required
-evidence artifact is absent — an attestation, a backreference, a live-verification result —
-apply the same disposition. A malformed, mismatched, or fabricated artifact blocks regardless
+side effects reach, and take the highest class among them. TESTING T43 selects required test campaigns: missing optional oracle, live, monitor-coverage or structural-mutation evidence is reported honestly and does not demand a new campaign. Missing explicitly required evidence is disposed by class: block if Critical, gate if Standard, report if Cosmetic. Attestation and provenance remain required. A malformed, mismatched, or fabricated artifact blocks regardless
 of class.
 
 **Treat a flaked critical test as a failure.** A green result obtained after a red on a

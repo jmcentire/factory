@@ -132,7 +132,11 @@ def _control(
         decided_by=decided_by,
         wrong_cost=wrong_cost,
         side_effect_surface_ids=side_effects,
-        required_evidence_ids=required_evidence,
+        # These fixtures exercise explicitly required campaigns. Production
+        # profiles select them only for demonstrated damaging failure risks.
+        required_evidence_ids=required_evidence | frozenset({
+            "campaign:oracle", "campaign:live", "campaign:monitor", "campaign:mutation",
+        }),
         standard_flake_budget=standard_flake_budget,
     )
 
