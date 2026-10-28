@@ -156,7 +156,7 @@ values = (active[0].get("repository"), active[0].get("agent"), active[0].get("mo
           json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])),
           "off" if active[0].get("sandbox") == "off" else "on",
           json.dumps(active[0].get("kernel_boundary")))
-# The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
+# The Codex config overrides that selected the lane model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
     raise SystemExit("lane-message: retained launch fields are malformed")
