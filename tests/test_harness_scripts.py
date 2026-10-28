@@ -9921,14 +9921,19 @@ def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     assert verdict["allowed"] is True
 
 
+@pytest.mark.parametrize("monitoring", [
+    {}, {"jev_screen": None, "progress_review": {"every_cadence_ticks": 2}},
+])
 def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
-    tmp_path: Path,
+    tmp_path: Path, monitoring: dict[str, object],
 ) -> None:
     """The current ignition schema must survive the exact Gate-L metadata check."""
     from tests.conftest import promoting_promotion_inputs, write_promoting_chain
 
     root = _make_run(tmp_path)
     harness = _add_current_harness_contract(root)
+    harness.update(monitoring)
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
     admission = _write_green_endgame_admission(root, harness)
     (root / "promotion_inputs.json").write_text(
         json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
@@ -9949,6 +9954,27 @@ def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
 
     assert promoted.returncode == 0, promoted.stderr
     assert _run_status(root) == "closed"
+
+
+@pytest.mark.parametrize("monitoring", [
+    {"progress_review": {"every_cadence_ticks": 0}},
+    {"jev_screen": {"max_calls": 0}},
+])
+def test_promote_refuses_invalid_monitoring_configuration(
+    tmp_path: Path, monitoring: dict[str, object],
+) -> None:
+    """Recognizing current ignition fields must not admit invalid monitoring settings."""
+    root = _make_run(tmp_path)
+    harness = _add_current_harness_contract(root)
+    harness.update(monitoring)
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+    admission = _write_green_endgame_admission(root, harness)
+    result = run(
+        ["bash", str(HARNESS / "promote.sh"), "r1", "--endgame-admission", str(admission)],
+        tmp_path, _factory_cli_env(),
+    )
+    assert result.returncode == 66
+    assert _run_status(root) == "open"
 
 
 def test_promote_refuses_current_contract_without_green_endgame_admission(

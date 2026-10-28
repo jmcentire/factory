@@ -32,13 +32,18 @@
 # The full suite still runs — per-test attribution manufactures blind spots the
 # same way per-test greens manufacture false confidence; this only checks the
 # kill is attributable to the named oracle, not that only one test ran.
+# --package-root is the package search directory relative to the copied tree.
+# --package selects the import when a flat tree contains other directories.
 set -uo pipefail
+PACKAGE_ROOT="src"; PACKAGE=""
 
 NAME="${1:?usage: mutate.sh <name> <patch.py> --src <tree> --tests <tree>}"; shift
 PATCH="${1:?patch script}"; shift
 SRC=""; TESTS=""; TEST_CMD="${TEST_CMD:-}"; NAMED_TEST=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --package-root) PACKAGE_ROOT="$2"; shift 2 ;;
+    --package) PACKAGE="$2"; shift 2 ;;
     --src)        SRC="$2"; shift 2 ;;
     --tests)      TESTS="$2"; shift 2 ;;
     --test-cmd)   TEST_CMD="$2"; shift 2 ;;
@@ -137,17 +142,25 @@ verdict() { ORACLE_VERDICT="$*"; printf '%s: %s\n' "$NAME" "$*"; }
 # A stale site-packages .pth on the workstation aliases the package import to a
 # different checkout, so a run can silently exercise other code and report a
 # confident verdict about it.
-import_ok=$(cd "$WORK" && PYTHONPATH="$WORK/src" python3 - "$WORK" <<'PY' 2>&1
-import os, sys, importlib
-root = sys.argv[1]; sys.path.insert(0, root + "/src")
-pkg = next((n for n in sorted(os.listdir(root + "/src"))
-            if not n.startswith("_") and os.path.isdir(root + "/src/" + n)), None)
+import_ok=$(cd "$WORK" && python3 - "$WORK" "$PACKAGE_ROOT" "$PACKAGE" <<'PYIMPORT' 2>&1
+import importlib
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1]).resolve()
+relative = pathlib.Path(sys.argv[2])
+search = (root / relative).resolve()
+if relative.is_absolute() or not search.is_relative_to(root) or not search.is_dir():
+    raise SystemExit("INVALID-PACKAGE-ROOT")
+sys.path.insert(0, str(search))
+pkg = sys.argv[3] or next((p.name for p in sorted(search.iterdir())
+                          if not p.name.startswith("_") and p.is_dir()), None)
 if pkg is None:
     print("NO-PACKAGE")
 else:
-    m = importlib.import_module(pkg)
-    print("OK" if (m.__file__ or "").startswith(root) else "WRONG-TREE " + str(m.__file__))
-PY
+    module = importlib.import_module(pkg)
+    origin = pathlib.Path(module.__file__).resolve() if module.__file__ else None
+    print("OK" if origin and origin.is_relative_to(search) else "WRONG-TREE")
+PYIMPORT
 )
 case "$import_ok" in
   OK*) ;;
@@ -164,7 +177,7 @@ esac
 # slipped past the grep, and was accepted as green. The mutation was then falsely reported
 # KILLED: the exact v8 false-red this gate exists to prevent. The line-146 premise ("GATE 2
 # already proved the clean tree exits 0") is only true now that GATE 2 sees pytest's exit.
-clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
+clean_full=$(cd "$WORK" && PYTHONPATH="$WORK/$PACKAGE_ROOT" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); clean_rc=$?
 clean_out=$(printf '%s' "$clean_full" | tail -3)
 # The kill condition is pytest's EXIT CODE alone — not a grep for "N failed/error" in the
 # summary. The grep was added to catch a collection crash that prints no summary line, but a
@@ -218,7 +231,7 @@ fi
 # shadowing install, or a patch that edited a sibling copy all break the link
 # between "file changed" and "behavior changed".
 if [ -n "${MUTATE_MARKER:-}" ]; then
-  if ! grep -rq -- "$MUTATE_MARKER" "$WORK/src"; then
+  if ! grep -rq -- "$MUTATE_MARKER" "$WORK/$PACKAGE_ROOT"; then
     verdict "INVALID (marker '$MUTATE_MARKER' absent from mutated source)"; exit 3
   fi
 fi
@@ -229,7 +242,7 @@ fi
 # manufacture false confidence: in v8 a mutation "survived" the oracle it was aimed
 # at and was killed by a different one, because at zero elapsed interval the
 # mutated fold was mathematically the identity and observable only elsewhere.
-out=$(cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
+out=$(cd "$WORK" && PYTHONPATH="$WORK/$PACKAGE_ROOT" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD 2>&1); test_rc=$?
 # A conftest.py SyntaxError (or any collection-time crash) exits non-zero with NO
 # "N failed/error" summary line — pytest prints "ImportError while loading conftest"
 # and a traceback, then stops. The kill condition is the EXIT CODE alone: a collection

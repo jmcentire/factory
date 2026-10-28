@@ -58,9 +58,12 @@ refusal_event() {
   echo "promote: no checked harness.json at $ROOT" >&2; exit 64;
 }
 CURRENT_CONTRACT=$(python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
-  "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY'
+    "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" "$D" <<'PY'
 import json, os, re, stat, sys
-path, run, target_state, commit, checkout = sys.argv[1:]
+path, run, target_state, commit, checkout, harness_tools = sys.argv[1:]
+sys.path.insert(0, harness_tools)
+from jev_screen import check_config
+from orchestrator_channel import progress_review_every
 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
 try:
     if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -105,7 +108,11 @@ allowed_shapes = {
     frozenset(base_fields | resident_fields | close_fields),
     frozenset(base_fields | resident_fields | contract_fields | close_fields),
 }
-if frozenset(doc) not in allowed_shapes:
+# Current ignition adds these optional monitoring configurations. Validate them
+# with the same authorities as the runtime; never discard them from the subject.
+check_config(doc.get("jev_screen"))
+progress_review_every(doc)
+if frozenset(doc) - {"jev_screen", "progress_review"} not in allowed_shapes:
     raise SystemExit("promote: harness metadata has unknown or missing fields")
 if doc.get("status") not in {"open", "closed"}:
     raise SystemExit("promote: harness status is invalid")
