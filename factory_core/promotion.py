@@ -888,7 +888,7 @@ def decide_promotion(
     derived_surface_ids = derivation.surface_ids + tuple(
         f"path:{path}" for path in derivation.unmapped_paths
     )
-    resolution = resolve_criticality(profile, derived_surface_ids, policy)
+    resolution = resolve_criticality(profile, derived_surface_ids, policy, request.evaluated_at)
     # The ``path:`` namespace is RESERVED for unmapped-path pseudo-surfaces. A profile
     # that declares a surface id inside it could pre-classify an unmapped path (declare
     # "path:migrations/drop.sql" Cosmetic, and the collision resolves to the declared

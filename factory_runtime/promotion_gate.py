@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -369,6 +370,27 @@ def decide(run_root: Path) -> dict[str, Any]:
         raise
     except (TypeError, AttributeError, ValueError) as exc:
         raise PromotionGateError(f"promotion-inputs-malformed: {exc}") from exc
+    if "delegation" in raw:
+        from factory_runtime.authority import AuthorityVerificationError, load_genesis
+        from factory_runtime.promotion_delegation import apply_delegation
+        from factory_runtime.tessera import TesseraCli
+
+        delegation = raw["delegation"]
+        if not isinstance(delegation, Mapping):
+            raise PromotionGateError("delegation must be an object")
+        try:
+            tessera = TesseraCli((os.environ.get("FACTORY_TESSERA_BIN", "tessera"),))
+            authority = load_genesis(
+                os.environ["FACTORY_GENESIS"],
+                trusted_root_public_key=os.environ["FACTORY_ROOT_PUBLIC_KEY"],
+                tessera=tessera,
+            )
+            policy = apply_delegation(
+                run_root, delegation, request, profile, policy,
+                authority=authority, tessera=tessera,
+            )
+        except (KeyError, OSError, ValueError, AuthorityVerificationError) as exc:
+            raise PromotionGateError(f"delegation-invalid: {exc}") from exc
     # F3: the seam's chain-anchor check. Every cited receipt envelope must be grounded in the
     # real tamper-evident chain — an envelope whose id is not in the chain, whose chain entry is
     # tampered, or whose body does not match the entry's projection, is a fabrication the core
