@@ -572,7 +572,8 @@ def bind_validator(root: pathlib.Path, session: str, pid: int, started: str, pan
 
 @_locked
 def rebind_validator(root: pathlib.Path, session: str, pid: int, started: str, pane: str,
-                     previous_pid: int, previous_started: str, assessment_digest: str) -> dict:
+                     previous_pid: int, previous_started: str, assessment_digest: str | None,
+                     maintenance_reason: str | None = None) -> dict:
     """Host-only handoff to a paused incarnation; retain old custody and all stop reasons.
 
     This neither launches nor resumes a worker, nor clears attention/policy holds. All known
@@ -581,11 +582,21 @@ def rebind_validator(root: pathlib.Path, session: str, pid: int, started: str, p
     import orchestrator_channel
     from lane_custody import _save_once
 
+    # This is a host-only maintenance operation, not permission to resume a lane.
+    # The external engineer's authority is not delegated to the application's AG.
+    # Keep the existing reviewed handoff route for in-run callers; never mix modes.
+    if maintenance_reason is not None:
+        if (assessment_digest is not None or not isinstance(maintenance_reason, str)
+                or not maintenance_reason.strip() or len(maintenance_reason.encode()) > 4096):
+            raise SupervisorError(
+                "maintenance handoff requires one bounded reason, not an assessment")
     binding = _validator_binding(root, session, pid, started, pane)
     old_identity = {"pid": previous_pid, "started": previous_started}
     if old_identity == binding["identity"]:
         raise SupervisorError("rebind requires a different process incarnation")
-    subject = {"previous_identity": old_identity, "binding": binding}
+    subject: dict[str, Any] = {"previous_identity": old_identity, "binding": binding}
+    if maintenance_reason is not None:
+        subject["maintenance_reason"] = maintenance_reason
     digest = hashlib.sha256(json.dumps(subject, sort_keys=True).encode()).hexdigest()
     folder = _folder(root)
     receipt_path = folder / f"validator-rebind-{digest}.json"
@@ -616,15 +627,16 @@ def rebind_validator(root: pathlib.Path, session: str, pid: int, started: str, p
                            or table[i["pid"]]["started"] != i["started"]
                            or "T" not in table[i["pid"]]["state"] for i in new_tree):
         raise SupervisorError("replacement Validator tree must already be paused")
-    try:
-        orchestrator_channel.require_current(root)
-    except orchestrator_channel.OrchestratorChannelError as error:
-        raise SupervisorError("rebind supervision is not current") from error
-    reports = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
-    latest = reports[-1] if reports else {}
-    if (latest.get("assessment_digest") != assessment_digest
-            or latest.get("assessment", {}).get("decision") != "no-op"):
-        raise SupervisorError("rebind requires the current accepted supervision disposition")
+    if maintenance_reason is None:
+        try:
+            orchestrator_channel.require_current(root)
+        except orchestrator_channel.OrchestratorChannelError as error:
+            raise SupervisorError("rebind supervision is not current") from error
+        reports = orchestrator_channel._read_jsonl(root / "orchestrator/reports.jsonl")
+        latest = reports[-1] if reports else {}
+        if (not assessment_digest or latest.get("assessment_digest") != assessment_digest
+                or latest.get("assessment", {}).get("decision") != "no-op"):
+            raise SupervisorError("rebind requires the current accepted supervision disposition")
     if not retained:
         retained = {"subject": subject, "previous_binding": old_binding,
                     "previous_custody": previous, "observed_exited": known,
@@ -903,7 +915,10 @@ def main(argv: list[str] | None = None) -> int:
     rebind.add_argument("--pane", required=True)
     rebind.add_argument("--previous-pid", required=True, type=int)
     rebind.add_argument("--previous-started", required=True)
-    rebind.add_argument("--assessment-digest", required=True)
+    rebind_mode = rebind.add_mutually_exclusive_group(required=True)
+    rebind_mode.add_argument("--assessment-digest")
+    rebind_mode.add_argument("--maintenance-reason",
+                             help="external host repair; retains every hold")
     check = sub.add_parser("check-validator")
     check.add_argument("--root", required=True, type=pathlib.Path)
     check.add_argument("--session", required=True)
@@ -912,7 +927,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "rebind-validator":
             print(json.dumps(rebind_validator(
                 args.root, args.session, args.pid, args.started, args.pane,
-                args.previous_pid, args.previous_started, args.assessment_digest), sort_keys=True))
+                args.previous_pid, args.previous_started, args.assessment_digest,
+                args.maintenance_reason), sort_keys=True))
             return 0
         if args.command == "bind-validator":
             print(json.dumps(bind_validator(args.root, args.session, args.pid, args.started,

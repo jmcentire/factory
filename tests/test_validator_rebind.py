@@ -67,9 +67,11 @@ def test_handoff_retains_old_custody_all_holds_and_no_resume(handoff):
 @pytest.mark.parametrize('defect', ['old-live', 'orphan', 'running', 'wrong-start',
                                   'wrong-prior', 'wrong-session', 'wrong-assessment', 'unknown',
                                   'running-child', 'new-pid-reused'])
-def test_unqualified_handoff_never_mutates_binding(handoff, monkeypatch, defect):
+@pytest.mark.parametrize('maintenance', [False, True])
+def test_unqualified_handoff_never_mutates_binding(handoff, monkeypatch, defect, maintenance):
     root, table, old, _, _ = handoff
-    changes = {}
+    changes = ({'assessment_digest': None, 'maintenance_reason': 'repair host launcher'}
+               if maintenance else {})
     if defect in ('old-live', 'orphan'):
         pid = 102 if defect == 'old-live' else 103
         table[pid] = {'pid': pid, 'ppid': 1, 'started': 'old' if pid == 102 else 'old-child',
@@ -155,3 +157,42 @@ def test_new_or_blocking_supervision_prevents_handoff(handoff, state):
         perform(handoff, **changes)
     assert supervisor._read_control(root / 'orchestrator/validator-process.json') == old
     assert not list((root / 'orchestrator').glob('validator-rebind-*.json'))
+
+
+@pytest.mark.parametrize('state', ['unassessed', 'block', 'absent'])
+def test_external_maintenance_retains_holds_without_application_approval(handoff, state):
+    import orchestrator_channel as channel
+    root, _, old, custody, _ = handoff
+    if state == 'absent':
+        (root / 'orchestrator/reports.jsonl').unlink()
+    else:
+        cursor = channel.append_activity(root, kind='cadence', source='dispatcher',
+                                         detail='application review pending during maintenance')
+        if state == 'block':
+            report = assessment(cursor)
+            report['decision'] = 'block'
+            channel.record_assessment(root, report)
+    before = {p.name: p.read_bytes() for p in (root / 'orchestrator').glob('*.jsonl')}
+    result = perform(handoff, assessment_digest=None, maintenance_reason='repair host launcher')
+    receipt = supervisor._read_control(Path(result['receipt']))
+    assert receipt['previous_binding'] == old and receipt['previous_custody'] == custody
+    assert receipt['subject']['maintenance_reason'] == 'repair host launcher'
+    assert receipt['assessment_digest'] is None
+    assert before == {p.name: p.read_bytes() for p in (root / 'orchestrator').glob('*.jsonl')}
+    state_after = supervisor.load_state(root)
+    assert set(state_after['validator']) == {
+        'stop:prior-incident', 'stop:validator-rebind-validation'}
+    assert state_after['coder'] == ['validator-stopped']
+    records = supervisor._read_control(root / 'orchestrator/seat-processes.json')
+    assert records['validator']['requested'] == 'stop'
+    assert not records['validator']['acknowledged']
+    assert perform(handoff, assessment_digest=None,
+                   maintenance_reason='repair host launcher')['replayed']
+
+
+@pytest.mark.parametrize('reason', ['', ' ', 'x' * 4097])
+def test_maintenance_requires_bounded_recorded_reason(handoff, reason):
+    root, _, old, _, _ = handoff
+    with pytest.raises(supervisor.SupervisorError, match='bounded reason'):
+        perform(handoff, assessment_digest=None, maintenance_reason=reason)
+    assert supervisor._read_control(root / 'orchestrator/validator-process.json') == old
