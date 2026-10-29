@@ -2983,6 +2983,7 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
     launch = {
         "schema_version": "factory-tmux-lane-launch/1",
         "status": "active",
+        "mode": "launch",
         "run_id": "r1",
         "role": "tester",
         "agent": "codex",

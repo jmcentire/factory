@@ -82,7 +82,11 @@ def launch(*args, **kwargs):
 subprocess.Popen = launch
 raise SystemExit(agent_exec.run(["sleep", "30"], timeout_s=30, stdin_file=None, log=None))
 ''')
-    assert subprocess.run([sys.executable, str(script)], timeout=8, check=False).returncode == 143
+    result = subprocess.run(
+        [sys.executable, str(script)], timeout=8, check=False,
+        env={**os.environ, "PYTHONPATH": str(WRAPPER.parent.parent)},
+    )
+    assert result.returncode == 143
 
 
 def test_already_reaped_child_and_launch_failure_restore_handlers() -> None:

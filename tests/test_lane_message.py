@@ -40,6 +40,7 @@ def lane_fixture(
         json.dumps(
             {
                 "status": "active",
+                "mode": "launch",
                 "run_id": "r1",
                 "role": lane,
                 "agent": "codex",
