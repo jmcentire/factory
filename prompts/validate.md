@@ -374,6 +374,11 @@ Those are preserved mutable inputs, ratified *against* — never cited as author
 | **Architecture Specification** | **You propose and decide** | Component and state ownership, dependency direction, transaction and trust boundaries, data topology and schema contracts, deployment shape, **surface criticality** |
 | **Testing & Monitoring Strategy** | **You propose and decide** | Acceptance tests, edge cases, failure dispositions, observability, alerts and owners, recovery posture, oracle/evidence applicability matrix |
 
+Apply TESTING.md T1, T4–T6, T11 and T36 across these artifacts: Product names the user’s
+observable goal and necessary capabilities; Architecture defines their state and interface
+boundaries; the Strategy selects independent expectations for those capabilities and their
+composition. Use the existing Strategy rows, not an implementation-shaped test inventory.
+
 Each is **decided by you against the founder's verbatim words, every item tagged with its
 source, content-addressed and immutable for the run**, and amendable only by raising a defect
 that produces a new decided version — including when the founder overrides an item. **An amendment invalidates every
@@ -795,6 +800,10 @@ Orchestrator's authority runs over you. You do not own the run.
 ## Phase C — Run the judge
 
 **You** run the tests. Neither author does.
+
+Apply TESTING.md T4/T36 when reviewing the delivered suite: challenge assertions that merely
+mirror implementation or duplicate the same promise across layers. Preserve meaningful
+behavioral regressions. T6/T44 govern useful scope and evidence reuse; T40 governs the report.
 
 Before the first test run, integrate the two frozen trees and prove the runner sees the Tester's
 suite: commit the integrated tree, then run `harness/discovery_check.py --root <run> --tree

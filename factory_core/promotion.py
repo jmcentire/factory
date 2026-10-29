@@ -15,10 +15,10 @@ only the doctrine:
 * every monitor is spec-derived, truthfully attributed and resolves its own authority
   (generated monitors are valid on Critical surfaces under H9 / P-0001);
 * a correction shows both controls, per-test, plus a reproduction recorded before the repair;
-* required evidence gaps are disposed by class; additional test campaigns follow TESTING T43;
+* required evidence gaps are disposed by class; additional test campaigns follow TESTING T44;
 * malformed, mismatched, or negative evidence blocks every class;
 * Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
-  retry-free and independently specialist-reviewed; required live checks follow TESTING T43;
+  retry-free and independently specialist-reviewed; required live checks follow TESTING T44;
   targets may additionally require
   named human approvers, but H9 / P-0001 sets no doctrine approval floor;
 * Standard gaps require a candidate-bound, expiring risk acceptance from an enrolled human;
@@ -913,7 +913,7 @@ def decide_promotion(
     gate_reasons: list[str] = []
 
     # Release testing is selected for demonstrated damaging failure modes, not
-    # purchased by a Critical label alone (TESTING T43, owner 2026-10-28).
+    # purchased by a Critical label alone (TESTING T44, owner 2026-10-28).
     # These markers use the existing reviewed profile; they confer no tool access.
     campaign_requirements = {
         "oracle-silent": "campaign:oracle",

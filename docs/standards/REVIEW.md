@@ -257,7 +257,7 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 
 **Ignore:** business logic.
 
-### C9 — Tests (W19–W20, T1–T43, A57)
+### C9 — Tests (W19–W20, T1–T44, A57)
 **Question:** Would these tests fail if the code were wrong?
 
 **Look for:**

@@ -2,6 +2,11 @@
 
 Wrong code must not be able to stay green.
 
+This guide governs the product tests Factory generates as well as Factory’s own tests.
+Apply it under AUTHORITY H3–H4: current, scoped user intent governs. Retain older rationale
+and useful protections where consistent; resolve contradictions rather than accumulating
+every historical instruction as another requirement.
+
 Everything here serves that one aim. A test is evidence that the software does what was promised. A suite that passes whatever the code does is ceremony, and ceremony is worse than nothing because it gets cited.
 
 This is the overview. It says what a good test is, which kind to write for which claim, and what code owes its tests. The Tester's procedure, ledgers and gates live in the Tester directive ([`prompts/test.md`](../../prompts/test.md)), and this document does not repeat them. Strategy rows, reviews and verdicts cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), H for [Whose Word Counts](AUTHORITY.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md). A *stated item* is a requirement with authority under H1–H8: what the human said, latest first, with any exception they made.
@@ -234,7 +239,7 @@ const normalizeQuote = mask<Quote>({
 
 ## Release test selection
 
-**T43. Require tests for demonstrated damaging failure risks, not ceremony.**
+**T44. Require tests for demonstrated damaging failure risks, not ceremony.**
 Owner direction, 2026-10-28: mandatory release tests are those demonstrated to
 prevent damaging or unrecoverable production issues, such as data loss. Record the
 failure mode and the evidence of a test's value. Preserve required product checks,
@@ -258,14 +263,14 @@ actions, required signoffs, authentication, Signet, custody or role access. Do n
 perform a forbidden real action to acquire evidence. Existing evidence is retained
 honestly, including absent or failed probes.
 
-T43 governs selection and frequency where older blanket campaign language conflicts.
+T44 governs selection and frequency where older blanket campaign language conflicts.
 It does not turn a failed product check into an optional check.
 
 ## Testing the tests
 
-**T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. Where a mutation check is selected under T43, prove it by breaking the code and watching that named test fail (Gate D). Reuse unchanged valid evidence; treat observed survivors as findings.[^mutation]
+**T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. Where a mutation check is selected under T44, prove it by breaking the code and watching that named test fail (Gate D). Reuse unchanged valid evidence; treat observed survivors as findings.[^mutation]
 
-Mechanical mutants flip operators and drop statements. They rarely produce the defect an invariant exists to prevent. For a required sensitivity check under T43, use a semantic falsifier: a plausible implementation that violates it the way a real mistake would. Examples: a retry that mints a new idempotency key; a charge taken before the dates are confirmed; a tenant filter applied after the query instead of in it; an `Authorization` header written to the capture record; a permanent error retried; the last page of results silently dropped. The evidence must reject each one. Mutation score is not a target either. It measures sensitivity, and a suite can kill every mutant while asserting the wrong requirement.
+Mechanical mutants flip operators and drop statements. They rarely produce the defect an invariant exists to prevent. For a required sensitivity check under T44, use a semantic falsifier: a plausible implementation that violates it the way a real mistake would. Examples: a retry that mints a new idempotency key; a charge taken before the dates are confirmed; a tenant filter applied after the query instead of in it; an `Authorization` header written to the capture record; a permanent error retried; the last page of results silently dropped. The evidence must reject each one. Mutation score is not a target either. It measures sensitivity, and a suite can kill every mutant while asserting the wrong requirement.
 
 **T42. Declare a mutant before applying it.** Each mutant states, before it runs, which invariant it breaks and which named test must turn red. It touches implementation only, never a test, a fixture, a mask or an oracle. A mutant declared after its result was read, or one that reddens some other test, shows that the suite is alive, not that the named requirement is covered. Mutation evidence belongs to the Validator's lane (Gate D), never to the author of the tests ([SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md), mutation evidence belongs to the Validator).
 
