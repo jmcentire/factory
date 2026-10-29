@@ -460,6 +460,7 @@ def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> No
     assert "--terminal --prompt-arg" in call
     assert "-- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never" in call
     assert "never exec" not in call and "codex_lane_session" not in call
+    assert "--disable apps" in call
 
 
 def test_codex_exec_stays_the_default_author_lane(tmp_path: Path) -> None:
@@ -468,6 +469,7 @@ def test_codex_exec_stays_the_default_author_lane(tmp_path: Path) -> None:
     [call] = lanes.windows("coder")
     assert "lane_agent.py run --slot coder" in call
     assert "codex_lane_session.py" in call and "codex --ask-for-approval never exec" in call
+    assert "--disable apps" in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["agent"] == "codex" and row["metered"] is False
     assert row["caps"]["wall_cap_s"] is None
@@ -635,6 +637,7 @@ class Watched:
         self.repo = tmp_path / "clone"
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
         self.log = self.lanes / "tester-lane.log"
+        self.log.touch()
         self.exits = self.lanes / "tester-exits.jsonl"
         row = {
             "status": "active", "ts": datetime.datetime.fromtimestamp(T0, datetime.UTC)
@@ -659,8 +662,11 @@ class Watched:
         self.delivered: list[list[str]] = []
         self.watch = lane_watchdog.LaneWatch(
             root=self.root, slot="tester", now=self.clock, stop=self._stop,
-            tmux=lambda *a: subprocess.CompletedProcess(a, 0, "", ""), echo=self.said.append,
+            tmux=lambda *a: subprocess.CompletedProcess(
+                a, 0, "tester @1\n" if a[0] == "list-windows" else "1\n", ""),
+            echo=self.said.append,
             deliver=self._deliver,
+            processes=lambda: {},
         )
         self.watch.arm()
 
@@ -702,7 +708,8 @@ def test_watchdog_stops_a_lane_that_does_not_commit_and_wakes_the_operator(
     assert watched.stops == ["r1:tester"]
     [event] = [row for row in watched.events() if row["kind"] == "refusal-lane-stall"]
     assert event["class"] == "refusal" and "no commit for" in str(event["detail"])
-    [wake] = watched.rows("wake.jsonl")
+    [requested, wake] = watched.rows("wake.jsonl")
+    assert requested["kind"] == "lane-stop-requested"
     assert wake["kind"] == "refusal-lane-stall" and wake["slot"] == "tester"
     assert any(line.startswith("FACTORY_WAKE refusal-lane-stall") for line in watched.said)
     [output] = watched.rows("lane-output.jsonl")
@@ -736,7 +743,9 @@ def test_watchdog_wakes_the_operator_when_the_lane_reports_done(tmp_path: Path) 
                         "__LANE_DONE__ tester commits=2"}}
     with watched.log.open("a") as stream:
         stream.write(json.dumps(message) + "\n")
-    assert watched.at(300) == "done"
+    assert watched.at(300) == "watching"  # a response is still only a claim
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(301) == "done"
     assert watched.stops == []
     [event] = [row for row in watched.events() if row["kind"] == "lane-done"]
     assert event["wake"] is True and "2 commit(s)" in str(event["detail"])
@@ -749,6 +758,219 @@ def test_watchdog_wakes_the_operator_when_the_lane_process_exits(tmp_path: Path)
     assert watched.at(30) == "exited"
     [event] = [row for row in watched.events() if row["kind"] == "lane-exited"]
     assert "rc=1" in str(event["detail"]) and event["wake"] is True
+
+
+def test_tool_fixture_cannot_end_monitoring_even_after_clean_exit(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "tool_result", "content": {
+        "fixture": "__LANE_DONE__ tester commits=9"}}) + "\n")
+    assert watched.at(30) == "watching"
+    assert not watched.rows("lane-output.jsonl")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(31) == "exited"  # no independent agent completion claim
+
+
+def test_interactive_screen_text_cannot_certify_agent_completion(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    launch = watched.watch.launch()
+    launch["terminal"] = True
+    watched.watch.journal.write_text(json.dumps(launch) + "\n")
+    # Even a displayed JSON fixture cannot establish a terminal event's author.
+    displayed = json.dumps({"type": "result", "result": "__LANE_DONE__ tester commits=0"})
+    watched.log.write_text(displayed + "\n")
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, displayed if a[0] == "capture-pane" else
+        "tester @1\n" if a[0] == "list-windows" else "1\n", "")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(31) == "exited"
+
+
+@pytest.mark.parametrize("pane", ["0", "", "unknown"])
+def test_completion_waits_for_positive_process_exit_evidence(tmp_path: Path, pane: str) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, "tester @1\n" if a[0] == "list-windows" else pane, "")
+    assert watched.at(30) == "watching"
+    assert not watched.rows("lane-output.jsonl")
+    # A watcher restart retains the claim, but still requires a positive dead-pane observation.
+    watched.watch.arm()
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, "tester @1\n" if a[0] == "list-windows" else "1\n", "")
+    assert watched.at(31) == "done"
+
+
+@pytest.mark.parametrize(("rc", "stopped"), [(1, False), (0, True)])
+def test_failed_or_signalled_turn_is_not_done(tmp_path: Path, rc: int, stopped: bool) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=rc, stopped=stopped)
+    assert watched.at(30) == "exited"
+
+
+def test_completion_rejects_wrong_lane_and_untyped_exit_receipts(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ coder commits=1"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="coder", rc=0, stopped=False)
+    with watched.exits.open("a") as stream:
+        stream.write(json.dumps({"slot": "tester", "rc": 0}) + "\n")
+    assert watched.at(30) == "watching"
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(31) == "exited"
+
+
+def test_new_life_does_not_inherit_a_previous_completion_claim(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(30) == "done"
+    watched.resume(60)
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(61) == "exited"
+
+
+def test_requested_stop_stays_pending_across_restart_questions_and_done_claims(
+    tmp_path: Path,
+) -> None:
+    from harness.lane_dialogue import record_question
+
+    watched = Watched(tmp_path, caps={"wall_cap_s": 60})
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, "tester @1\n" if a[0] == "list-windows" else "0\n", "")
+    assert watched.at(61) == "stopping"
+    assert watched.stops == ["r1:tester"]
+    assert not watched.rows("lane-output.jsonl")
+    watched.watch.arm()  # the watcher restarts; intent survives
+    record_question(watched.root, "tester", "Can I continue?")
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(62) == "stopping"
+    with pytest.raises(lane_watchdog.LaneWatchError, match="stop is unverified"):
+        watched.watch.arm(new_life=True)
+    assert watched.stops == ["r1:tester"]  # no repeat signal to a potentially reused identity
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, "tester @1\n" if a[0] == "list-windows" else "1\n", "")
+    assert watched.at(63) == "capped"
+    [output] = watched.rows("lane-output.jsonl")
+    assert output["outcome"] == "capped" and output["wall_s"] == 63
+    state = json.loads(watched.watch.state_path.read_text())
+    assert state["stop_verified_ts"] > state["stop_requested_ts"]
+
+
+def test_dead_pane_does_not_verify_stop_while_observed_reparented_child_survives(
+    tmp_path: Path,
+) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 60})
+    table = {
+        1: {"pid": 1, "ppid": 99, "started": "root-start", "state": "S"},
+        2: {"pid": 2, "ppid": 1, "started": "child-start", "state": "S"},
+    }
+    watched.watch.processes = lambda: table
+    assert watched.at(30) == "watching"  # records the tree before the parent exits
+    del table[1]
+    table[2]["ppid"] = 99  # orphan is no longer discoverable by walking from the old root
+    assert watched.at(61) == "stopping"
+    assert not watched.rows("lane-output.jsonl")
+    watched.watch.arm()
+    assert watched.at(62) == "stopping"
+    assert json.loads(watched.watch.state_path.read_text())["surviving_processes"] == [
+        {"pid": 2, "started": "child-start"}]
+    # PID reuse is not a surviving child, and the observer must not signal the unrelated process.
+    table[2]["started"] = "different-process"
+    assert watched.at(63) == "capped"
+    assert watched.stops == ["r1:tester"]
+
+
+def test_process_observation_failure_cannot_certify_completion(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    watched.watch.processes = lambda: None
+    assert watched.at(30) == "watching"
+    assert not watched.rows("lane-output.jsonl")
+
+
+def test_later_agent_result_can_retract_an_earlier_done_claim(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    watched.log.write_text(json.dumps({"type": "result",
+                                      "result": "__LANE_DONE__ tester commits=0"}) + "\n")
+    assert watched.at(30) == "watching"
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps({"type": "result", "result": "Blocked: unfinished."}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(31) == "exited"
+
+
+def test_exit_waits_for_all_log_chunks_and_split_response_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watched = Watched(tmp_path)
+    first = json.dumps({"type": "result", "result": "__LANE_DONE__ tester commits=0"}) + "\n"
+    last = json.dumps({"type": "result", "result": "Blocked; still unfinished."}) + "\n"
+    watched.log.write_text(first + last)
+    monkeypatch.setattr(lane_watchdog, "_MAX_LOG_SCAN_BYTES", len(first) + 10)
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(30) == "watching"  # first claim, but later response is only partly read
+    assert watched.at(31) == "exited"  # completes the split JSON record, retracting the claim
+
+
+def test_partial_tool_output_never_leaks_into_watcher_status(tmp_path: Path) -> None:
+    watched = Watched(tmp_path)
+    private = "private-author-work-product"
+    event = json.dumps({"type": "tool_result", "content": private})
+    watched.log.write_text(event)
+    assert watched.at(30) == "watching"
+    status = watched.watch.state_path.read_text()
+    assert private not in status and "log_fragment" not in json.loads(status)
+    assert json.loads(status)["log_offset"] == 0
+    with watched.log.open("a") as stream:
+        stream.write("\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    assert watched.at(31) == "exited"
+
+
+def test_discarded_oversized_record_invalidates_an_earlier_completion_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watched = Watched(tmp_path)
+    first = json.dumps({"type": "result", "result": "__LANE_DONE__ tester commits=0"}) + "\n"
+    watched.log.write_text(first)
+    assert watched.at(30) == "watching"
+    monkeypatch.setattr(lane_watchdog, "_MAX_LOG_SCAN_BYTES", 100)
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps({"type": "result", "result": "unfinished " * 80}) + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    outcome = "watching"
+    for seconds in range(31, 50):
+        outcome = watched.at(seconds)
+        if outcome != "watching":
+            break
+    assert outcome == "exited"
+
+
+def test_stop_failure_remains_durable_and_is_not_retried_blindly(tmp_path: Path) -> None:
+    watched = Watched(tmp_path, caps={"wall_cap_s": 60})
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, "tester @1\n" if a[0] == "list-windows" else "0\n", "")
+    attempts = []
+
+    def refused(target: str) -> str:
+        attempts.append(target)
+        raise PermissionError("test stop denied")
+
+    watched.watch.stop = refused
+    assert watched.at(61) == "stopping"
+    watched.watch.arm()
+    assert watched.at(62) == "stopping"
+    assert attempts == ["r1:tester"]
+    assert "stop failed" in json.loads(watched.watch.state_path.read_text())["stop_response"]
 
 
 def test_watchdog_enforces_the_spend_cap_as_wall_clock_and_reports_output_per_dollar(
@@ -792,7 +1014,9 @@ def test_a_new_life_never_reports_the_earlier_turns_done_line(tmp_path: Path) ->
     watched.watch.arm(new_life=True, log_offset=resumed_at)
     assert watched.at(3060) == "watching"
     with watched.log.open("a", encoding="utf-8") as log:
-        log.write("__LANE_DONE__ tester commits=2\n")
+        log.write(json.dumps({"type": "result", "result": "__LANE_DONE__ tester commits=2"})
+                  + "\n")
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
     assert watched.at(3120) == "done"
 
 
@@ -837,13 +1061,12 @@ def test_an_undelivered_wrap_up_ends_the_lane_as_capped(tmp_path: Path) -> None:
     assert watched.stops == ["r1:tester", "r1:tester"]
 
 
-def test_a_wrap_up_that_cannot_start_leaves_the_lane_running_to_its_cap(tmp_path: Path) -> None:
+def test_a_wrap_up_that_cannot_start_finishes_only_after_verified_stop(tmp_path: Path) -> None:
     watched = Watched(tmp_path, caps={"wall_cap_s": 1800}, watch=RESUMABLE, thread=True)
     watched.watch.deliver = lambda argv: "not started: no environment"
     _commit(watched.repo, T0 + 100, "a")
-    assert watched.at(1500) == "watching" and watched.stops == []
-    assert watched.at(1600) == "watching"  # one attempt, not one per poll
-    assert watched.at(1800) == "capped"
+    assert watched.at(1500) == "capped" and watched.stops == ["r1:tester"]
+    assert watched.at(1600) == "capped"  # no restart or repeat delivery
 
 
 def test_the_wrap_up_delivery_runs_in_its_own_session_from_the_recorded_environment(
@@ -927,7 +1150,9 @@ def test_a_review_pause_carries_the_stall_window_instead_of_resetting_it(tmp_pat
     assert watched.at(5000 + 1021) == "stalled"
 
 
-def test_a_pause_that_did_not_stop_the_lane_is_cancelled(tmp_path: Path) -> None:
+def test_a_review_with_lost_exit_evidence_becomes_pending_not_authorized_work(
+    tmp_path: Path,
+) -> None:
     watched = Watched(tmp_path, watch={"runs_dir": "/runs", "review_every_s": 1080},
                       thread=True)
     _commit(watched.repo, T0 + 600, "a")
@@ -935,9 +1160,9 @@ def test_a_pause_that_did_not_stop_the_lane_is_cancelled(tmp_path: Path) -> None
     live = subprocess.CompletedProcess((), 0, "tester @6\n", "")
     watched.watch.tmux = lambda *a: (
         live if a[0] == "list-windows" else subprocess.CompletedProcess(a, 0, "0\n", ""))
-    assert watched.at(1080 + 30) == "paused"  # within the stop's grace
-    assert watched.at(1080 + 61) == "watching"
-    assert [row["kind"] for row in watched.events()].count("lane-review-cancelled") == 1
+    assert watched.at(1080 + 30) == "stopping"
+    assert watched.at(1080 + 61) == "stopping"
+    assert [row["kind"] for row in watched.events()].count("lane-review-unverified") == 1
 
 
 def test_a_new_round_closes_a_slot_left_paused(tmp_path: Path) -> None:
@@ -945,14 +1170,18 @@ def test_a_new_round_closes_a_slot_left_paused(tmp_path: Path) -> None:
                       thread=True)
     _commit(watched.repo, T0 + 600, "a")
     assert watched.at(1080) == "paused"
-    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == ["tester"]
+    assert lane_watchdog.close_superseded(
+        watched.root, "tester", "tester.r2", tmux=watched.watch.tmux,
+        processes=lambda: {},
+    ) == ["tester"]
     [output] = watched.rows("lane-output.jsonl")
     assert output["outcome"] == "superseded" and output["commits"] == 1
     assert watched.at(9000) == "superseded"
-    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2") == []
+    assert lane_watchdog.close_superseded(watched.root, "tester", "tester.r2",
+                                           tmux=watched.watch.tmux, processes=lambda: {}) == []
 
 
-def test_no_review_pause_is_taken_when_the_wrap_up_is_near_or_a_question_is_pending(
+def test_review_schedule_is_independent_of_questions_but_respects_wrap_up_headroom(
     tmp_path: Path,
 ) -> None:
     from harness.lane_dialogue import record_question
@@ -965,7 +1194,7 @@ def test_no_review_pause_is_taken_when_the_wrap_up_is_near_or_a_question_is_pend
     asking = Watched(tmp_path / "asking", watch={"runs_dir": "/runs", "review_every_s": 600},
                      thread=True)
     record_question(asking.root, "tester", "Which clock does the contract's `at` mean?")
-    assert asking.at(700) == "watching" and asking.stops == []
+    assert asking.at(700) == "paused" and asking.stops == ["r1:tester"]
     unrecorded = Watched(tmp_path / "unrecorded", watch={"runs_dir": "/runs",
                                                          "review_every_s": 600}, thread=True)
     (unrecorded.lanes / "tester-delivery.env").unlink()
@@ -1390,3 +1619,68 @@ def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -
     calls = lanes.tmux_log.read_text().splitlines()
     assert any("set-option -w -t r1:coder remain-on-exit on" in call for call in calls), calls
     assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)
+
+
+@pytest.mark.parametrize('purpose', ['review', 'wrapup'])
+def test_review_and_wrapup_wait_for_exit_before_delivery(tmp_path, purpose):
+    settings = {'runs_dir': '/runs', 'review_every_s': 600} if purpose == 'review' else RESUMABLE
+    watched = Watched(tmp_path, caps={} if purpose == 'review' else {'wall_cap_s': 1800},
+                      watch=settings, thread=True)
+    _commit(watched.repo, T0 + 100, 'a')
+    live = True
+
+    def tmux(*args):
+        return subprocess.CompletedProcess(args, 0, 'tester @1\n' if args[0] == 'list-windows'
+                                           else '0\n' if live else '1\n', '')
+
+    watched.watch.tmux = tmux
+    at = 600 if purpose == 'review' else 1500
+    assert watched.at(at) == 'stopping'
+    assert not watched.delivered
+    assert not any(r['kind'] == 'lane-review-due' for r in watched.events())
+    assert watched.at(at + 1) == 'stopping'
+    assert len(watched.stops) == 1
+    live = False
+    assert watched.at(at + 2) == ('paused' if purpose == 'review' else 'wrapping')
+    assert len(watched.delivered) == (0 if purpose == 'review' else 1)
+    assert json.loads(watched.watch.state_path.read_text())['stop_verified_ts'] == T0 + at + 2
+
+
+def test_supersession_refuses_live_unknown_and_pending_old_round(tmp_path):
+    watched = Watched(tmp_path, watch={'runs_dir': '/runs', 'review_every_s': 600}, thread=True)
+    assert watched.at(600) == 'paused'
+    def alive(*a):
+        return subprocess.CompletedProcess(
+            a, 0, 'tester @1\n' if a[0] == 'list-windows' else '0\n', '')
+    for tmux, processes in [(alive, lambda: {}), (watched.watch.tmux, lambda: None)]:
+        with pytest.raises(lane_watchdog.LaneWatchError, match='unverified'):
+            lane_watchdog.close_superseded(watched.root, 'tester', 'tester.r2',
+                                           tmux=tmux, processes=processes)
+    assert not watched.rows('lane-output.jsonl')
+    state = json.loads(watched.watch.state_path.read_text())
+    state['status'] = 'stopping'
+    watched.watch.state_path.write_text(json.dumps(state))
+    with pytest.raises(lane_watchdog.LaneWatchError, match='unverified'):
+        lane_watchdog.close_superseded(watched.root, 'tester', 'tester.r2',
+                                       tmux=watched.watch.tmux, processes=lambda: {})
+
+
+def test_kickoff_without_actual_process_binding_cannot_admit_an_author(tmp_path):
+    lanes = Lanes(tmp_path)
+    metadata = json.loads((lanes.root / 'harness.json').read_text())
+    metadata['validator_agent'] = 'kickoff'
+    (lanes.root / 'harness.json').write_text(json.dumps(metadata))
+    result = lanes.lane('coder')
+    assert result.returncode == 70
+    assert 'executing Validator identity/control is unavailable' in result.stderr
+    assert not lanes.windows('coder')
+
+
+def test_replaced_window_cannot_certify_old_lane_exit(tmp_path):
+    watched = Watched(tmp_path, watch={'runs_dir': '/runs', 'review_every_s': 600}, thread=True)
+    assert watched.at(600) == 'paused'
+    watched.watch.tmux = lambda *a: subprocess.CompletedProcess(
+        a, 0, 'tester @999\n' if a[0] == 'list-windows' else '1\n', '')
+    assert watched.at(601) == 'stopping'
+    assert watched.at(602) == 'stopping'
+    assert not watched.rows('lane-output.jsonl')

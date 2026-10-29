@@ -790,7 +790,7 @@ def test_monitor_coverage_is_class_disposed_at_the_bundle_boundary(tmp_path: Pat
     assert standard.blocking_issues == () and cosmetic.blocking_issues == ()
 
 
-def test_a_generated_monitor_on_a_critical_surface_blocks_the_bundle(tmp_path: Path) -> None:
+def test_a_generated_monitor_on_a_critical_surface_satisfies_the_bundle(tmp_path: Path) -> None:
     _, artifacts = _ratified_run(tmp_path)
 
     report = EvidenceBundleAssembler(tmp_path).assemble(
@@ -807,10 +807,9 @@ def test_a_generated_monitor_on_a_critical_surface_blocks_the_bundle(tmp_path: P
         ),
     )
 
-    assert (
-        "critical-gap:critical-monitor-not-human-authored:monitor-control-plane:control-plane"
-        in report.blocking_issues
-    )
+    # AUTHORITY H9 / P-0001: authorship remains generated, with genuine spec provenance.
+    assert report.blocking_issues == ()
+    assert report.mechanically_satisfied
 
 
 def test_monitor_authorship_resolves_against_the_signed_roster(tmp_path: Path) -> None:

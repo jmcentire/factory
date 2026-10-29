@@ -47,6 +47,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -57,6 +58,7 @@ if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
 import agents  # noqa: E402  (harness/agents.py, the harness registry)
+import validator_boundary  # noqa: E402
 
 EXIT_SCHEMA = "factory-lane-exit/1"
 REFUSED = 77
@@ -661,6 +663,8 @@ def run_lane(
     session_agent: str = "",
     session_file: pathlib.Path | None = None,
     plan_only: bool = False,
+    boundary_record: object = None,
+    boundary_role: str = "",
 ) -> int:
     """Run one lane process to its end and record that end.
 
@@ -669,8 +673,9 @@ def run_lane(
 
     With ``session_agent``, the first session id the harness streams is written to
     ``session_file`` the moment it appears, so a turn the watchdog ends mid-flight can be resumed.
-    With ``plan_only``, a harness that announces per-use API billing in its stream is stopped at
-    once and the run ends ``BILLING_REFUSED``: a plan lane never spends on an API key.
+    With ``plan_only``, reject the selected harness's API-routing variables before starting it.
+    A later stream announcement of per-use API billing also stops the lane with
+    ``BILLING_REFUSED``. Neither check proves containment of credentials in host files or shells.
     """
 
     argv = list(command)
@@ -678,6 +683,13 @@ def run_lane(
         argv = argv[1:]
     if not argv:
         raise ValueError("lane command is empty")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", slot):
+        raise ValueError("invalid process receipt slot")
+    chosen = agents.harness(session_agent) if session_agent else None
+    if plan_only:
+        if chosen is None:
+            raise ValueError("plan-only lane requires a registered session agent")
+        chosen.admitted_env("plan")  # Reject harnesses without a subscription route.
     if prompt is not None:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -688,11 +700,49 @@ def run_lane(
             name, sep, value = line.partition("=")
             if sep and name.isidentifier():
                 child_env[name] = value
+    if plan_only and chosen is not None:
+        forbidden = sorted(name for name in chosen.api_env if child_env.get(name))
+        if forbidden:
+            # Inspect the final environment, including env_file overrides. Never log values.
+            raise ValueError("plan-only lane contains API-routing variables: "
+                             + ", ".join(forbidden))
+    argv = validator_boundary.model_command(
+        argv, boundary_record, boundary_role, pathlib.Path.cwd())
     stopped = False
     refused_billing = ""
     session_seen = False
-    chosen = agents.harness(session_agent) if session_agent else None
     process: subprocess.Popen[bytes] | None = None
+
+    def record_worker(status: str) -> None:
+        # The tmux pane owns this wrapper; pause the child doing the work, never the pane root
+        # (tmux automatically SIGCONTs that root). No command line or credential is retained.
+        assert process is not None
+        path = log.parent / f"{slot}-process.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wrapper_start = " ".join(_started(os.getpid()).split())
+        worker_start = " ".join(_started(process.pid).split())
+        receipt = {"schema": "factory-worker-process/1", "slot": slot, "status": status,
+                   "wrapper": {"pid": os.getpid(), "started": wrapper_start},
+                   "worker": {"pid": process.pid, "started": worker_start}}
+        if not wrapper_start or not worker_start:
+            if process.poll() is not None:
+                return  # a completed short-lived command needs its exit receipt, not a pause
+            raise OSError("cannot publish worker process identity")
+        fd, temporary = tempfile.mkstemp(prefix=".worker-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as out:
+                json.dump(receipt, out, sort_keys=True)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _watch(raw: bytes) -> None:
         nonlocal session_seen, refused_billing
@@ -721,12 +771,14 @@ def run_lane(
     try:
         if terminal:
             process = subprocess.Popen(argv, env=child_env)
+            record_worker("running")
             rc = process.wait()
         else:
             process = subprocess.Popen(
                 argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 env=child_env,
             )
+            record_worker("running")
             assert process.stdout is not None
             for raw in process.stdout:
                 sys.stdout.buffer.write(raw)
@@ -735,6 +787,15 @@ def run_lane(
                 _watch(raw)
             rc = process.wait()
     except OSError as error:
+        if process is not None and process.poll() is None:
+            # Receipt failure must not leave an untracked model running. This is terminal
+            # cleanup of our own Popen child, not the supervisor's resumable pause operation.
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
         rc = 127
     finally:
@@ -881,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--session-agent", default="")
     runner.add_argument("--session-file", type=pathlib.Path)
     runner.add_argument("--plan-only", action="store_true")
+    runner.add_argument("--boundary-record", type=json.loads, default=None)
+    runner.add_argument("--boundary-role", choices=("coder", "tester"), default="")
     runner.add_argument("lane_command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     try:
@@ -939,6 +1002,8 @@ def main(argv: list[str] | None = None) -> int:
             session_agent=arguments.session_agent,
             session_file=arguments.session_file,
             plan_only=arguments.plan_only,
+            boundary_record=arguments.boundary_record,
+            boundary_role=arguments.boundary_role,
         )
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)

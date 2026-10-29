@@ -93,6 +93,43 @@ LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
 # A registry lane's launch shape (harness/agents.py turn-record): how to resume its session.
 TURN_RECORD="$TMUX_ROOT/$SLOT-turn.json"
 
+# Answer exceptions to an Orchestrator report do not release an actual process-control hold.
+"$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || {
+  echo "lane-message: executing Validator identity/control is unavailable; refusing continuation" >&2
+  exit 70
+}
+
+# A pending stop is durable across deliveries. Refuse before any queue/resume/respawn effect;
+# the watcher starting after a model has resumed is too late to enforce this hold.
+"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" <<'PY' || exit 70
+import json, os, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    if path.is_symlink():
+        raise ValueError("symlinked watcher state")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        state = {}  # pre-watch/legacy launches have no watcher state yet
+    else:
+        with os.fdopen(fd, encoding="utf-8") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("non-regular watcher state")
+            state = json.load(stream)
+    if not isinstance(state, dict):
+        raise ValueError("non-object watcher state")
+except (OSError, ValueError) as error:
+    raise SystemExit(f"lane-message: watcher state unreadable; refusing delivery: {error}")
+if state.get("status") == "stopping":
+    raise SystemExit("lane-message: requested stop is unverified; refusing delivery")
+if state.get("status") in {"paused", "wrapping"}:
+    sys.path.insert(0, sys.argv[2])
+    from lane_watchdog import LaneWatch
+    watch = LaneWatch(root=pathlib.Path(sys.argv[3]), slot=sys.argv[4])
+    if not state.get("stop_verified_ts") or not watch._exit_verified(watch.launch(), state):
+        raise SystemExit("lane-message: pause/wrap exit is unverified; refusing delivery")
+PY
+
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
   echo "lane-message: no retained session for $RUN:$SLOT yet (a codex-interactive lane has none, and a registry lane has one once its harness starts streaming: launch a new --round instead)" >&2
   exit 70
@@ -117,8 +154,9 @@ if len(active) != 1:
 values = (active[0].get("repository"), active[0].get("agent"), active[0].get("model", ""),
           (active[0].get("kindex") or {}).get("mcp_override", ""),
           json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])),
-          "off" if active[0].get("sandbox") == "off" else "on")
-# The Codex config overrides that selected the lane's model (launches before 0.8.15 have none).
+          "off" if active[0].get("sandbox") == "off" else "on",
+          json.dumps(active[0].get("kernel_boundary")))
+# The Codex config overrides that selected the lane model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
     raise SystemExit("lane-message: retained launch fields are malformed")
@@ -147,9 +185,36 @@ IFS= read -r -d '' LANE_ENV_RECORD <&3 || {
 IFS= read -r -d '' LANE_SANDBOX <&3 || {
   echo "lane-message: retained lane sandbox is missing or malformed" >&2; exit 70;
 }
+IFS= read -r -d '' BOUNDARY_RECORD <&3 || {
+  echo "lane-message: retained boundary is missing or malformed" >&2; exit 70;
+}
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
+# Reuse only the launch's binding. Ambient configuration cannot replace or drop it.
+"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" <<'PY' || exit 77
+import json, os, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from validator_boundary import validate_lane_record
+record = json.loads(sys.argv[2])
+if record is None and os.environ.get("FACTORY_REQUIRE_BOUNDARY") == "1":
+    raise SystemExit("lane-message: required retained author boundary is absent")
+validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+PY
+BOUNDARY_MODEL_ARGS=""
+BOUNDARY_CODEX_ARGS=""
+AUTHOR_CUSTODY=$("$FACTORY_PYTHON" - "$D" "$ROOT" "$SLOT" "$LANE" "$AGENT" "$REPOSITORY" "$BOUNDARY_RECORD" <<'PY'
+import json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import author_custody
+print(json.dumps(author_custody.retained(pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+    sys.argv[5], pathlib.Path(sys.argv[6]), json.loads(sys.argv[7]))))
+PY
+) || { echo "lane-message: author custody hold or binding prevents continuation" >&2; exit 77; }
+if [ "$BOUNDARY_RECORD" != null ]; then
+  printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$LANE"
+  printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
+fi
 case "$AGENT" in
   codex|codex-ollama) ;;
   cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
@@ -387,6 +452,16 @@ if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) t
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
+  # Retain only the launch's explicit guard configuration. Do not re-read operator hooks or
+  # accept arbitrary extra arguments as a way around resume's fixed permission profile.
+  GUARD_RESUME=$(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" \
+    TMPDIR="$SAFE_TMPDIR" CODEX_HOME="$SAFE_CODEX_HOME" \
+    "$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD" \
+    --check-codex-cwd "$REPOSITORY") || {
+    echo "lane-message: retained Signet configuration or exact Codex hook trust unavailable" >&2
+    exit 70
+  }
+  [ -z "$GUARD_RESUME" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$GUARD_RESUME"
 fi
 RESUME_ARGS="$LOCAL_ARGS"
 for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
@@ -449,10 +524,10 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_SANDBOX=""
   [ "$LANE_SANDBOX" != off ] || RESUME_SANDBOX="--dangerously-bypass-approvals-and-sandbox "
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config -c %q -c %q -c %q %s %q -' \
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$RESUME_ARGS" "$REPOSITORY" \
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$REPOSITORY" \
     "$RESUME_SANDBOX" 'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
@@ -486,10 +561,16 @@ PY
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
       PLAN_FLAG=""
       [ "$TURN_BILLING" != plan ] || PLAN_FLAG="--plan-only"
-      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
+      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q%s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
         "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
-        "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
+        "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
   esac
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    AUTHOR_CONFIG=$(printf '%s' "$AUTHOR_CUSTODY" | "$FACTORY_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["config"])')
+    AUTHOR_DIGEST=$(printf '%s' "$AUTHOR_CUSTODY" | "$FACTORY_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+    printf -v RESUME_CMD '%q %q --config %q --digest %q --shell-command %q' \
+      "$FACTORY_PYTHON" "$D/author_custody.py" "$AUTHOR_CONFIG" "$AUTHOR_DIGEST" "$RESUME_CMD"
+  fi
   # The new life reads only what the resumed turn writes: the log's size now, before the turn
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0

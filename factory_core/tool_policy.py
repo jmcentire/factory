@@ -455,6 +455,14 @@ def verify_tool_policy(
         issues.append("tool-policy-not-active")
 
     signer = identity_policy.resolve_human(policy.signed_by)
+    if signer is None and any(
+        run_id == policy.run_id and subject == policy.content_digest
+        and identity == policy.signed_by and issued_at <= evaluated_at <= expires_at
+        for run_id, subject, identity, issued_at, expires_at
+        in identity_policy.delegated_policy_signers
+    ):
+        signer = policy.signed_by
+        reports.append(f"tool-policy-delegated-signer:{signer}")
     if signer is None:
         issues.append("tool-policy-signer-not-enrolled")
     # Single-operator disposition (ratified 2026-08-27): with exactly one enrolled

@@ -178,12 +178,13 @@ test-tessera: check-python ## run every real-Tessera integration and denial proo
 			tests/test_build_and_validate_cli.py \
 			tests/test_repair_ceremony.py \
 			tests/test_trust_root.py \
-			tests/test_project_init.py
+			tests/test_project_init.py \
+			tests/test_promotion_delegation.py
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \
 		harness/agent_exec.py harness/agreement_contract.py harness/agreement_probe.py \
-		harness/boundary_register.py \
+		harness/boundary_register.py harness/claude_custody.py harness/author_custody.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/agents.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
 		harness/lane_repository.py \
@@ -199,7 +200,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
 		harness/agent_exec.py harness/agreement_contract.py harness/agreement_probe.py \
-		harness/boundary_register.py \
+		harness/boundary_register.py harness/claude_custody.py harness/author_custody.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/agents.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
 		harness/lane_repository.py \

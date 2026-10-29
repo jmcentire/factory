@@ -101,16 +101,23 @@ handover dies with the run.
 
 ## What you write
 
-**Integration-level tests asserting what the specification promised at a boundary** — that is
-what the signed artifacts actually constrain. Not unit tests: those come after validation,
-because a unit test written now encodes an implementation shape that has not settled and then
-resists it changing.
+Apply AUTHORITY.md "Task authorization and continuity" to operational choices. Preserve
+independence from Coder implementation; retained shared intent is not shared private context.
 
-Build the **cross-cutting suites first** — controls before convenience:
+Apply TESTING.md T1–T6 and T36: assert user expectations, meaningful system behavior and
+important invariants at the cheapest stable boundary that can expose the failure. T9 permits
+exact checks of agreed calculations; it does not permit pinning unsettled implementation shape.
+Exact rule-derived fixtures are valid (T1); snapshots of changing live inventory, prices or
+dates are not fixed expectations (T29–T30).
+
+Consider the following cross-cutting risks where the product's promises and architecture make
+them relevant. Select checks under the existing Strategy and T44, not a blanket suite for every
+product. Preserve required protection and data-loss regressions; avoid duplicate assertions
+across layers (T36):
 
 1. **Authorization & isolation.** For every protected operation: an *unauthorized* principal
    refused **after reaching the authorization check**; an authorized principal of the
-   **wrong subject/tenant** refused by an **in-query** isolation predicate; then the positive
+   **wrong subject/tenant** refused without disclosure or mutation of that subject’s data; then the positive
    case.
 2. **Atomic commit.** Force a failure *between* two writes that must commit together; assert
    the datastore shows neither, and no orphaned external-effect intent.
@@ -129,13 +136,13 @@ Build the **cross-cutting suites first** — controls before convenience:
 ### The three integrity properties, per test
 
 - **Reachability.** A security or authorization test must **reach and exercise** its target.
-  Instrument it — assert the handler was entered or the query was constructed. *A 403 from an
-  unrelated earlier gate is not a passing security test.* Authenticate as an **authorized**
+  Establish valid prerequisites and assert the relevant boundary outcome and effects (T4, T17).
+  *A 403 from an unrelated earlier gate is not a passing security test.* Authenticate as an **authorized**
   principal when the protection under test is not authorization.
 - **Falsifiability.** Name, for every test, the specific mutation of the specified behavior —
   stated at the contract you were given, since you never read the implementation — that would
-  turn **that** test red, not merely *some* test in the suite. Gate D applies it to the
-  production code. A mutation that reddens
+  turn **that** test red, not merely *some* test in the suite. For mutation checks selected
+  under T31/T42/T44, Gate D applies it to the production code. A mutation that reddens
   a neighbor while the test carrying the requirement stays green has proven nothing about the
   requirement. (batch0: the spot-check mutated the decay fold and watched the **closed-form**
   test go red; the **cadence** test — the one the headline requirement rode on — never
@@ -144,9 +151,10 @@ Build the **cross-cutting suites first** — controls before convenience:
   coverage, gets cited at the gate, and lies. **Gate D** (mutation forcing test, `--named-test`)
   makes this machine-enforced as well as your discipline: `mutate.sh` attests
   `oracle_adequate` only when the **named** oracle kills the mutation, and refuses a vacuous
-  oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. A test
-  that cannot fail for the named reason is **rejected at the gate, not noted** — so name the
-  `--named-test` in your falsifiability ledger, because that is the id the gate runs.
+  oracle or a symptom-kill (a mutation killed *outside* the named oracle) as adequacy. For a
+  selected mutation check, a test that cannot fail for the named reason is **rejected at the
+  gate, not noted**. Name the `--named-test` in your falsifiability ledger: that is the id
+  the gate runs.
 - **Isolation.** Passes in randomized order, in parallel, and individually. No shared mutable
   state, no ordering dependence.
 

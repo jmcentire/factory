@@ -132,7 +132,11 @@ def _control(
         decided_by=decided_by,
         wrong_cost=wrong_cost,
         side_effect_surface_ids=side_effects,
-        required_evidence_ids=required_evidence,
+        # These fixtures exercise explicitly required campaigns. Production
+        # profiles select them only for demonstrated damaging failure risks.
+        required_evidence_ids=required_evidence | frozenset({
+            "campaign:oracle", "campaign:live", "campaign:monitor", "campaign:mutation",
+        }),
         standard_flake_budget=standard_flake_budget,
     )
 
@@ -1434,9 +1438,9 @@ def test_approver_sod_and_distinct_human_floor_are_deny_wins() -> None:
     assert "approver-is-agent:factory-agent" in denied_agent.reasons
 
 
-def test_specialist_review_is_human_candidate_and_evidence_bound() -> None:
+def test_specialist_review_is_candidate_and_evidence_bound() -> None:
     wrong_candidate = digest_obj({"artifact": "wrong"})
-    review = _review("critical-surface", candidate=wrong_candidate)
+    review = _review("critical-surface", reviewer="factory-agent", candidate=wrong_candidate)
 
     decision = decide_promotion(
         _critical_request(specialist_reviews=(review,)),
@@ -1446,6 +1450,49 @@ def test_specialist_review_is_human_candidate_and_evidence_bound() -> None:
 
     assert decision.allowed is False
     assert "specialist-review-candidate-mismatch:critical-surface" in decision.reasons
+
+
+def test_agent_specialist_is_independent_known_and_evidence_bound() -> None:
+    profile = _profile()
+    review = _review("critical-surface", reviewer="factory-agent", profile=profile)
+    good = _critical_request(profile=profile, specialist_reviews=(review,))
+    assert decide_promotion(good, _roster(), profile).allowed
+
+    for identity, expected in (
+        ("", "authority-not-enrolled:"),
+        ("unknown-reviewer", "authority-not-enrolled:unknown-reviewer"),
+        (good.implementer, f"authority-equals-implementer:{good.implementer}"),
+        (good.verifier, f"authority-equals-verifier:{good.verifier}"),
+    ):
+        policy = replace(_roster(), excluded_service_identities=frozenset(
+            {*_roster().excluded_service_identities, good.implementer, good.verifier}))
+        request = _critical_request(profile=profile, specialist_reviews=(
+            _review("critical-surface", reviewer=identity, profile=profile),))
+        decision = decide_promotion(request, policy, profile)
+        assert not decision.allowed
+        assert f"specialist-review-{expected}:critical-surface" in decision.reasons
+
+    alias_policy = replace(_roster(), human_aliases={
+        **_roster().human_aliases, "review-alias": good.implementer})
+    aliased = _critical_request(profile=profile, specialist_reviews=(
+        _review("critical-surface", reviewer="review-alias", profile=profile),))
+    alias_policy = replace(alias_policy, excluded_service_identities=frozenset(
+        {*alias_policy.excluded_service_identities, good.implementer}))
+    aliased_decision = decide_promotion(aliased, alias_policy, profile)
+    assert not aliased_decision.allowed
+    assert ("specialist-review-authority-equals-implementer:review-alias:critical-surface"
+            in aliased_decision.reasons)
+
+    for bad_review in (
+        replace(review, evidence=None),
+        replace(review, reviewer="another-bot"),  # retained evidence names a different reviewer
+        replace(review, criticality_profile_digest=digest_obj({"wrong": "profile"})),
+        _review("critical-surface", reviewer="factory-agent", passed=False, profile=profile),
+    ):
+        decision = decide_promotion(
+            _critical_request(profile=profile, specialist_reviews=(bad_review,)),
+            _roster(), profile)
+        assert not decision.allowed
 
 
 def test_from_dict_and_decision_serialization_preserve_determinism_record() -> None:
@@ -1705,11 +1752,7 @@ def test_a_diff_derived_monitor_blocks_and_an_uncovered_critical_surface_has_no_
     )
 
     assert "monitor-integrity:monitor-diff-derived:monitor-standard-surface" in diff_derived.reasons
-    assert generated_on_critical.disposition == DISPOSITION_BLOCK
-    assert (
-        "critical-gap:critical-surface:critical-monitor-not-human-authored:monitor-critical-surface"
-        in generated_on_critical.reasons
-    )
+    assert generated_on_critical.allowed is True
     assert "critical-gap:critical-surface:monitor-coverage-missing" in uncovered.reasons
 
 

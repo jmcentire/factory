@@ -271,7 +271,8 @@ Validator decide which governs, quoting both, and record the basis; do not silen
 replacement.
 
 Record the assessment through the run-owned `orchestrator/bin/orchestrator_channel.py report`
-copy (or `harness/orchestrator_channel.py` while developing Factory itself). A run whose
+copy (or `harness/orchestrator_channel.py` while developing Factory itself). Run the
+`orchestrator/bin/*` tools by path, because their first line names the run's interpreter. A run whose
 `harness.json` sets `progress_review` takes assessment/5, shown here; any other run takes
 assessment/3, which is the same object without `screen_review`, `signal_class` and
 `progress_review` (assessment/4 adds only `screen_review`). `screen_review` is null unless
@@ -371,6 +372,13 @@ Validator owes a decision or an answer); `at-your-convenience` (worth reading, b
 refuses a class below what the assessment itself reports: a specification question is at least
 `action-required`, a block or a `stalled` trend is at least `at-your-convenience`, and no
 assessment ranks below its most urgent code finding.
+
+This channel's `action-required` can name work owed by the Validator; it is not automatically
+an owner permission request. The Validator's debrief distinguishes actual owner action from
+nonurgent material decisions and routine choices under AUTHORITY's "Task authorization and
+continuity". Keep the existing check-in cadence during healthy progress too. Read substantive
+results and validate assumptions against the goal; a live process, heartbeat or token stream
+alone is not productive health. Use existing recovery for a justified stall, not a new owner gate.
 
 ## The code-and-progress review — every second tick and every slice boundary
 
@@ -731,7 +739,10 @@ orchestrator/bin/seat_supervisor.py control --root . --session <run> --seat <val
 - The Validator is under this too. You hold authority over all three seats. When harness.json
   says `validator_agent: kickoff`, the Validator is the session that kicked off the run: its
   `validator` window shows that session's console, a correction lands in its inbox, and a stop
-  holds every lane (the founder's conversation is never frozen) until you resume it.
+  controls the explicitly bound executing Validator and holds every author lane until its
+  resume is acknowledged. The mirror is never a substitute process target. Inspect the returned
+  `acknowledged` and per-seat observations: exit 75 means pending, not stopped/resumed. Signal
+  attempts and failures persist; do not erase holds or substitute an inbox notice for a real stop.
 
 **The founder's dash: `orchestrator/bin/escalate.py`.** Herald (dash.herald.tools) is how the run talks to
 the founder. Three levels, and you choose the level by who must act:

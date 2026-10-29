@@ -15,12 +15,17 @@
 # detecting a red baseline manufactures a "flake" that is just the pre-existing red.
 #
 #   usage: flake.sh <name> --src <tree> --tests <tree> [--test-cmd "..."] [--runs N]
+# --package-root is the package search directory relative to the copied tree.
+# --package selects the import when a flat tree contains other directories.
 set -uo pipefail
+PACKAGE_ROOT="src"; PACKAGE=""
 
 NAME="${1:?usage: flake.sh <name> --src <tree> --tests <tree> [--test-cmd ...] [--runs N]}"; shift
 SRC=""; TESTS=""; TEST_CMD="${TEST_CMD:-}"; RUNS="${FLAKE_RUNS:-3}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --package-root) PACKAGE_ROOT="$2"; shift 2 ;;
+    --package) PACKAGE="$2"; shift 2 ;;
     --src)      SRC="$2"; shift 2 ;;
     --tests)    TESTS="$2"; shift 2 ;;
     --test-cmd) TEST_CMD="$2"; shift 2 ;;
@@ -51,17 +56,25 @@ TIMEOUT=$(command -v timeout || command -v gtimeout) || { echo "flake: needs GNU
 verdict() { printf '%s: %s\n' "$NAME" "$*"; }
 
 # --- GATE 1: the code under test must load FROM THIS TREE (same rationale as mutate.sh) ---
-import_ok=$(cd "$WORK" && PYTHONPATH="$WORK/src" python3 - "$WORK" <<'PY' 2>&1
-import os, sys, importlib
-root = sys.argv[1]; sys.path.insert(0, root + "/src")
-pkg = next((n for n in sorted(os.listdir(root + "/src"))
-            if not n.startswith("_") and os.path.isdir(root + "/src/" + n)), None)
+import_ok=$(cd "$WORK" && python3 - "$WORK" "$PACKAGE_ROOT" "$PACKAGE" <<'PYIMPORT' 2>&1
+import importlib
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1]).resolve()
+relative = pathlib.Path(sys.argv[2])
+search = (root / relative).resolve()
+if relative.is_absolute() or not search.is_relative_to(root) or not search.is_dir():
+    raise SystemExit("INVALID-PACKAGE-ROOT")
+sys.path.insert(0, str(search))
+pkg = sys.argv[3] or next((p.name for p in sorted(search.iterdir())
+                          if not p.name.startswith("_") and p.is_dir()), None)
 if pkg is None:
     print("NO-PACKAGE")
 else:
-    m = importlib.import_module(pkg)
-    print("OK" if (m.__file__ or "").startswith(root) else "WRONG-TREE " + str(m.__file__))
-PY
+    module = importlib.import_module(pkg)
+    origin = pathlib.Path(module.__file__).resolve() if module.__file__ else None
+    print("OK" if origin and origin.is_relative_to(search) else "WRONG-TREE")
+PYIMPORT
 )
 case "$import_ok" in
   OK*) ;;
@@ -72,7 +85,7 @@ esac
 # A red baseline makes every dissenting run look like a flake when it is the same
 # pre-existing red. Establish green once, then vary only the run.
 clean_rc=0
-( cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || clean_rc=$?
+( cd "$WORK" && PYTHONPATH="$WORK/$PACKAGE_ROOT" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || clean_rc=$?
 if [ "$clean_rc" -ne 0 ]; then
   verdict "INVALID (baseline is not green — a red baseline manufactures false flakes)"
   exit 3
@@ -88,7 +101,7 @@ fi
 exits=()
 for i in $(seq 1 "$RUNS"); do
   rc=0
-  ( cd "$WORK" && PYTHONPATH="$WORK/src" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || rc=$?
+  ( cd "$WORK" && PYTHONPATH="$WORK/$PACKAGE_ROOT" "$TIMEOUT" "${MUTATE_TIMEOUT:-2000}" $TEST_CMD >/dev/null 2>&1 ) || rc=$?
   exits+=("$rc")
 done
 pass_count=0; fail_count=0

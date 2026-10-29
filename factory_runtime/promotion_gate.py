@@ -23,11 +23,11 @@ until the inputs arrive, which is exactly what enforcement means. The alternativ
 on ``make ship`` green, as the pre-cage harness did) is the route-around this gate exists to
 prevent: a green build is not a verified run.
 
-HONEST SCOPE (updated 2026-08-14). ``endgame.sh`` invokes ``promote.sh`` only after its other
-gates are green, so this module is now on the live harness close path. No producer of
-``promotion_inputs.json`` exists yet, however; an otherwise green live run therefore stops at
-Gate L until those inputs have been gathered. The harness close also remains distinct from a
-RunStore ``PROMOTED`` ledger transition.
+HONEST SCOPE. ``endgame.sh`` invokes ``promote.sh`` only after its other gates are green.
+``factory assemble-promotion-inputs`` composes existing reviewed documents and calls this
+same decision path before writing a new output. It does not derive missing claims, generate
+receipts or infer policy. The harness close remains distinct from a RunStore ``PROMOTED``
+ledger transition and from delivery of the user's requested outcome.
 
 What this module DOES do — the F3 chain-anchor check (built 2026-08-14, hardened R2/R3
 2026-08-14). The pure core verifies each receipt envelope's content-address, subject binding,
@@ -74,9 +74,8 @@ run/suite — or a build receipt whose ``git_head`` is not compared to the promo
 put ``candidate_digest`` + ``surface_id`` in the flake/oracle receipt bodies, bind them in
 ``verifies_binding``, and extend the build projection to bind ``git_head`` to the request's
 ``candidate_digest``. That decision belongs with the evidence-production pipeline (plan Part 7):
-the envelopes are produced by that pipeline, which does not yet exist (nothing produces
-``promotion_inputs.json``), so building the binding now would define a
-contract with no producer — the F1 pattern. R1 is captured as the named "next proxy" (plan Part
+the generic input composer does not add these missing receipt bindings. R1 is captured as
+the named "next proxy" (plan Part
 5 §4) and lands with Part 7.
 
 R4 — chain AUTHENTICITY / mint-by-append (Opus, 2026-08-14 re-verification; a NEW gap, not R1 in
@@ -99,6 +98,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -355,6 +355,15 @@ def decide(run_root: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise PromotionGateError("promotion-inputs-malformed: root is not a JSON object")
 
+    return decide_document(run_root, raw)
+
+
+def decide_document(run_root: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate assembled inputs through the same gate used by canonical closure.
+
+    This is also the assembly diagnostic: it neither writes a verdict nor advances a run.
+    Missing evidence remains missing; no receipt values or signatures are synthesized.
+    """
     # Wrap the from_dict builders (Opus F8): a malformed-but-JSON input (e.g.
     # human_aliases as a list, or an observation that is not an object) raises
     # AttributeError/TypeError/ValueError from inside a from_dict. The CLI's main()
@@ -369,6 +378,27 @@ def decide(run_root: Path) -> dict[str, Any]:
         raise
     except (TypeError, AttributeError, ValueError) as exc:
         raise PromotionGateError(f"promotion-inputs-malformed: {exc}") from exc
+    if "delegation" in raw:
+        from factory_runtime.authority import AuthorityVerificationError, load_genesis
+        from factory_runtime.promotion_delegation import apply_delegation
+        from factory_runtime.tessera import TesseraCli
+
+        delegation = raw["delegation"]
+        if not isinstance(delegation, Mapping):
+            raise PromotionGateError("delegation must be an object")
+        try:
+            tessera = TesseraCli((os.environ.get("FACTORY_TESSERA_BIN", "tessera"),))
+            authority = load_genesis(
+                os.environ["FACTORY_GENESIS"],
+                trusted_root_public_key=os.environ["FACTORY_ROOT_PUBLIC_KEY"],
+                tessera=tessera,
+            )
+            policy = apply_delegation(
+                run_root, delegation, request, profile, policy,
+                authority=authority, tessera=tessera,
+            )
+        except (KeyError, OSError, ValueError, AuthorityVerificationError) as exc:
+            raise PromotionGateError(f"delegation-invalid: {exc}") from exc
     # F3: the seam's chain-anchor check. Every cited receipt envelope must be grounded in the
     # real tamper-evident chain — an envelope whose id is not in the chain, whose chain entry is
     # tampered, or whose body does not match the entry's projection, is a fabrication the core

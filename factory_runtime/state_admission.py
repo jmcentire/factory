@@ -351,6 +351,44 @@ def verify_state_capsule(
             )
 
 
+def state_dependency_delta(
+    previous: Mapping[str, Any], current: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Report a same-role context delta, never authorize dispatch or evidence reuse.
+
+    Capsules contain digests, not source contents. Full authorized sources remain available
+    through the existing role projection. Neither a matching digest nor this diagnostic
+    replaces the live admission checks or an evidence artifact's own validity contract.
+    """
+    verify_state_capsule(previous)
+    verify_state_capsule(
+        current,
+        expected_purpose=str(previous["purpose"]),
+        expected_run_id=str(previous["run_id"]),
+        expected_generation=int(previous["generation"]),
+        expected_role=str(previous["role"]),
+        expected_target_state_digest=str(previous["target_state_digest"]),
+    )
+    before = {row["dependency_id"]: row for row in previous["dependencies"]}
+    after = {row["dependency_id"]: row for row in current["dependencies"]}
+    changed = {
+        key: {"previous": before[key]["content_digest"], "current": after[key]["content_digest"]}
+        for key in sorted(after) if before[key] != after[key]
+    }
+    return {
+        "run_id": current["run_id"],
+        "role": current["role"],
+        "previous_capsule_digest": digest_obj(dict(previous)),
+        "current_capsule_digest": digest_obj(dict(current)),
+        "changed_dependencies": changed,
+        "unchanged_dependencies": sorted(set(after) - set(changed)),
+        "changed_checkpoint_fields": [
+            key for key in ("run_ledger_head", "resume_checkpoint_digest")
+            if previous[key] != current[key]
+        ],
+    }
+
+
 def read_stable_regular_bytes(
     path: str | Path,
     *,
@@ -443,5 +481,6 @@ __all__ = [
     "profile_digest",
     "profile_document",
     "read_stable_regular_bytes",
+    "state_dependency_delta",
     "verify_state_capsule",
 ]

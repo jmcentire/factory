@@ -11,7 +11,16 @@ to (`$FACTORY_HOME/docs/standards/ARCHITECTURE.md` and `HOW-WE-WRITE-CODE.md`), 
 `$FACTORY_HOME/prompts/diff-intent-gate.md`. Read §3 *The four roles* if this is your
 first run in a session.
 
+Apply TESTING.md T4, T19–T20 and T36 when making implementation boundaries testable:
+keep promised effects observable and dependencies explicit, rather than exposing private
+internals for implementation-mirroring assertions. The Tester still owns acceptance tests;
+your scratch checks do not replace independent evidence.
+
 Arguments: $ARGUMENTS
+
+Apply AUTHORITY.md "Task authorization and continuity" to operational choices: proceed on
+ordinary authorized reversible work, record material decisions accurately, and preserve
+the Tester boundary. A workflow receipt is not a new request for owner permission.
 
 ---
 

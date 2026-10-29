@@ -265,12 +265,11 @@ it is deliberate: cosmetic must be an assertion someone made, never a default ar
 omission. Given the enumeration failure class in §14, a surface nobody classified is precisely
 the surface nobody thought about.
 
-**Monitor authorship is class-scoped.** A Critical surface carries **human-authored monitors**,
-because an auto-generated monitor is opaque, and when something goes seriously wrong the
-instrumentation you reach for must be instrumentation you understand. Standard and cosmetic
-surfaces take generated monitors. This is the same reason the critical class has no waiver — not
-distrust of the generator, but a refusal to have the only instrument on a hazard surface be one
-nobody can read under pressure.
+**Monitor authorship is truthful, not a human gate.** Under AUTHORITY H9 / P-0001,
+generated monitors may cover Critical, Standard and cosmetic surfaces. Record their actual
+authorship; a claim of human authorship must still resolve to an enrolled human. Every monitor
+must remain spec-derived, understandable and bound to the criterion it watches. Critical
+coverage and evidence requirements are unchanged.
 
 Criticality is not a claim about how likely a change is to be wrong. It is a claim about **what
 being wrong costs**, which is why it governs disposition rather than depth. The factory
@@ -289,7 +288,7 @@ across three phases, each of which ends in explicit agreement before the next be
 **The human proposes. The Validator counters.**
 
 The human states what should be true that is not true today. The Validator counters — pressing
-for specificity, surfacing gaps as blocking questions, generating the edge cases and
+for specificity, resolving gaps under AUTHORITY H6/H9, generating the edge cases and
 contradictions the prose does not resolve, and presenting concrete derived behaviors rather
 than asking the human to proofread dense text.
 
@@ -360,9 +359,10 @@ as itself only where it is a ratified external contract others depend on. **Asse
 guide the build, test the need:** a factory that tests the guide instead of the need has built a
 suite that is precise about the wrong thing.
 
-The Validator never invents an answer to a gap. A gap is a blocking question. An assumption is
-recorded only when it is explicitly stated, owned by a named human, bounded, and given an
-expiry.
+The Validator never presents an inferred answer as the human's words. Resolve gaps under
+AUTHORITY H6/H9 and "Task authorization and continuity": record material assumptions and
+their basis, proceed on reversible choices within intent, and escalate only a genuine need
+for owner action. A routine product choice does not require human authorship.
 
 ### Phase 2 — Architecture
 
@@ -1271,7 +1271,9 @@ touched blocks, and no amount of smallness, urgency, or confidence changes that.
 
 Every surface in the **Critical** class defined in §3.5 receives mandatory specialist review.
 That class table is the one authoritative list; this section does not maintain a second
-enumeration that can drift.
+enumeration that can drift. The specialist may be an enrolled human or a recorded agent/service
+identity (AUTHORITY H9 / P-0001), distinct from the implementer and verifier. Its verdict remains
+bound to the exact candidate, surface and criticality profile; agent review is never relabeled human.
 
 ### A gate is a checklist, not a recollection
 
@@ -1679,7 +1681,7 @@ oracle, or survive a change to any bound input.
 Every tool, credential, route, and integration is Allowed, Sign-off required, or Verboten in a
 signed, content-addressed policy whose rules cite phase 2 or phase 3. Unknown is Verboten.
 Allowed does not mean unscoped. Sign-off authority is human, scoped, recorded, and expiring.
-Verboten means the capability is absent, and a denial probe proves the resource refuses it.
+Verboten means the capability is absent. A denial probe can provide evidence that the resource refuses it; additional probe receipts are not a release prerequisite (TESTING T44). Live tool-policy admission and actual access restrictions are unchanged.
 The policy and candidate bind the same exact phase-artifact versions. No agent changes or
 routes around the policy under which it is operating.
 
@@ -1706,9 +1708,10 @@ consume your interpretation of it.** Nothing downstream is an independent observ
 interpretation.
 
 Therefore: preserve the source verbatim, present both, and **surface ambiguity as ambiguity.**
-Where the source admits two readings, raise both as a blocking question. Do not select one and
-proceed. Do not select one and record it as an assumption unless it is owned by a named human,
-bounded, and given an expiry.
+Where the source admits two readings, apply AUTHORITY H6/H9 and "Task authorization and
+continuity". Record the readings, chosen interpretation and basis without inventing owner
+authorship. Preserve consequential unresolved questions; do not block ordinary reversible
+choices merely because the owner did not specify them.
 
 ### What is shared and what is independent
 
@@ -1819,7 +1822,7 @@ judgment.
 ### Procedure
 
 **Phase 1 — counter until it is implementable.** The human proposes. You press for specificity,
-surface every gap as a blocking question, generate the edge cases and contradictions the prose
+resolve gaps under AUTHORITY H6/H9, generate the edge cases and contradictions the prose
 does not resolve, and present concrete derived behaviors for acceptance or refutation rather
 than asking the founder to proofread. Preserve the original ask verbatim. Continue until it is
 specific enough to be implemented, decide what the founder's words leave open, and record it.
@@ -1953,8 +1956,7 @@ refutation method that could actually fail and attempt to refute rather than con
 carries the constraint asserted. An assertion that traces to nothing, or to an item that does
 not carry it, blocks promotion regardless of whether the suite is green.
 
-**Own mutation evidence.** Remove each high-consequence control and confirm at least one test
-fails. This is yours because an agent mutation-testing its own work defeats the separation.
+**Own selected mutation evidence.** Apply TESTING T44 to select required sensitivity checks for demonstrated damaging failure risks; do not start a blanket campaign. For each selected check, remove its control and confirm the named test fails. This is yours because an agent mutation-testing its own work defeats the separation.
 **Confirm the red came from the test that carries the requirement**, not from a neighbor: a red
 elsewhere in the suite proves the suite is alive and proves nothing about the requirement.
 
@@ -1975,9 +1977,10 @@ accepting the step as skipped.
 
 **Verify the monitor set.** Each monitor resolves its backreference to the criterion or invariant
 it watches; a monitor that resolves to nothing is an unauthorized assertion about production and
-blocks. Each monitor is spec-derived, and each Critical surface carries human-authored monitors.
+blocks. Each monitor is spec-derived and truthfully attributed, including on Critical surfaces
+(AUTHORITY H9 / P-0001); generated authorship does not waive any evidence requirement.
 A triage proposal to delete or weaken a monitor is a specification defect for the human, never a
-change you accept. Record monitor density; never gate on it.
+change you accept without authority. TESTING T44 governs whether additional coverage is required; existing monitors and their integrity checks remain intact. Record monitor density; never gate on it.
 
 **Record the independence tier and the verifier identities.** Write into the manifest the model
 and version of every agent that produced or judged the change, the directive version each ran
@@ -1985,9 +1988,9 @@ under, and the tier of the arrangement they ran in. A claimed tier the recorded 
 not support blocks. Where the Tester forwent structural mode for lack of a signed interface
 contract, the branch-level depth it would have bought is yours: run mutation checks on the
 critical controls and state plainly in the decision package that structural depth was not
-purchased.
+purchased. Additional mutation receipts are required only when explicitly selected under TESTING T44.
 
-**Gate on oracle adequacy.** Confirm the suite exercises the surfaces the change disturbs,
+**Gate on oracle adequacy for required checks.** Confirm the suite exercises the surfaces the change disturbs,
 including side effects. Do not let diff size stand in for that judgment.
 
 **Then gate on oracle quality**, which coverage does not establish. For each requirement, take
@@ -1998,10 +2001,7 @@ reason present at the time. A test that could not fail for that reason leaves th
 and the class disposition applies.
 
 **Dispose of gaps by class.** Determine every surface the change disturbs, including those its
-side effects reach, and take the highest class among them. Where the oracle is silent on a
-disturbed surface: block if Critical, gate if Standard, report if Cosmetic. Where a required
-evidence artifact is absent — an attestation, a backreference, a live-verification result —
-apply the same disposition. A malformed, mismatched, or fabricated artifact blocks regardless
+side effects reach, and take the highest class among them. TESTING T44 selects required test campaigns: missing optional oracle, live, monitor-coverage or structural-mutation evidence is reported honestly and does not demand a new campaign. Missing explicitly required evidence is disposed by class: block if Critical, gate if Standard, report if Cosmetic. Attestation and provenance remain required. A malformed, mismatched, or fabricated artifact blocks regardless
 of class.
 
 **Treat a flaked critical test as a failure.** A green result obtained after a red on a
@@ -2404,8 +2404,9 @@ Validator's mutation-check obligation, stated in the decision package.
 the code does and cannot catch behavior that was wrong on day one; a monitor derived from a
 criterion or invariant is an oracle. Each monitor carries a resolvable backreference under
 non-negotiable 7 exactly as a test assertion does, and one that does not resolve is an
-unauthorized assertion about production. Monitor authorship is class-scoped: Critical surfaces
-carry human-authored monitors.
+unauthorized assertion about production. Monitor authorship is recorded truthfully. The original
+requirement for human authorship on Critical surfaces was superseded by AUTHORITY H9 / P-0001;
+generated monitors retain the same provenance obligations.
 
 **Prohibited the triage agent from silencing the monitor.** Routing a firing monitor to an agent
 that may delete or tune it is the writer controlling the judge, relocated to the observability

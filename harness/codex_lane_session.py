@@ -16,6 +16,8 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
+import codex_hook_admission  # noqa: E402
+import validator_boundary  # noqa: E402
 from lane_dialogue import (  # noqa: E402
     MAX_TEXT_BYTES,
     LaneDialogueError,
@@ -191,6 +193,7 @@ def run_turn(
     *,
     root: pathlib.Path | None = None,
     role: str | None = None,
+    boundary_record: object = None,
 ) -> int:
     if (root is None) != (role is None):
         raise SessionError("run root and role must be supplied together")
@@ -202,6 +205,13 @@ def run_turn(
         command = command[1:]
     if not command:
         raise SessionError("Codex command is empty")
+    try:
+        command = codex_hook_admission.preserve_trust_with_scoped_mcp(command, pathlib.Path.cwd())
+        codex_hook_admission.check_command(command, pathlib.Path.cwd())
+    except codex_hook_admission.HookAdmissionError as exc:
+        raise SessionError(str(exc)) from exc
+    command = validator_boundary.model_command(
+        command, boundary_record, (role or "").split("-", 1)[0], pathlib.Path.cwd())
     event_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     event_descriptor = os.open(
         event_path,
@@ -265,6 +275,7 @@ def main() -> int:
     parser.add_argument("--root", type=pathlib.Path, required=True)
     # The lane identity (tester-b for an instance), which its questions are recorded under.
     parser.add_argument("--role", required=True)
+    parser.add_argument("--boundary-record", type=json.loads, default=None)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     try:
@@ -275,8 +286,9 @@ def main() -> int:
             arguments.command,
             root=arguments.root,
             role=arguments.role,
+            boundary_record=arguments.boundary_record,
         )
-    except (OSError, SessionError) as exc:
+    except (OSError, SessionError, validator_boundary.BoundaryError) as exc:
         print(f"codex-lane-session refused: {exc}", file=sys.stderr)
         return 70
 

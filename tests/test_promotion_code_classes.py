@@ -53,6 +53,8 @@ _NON_CODES = {
     "negative-evidence",  # wrapper token, classified — listed to note it IS classified
     "flake-count",
     "retry-count",
+    # Recognized tool-policy input, emitted only inside the optional-evidence report.
+    "verboten-denial-probe-missing",
 }
 
 
@@ -130,6 +132,8 @@ def test_class_partitions_are_disjoint_and_complete() -> None:
     # ...the path:-namespace reservation added one configuration code, and 4.2
     # change 1 dropped the ten oracle/flake envelope codes (the chain is the sole
     # value authority; binding truth moved to the seam, outside this vocabulary).
+    # P-0001 permits a recorded agent specialist: the obsolete human-only rejection is gone.
+    # T44 adds an explicit report for optional, unexecuted evidence campaigns.
     assert len(PROMOTION_CODE_CLASSES) == 108
     assert len(CONFIGURATION_DETERMINED_CODES) == 26
     assert len(SURFACE_SCOPED_CODES) == 5

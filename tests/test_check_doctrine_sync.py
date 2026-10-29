@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
+
 from scripts.check_doctrine_sync import check_repository
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -365,3 +367,21 @@ def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) 
     errors = check_repository(root)
 
     assert "stale-commitment:docs/new-operating-guide.md:the seven non-negotiables" in errors
+
+
+@pytest.mark.parametrize("requirement", [
+    "Monitor authorship is truthful, not a human gate.",
+    "generated monitors may cover Critical, Standard and cosmetic surfaces.",
+    "a claim of human authorship must still resolve to an enrolled human.",
+    "must remain spec-derived, understandable and bound to the criterion it watches.",
+])
+def test_monitor_authorship_and_provenance_requirements_cannot_disappear(
+    tmp_path: Path, requirement: str,
+) -> None:
+    root = _copy_guard_surface(tmp_path)
+    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
+    source = doctrine.read_text(encoding="utf-8")
+    assert source.count(requirement) == 1
+    doctrine.write_text(source.replace(requirement, "Requirement removed."), encoding="utf-8")
+
+    assert f"monitor-authorship-rule-missing:{requirement}" in check_repository(root)

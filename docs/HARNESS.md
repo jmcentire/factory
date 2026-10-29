@@ -19,8 +19,9 @@
 > harness-bound green-endgame admission. Gate L requires that receipt for current-contract runs,
 > rechecks it under the close lock, and then seals resources and closes `harness.json`; it does not
 > itself create a RunStore `PROMOTED` transition, although that transition now independently
-> requires and binds the same sealed resource head. The evidence pipeline still does not automatically
-> produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
+> requires and binds the same sealed resource head. `factory assemble-promotion-inputs` composes
+> existing reviewed documents; it does not automatically infer missing evidence or policy.
+> The R1 cross-run receipt binding and R4 chain-authenticity
 > gaps remain. A green build is not a verified run; a verified run is the cage refusing on every
 > gap.
 > Canonical copy: `$FACTORY_HOME/docs/HARNESS.md`. The former `HARNESS.md` mirror in the
@@ -459,6 +460,25 @@ machine, before the agent starts and while it runs:
   claude-ollama, an `XDG_CONFIG_HOME` for Muse, and for cursor-agent and agy a private `HOME`
   whose `Library` is the operator's (the keychain sign-in) and whose dot-files are the lane's.
   `--effort` sets the reasoning effort; `<slot>-turn.json` records how to resume the session.
+  When `FACTORY_REQUIRE_SIGNET=1`, admission also requires `FACTORY_SIGNET_CONTRACT` and
+  `FACTORY_SIGNET_DIGEST`. `signet_hooks.py` carries that exact installed-evaluator binding into
+  Claude's explicit settings, Cursor's private hooks file, or Codex's explicit configuration
+  overrides, including resume. It never copies the operator's other hooks or changes policy.
+  Unsupported clients refuse a required binding. Missing/changed evaluator, invalid output and
+  evaluator failure produce a denial; an ASK stays blocked on events that cannot enforce ASK.
+  Cursor uses dedicated shell/MCP hooks so MCP server identity reaches Kindex's prerequisite
+  rule without duplicate evaluation; its shell hook can still request a genuine scoped approval.
+  **This is configuration plumbing, not runtime qualification.** Actual hook loading, Codex's
+  hook trust and failure semantics, and scoped Kindex use still require client receipts. Codex
+  can fail open when the hook process itself fails, so hooks alone are not a security boundary.
+  Required Codex hooks now have a pre-model admission check: `codex_hook_admission.py` queries
+  the installed client's read-only `hooks/list` API for the exact session-flag handler and
+  refuses absent, disabled, modified or untrusted hooks. Launch and continuation check it;
+  the headless turn wrapper checks again before starting either an initial or resumed turn.
+  Timeout, malformed metadata and source errors refuse admission. No thread/model is started
+  by this check, and no trust is granted or changed. Review the exact host-pinned hook through
+  the client's supported `/hooks` flow when needed; configuration presence is insufficient.
+  Metadata admission still requires a live denial probe before claiming provider acceptance.
 - **Every resumable lane, not only Codex.** The wrapper records the session id the harness streams
   first (`--session-agent`, `<slot>-thread-id`), so the watcher's wrap-up and review pauses, and
   every lane message, resume a registry lane's own session (`--resume`, `--session-id` or
@@ -694,8 +714,46 @@ dependency-free (bash + python3 + git):
   prints the transcript as it grows (so the dispatcher, its failure-mode checks and the
   Orchestrator see the Validator's real console) and appends every line typed into the window
   (dispatcher notices, Orchestrator corrections) to `<run>/validator/inbox.jsonl`, which the
-  kickoff session watches. Its brief is `<run>/validator/BRIEF.md`. The supervisor never freezes
-  that session; an Orchestrator stop of it holds every lane until the Orchestrator resumes it.
+  kickoff session watches. Its brief is `<run>/validator/BRIEF.md`. Ignition requires
+  `FACTORY_VALIDATOR_PID`, `FACTORY_VALIDATOR_STARTED` (the normalized UTC `ps lstart` value),
+  and `FACTORY_VALIDATOR_PANE` (exact `%id`) for the **executing** Validator. The supervisor
+  verifies that PID/start belongs to the pane and persists an immutable per-run binding at
+  `orchestrator/validator-process.json`; the mirror is never a substitute signal target.
+  The bound Validator must be a worker child of its terminal shell/wrapper, not the tmux
+  pane-root process: tmux automatically resumes stopped pane roots. Resident Validators and
+  authors use the existing `lane_agent.py` wrapper's PID/start receipt; supervision pauses the
+  verified worker tree while the wrapper waits. An Orchestrator stop or overdue assessment
+  requests a pause of that worker tree. Acknowledgement requires repeated stopped-state
+  observations over at least one second with unchanged CPU time. Terminal exit is distinct
+  from resumable pause; an exited worker cannot be resumed.
+  `seat-state.json` records requested holds; `seat-processes.json` records each signal attempt
+  and observed acknowledgement. `status --root <run>` exposes both. Unknown observation,
+  changed identity or failed delivery stays pending; a control command returns 75 when not
+  acknowledged. A sent signal alone is not success. Resume requires recorded custody and
+  confirmed process state; author holds survive until the Validator's resume is acknowledged.
+  Author admission checks the binding and unresolved Validator holds. These checks identify
+  processes, not their served models. Individual PID/start revalidation avoids process-group
+  spill and known PID reuse, but POSIX signalling retains a check-to-signal race; observed-tree
+  tracking cannot prove containment of children that detach between polls.
+  `rebind-validator` is the host-only maintenance path for a client that must restart to load
+  updated session hooks. It requires the exact prior identity/custody, observed exit of every
+  tracked prior descendant, an already paused replacement tree in the declared pane, and a
+  current accepted Orchestrator no-op disposition. Before moving the binding it durably retains
+  the old binding/custody and handoff subject. Existing holds remain, and a new validation hold
+  keeps the replacement paused until separately qualified. Interrupted persistence can be
+  completed against that same immutable subject with fresh supervision. This operation never
+  launches/resumes the client, clears an attention/policy block, or attests its model/account.
+  A legacy pane parser could misclassify a quoted question placeholder inside a serialized
+  tool result. `lane_dialogue.py correct-tool-echo --root <run> --question-id <id>
+  --source <lane.round-codex-events.jsonl> --assessment-digest <current-AG-digest>` is the
+  host-only, append-only repair for that exact case. It requires a current accepted AG review
+  containing the pending question and one matching completed tool event in the named run-local
+  stream. Ordinary questions, ambiguous author messages, changed evidence and planned answers
+  are refused. The receipt retains source/event hashes and the original question stays in the
+  journal; it is neither answered nor falsely marked delivered. A fresh AG assessment and every
+  existing custody, attention and process-control check still govern rebind and continuation.
+  The pane fallback now accepts only direct question-marker lines, never embedded JSON/quoted
+  examples. Typed provider session wrappers remain responsible for structured author messages.
   An explicitly selected interactive Claude Validator is an opt-in, operator-equivalent,
   unsandboxed process: it is not a qualified lane and contributes no filesystem-isolation
   evidence. Codex is the default; Ollama-launched Codex is the supported alternate.
@@ -708,6 +766,68 @@ dependency-free (bash + python3 + git):
   Validator and a Codex Orchestrator (agy takes no model flag; select its model inside agy), and
   `tmux_lane.sh --model` names a lane's. Unset, each agent runs its own configured default. The
   qualified dispatch path takes its model from the runner manifest.
+- `harness/author_custody.py` binds a Coder or Tester to its own policy-only custody
+  service. The canonical tmux launch takes `--author-custody-contract PATH` and
+  `--author-custody-digest SHA256` (or the fixed `FACTORY_AUTHOR_CUSTODY_CONFIG` /
+  `FACTORY_AUTHOR_CUSTODY_DIGEST` environment). A conflicting CLI pin is refused.
+  `FACTORY_REQUIRE_AUTHOR_CUSTODY=1`, or a kernel-bound lane requiring Signet,
+  refuses admission without that binding. Legacy direct hooks are not evidence of
+  persistent custody. The host configuration pins the role, client, repository,
+  run-specific policy binding, boundary, source hashes, private state directory and
+  allowed Unix socket. It must protect the configuration, state, socket directory
+  and enforcement source directories from author writes.
+  The host holds the new child behind a pipe until PID/start identity and immutable
+  runtime receipts exist and the separate broker responds. The broker is outside
+  that child's process tree; it accepts policy evaluation only, never execution.
+  Hooks carry explicit `--author-config` / `--author-digest` pins and use the protected
+  runtime binding rather than model-controlled environment. Missing/stale bindings,
+  wrong clients, foreign peers and unavailable brokers fail closed. Resume uses the
+  retained launch binding and the same receipt store; unresolved denials or unknown
+  previous shutdown prevent continuation. A store cannot be reassigned to another
+  role, client, project or run. Release uses the existing genuine Orchestrator
+  disposition and that author's attention gate, not the Validator's custody identity.
+  Cleanup records actual outcomes for observed PID/start identities, including retained
+  orphans. Unknown observations remain unverified. This is sampled process custody,
+  not a kernel job object: a descendant that forks and detaches entirely between
+  observations is not thereby proven stopped. Provider hook loading/coverage and
+  kernel information separation still require actual qualification. Changed hook
+  definitions require the client's normal exact trust review; this code grants no trust.
+- `harness/policy_custody.py` — optional host-bound Signet evaluation in the existing
+  `lane_custody.py` service. The admitted seat sends tool metadata for evaluation, never
+  execution. The host pins the client, evaluator contract, implementation hashes and run.
+  A non-prerequisite denial persists a hold before returning; a failed evaluation leaves an
+  uncertain hold. Subsequent tool requests and fixed custody operations cannot proceed by
+  changing spelling, tool or request ID. The journal contains identity, digests and outcomes,
+  not tool inputs. A prerequisite exception must name an exact owner policy revision and
+  recovery reason: the original DENY remains, and the real recovery call still goes through
+  Signet. This is not a Kindex success marker or an exemption from other checks.
+  Only the host's `lane_custody.py release-policy` command can release a named hold against
+  a current accepted Orchestrator no-op assessment covering its incident notice, with no
+  unresolved Validator attention block. A cadence no-op cannot override a prior block. There is no
+  release socket operation. A missing notice after a crash is recorded first and requires a
+  subsequent assessment; release never silently treats the crash as success. Old receipts
+  remain after release, and every later request is evaluated again.
+  Activation is explicit: a protected custody plan's `policy` binding and the session hook's
+  `--custody-socket` / `--custody-digest` must agree. Existing stateless hooks do not acquire
+  this protection merely because code is present. A missing or invalid endpoint blocks,
+  without falling back to local evaluation. Host receipt/control paths must be outside the
+  seat's writable boundary and actual provider hook loading must be qualified separately.
+  This guards calls reaching that hook, not unobserved provider refusals, already executing
+  actions, model text generation or an unconfined alternate executor. Actual process pause
+  remains the supervisor's separate acknowledged control.
+  Claude's native modules can reject `classic.PreToolUse` without invoking ordinary settings
+  hooks. A settings-only custody hook therefore cannot retain those denials. The optional
+  `harness/claude_custody.py` generator prepares a session-local native module with an explicit
+  dependency on the existing native Signet owner, placing custody before that owner. It uses
+  the same pinned custody endpoint and adapter; it neither edits nor replaces the installed
+  owner. An allow still invokes downstream policy, host checks and redaction. Ask/deny and
+  adapter failures do not invoke the next handler. The generator refuses to overwrite an
+  existing plugin directory and does not activate anything. Host-protect the generated files
+  and qualify actual dependency ordering in the installed client, including a real denial
+  followed by a different tool, before claiming coverage. Earlier built-in/managed guards
+  can still reject before this module: their outcomes are not thereby custody-observed.
+  See [Claude module ordering](https://code.claude.com/docs/en/plugins/mods/events#the-order-mods-run-in)
+  and [settings-hook placement](https://code.claude.com/docs/en/plugins/mods/events#where-settings-hooks-run-in-the-order).
 - `harness/dispatch_lane.sh` — re-derives target-state; under the shared attention lock checks both
   applicable blockers and acquires a crash-released role mutex as one admission ordering point;
   durably freezes or exact-reuses caller dispatch bytes; mints the declared asymmetric projection;
@@ -860,6 +980,48 @@ remediation. A run becomes terminal only through Gate L writing `closed` after a
 promotion verdict and, for current runs, a candidate-bound green-endgame admission, or
 `record_no.sh` writing `no`; ending a model turn, closing a Kindex session
 tag, or declaring completion in chat has no lifecycle effect.
+
+### Reuse retained context and evidence
+
+The verified RunStore ledger retains intake authority, phase versions and material transitions;
+`execution_authority_digests` resolves the original Stage-E bindings after later transitions.
+Use that record and the existing externally anchored resume path, not a second authorization
+store or repeated intake. AUTHORITY's "Task authorization and continuity" governs operational
+decisions. Existing security grant expiry, role access and admission checks still apply.
+
+For a same-role continuation, compare the retained capsules:
+
+```sh
+factory context-delta --previous previous-capsule.json --current current-capsule.json
+```
+
+The output lists changed and unchanged dependency identities/digests, not source contents.
+It refuses comparisons across roles, runs, generations or targets. It does not authenticate
+the files independently, grant admission or certify test reuse. Full sources remain in their
+authorized role projections; never give Coder the Tester's capsule or private sources, or vice
+versa. Use the delta to focus review; let each evidence contract determine actual validity.
+
+The Validator can assemble the existing evidence inputs without hand-copying their fields:
+
+```sh
+factory assemble-promotion-inputs --runs "$H/runs" --run-id "$RUN" \
+  --request request.json --policy enrollment.json --profile criticality.json \
+  --candidate-digest "$CANDIDATE_DIGEST" --output promotion_inputs.new.json
+```
+
+Use `--delegation delegation.json` only for an existing authorized delegation. The command
+retains every supplied field, checks candidate/run consistency, uses the same receipt-chain
+and promotion checks as Gate L, and returns one consolidated diagnostic. A blocked diagnostic
+is not acceptance: its exit zero means assembly succeeded, not promotion. Malformed or
+unverifiable inputs fail without creating the output; an identical existing output is reused
+after fresh verification, and different existing evidence is never overwritten.
+Source document digests accompany the result. No receipt, attestation, classification or
+signature is manufactured. Place the reviewed result through the existing permitted host
+workflow; this command does not change protected-write permissions or close the run.
+
+Harness closure, RunStore promotion and delivery are distinct milestones. Report the verified
+requested endpoint and its access/commit evidence; do not treat a closed process or green test
+as a delivered user goal. Retain unresolved limitations and the next supported action.
 
 The active scripts live in `$FACTORY_HOME/harness/`; tests and the denial-probe registry are the
 enforcement inventory, not this prose.

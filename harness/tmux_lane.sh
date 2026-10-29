@@ -34,6 +34,8 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options
                   [--wrap-up-minutes <min, default 5; 0 = none>]
                   [--review-every-minutes <min, Coder launches default 18; 0 = none>]
                   [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
+                  [--boundary-contract <host JSON> --boundary-digest <sha256>]
+                  [--signet-contract <host JSON> --signet-digest <sha256>]
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
   all             [--runs <runs dir>]'
@@ -64,6 +66,12 @@ MIN_COMMITS=1
 WRAP_UP_MINUTES=""
 REVIEW_EVERY_MINUTES=""
 LANE_ENV_ARGS=()
+BOUNDARY_ARG_PATH=""
+BOUNDARY_ARG_DIGEST=""
+SIGNET_ARG_PATH=""
+SIGNET_ARG_DIGEST=""
+AUTHOR_CUSTODY_ARG_PATH=""
+AUTHOR_CUSTODY_ARG_DIGEST=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
@@ -87,8 +95,36 @@ while [ "$#" -gt 0 ]; do
     --review-every-minutes) REVIEW_EVERY_MINUTES="$2"; shift 2 ;;
     --cache-env) LANE_ENV_ARGS+=(--cache-env "$2"); shift 2 ;;
     --runtime-dir) LANE_ENV_ARGS+=(--runtime-dir "$2"); shift 2 ;;
+    --boundary-contract) BOUNDARY_ARG_PATH="$2"; shift 2 ;;
+    --boundary-digest) BOUNDARY_ARG_DIGEST="$2"; shift 2 ;;
+    --signet-contract) SIGNET_ARG_PATH="$2"; shift 2 ;;
+    --signet-digest) SIGNET_ARG_DIGEST="$2"; shift 2 ;;
+    --author-custody-contract) AUTHOR_CUSTODY_ARG_PATH="$2"; shift 2 ;;
+    --author-custody-digest) AUTHOR_CUSTODY_ARG_DIGEST="$2"; shift 2 ;;
     *) echo "tmux-lane: unknown argument: $1" >&2; exit 64 ;;
   esac
+done
+# Closed host custody operations pass each role's fixed pins without changing the server's
+# shared environment. A CLI pin may fill an absent setting, never replace a conflicting one.
+for FAMILY in BOUNDARY SIGNET AUTHOR_CUSTODY; do
+  PATH_ARG="${FAMILY}_ARG_PATH"; DIGEST_ARG="${FAMILY}_ARG_DIGEST"
+  if [ -n "${!PATH_ARG}" ] || [ -n "${!DIGEST_ARG}" ]; then
+    [ -n "${!PATH_ARG}" ] && [ -n "${!DIGEST_ARG}" ] || {
+      echo "tmux-lane: $FAMILY contract and digest must be supplied together" >&2; exit 64;
+    }
+    PATH_ENV="FACTORY_${FAMILY}_CONTRACT"; DIGEST_ENV="FACTORY_${FAMILY}_DIGEST"
+    [ "$FAMILY" != AUTHOR_CUSTODY ] || PATH_ENV="FACTORY_AUTHOR_CUSTODY_CONFIG"
+    for PAIR in PATH DIGEST; do
+      ARG_NAME="${PAIR}_ARG"; ENV_NAME="${PAIR}_ENV"
+      ARG_NAME="${!ARG_NAME}"; ENV_NAME="${!ENV_NAME}"
+      [ -z "${!ENV_NAME:-}" ] || [ "${!ENV_NAME}" = "${!ARG_NAME}" ] || {
+        echo "tmux-lane: $FAMILY CLI setting conflicts with host binding" >&2; exit 77;
+      }
+      printf -v "$ENV_NAME" '%s' "${!ARG_NAME}"
+      export "$ENV_NAME"
+    done
+    export "FACTORY_REQUIRE_${FAMILY}=1"
+  fi
 done
 AGENT="${AGENT_ARG:-codex}"
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -142,6 +178,11 @@ refuse() {
   [ -z "$remediation" ] || echo "tmux-lane: remediation: $remediation" >&2
   exit "$code"
 }
+
+if [ "$ACTION" != freeze ]; then
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || \
+    refuse 70 "executing Validator identity/control is unavailable; refusing author admission"
+fi
 
 # The operator names the lane's agent (--agent, default codex) and, optionally, its model
 # (--model). The factory names no model. MODEL_SOURCE records where the model came from:
@@ -394,17 +435,20 @@ for journal in sorted(root.glob("*-launch.jsonl")):
                 f"tmux-lane: the {other} lane already works in {theirs}; give each lane its own copy"
             )
 PY
-  # Shared means shared: every lane starts from the same seed, or the later one does not start.
+  # Productive peers share a seed; earlier qualification probes are not product inputs.
   OTHER_ROLE=$([ "$ROLE" = coder ] && echo tester || echo coder)
-  SEED_DIGEST=$("$FACTORY_PYTHON" - "$TMUX_ROOT" "$ROOT/lane-seed.jsonl" "$OTHER_ROLE" <<'PY'
+  SEED_DIGEST=$("$FACTORY_PYTHON" - "$TMUX_ROOT" "$ROOT/lane-seed.jsonl" "$OTHER_ROLE" "$ACTION" <<'PY'
 import hashlib, json, pathlib, sys
 
 root, seed, other = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+action = sys.argv[4]
 mine = "sha256:" + hashlib.sha256(seed.read_bytes()).hexdigest() if seed.is_file() else ""
 active = []
 for journal in sorted(root.glob("*-launch.jsonl")):
     for line in journal.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
+        if action == "launch" and row.get("mode") == "qualify":
+            continue
         if row.get("status") == "active" and row.get("role") == other:
             active.append(row)
 if active:
@@ -737,11 +781,30 @@ PY
   git -C "$REPOSITORY" config user.name "Factory ${ROLE}"
   git -C "$REPOSITORY" config user.email "factory-${ROLE}@local"
 
+  BOUNDARY_RECORD=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
+    --role "$ROLE" --cwd "$REPOSITORY") || refuse 77 "author boundary admission failed"
+  KINDEX_HOME="$TMUX_ROOT/$SLOT-kindex-home"
+  AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
+  if [ "$BOUNDARY_RECORD" != null ]; then
+    # Mutable client/Kindex state belongs to this lane, not the host control tree that its
+    # kernel profile protects. .git is already verified standalone and excluded from commits.
+    PRIVATE_RUNTIME=$("$FACTORY_PYTHON" - "$REPOSITORY" "$SLOT" <<'PY'
+import pathlib, sys
+git = pathlib.Path(sys.argv[1]) / ".git"
+root = git / "factory-runtime" / sys.argv[2]
+if git.is_symlink() or not git.is_dir() or root.resolve() != root:
+    raise SystemExit("tmux-lane: private runtime path is aliased or unavailable")
+print(root)
+PY
+    ) || refuse 77 "author private runtime cannot be isolated"
+    KINDEX_HOME="$PRIVATE_RUNTIME/kindex"
+    AGENT_HOME="$PRIVATE_RUNTIME/agent"
+  fi
   # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
   SEED_ARGS=()
   [ ! -e "$ROOT/lane-seed.jsonl" ] || SEED_ARGS=(--seed "$ROOT/lane-seed.jsonl")
   KINDEX=$("$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
-    --home "$TMUX_ROOT/$SLOT-kindex-home" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
+    --home "$KINDEX_HOME" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
   # The seed may not move between the check above and the load: the store must hold what was checked.
   printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c '
 import json, sys
@@ -756,7 +819,27 @@ if (seed.get("digest") or "") != sys.argv[1]:
   PROFILE_DIGEST=$(printf '%s\n%s' "$PERMISSION_PROFILE" "$SHELL_POLICY" | shasum -a 256 | cut -d' ' -f1)
   LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
   LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
-  PLANNED=$(LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  BOUNDARY_MODEL_ARGS=""
+  BOUNDARY_CODEX_ARGS=""
+  if [ "$BOUNDARY_RECORD" != null ]; then
+    printf -v BOUNDARY_MODEL_ARGS ' --boundary-record %q --boundary-role %q' "$BOUNDARY_RECORD" "$ROLE"
+    printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
+  fi
+  AUTHOR_CUSTODY=$("$FACTORY_PYTHON" - "$D" "$ROLE" "$AGENT" "$REPOSITORY" "$BOUNDARY_RECORD" "$ROOT" <<'PY'
+import json, os, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import author_custody
+print(json.dumps(author_custody.select(dict(os.environ), sys.argv[2], sys.argv[3],
+    pathlib.Path(sys.argv[4]), json.loads(sys.argv[5]), pathlib.Path(sys.argv[6]))))
+PY
+  ) || refuse 77 "required author custody admission failed"
+  AUTHOR_HOOK_ARGS=()
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] && [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || \
+      refuse 77 "author custody requires its Signet hook binding"
+    AUTHOR_HOOK_ARGS=(--author-config "$FACTORY_AUTHOR_CUSTODY_CONFIG" --author-digest "$FACTORY_AUTHOR_CUSTODY_DIGEST")
+  fi
+  PLANNED=$(LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -849,6 +932,8 @@ print(json.dumps({
     "cli_contract": cli_contract,
     "repository_preflight": json.loads(preflight),
     "boundary": "operator-owned-tmux-unqualified",
+    "kernel_boundary": json.loads(os.environ["LANE_KERNEL_BOUNDARY"]),
+    "author_custody": json.loads(os.environ["LANE_AUTHOR_CUSTODY"]),
     "host_git_after_agent_start": "forbidden",
 }, sort_keys=True, separators=(",", ":")))
 PY
@@ -856,6 +941,27 @@ PY
   append_event "$PLANNED"
 
   LOCAL_ARGS=""
+  # Carry only the approved evaluator hook, never the operator's full hook/MCP configuration.
+  # This settings selection does not waive Codex's hook trust review or attest runtime loading.
+  if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
+      [ -n "${FACTORY_SIGNET_DIGEST:-}" ]; then
+    [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] && [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || \
+      refuse 77 "required Signet hook contract and digest are missing"
+    case "$AGENT" in
+      codex|codex-interactive)
+        SIGNET_OVERRIDE=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/signet_hooks.py" --client codex \
+          --contract "$FACTORY_SIGNET_CONTRACT" --digest "$FACTORY_SIGNET_DIGEST" \
+          --render-codex --check-codex-cwd "$REPOSITORY" ${AUTHOR_HOOK_ARGS[@]+"${AUTHOR_HOOK_ARGS[@]}"}) || \
+          refuse 77 "required Signet hook configuration or exact Codex hook trust is unavailable" \
+            "review the host-pinned hook with Codex /hooks; no lane was started"
+        printf -v SIGNET_ARGS -- '-c %q -c %q' 'features.hooks=true' "$SIGNET_OVERRIDE"
+        ;;
+      claude|cursor-agent) SIGNET_ARGS="" ;;
+      *) refuse 77 "required Signet client adapter is not qualified" ;;
+    esac
+  else
+    SIGNET_ARGS=""
+  fi
   if [ "$AGENT" = "codex-ollama" ]; then
     LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
   elif [ "$MODEL_SOURCE" = operator ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
@@ -865,10 +971,15 @@ PY
     printf -v QUOTED -- '-c %q' "$OVERRIDE"
     LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$QUOTED"
   done
+  [ -z "$SIGNET_ARGS" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$SIGNET_ARGS"
   # A Codex lane's --effort travels as a config override, last so it wins; one closed-set word.
-  if [ "$AGENT" = codex ] && [ -n "$EFFORT" ]; then
-    LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
+  if [ "$AGENT" = codex ]; then
+    [ -z "$EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
     : > "$TMUX_ROOT/$SLOT-lane-setup.nul"
+    if [ -n "$SIGNET_ARGS" ]; then
+      printf '%s\0' '-c' 'features.hooks=true' '-c' "$SIGNET_OVERRIDE" > \
+        "$TMUX_ROOT/$SLOT-lane-setup.nul"
+    fi
     "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
       --agent codex --model "$MODEL" --effort "$EFFORT" --billing plan \
       --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" || \
@@ -885,19 +996,24 @@ PY
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
     "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS"
+  # Codex's trusted event/session driver stays outside the model boundary. Other clients
+  # are direct children of lane_agent, which retains their process/exit evidence on the host.
+  case "$AGENT" in codex|codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
   # On a host whose kernel will not give Codex's own sandbox a namespace (a gVisor container,
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
   [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
+  # Ignore-user-config does not disable Codex's built-in app connector surface. Authors must
+  # use their explicitly scoped local Kindex server, not a same-named operator connector.
   case "$AGENT" in
     codex|codex-ollama)
       [ -z "$CODEX_SANDBOX_ARG" ] || LOCAL_ARGS="$CODEX_SANDBOX_ARG${LOCAL_ARGS:+ $LOCAL_ARGS}"
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$LOCAL_ARGS" "$REPOSITORY" \
+        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s -C %q -c %q -c %q -c %q -c %q' \
+      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
@@ -908,7 +1024,6 @@ PY
       # and the wrapper stops it if the harness reports per-use billing anyway.
       BILLING=plan
       [ "$METERED" != true ] || BILLING=metered
-      AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
       CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
       SETUP_OUT="$TMUX_ROOT/$SLOT-lane-setup.nul"
       "$FACTORY_PYTHON" "$D/agents.py" lane-setup --agent "$AGENT" --billing "$BILLING" \
@@ -934,6 +1049,11 @@ PY
       printf -v LANE_CMD '%s %s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
         "$ENV_PREFIX" "$WRAP" "$CREDENTIALS" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$PROMPT" "$QUOTED_TURN" ;;
   esac
+  if [ "$AUTHOR_CUSTODY" != null ]; then
+    printf -v LANE_CMD '%q %q --config %q --digest %q --shell-command %q' \
+      "$FACTORY_PYTHON" "$D/author_custody.py" "$FACTORY_AUTHOR_CUSTODY_CONFIG" \
+      "$FACTORY_AUTHOR_CUSTODY_DIGEST" "$LANE_CMD"
+  fi
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
 
@@ -962,7 +1082,8 @@ PY
   fi
   # A finished round's window (and its watcher's) is replaced; a running one was refused above.
   # A round its watcher had paused for review, or was wrapping up, ends as superseded.
-  "$FACTORY_PYTHON" "$D/lane_watchdog.py" close --root "$ROOT" --lane "$LANE" --by "$SLOT" || true
+  "$FACTORY_PYTHON" "$D/lane_watchdog.py" close --root "$ROOT" --lane "$LANE" --by "$SLOT" || \
+    refuse 70 "prior round stop/exit is unverified; refusing replacement"
   if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 1"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
@@ -1008,7 +1129,7 @@ fi
   echo "tmux-lane: no retained launch record for $SLOT" >&2
   exit 70
 }
-REPOSITORY=$("$FACTORY_PYTHON" - "$EVENTS" "$RUN" "$ROLE" <<'PY'
+FREEZE_LAUNCH=$("$FACTORY_PYTHON" - "$EVENTS" "$RUN" "$ROLE" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 run, role = sys.argv[2:]
@@ -1016,9 +1137,15 @@ rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip
 active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or active[0].get("run_id") != run or active[0].get("role") != role:
     raise SystemExit("tmux-lane: retained active launch record is missing or ambiguous")
+mode = active[0].get("mode")
+if mode not in ("qualify", "launch"):
+    raise SystemExit("tmux-lane: retained launch mode is missing or invalid")
+print(mode)
 print(active[0]["repository"])
 PY
 ) || exit $?
+LAUNCH_MODE=${FREEZE_LAUNCH%%$'\n'*}
+REPOSITORY=${FREEZE_LAUNCH#*$'\n'}
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
   --lane "$LANE" >/dev/null || {
   echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
@@ -1039,12 +1166,15 @@ EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repo
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}" \
   --control-root "$ROOT" --target-manifest-digest "$FACTORY_TARGET_MANIFEST_DIGEST") || exit $?
-# A Tester freezes only when its modules mention every Critical planned case of the Strategy
-# (dogfood #73, traceability only); refused, the lane stays open to write them. That the cases are
+# A productive Tester freezes only when its modules mention every Critical planned case
+# of the Strategy (dogfood #73, traceability only).
+# Qualification exports retain their mode; a capped probe is not product acceptance evidence.
+# This is selected by the retained launch receipt, never a round name or a freeze-time flag.
+# Refused, the lane stays open to write them. That the cases are
 # runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,
 # whose receipt endgame.sh requires before any verdict.
 PLAN_GAPS=null
-if [ "$ROLE" = tester ]; then
+if [ "$ROLE" = tester ] && [ "$LAUNCH_MODE" = launch ]; then
   TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.load(sys.stdin)["files_directory"])')
   PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" traceability \
@@ -1054,10 +1184,11 @@ if [ "$ROLE" = tester ]; then
   PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.dumps(json.load(sys.stdin)["traceability_gaps"]))')
 fi
-FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" <<'PY'
+FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" "$LAUNCH_MODE" <<'PY'
 import datetime, json, sys
-run, role, export, slot, traceability_gaps = sys.argv[1:]
+run, role, export, slot, traceability_gaps, mode = sys.argv[1:]
 print(json.dumps({
+    "mode": mode,
     "traceability_gaps": json.loads(traceability_gaps),
     "schema_version": "factory-tmux-lane-freeze/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),

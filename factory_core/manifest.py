@@ -150,6 +150,10 @@ class SegregationPolicy:
     excluded_service_identities: frozenset[str] = frozenset()  # exact ids OR fnmatch globs
     require_signature: bool = False
     allowlist_digest: str = ""
+    # Populated only by an authority-verifying seam, never inferred from the
+    # service denylist. Bind delegated roles to the exact reviewed subjects.
+    delegated_policy_signers: frozenset[tuple[str, str, str, int, int]] = frozenset()
+    delegated_classification_deciders: frozenset[tuple[str, str, int, int]] = frozenset()
 
     def canonical(self, identity: str) -> str:
         """Map an identity to its canonical human id if enrolled, else return it stripped, so

@@ -248,14 +248,16 @@ case "$ORCHESTRATOR_AGENT" in
       echo "factory: agy CLI is not runnable" >&2; exit 70;
     }
     ORCHESTRATOR_HELP=$(agy --help 2>&1) || exit 70
-    for REQUIRED in --new-project --prompt-interactive --sandbox \
-      --dangerously-skip-permissions --add-dir; do
-      printf '%s' "$ORCHESTRATOR_HELP" | grep -q -- "$REQUIRED" || {
+    REQUIRED_FLAGS="--new-project --prompt-interactive --dangerously-skip-permissions --add-dir"
+    [ -z "$ORCHESTRATOR_MODEL" ] || REQUIRED_FLAGS="$REQUIRED_FLAGS --model"
+    [ -z "$ORCHESTRATOR_EFFORT" ] || REQUIRED_FLAGS="$REQUIRED_FLAGS --effort"
+    for REQUIRED in $REQUIRED_FLAGS; do
+      printf '%s' "$ORCHESTRATOR_HELP" | grep -Eq -- "(^|[^[:alnum:]_-])$REQUIRED([^[:alnum:]_-]|$)" || {
         echo "factory: agy CLI contract lacks $REQUIRED ($ORCHESTRATOR_VERSION)" >&2
         exit 70
       }
     done
-    ORCHESTRATOR_CLI_CONTRACT="agy-resident-new-project-sandbox-v1"
+    ORCHESTRATOR_CLI_CONTRACT="agy-resident-new-project-unsandboxed-v2"
     ;;
   codex)
     ORCHESTRATOR_VERSION=$(codex --version 2>/dev/null) || {
@@ -287,19 +289,27 @@ esac
 
 # No harness metadata exists yet, so a file here can only be left by an ignition that
 # failed, and is replaced.
+if [ "$VALIDATOR_AGENT" = kickoff ]; then
+  "$FACTORY_PYTHON" "$D/seat_supervisor.py" bind-validator --root "$ROOT" --session "$RUN" \
+    --pid "${FACTORY_VALIDATOR_PID:?kickoff needs its executing Validator PID}" \
+    --started "${FACTORY_VALIDATOR_STARTED:?kickoff needs its observed UTC ps lstart identity}" \
+    --pane "${FACTORY_VALIDATOR_PANE:?kickoff needs its exact execution pane ID}" || exit 70
+fi
 IGNITION_FILES=1
 python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
-  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" <<'PY'
+  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" "$D" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, engagement, question_channel, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
-    generation_text, guidance_admission_raw, jev_config_raw,
+    generation_text, guidance_admission_raw, jev_config_raw, harness_tools,
 ) = sys.argv[1:]
+sys.path.insert(0, harness_tools)
+from handoff_metadata import MetadataError, validate_metadata
 audit_value = int(audit)
 if audit_value < 1:
     raise SystemExit("factory: audit interval must be positive")
@@ -391,6 +401,11 @@ metadata = {
     "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
+try:
+    validate_metadata(metadata, run=run, target_state=target_state_digest,
+                      commit=commit, checkout=checkout_id)
+except MetadataError as exc:
+    raise SystemExit(f"factory: {exc}") from exc
 path = pathlib.Path(metadata_path)
 tmp = tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False, encoding="utf-8")
 try:
@@ -527,6 +542,18 @@ case "$VALIDATOR_AGENT" in
     ;;
 esac
 
+# Keep the existing lane wrapper as tmux's child; the executing Validator is its child.
+# tmux resumes stopped pane roots, so a directly exec'd model cannot be a resumable seat.
+# claude-ollama already uses this wrapper for its environment; kickoff binds a shell child.
+case "$VALIDATOR_AGENT" in
+  kickoff|claude-ollama) ;;
+  *)
+    printf -v VALIDATOR_CONTROL_WRAPPER 'exec %q %q run --slot validator --log %q --exits %q --terminal -- ' \
+      "$FACTORY_PYTHON" "$D/lane_agent.py" "$ROOT/validator-lane.log" "$ROOT/validator-exits.jsonl"
+    VALIDATOR_CMD="${VALIDATOR_CONTROL_WRAPPER}${VALIDATOR_CMD#exec }"
+    ;;
+esac
+
 # Prompt size is verified on delegation (founder, 2026-10-18): each seat prompt is measured
 # against the one-argv-element limit its CLI receives it under, and the measurement is a run
 # event. The seat prompts are short main prompts that name the files the seat reads itself.
@@ -559,10 +586,9 @@ SAFE_SHELL="${SHELL:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 case "$ORCHESTRATOR_AGENT" in
   agy)
-    # --sandbox restricts terminal effects; --dangerously-skip-permissions only
-    # prevents unattended tool prompts from neutering the resident monitor. It
-    # does not disable the sandbox.
-    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --sandbox --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
+    # Founder ruling: omit --sandbox so this seat can reach tmux and monitor the run;
+    # never give the Orchestrator less reach than the Validator.
+    printf -v ORCHESTRATOR_CMD 'exec env -i %s HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q agy --new-project --dangerously-skip-permissions --add-dir %q %s--prompt-interactive %q' \
       "$SEAT_ENV" "$SAFE_HOME" "$SAFE_USER" "$SAFE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" \
       "$FACTORY_WORKDIR" "$ORCHESTRATOR_MODEL_ARGS" "$ORCHESTRATOR_PROMPT"
     ;;
@@ -605,7 +631,7 @@ cp -f "$D/../docs/practices/jev-runtime.md" "$ROOT/orchestrator/JEV.md"
 cp -f "$D/../docs/practices/boundary-identifiers.md" "$ROOT/orchestrator/BOUNDARIES.md"
 cp -f "$D/orchestrator_channel.py" "$D/attention_gate.py" "$D/lane_dialogue.py" \
   "$D/run_guidance.py" "$D/agreement_contract.py" "$D/jev_screen.py" "$D/jev_rules.py" \
-  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" \
+  "$D/boundary_register.py" "$D/escalate.py" "$D/seat_supervisor.py" "$D/lane_watchdog.py" \
   "$ROOT/orchestrator/bin/"
 # The Orchestrator runs these tools by their shebang. Pin it to the interpreter that started the
 # run, so they never fall through to whatever `python3` the agent's PATH holds (lane_dialogue
@@ -628,7 +654,7 @@ chmod 500 "$ROOT/orchestrator/bin/orchestrator_channel.py" \
   "$ROOT/orchestrator/bin/run_guidance.py" "$ROOT/orchestrator/bin/agreement_contract.py" \
   "$ROOT/orchestrator/bin/jev_screen.py" "$ROOT/orchestrator/bin/jev_rules.py" \
   "$ROOT/orchestrator/bin/boundary_register.py" "$ROOT/orchestrator/bin/escalate.py" \
-  "$ROOT/orchestrator/bin/seat_supervisor.py"
+  "$ROOT/orchestrator/bin/seat_supervisor.py" "$ROOT/orchestrator/bin/lane_watchdog.py"
 if ! tmux new-session -d -s "$RUN" -n orchestrator -c "$ROOT" "$ORCHESTRATOR_CMD" 9>&-; then
   resource_event '{"reason":"tmux creation failed","residue":false}' abandoned || true
   echo "factory: failed to create tmux session" >&2

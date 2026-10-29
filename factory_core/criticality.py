@@ -290,6 +290,8 @@ class CriticalityResolution:
 def _effective_class(
     control: SurfaceControl,
     policy: SegregationPolicy,
+    profile_digest: str,
+    evaluated_at: int,
 ) -> tuple[str, tuple[str, ...]]:
     reports: list[str] = []
     declared = control.criticality
@@ -297,7 +299,12 @@ def _effective_class(
         reports.append(f"surface-unclassified:{control.surface_id}")
     if not control.component_id:
         reports.append(f"surface-component-missing:{control.surface_id}")
-    if policy.resolve_human(control.decided_by) is None:
+    decider_valid = policy.resolve_human(control.decided_by) is not None or any(
+        subject == profile_digest and identity == control.decided_by
+        and issued_at <= evaluated_at <= expires_at
+        for subject, identity, issued_at, expires_at in policy.delegated_classification_deciders
+    )
+    if not decider_valid:
         reports.append(f"classification-decider-invalid:{control.surface_id}")
     if not control.wrong_cost.strip():
         reports.append(f"classification-rationale-missing:{control.surface_id}")
@@ -305,7 +312,7 @@ def _effective_class(
     valid = (
         declared in _CLASS_RANK
         and bool(control.component_id)
-        and policy.resolve_human(control.decided_by) is not None
+        and decider_valid
         and bool(control.wrong_cost.strip())
     )
     return (declared if valid else CRITICALITY_CRITICAL), tuple(reports)
@@ -315,6 +322,7 @@ def resolve_criticality(
     profile: CriticalityProfile,
     disturbed_surface_ids: Iterable[str],
     policy: SegregationPolicy,
+    evaluated_at: int = 0,
 ) -> CriticalityResolution:
     """Resolve explicit disturbances plus declared side effects to their highest class.
 
@@ -376,7 +384,9 @@ def resolve_criticality(
             )
             continue
 
-        effective, classification_reports = _effective_class(resolved_control, policy)
+        effective, classification_reports = _effective_class(
+            resolved_control, policy, profile.content_digest, evaluated_at
+        )
         reports.extend(classification_reports)
         resolved.append(
             ResolvedSurface(

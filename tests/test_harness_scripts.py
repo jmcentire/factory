@@ -2051,7 +2051,9 @@ def test_factory_ignition_reads_agy_help_from_stderr(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     harness = json.loads((root / "harness.json").read_text())
-    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-sandbox-v1"
+    # R4 supersedes the sandboxed contract id. The assertion stays; the value moves.
+    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R4
+    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-unsandboxed-v2"
 
 
 def test_factory_ignition_tripwire_scans_run_kindex_not_conversations(tmp_path: Path) -> None:
@@ -2129,7 +2131,11 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
     assert str(target["workdir"]) in tmux_calls
     assert str(operator) not in tmux_calls
     assert "-n orchestrator" in tmux_calls
-    assert "agy --new-project --sandbox" in tmux_calls
+    # R1: resident agy launch is `agy --new-project` and has no standalone `--sandbox`.
+    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R1
+    orchestrator_line = next(ln for ln in tmux_calls.splitlines() if "-n orchestrator " in ln)
+    assert "agy --new-project" in orchestrator_line
+    assert "--sandbox" not in orchestrator_line.split()
     assert "--new-project" in tmux_calls
     assert "--prompt-interactive" in tmux_calls
     assert "--disable-slash-commands" not in tmux_calls
@@ -2152,6 +2158,7 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         "orchestrator_channel.py",
         "run_guidance.py",
         "seat_supervisor.py",
+        "lane_watchdog.py",
     }
     supervisor_line = next(ln for ln in tmux_calls.splitlines() if "-n supervisor " in ln)
     assert "seat_supervisor.py run --root" in supervisor_line
@@ -2162,12 +2169,517 @@ def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path)
         text=True,
     )
     assert imported.returncode == 0, imported.stderr
+    copied_control = subprocess.run(
+        [sys.executable, str(orchestrator_bin / "seat_supervisor.py"), "--help"],
+        cwd=root, capture_output=True, text=True,
+    )
+    assert copied_control.returncode == 0, copied_control.stderr
     # The Orchestrator runs these by shebang; it names the interpreter that started the run.
     for tool in orchestrator_bin.glob("*.py"):
         shebang = tool.read_text(encoding="utf-8").split("\n", 1)[0]
         assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
     resources = ResourceLedger(root, "r1").latest()
     assert resources["tmux-session"]["status"] == "active"
+
+
+def orchestrator_tmux_line(tmux_log: Path) -> str:
+    """The tmux argv that starts the resident orchestrator window."""
+    return next(line for line in tmux_log.read_text().splitlines() if "-n orchestrator " in line)
+
+
+def agy_launch_words(orchestrator_line: str) -> list[str]:
+    """Whitespace-delimited words of the agy command on that tmux line.
+
+    The ignition tmux stub logs argv joined by spaces, so a standalone flag is one word.
+    """
+    words = orchestrator_line.split()
+    for index, word in enumerate(words):
+        if word == "agy" or word.endswith("/agy"):
+            return words[index:]
+    return []
+
+
+def write_agy_admission_stub(agy: Path, help_text: str) -> None:
+    """Replace the ignition agy stub's --help text. --version stays a successful probe."""
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        f'echo "{help_text}" >&2; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
+
+
+def prepare_agy_ignition(
+    tmp_path: Path, task: str
+) -> tuple[Path, Path, dict[str, str], Path, dict[str, object]]:
+    """Intake fixture and the shared agy/tmux stubs, before factory.sh runs."""
+    operator, root, target = execution_truth_fixture(
+        tmp_path,
+        task=task,
+        harness_status=None,
+    )
+    env, tmux_log = factory_ignition_env(tmp_path, root)
+    return operator, root, env, tmux_log, target
+
+
+def ignite_prepared(
+    operator: Path, root: Path, env: dict[str, str], task: str
+) -> subprocess.CompletedProcess[str]:
+    return run(
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        operator,
+        env,
+    )
+
+
+def ignite_agy_run(
+    tmp_path: Path,
+    task: str,
+    env_extra: Mapping[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, dict[str, object]]:
+    operator, root, env, tmux_log, target = prepare_agy_ignition(tmp_path, task)
+    if env_extra:
+        env.update(env_extra)
+    return ignite_prepared(operator, root, env, task), root, tmux_log, target
+
+
+# Help text one delta from the igniting stub: `--sandbox` removed. `--disable-slash-commands`
+# stays, as it does on that stub, so the only admission change is the sandbox token (R3).
+_AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX = (
+    "--new-project --prompt-interactive --dangerously-skip-permissions "
+    "--disable-slash-commands --add-dir"
+)
+# One used flag removed. `--sandbox` stays listed so the missing token is the used flag.
+_AGY_HELP_MISSING_DANGEROUSLY_SKIP = (
+    "--new-project --prompt-interactive --sandbox --disable-slash-commands --add-dir"
+)
+_TASK_DIGEST = "9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6"
+_STRATEGY_DIGEST = "9ed96be31d6c9b494f999ab77821ad2a5ddd3f959b29985f6930ae1d19aa9406"
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R1-no-sandbox"], ids=["AGY-R1-no-sandbox"])
+def test_resident_agy_launch_has_no_sandbox_token(case_id: str, tmp_path: Path) -> None:
+    """The resident agy orchestrator launch does not pass a standalone --sandbox token.
+
+    cites: task.txt _TASK_DIGEST #R1
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R1-no-sandbox
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: the orchestrator tmux line still has a standalone --sandbox word
+    (the pinned `agy --new-project --sandbox` launch).
+    """
+    task = "Launch the resident agy orchestrator without a sandbox."
+    result, _root, tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    assert "agy --new-project" in line, case_id
+    assert "--sandbox" not in line.split(), case_id
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R2-workflow-kept"], ids=["AGY-R2-workflow-kept"])
+def test_resident_agy_launch_keeps_workflow_and_hides_billing_keys(
+    case_id: str, tmp_path: Path
+) -> None:
+    """The unsandboxed launch keeps the resident workflow and leaks no billing key.
+
+    cites: task.txt _TASK_DIGEST #R2
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R2-workflow-kept
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: drop exec env -i, a kept flag, or --add-dir of the target workdir;
+    pass standalone -p, --print, or --disable-slash-commands; or copy one of the
+    five billing names or sentinel values onto the orchestrator tmux line.
+    """
+    task = "Keep the resident agy workflow and withhold billing keys."
+    sentinels = {
+        "ANTHROPIC_API_KEY": "marker-anthropic-agy-r2",
+        "OPENAI_API_KEY": "marker-openai-agy-r2",
+        "GEMINI_API_KEY": "marker-gemini-agy-r2",
+        "GOOGLE_API_KEY": "marker-google-agy-r2",
+        "TYPESAFE_API_KEY": "marker-typesafe-agy-r2",
+    }
+    result, _root, tmux_log, target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy", **sentinels},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    words = line.split()
+    agy_words = agy_launch_words(line)
+    assert agy_words, case_id
+    assert "exec env -i" in line, case_id
+    assert "--new-project" in agy_words, case_id
+    assert "--dangerously-skip-permissions" in agy_words, case_id
+    assert "--prompt-interactive" in agy_words, case_id
+    workdir = str(target["workdir"])
+    assert any(
+        words[index] == "--add-dir" and words[index + 1] == workdir
+        for index in range(len(words) - 1)
+    ), case_id
+    for forbidden in ("-p", "--print", "--disable-slash-commands"):
+        assert forbidden not in words, (case_id, forbidden)
+    for name, value in sentinels.items():
+        assert name not in line, (case_id, name)
+        assert value not in line, (case_id, value)
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-help-without-sandbox-accepted"],
+    ids=["AGY-R3-help-without-sandbox-accepted"],
+)
+def test_agy_help_without_sandbox_still_ignites(case_id: str, tmp_path: Path) -> None:
+    """An agy whose --help lists every used flag but not --sandbox ignites.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-help-without-sandbox-accepted
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: admission still requires --sandbox in --help, so ignition does not
+    exit 0. Reach is the orchestrator window on the tmux log after exit 0.
+    """
+    task = "Admit an agy whose help omits sandbox."
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, _AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX)
+    help_body = agy.read_text(encoding="utf-8")
+    assert "--sandbox" not in help_body
+    for flag in (
+        "--new-project",
+        "--prompt-interactive",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+    ):
+        assert flag in help_body
+    result = ignite_prepared(operator, root, env, task)
+    assert result.returncode == 0, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "-n orchestrator " in tmux_log.read_text(), case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-missing-used-flag-refused"],
+    ids=["AGY-R3-missing-used-flag-refused"],
+)
+def test_agy_help_missing_a_used_flag_is_refused(case_id: str, tmp_path: Path) -> None:
+    """Help that lacks a flag the launch uses is refused before a tmux session exists.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-missing-used-flag-refused
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: exit is not 70, the output does not name --dangerously-skip-permissions,
+    or a new-session call is logged.
+    """
+    task = "Refuse an agy whose help omits a flag the launch uses."
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, _AGY_HELP_MISSING_DANGEROUSLY_SKIP)
+    help_body = agy.read_text(encoding="utf-8")
+    assert "--dangerously-skip-permissions" not in help_body
+    for flag in ("--new-project", "--prompt-interactive", "--sandbox", "--add-dir"):
+        assert flag in help_body
+    result = ignite_prepared(operator, root, env, task)
+    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "--dangerously-skip-permissions" in result.stdout + result.stderr, case_id
+    logged = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "new-session" not in logged, case_id
+
+
+@pytest.mark.parametrize("case_id", ["AGY-R4-contract-id"], ids=["AGY-R4-contract-id"])
+def test_agy_ignition_records_unsandboxed_contract(case_id: str, tmp_path: Path) -> None:
+    """harness.json records the unsandboxed resident contract after agy ignition.
+
+    cites: task.txt _TASK_DIGEST #R4
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R4-contract-id
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: orchestrator_cli_contract is still agy-resident-new-project-sandbox-v1
+    or any other id.
+    """
+    task = "Record the unsandboxed agy resident contract."
+    result, root, _tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    harness = json.loads((root / "harness.json").read_text())
+    assert harness["orchestrator_agent"] == "agy", case_id
+    assert harness["orchestrator_cli_contract"] == (
+        "agy-resident-new-project-unsandboxed-v2"
+    ), case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R6-channel-runs-on-pinned-interpreter"],
+    ids=["AGY-R6-channel-runs-on-pinned-interpreter"],
+)
+def test_run_owned_channel_status_uses_pinned_interpreter(
+    case_id: str, tmp_path: Path
+) -> None:
+    """The run-owned channel status runs by path when PATH's python3 is not ours.
+
+    cites: task.txt _TASK_DIGEST #R6
+    cites: testing-strategy _STRATEGY_DIGEST #AGY-R6-channel-runs-on-pinned-interpreter
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: status is exec'd via PATH python3 (the stub exits 97), stdout is not
+    a JSON object with current, or orchestrator/.channel.lock is not a regular file.
+    """
+    task = "Ask the run-owned channel for status on the pinned interpreter."
+    result, root, _tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    channel = root / "orchestrator" / "bin" / "orchestrator_channel.py"
+    assert channel.is_file(), case_id
+    python_dir = tmp_path / "not-factory-python"
+    python_dir.mkdir()
+    python3 = python_dir / "python3"
+    python3.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    python3.chmod(0o755)
+    home = tmp_path / "channel-home"
+    temp = tmp_path / "channel-tmp"
+    home.mkdir()
+    temp.mkdir()
+    status = subprocess.run(
+        [str(channel), "status", "--root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{python_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "HOME": str(home),
+            "TMPDIR": str(temp),
+        },
+    )
+    assert status.returncode == 0, (case_id, status.returncode, status.stdout, status.stderr)
+    payload = json.loads(status.stdout)
+    assert isinstance(payload, dict) and "current" in payload, case_id
+    lock = root / "orchestrator" / ".channel.lock"
+    assert lock.is_file(), case_id
+    assert stat.S_ISREG(lock.lstat().st_mode), case_id
+
+
+# Igniting stub help: every resident flag except --model and --effort. --sandbox and
+# --disable-slash-commands stay, as on that stub, so a refusal names the omitted flag.
+_AGY_HELP_WITHOUT_MODEL_OR_EFFORT = (
+    "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions "
+    "--disable-slash-commands --add-dir"
+)
+_ENV_ASSIGNMENT_EXACT = frozenset(
+    {
+        "HOME",
+        "USER",
+        "PATH",
+        "TMPDIR",
+        "TERM",
+        "SHELL",
+        "LANG",
+        "DIRECTIVE_LEDGER",
+        "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION",
+    }
+)
+
+
+def _env_assignment_allowed(name: str) -> bool:
+    """R2 v2: HOME/USER/PATH/TMPDIR/TERM/SHELL/LANG, FACTORY_*, HARNESS_*, or two exact names."""
+    return (
+        name in _ENV_ASSIGNMENT_EXACT
+        or name.startswith("FACTORY_")
+        or name.startswith("HARNESS_")
+    )
+
+
+def _assignments_between_env_and_agy(orchestrator_line: str) -> list[str]:
+    """NAME=VALUE tokens between the env command and agy. `-u NAME` is not an assignment."""
+    words = orchestrator_line.split()
+    env_at = next(
+        (index for index, word in enumerate(words) if word == "env" or word.endswith("/env")),
+        None,
+    )
+    if env_at is None:
+        return []
+    agy_at = next(
+        (
+            index
+            for index, word in enumerate(words)
+            if index > env_at and (word == "agy" or word.endswith("/agy"))
+        ),
+        None,
+    )
+    if agy_at is None:
+        return []
+    names: list[str] = []
+    index = env_at + 1
+    while index < agy_at:
+        word = words[index]
+        if word == "-u":
+            index += 2
+            continue
+        if "=" in word:
+            name = word.split("=", 1)[0].strip("\"'")
+            if name and not name.startswith("-"):
+                names.append(name)
+        index += 1
+    return names
+
+
+def _prompt_interactive_argument(orchestrator_line: str) -> str:
+    words = agy_launch_words(orchestrator_line)
+    try:
+        index = words.index("--prompt-interactive")
+    except ValueError:
+        return ""
+    if index + 1 >= len(words):
+        return ""
+    return words[index + 1].strip("\"'")
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R2-env-allowlist-and-prompt"],
+    ids=["AGY-R2-env-allowlist-and-prompt"],
+)
+def test_resident_agy_env_assignments_stay_on_the_allowlist(
+    case_id: str, tmp_path: Path
+) -> None:
+    """Assignments between env and agy stay on the R2 allowlist, and the prompt is set.
+
+    cites: task.txt _TASK_DIGEST #R2
+    cites: testing-strategy v2 #AGY-R2-env-allowlist-and-prompt (review 2, finding F1)
+    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
+    falsifier: a NAME=VALUE between env and agy whose name is outside the allowlist,
+    or the argument after --prompt-interactive is empty.
+    """
+    task = "Keep the resident agy environment on the stated allowlist."
+    result, _root, tmux_log, _target = ignite_agy_run(
+        tmp_path,
+        task,
+        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = orchestrator_tmux_line(tmux_log)
+    names = _assignments_between_env_and_agy(line)
+    assert names, case_id
+    disallowed = [name for name in names if not _env_assignment_allowed(name)]
+    assert not disallowed, (case_id, disallowed)
+    assert _prompt_interactive_argument(line), case_id
+
+
+def _ignite_agy_help(
+    tmp_path: Path,
+    task: str,
+    help_text: str,
+    env_extra: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
+    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
+    env.update(env_extra)
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    write_agy_admission_stub(agy, help_text)
+    return ignite_prepared(operator, root, env, task), tmux_log
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-named-model-flag-required"],
+    ids=["AGY-R3-named-model-flag-required"],
+)
+def test_named_orchestrator_model_requires_model_in_agy_help(
+    case_id: str, tmp_path: Path
+) -> None:
+    """Help that omits --model is refused when the operator names an orchestrator model.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy v2 #AGY-R3-named-model-flag-required (review 2, finding F2)
+    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
+    falsifier: FACTORY_ORCHESTRATOR_MODEL is set, --help has every other used flag
+    and not --model, and ignition does not exit 70 naming --model with no new-session.
+    """
+    task = "Refuse an agy help text that omits --model."
+    help_body_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
+    assert "--model" not in help_body_flags
+    for flag in (
+        "--new-project",
+        "--prompt-interactive",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+    ):
+        assert flag in help_body_flags
+    result, tmux_log = _ignite_agy_help(
+        tmp_path,
+        task,
+        help_body_flags,
+        {"FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
+    )
+    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
+    assert "--model" in result.stdout + result.stderr, case_id
+    logged = tmux_log.read_text() if tmux_log.exists() else ""
+    assert "new-session" not in logged, case_id
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["AGY-R3-named-effort-flag-required"],
+    ids=["AGY-R3-named-effort-flag-required"],
+)
+def test_named_orchestrator_effort_requires_effort_in_agy_help(
+    case_id: str, tmp_path: Path
+) -> None:
+    """A named effort is refused without --effort in help, and kept when help lists it.
+
+    cites: task.txt _TASK_DIGEST #R3
+    cites: testing-strategy v2 #AGY-R3-named-effort-flag-required (review 2, finding F2)
+    authority: normative. oracle: direct. label: pre-freeze.
+    guard: refusal half red-now; admission half as stated (exit 0 and `--effort high`).
+    falsifier: FACTORY_ORCHESTRATOR_EFFORT=high and help lacks --effort, but the exit
+    is not 70, the output does not name --effort, or new-session is logged; or help
+    lists --effort and the orchestrator line does not carry `--effort high`.
+    """
+    task = "Require --effort when the operator names one."
+    env_extra = {"FACTORY_ORCHESTRATOR_EFFORT": "high"}
+    refused_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
+    assert "--effort" not in refused_flags
+    refused, refused_log = _ignite_agy_help(
+        tmp_path / "refused",
+        task,
+        refused_flags,
+        env_extra,
+    )
+    assert refused.returncode == 70, (
+        case_id,
+        refused.returncode,
+        refused.stdout,
+        refused.stderr,
+    )
+    assert "--effort" in refused.stdout + refused.stderr, case_id
+    refused_logged = refused_log.read_text() if refused_log.exists() else ""
+    assert "new-session" not in refused_logged, case_id
+
+    admitted, admitted_log = _ignite_agy_help(
+        tmp_path / "admitted",
+        task,
+        refused_flags + " --effort",
+        env_extra,
+    )
+    assert admitted.returncode == 0, (
+        case_id,
+        admitted.returncode,
+        admitted.stdout,
+        admitted.stderr,
+    )
+    assert "--effort high" in orchestrator_tmux_line(admitted_log), case_id
 
 
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
@@ -2294,6 +2806,65 @@ def test_an_unsandboxed_ignition_is_recorded_as_a_run_event(tmp_path: Path, sand
         assert not recorded
 
 
+@pytest.mark.parametrize("mode", ["qualify", "launch"])
+def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Owner Oct 28: a qualification export is not the product acceptance suite.
+
+    The same missing Critical case must refuse productive freeze. Real freeze/export
+    and traceability run; established fixture seams replace tmux and model execution.
+    """
+    task = "Separate qualification evidence from product acceptance."
+    operator, root, _ = execution_truth_fixture(
+        tmp_path, task=task, harness_status=None,
+        projection_conf="coder-exclude: tests\ntester-include: tests\n",
+    )
+    env, _ = factory_ignition_env(tmp_path, root)
+    result = run(["bash", str(HARNESS / "factory.sh"), "r1", task,
+                  "--runs", str(root.parent)], operator, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (root / "artifacts").mkdir(exist_ok=True)
+    (root / "artifacts" / "testing-strategy.md").write_text(
+        "planned-case: BOOK-LOCK Critical\ntest-modules: tests/test_*.py\n"
+    )
+    lane = tmp_path / "tester"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    prompt = tmp_path / "tester-prompt.txt"
+    prompt.write_text("Test the shared contract; retain independent evidence.\n")
+    result = run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", mode,
+                  "--agent", "codex", "--repo", str(lane), "--prompt", str(prompt),
+                  "--round", "probe", "--runs", str(root.parent)], operator, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (lane / "tests").mkdir()
+    (lane / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n")
+    freeze = ["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
+              "--round", "probe", "--runs", str(root.parent)]
+    result = run(freeze, operator, env)
+    events = root / "tmux-lanes" / "tester.probe-launch.jsonl"
+    if mode == "launch":
+        assert result.returncode == 70, result.stdout + result.stderr
+        assert "BOOK-LOCK" in result.stderr
+        assert not any(r.get("schema_version") == "factory-tmux-lane-freeze/1"
+                       for r in read_chain(events))
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = read_chain(events)[-1]
+    assert record["mode"] == "qualify" and record["traceability_gaps"] is None
+    assert (Path(record["export"]["files_directory"]) / "tests/test_probe.py").is_file()
+    # Missing/ambiguous recorded mode must not become a qualification exemption.
+    original = events.read_text()
+    for bad_mode in (None, "unknown", ["qualify"]):
+        rows = [json.loads(line) for line in original.splitlines()]
+        for row in rows:
+            if row.get("status") == "active":
+                row["mode"] = bad_mode
+        events.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        refused = run(freeze, operator, env)
+        assert refused.returncode != 0
+        assert "launch mode" in refused.stderr
+
+
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     tmp_path: Path,
 ) -> None:
@@ -2412,6 +2983,7 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
     launch = {
         "schema_version": "factory-tmux-lane-launch/1",
         "status": "active",
+        "mode": "launch",
         "run_id": "r1",
         "role": "tester",
         "agent": "codex",
@@ -9350,14 +9922,19 @@ def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
     assert verdict["allowed"] is True
 
 
+@pytest.mark.parametrize("monitoring", [
+    {}, {"jev_screen": None, "progress_review": {"every_cadence_ticks": 2}},
+])
 def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
-    tmp_path: Path,
+    tmp_path: Path, monitoring: dict[str, object],
 ) -> None:
     """The current ignition schema must survive the exact Gate-L metadata check."""
     from tests.conftest import promoting_promotion_inputs, write_promoting_chain
 
     root = _make_run(tmp_path)
     harness = _add_current_harness_contract(root)
+    harness.update(monitoring)
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
     admission = _write_green_endgame_admission(root, harness)
     (root / "promotion_inputs.json").write_text(
         json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
@@ -9378,6 +9955,55 @@ def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
 
     assert promoted.returncode == 0, promoted.stderr
     assert _run_status(root) == "closed"
+
+
+@pytest.mark.parametrize("monitoring", [
+    {"progress_review": {"every_cadence_ticks": 0}},
+    {"jev_screen": {"max_calls": 0}},
+])
+def test_promote_refuses_invalid_monitoring_configuration(
+    tmp_path: Path, monitoring: dict[str, object],
+) -> None:
+    """Recognizing current ignition fields must not admit invalid monitoring settings."""
+    root = _make_run(tmp_path)
+    harness = _add_current_harness_contract(root)
+    harness.update(monitoring)
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+    admission = _write_green_endgame_admission(root, harness)
+    result = run(
+        ["bash", str(HARNESS / "promote.sh"), "r1", "--endgame-admission", str(admission)],
+        tmp_path, _factory_cli_env(),
+    )
+    assert result.returncode == 66
+    assert _run_status(root) == "open"
+
+
+
+@pytest.mark.parametrize("corruption", ["unknown", "missing", "partial-contract", "target"])
+def test_handoff_metadata_refuses_incompatible_run_without_closing(
+    tmp_path: Path, corruption: str,
+) -> None:
+    """A shared writer/reader schema must retain rejection of incompatible handoffs."""
+    root = _make_run(tmp_path)
+    harness = json.loads((root / "harness.json").read_text())
+    if corruption == "unknown":
+        harness["unreviewed_extension"] = True
+    elif corruption == "missing":
+        del harness["orchestrator_window"]
+    elif corruption == "partial-contract":
+        harness["guidance_generation"] = 1
+    else:
+        harness["resolved_commit"] = "0" * 40
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env(),
+    )
+
+    assert result.returncode == 66, result.stderr
+    assert "harness metadata" in result.stderr
+    assert _run_status(root) == "open"
+    assert not (root / "promotion_verdict.json").exists()
 
 
 def test_promote_refuses_current_contract_without_green_endgame_admission(
@@ -10842,6 +11468,13 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
     env, tmux_log = factory_ignition_env(tmp_path, root)
     transcript = tmp_path / "kickoff-session.jsonl"
     transcript.write_text("", encoding="utf-8")
+    stub = Path(env["PATH"].split(os.pathsep)[0])
+    (stub / "ps").write_text(
+        "#!/bin/sh\nprintf '101 1 Sat Oct 24 00:00:00 2026 S 0:00.00\\n"
+        "102 101 Sat Oct 24 00:00:00 2026 S 0:00.00\\n'\n")
+    (stub / "ps").chmod(0o755)
+    tmux = stub / "tmux"
+    tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "101\\n"'))
     result = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
@@ -10849,6 +11482,9 @@ def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_pat
             **env,
             "FACTORY_VALIDATOR_AGENT": "kickoff",
             "FACTORY_VALIDATOR_TRANSCRIPT": str(transcript),
+            "FACTORY_VALIDATOR_PID": "102",
+            "FACTORY_VALIDATOR_STARTED": "Sat Oct 24 00:00:00 2026",
+            "FACTORY_VALIDATOR_PANE": "%101",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -10977,6 +11613,19 @@ def test_an_agy_orchestrator_receives_the_model_the_operator_names(tmp_path: Pat
     task = "Name a model for agy."
     operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
     env, tmux_log = factory_ignition_env(tmp_path, root)
+    # R3 / RUL-1: a named model is a flag the launch uses, so agy --help must list it.
+    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
+    agy.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--help" ]; then '
+        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
+        '--disable-slash-commands --add-dir --model" >&2; '
+        "exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
     launched = run(
         ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
         operator,
@@ -11094,7 +11743,10 @@ def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> 
     assert helped.returncode == 0, helped.stderr
 
 
-def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prior_mode", ["qualify", "launch", None])
+def test_coder_and_tester_lanes_get_separate_scoped_kindex(
+    tmp_path: Path, prior_mode: str | None,
+) -> None:
     """Each lane's Kindex is built from its own repository copy's committed .kin, under its own
     private HOME. Two lanes may not share a repository: that would share files and memory."""
 
@@ -11130,6 +11782,19 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(tmp_path: Path) -> No
 
     seed = root / "lane-seed.jsonl"
     seed.write_text('{"title":"shared research"}\n', encoding="utf-8")
+    # A completed qualification used no product seed. Only its explicit recorded
+    # mode excludes it: a productive or legacy peer still enforces seed equality.
+    old_probe = root / "tmux-lanes" / "tester.probe-launch.jsonl"
+    old_probe.parent.mkdir(exist_ok=True)
+    old_probe.write_text(json.dumps({
+        "status": "active", "role": "tester", "mode": prior_mode,
+        "ts": "2026-01-01T00:00:00Z", "kindex": {"seed": None},
+    }) + "\n")
+    if prior_mode != "qualify":
+        refused = launch("coder", lanes["coder"])
+        assert refused.returncode != 0 and "same lane-seed.jsonl" in refused.stderr
+        assert not any("-n coder" in line for line in tmux_log.read_text().splitlines())
+        return
     assert launch("coder", lanes["coder"]).returncode == 0
     shared = launch("tester", lanes["coder"])
     assert shared.returncode != 0 and "own copy" in shared.stderr

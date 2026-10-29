@@ -12,13 +12,15 @@ only the doctrine:
 * gate items count only when individually cited by subject-bound evidence;
 * the independence tier is derived from the recorded arrangement, and a claim above it is false
   rather than weak;
-* every monitor is spec-derived and resolves its own authority, and a Critical surface's monitors
-  are human-authored;
+* every monitor is spec-derived, truthfully attributed and resolves its own authority
+  (generated monitors are valid on Critical surfaces under H9 / P-0001);
 * a correction shows both controls, per-test, plus a reproduction recorded before the repair;
-* missing oracle/evidence links are gaps disposed by class;
+* required evidence gaps are disposed by class; additional test campaigns follow TESTING T44;
 * malformed, mismatched, or negative evidence blocks every class;
 * Critical gaps block without waiver and Critical evidence must be deterministic, flake-free,
-  retry-free, live, specialist-reviewed, and approved by at least two distinct enrolled humans;
+  retry-free and independently specialist-reviewed; required live checks follow TESTING T44;
+  targets may additionally require
+  named human approvers, but H9 / P-0001 sets no doctrine approval floor;
 * Standard gaps require a candidate-bound, expiring risk acceptance from an enrolled human;
 * Cosmetic gaps are reported and promoted past; and
 * Standard/Cosmetic changes with adequate oracles need no discretionary human click.
@@ -191,6 +193,7 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "observation-surface-id-missing",
     "oracle-receipt-required",
     "oracle-silent",
+    "optional-test-evidence-missing",
     "risk-acceptance-authority-equals-implementer",
     "risk-acceptance-authority-equals-verifier",
     "risk-acceptance-authority-is-agent",
@@ -205,7 +208,6 @@ _CONSTRUCTION_EVIDENCE_CODES = (
     "risk-acceptance-surface-missing",
     "specialist-review-authority-equals-implementer",
     "specialist-review-authority-equals-verifier",
-    "specialist-review-authority-is-agent",
     "specialist-review-authority-not-enrolled",
     "specialist-review-candidate-mismatch",
     "specialist-review-duplicate",
@@ -392,7 +394,7 @@ class SurfaceObservation:
 
 @dataclass(frozen=True)
 class SpecialistReview:
-    """Candidate-bound human specialist verdict for one surface."""
+    """Candidate-bound independent specialist verdict for one surface (H9 / P-0001)."""
 
     surface_id: str
     reviewer: str
@@ -888,7 +890,7 @@ def decide_promotion(
     derived_surface_ids = derivation.surface_ids + tuple(
         f"path:{path}" for path in derivation.unmapped_paths
     )
-    resolution = resolve_criticality(profile, derived_surface_ids, policy)
+    resolution = resolve_criticality(profile, derived_surface_ids, policy, request.evaluated_at)
     # The ``path:`` namespace is RESERVED for unmapped-path pseudo-surfaces. A profile
     # that declares a surface id inside it could pre-classify an unmapped path (declare
     # "path:migrations/drop.sql" Cosmetic, and the collision resolves to the declared
@@ -910,9 +912,32 @@ def decide_promotion(
     reports: list[str] = list(resolution.reports)
     gate_reasons: list[str] = []
 
+    # Release testing is selected for demonstrated damaging failure modes, not
+    # purchased by a Critical label alone (TESTING T44, owner 2026-10-28).
+    # These markers use the existing reviewed profile; they confer no tool access.
+    campaign_requirements = {
+        "oracle-silent": "campaign:oracle",
+        "live-verification-missing": "campaign:live",
+        "monitor-coverage-missing": "campaign:monitor",
+        "structural-depth-mutation-evidence-missing": "campaign:mutation",
+    }
+    controls = {control.surface_id: control for control in profile.surfaces}
+
+    def surface_gap(surface_id: str, code: str) -> None:
+        requirement = campaign_requirements.get(code)
+        control = controls.get(surface_id)
+        if (
+            requirement is not None
+            and control is not None
+            and requirement not in control.required_evidence_ids
+        ):
+            local_reports[surface_id].append(f"optional-test-evidence-missing:{code}")
+        else:
+            gaps[surface_id].append(code)
+
     def gap_all(code: str) -> None:
-        for surface_gaps in gaps.values():
-            surface_gaps.append(code)
+        for surface_id in gaps:
+            surface_gap(surface_id, code)
 
     def negative(surface_id: str, code: str) -> None:
         negatives[surface_id].append(code)
@@ -959,7 +984,11 @@ def decide_promotion(
         # the decision that rests on an anchored policy says so in its own record.
         reports.extend(tool_report.reports)
         for issue in tool_policy_issues:
-            if tool_policy_issue_is_gap(issue):
+            if issue.startswith("verboten-denial-probe-missing:"):
+                # Release evidence only. verify_tool_policy and live invocation
+                # admission remain unchanged, including all actual denials.
+                reports.append(f"optional-test-evidence-missing:{issue}")
+            elif tool_policy_issue_is_gap(issue):
                 gap_all(f"tool-policy-gap:{issue}")
             else:
                 hard_reasons.append(f"tool-policy-invalid:{issue}")
@@ -1033,7 +1062,7 @@ def decide_promotion(
     )
     for surface_id, code in monitor_report.surface_gaps:
         if surface_id in gaps:
-            gaps[surface_id].append(code)
+            surface_gap(surface_id, code)
         else:
             gap_all(code)
     hard_reasons.extend(f"monitor-integrity:{code}" for code in monitor_report.integrity_issues)
@@ -1119,13 +1148,13 @@ def decide_promotion(
             hard_reasons.append(f"flake-receipt-required:{surface_id}")
 
         if not current_observation.oracle_adequate:
-            gaps[surface_id].append("oracle-silent")
+            surface_gap(surface_id, "oracle-silent")
 
         live_result = normalize_label(current_observation.live_result) or "missing"
         if live_result not in _LIVE_RESULTS:
             hard_reasons.append(f"live-result-invalid:{surface_id}:{live_result}")
         elif live_result == "missing":
-            gaps[surface_id].append("live-verification-missing")
+            surface_gap(surface_id, "live-verification-missing")
         elif live_result == "failed":
             negative(surface_id, "live-verification-failed")
         else:
@@ -1159,7 +1188,11 @@ def decide_promotion(
                 continue
             named[evidence_id] = captured_record
 
-        additional_required = surface.required_evidence_ids - BASE_REQUIRED_EVIDENCE_IDS
+        additional_required = (
+            surface.required_evidence_ids
+            - BASE_REQUIRED_EVIDENCE_IDS
+            - frozenset(campaign_requirements.values())
+        )
         for evidence_id in sorted(additional_required):
             required_record = named.get(evidence_id)
             if (
@@ -1529,12 +1562,21 @@ def _validate_specialist_review(
     hard_reasons: list[str],
     surface_gaps: list[str] | None,
 ) -> None:
-    _, authority_issue = _record_human(
-        review.reviewer,
-        policy=policy,
-        implementer=request.implementer,
-        verifier=request.verifier,
-    )
+    # AUTHORITY H9 / P-0001: a specialist need not be human. Keep identity and
+    # independence: accept an enrolled human or a recorded service/agent identity,
+    # never an unknown name, the implementer, or the verifier. The service list
+    # excludes identities from HUMAN authority; it does not prohibit agent review.
+    reviewer = policy.canonical(review.reviewer)
+    authority_issue = None
+    if not normalize_label(reviewer) or not (
+        policy.resolve_human(review.reviewer) is not None
+        or policy.is_excluded(review.reviewer) or policy.is_excluded(reviewer)
+    ):
+        authority_issue = f"authority-not-enrolled:{normalize_label(review.reviewer)}"
+    elif reviewer == policy.canonical(request.implementer):
+        authority_issue = f"authority-equals-implementer:{normalize_label(review.reviewer)}"
+    elif reviewer == policy.canonical(request.verifier):
+        authority_issue = f"authority-equals-verifier:{normalize_label(review.reviewer)}"
     if authority_issue:
         hard_reasons.append(f"specialist-review-{authority_issue}:{surface_id}")
     if review.candidate_digest != request.candidate_digest:

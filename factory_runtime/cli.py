@@ -188,6 +188,12 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--run-id", required=True)
     _add_replay_verifier_arguments(status)
 
+    delta = commands.add_parser(
+        "context-delta", help="compare retained same-role capsules without granting admission",
+    )
+    delta.add_argument("--previous", required=True)
+    delta.add_argument("--current", required=True)
+
     pass_count = commands.add_parser(
         "pass-count",
         help="host pass count: VALIDATING admissions in the verified run ledger (plan 0.4b)",
@@ -651,6 +657,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     promote.add_argument("--runs", required=True, help="the runs root directory")
     promote.add_argument("--run-id", required=True, help="the run to promote")
+
+    assemble = commands.add_parser(
+        "assemble-promotion-inputs",
+        help="compose existing evidence documents and diagnose them without closing the run",
+    )
+    assemble.add_argument("--runs", required=True)
+    assemble.add_argument("--run-id", required=True)
+    assemble.add_argument("--request", required=True)
+    assemble.add_argument("--policy", required=True)
+    assemble.add_argument("--profile", required=True)
+    assemble.add_argument("--delegation")
+    assemble.add_argument("--candidate-digest", required=True)
+    assemble.add_argument(
+        "--output", required=True, help="new output file; never overwrite evidence",
+    )
 
     # The global-property layer above Gate L: the verdict is computed from the ratified
     # coverage map and typed evidence channels only — prose is never an input — and the
@@ -1194,6 +1215,13 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "status":
         _emit(_load_replay_store(arguments).load(arguments.run_id))
+        return
+    if arguments.command == "context-delta":
+        from factory_runtime.state_admission import state_dependency_delta
+
+        _emit(state_dependency_delta(
+            _read_object(arguments.previous), _read_object(arguments.current),
+        ))
         return
     if arguments.command == "pass-count":
         store = _load_replay_store(arguments)
@@ -2516,6 +2544,48 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
                 "path": str(envelope.path),
             }
         )
+        return
+    if arguments.command == "assemble-promotion-inputs":
+        from factory_runtime.promotion_gate import PromotionGateError, decide_document
+
+        documents = {
+            name: _read_object(getattr(arguments, name))
+            for name in ("request", "policy", "profile")
+        }
+        if arguments.delegation:
+            documents["delegation"] = _read_object(arguments.delegation)
+        candidate = arguments.candidate_digest
+        if (
+            not _DIGEST.fullmatch(candidate)
+            or documents["request"].get("candidate_digest") != candidate
+        ):
+            raise ValueError("promotion assembly candidate differs from the selected candidate")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", arguments.run_id):
+            raise ValueError("promotion assembly run identity is invalid")
+        tool_bundle = documents["request"].get("tool_policy")
+        if isinstance(tool_bundle, Mapping):
+            tool_policy = tool_bundle.get("policy")
+            if isinstance(tool_policy, Mapping) and tool_policy.get("run_id") != arguments.run_id:
+                raise ValueError("promotion assembly tool policy belongs to another run")
+        try:
+            decision = decide_document(Path(arguments.runs) / arguments.run_id, documents)
+        except PromotionGateError as exc:
+            raise ValueError(str(exc)) from exc
+        reused = False
+        try:
+            _write_json_once(arguments.output, documents)
+        except FileExistsError:
+            if _read_object(arguments.output) != documents:
+                raise ValueError("promotion assembly output contains different evidence") from None
+            reused = True
+        _emit({
+            "output": str(arguments.output),
+            "reused": reused,
+            "inputs_digest": digest_obj(documents),
+            "source_digests": {name: digest_obj(body) for name, body in documents.items()},
+            "decision": decision,
+            "closed": False,
+        })
         return
     if arguments.command == "promote":
         from factory_runtime.promotion_gate import PromotionGateError, render

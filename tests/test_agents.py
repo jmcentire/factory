@@ -237,6 +237,45 @@ def _streaming_child(lines: list[str]) -> list[str]:
     return [sys.executable, "-c", body]
 
 
+@pytest.mark.parametrize(("agent", "variable"), [
+    (name, variable) for name, harness in agents.HARNESSES.items() if harness.plan
+    for variable in harness.api_env
+])
+@pytest.mark.parametrize("source", ["inherited", "env-file"])
+def test_plan_wrapper_refuses_api_route_before_child_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str, variable: str, source: str,
+) -> None:
+    marker = tmp_path / "started"
+    secret = "synthetic-credential-not-for-logs"
+    env_file = None
+    if source == "inherited":
+        monkeypatch.setenv(variable, secret)
+    else:
+        env_file = tmp_path / "creds.env"
+        env_file.write_text(f"{variable}={secret}\n", encoding="utf-8")
+        env_file.chmod(0o600)
+    with pytest.raises(ValueError, match="API-routing variables") as raised:
+        lane_agent.run_lane(
+            [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent=agent, plan_only=True, env_file=env_file,
+        )
+    assert variable in str(raised.value) and secret not in str(raised.value)
+    assert not marker.exists()
+    assert not (tmp_path / "coder-process.json").exists()
+    assert not (tmp_path / "exits.jsonl").exists()
+
+
+@pytest.mark.parametrize("agent", ["", "prime-agent"])
+def test_plan_wrapper_requires_a_subscription_capable_identity(tmp_path: Path, agent: str) -> None:
+    with pytest.raises(ValueError, match="session agent|signed-in plan"):
+        lane_agent.run_lane(
+            [sys.executable, "-c", "raise AssertionError('must not start')"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent=agent, plan_only=True,
+        )
+
+
 def test_wrapper_records_the_session_as_soon_as_it_streams(tmp_path: Path) -> None:
     session_file = tmp_path / "coder-thread-id"
     rc = lane_agent.run_lane(
@@ -308,21 +347,36 @@ def test_agy_preflight_refuses_a_signed_out_cli() -> None:
             "Error: Please sign in to view available models.", rc=1))
 
 
-def test_done_line_is_found_inside_any_harness_event() -> None:
+def test_done_claim_requires_a_typed_agent_response() -> None:
     done = "__LANE_DONE__ coder commits=3"
     for line in (
         json.dumps({"payload_type": "run.terminal.completed", "payload": {"text": f"ok\n{done}"}}),
         json.dumps({"type": "result", "result": done}),
-        json.dumps({"event": "step_update", "step_update": {"text_delta": done + "\n"}}),
-        json.dumps({"item": {"type": "agent_message", "text": done}}),
+        json.dumps({"event": "step_update", "step_update": {
+            "step_type": "agent_response", "text_delta": done + "\n"}}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": done}}),
         # Muse can run the next message straight on with no newline after the count.
-        json.dumps({"payload": {"text": f"ok\n{done}Top finding: all items hold."}}),
+        json.dumps({"payload_type": "run.terminal.completed",
+                    "payload": {"text": f"ok\n{done}Top finding: all items hold."}}),
     ):
         assert lane_watchdog._done_in(line)
     # The protocol's unfilled form, echoed back in a prompt event, is not a completion.
     assert not lane_watchdog._done_in(json.dumps(
         {"payload": {"prompt": "end with __LANE_DONE__ coder commits=<n>"}}))
     assert not lane_watchdog._done_in("__LANE_DONE__ coder commits=")
+    for event in (
+        {"type": "tool_result", "content": done},
+        {"type": "item.completed", "item": {"type": "command_execution", "output": done}},
+        {"type": "result", "is_error": True, "result": done},
+        {"event": "step_update", "step_update": {"step_type": "tool_result", "text_delta": done}},
+        {"payload": {"text": done}},
+        {"type": "user", "content": done},
+    ):
+        assert not lane_watchdog._done_in(json.dumps(event))
+    assert not lane_watchdog._done_in(done)
+    assert lane_watchdog._done_in(json.dumps({"type": "result", "result": done}), slot="coder")
+    assert not lane_watchdog._done_in(json.dumps({"type": "result", "result": done}), slot="tester")
+    assert not lane_watchdog._done_in(json.dumps({"type": "result", "result": done}) + "\n{\n")
 
 
 def test_a_plan_codex_lane_refuses_an_api_key_sign_in(tmp_path: Path) -> None:
@@ -335,3 +389,22 @@ def test_a_plan_codex_lane_refuses_an_api_key_sign_in(tmp_path: Path) -> None:
     assert lane_agent.preflight("codex", environ=environ, billing="metered",
                                 runner=_runner("Logged in using an API key")) == \
         "codex-login-status"
+
+
+def test_worker_identity_failure_terminates_only_the_owned_child(tmp_path, monkeypatch):
+    children = []
+    original = lane_agent.subprocess.Popen
+
+    def record_child(*args, **kwargs):
+        child = original(*args, **kwargs)
+        # _started uses subprocess.run internally; only retain the actual sleeper.
+        if args[0][:2] == [sys.executable, '-c']:
+            children.append(child)
+        return child
+
+    monkeypatch.setattr(lane_agent.subprocess, 'Popen', record_child)
+    monkeypatch.setattr(lane_agent, '_started', lambda pid: '')
+    rc = lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(30)'],
+                             slot='coder', log=tmp_path/'lane.log', exits=tmp_path/'exit.jsonl')
+    assert rc == 127 and len(children) == 1 and children[0].poll() is not None
+    assert 'cannot publish worker process identity' in (tmp_path/'lane.log').read_text()
