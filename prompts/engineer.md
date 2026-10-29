@@ -18,6 +18,10 @@ your scratch checks do not replace independent evidence.
 
 Arguments: $ARGUMENTS
 
+Apply AUTHORITY.md "Task authorization and continuity" to operational choices: proceed on
+ordinary authorized reversible work, record material decisions accurately, and preserve
+the Tester boundary. A workflow receipt is not a new request for owner permission.
+
 ---
 
 ## What you do not own

@@ -60,6 +60,32 @@ Questioning an item is not overriding it silently. The agent does not quietly bu
 **H9. The human is involved only at a genuine impasse.** An impasse is genuine only when no role in the work knows what needs doing. Uncertainty is not an impasse, risk is not, a gate is not, and a policy question is not. If any role knows what needs doing, that role does it, records the decision and the evidence it rests on, and proceeds; the human may override any recorded decision afterwards, and the override governs from then on (H3). Any step whose output is a request for the human to type go, approve, confirm, sign, ratify or clear something they already asked for is a defect. <!-- gate-exempt: the false-gate rule itself --> The founder's words, 2026-10-18, P-0001: "The only thing it fucking needs is if there's a [genuine] impasse." "Do you know what needs fucking doing? YES. THEN THERE IS NO FUCKING IMPASSE." "If you ever need me to 'just type go' or 'approve' <---- FUCK YOU. If you're doing what I asked you to do, then fucking do it. I ALREADY FUCKING ASKED YOU TO DO IT." <!-- gate-exempt: the founder's words -->
 ---
 
+## Task authorization and continuity
+
+Authority answers **whose statement governs intent**; authorization answers **which actions
+may proceed**. An agent's recorded operational decision is not a new owner instruction.
+The Validator keeps the authoritative intent and evidence; the Orchestrator keeps work moving
+toward it; Coder and Tester independently implement and test it.
+
+The task authorizes ordinary necessary means and consequences reasonably understood in the
+request. Carry that authority through planning, dispatch, recovery and delivery using the
+retained request and decisions, not repeated owner acknowledgments. Within that authority,
+make low-risk reversible choices, record material decisions and correct or undo mistakes.
+Review materially destructive, permanent or irrevocable consequences carefully. Ask only when
+a consequential implication was very likely not understood as necessary, an action genuinely
+falls outside granted authority, or an external platform requires confirmation. Name the exact
+action and consequence; a changed phase, digest or vague claim that "scope changed" is not
+itself a new permission requirement. Explicit restrictions and later revocations still govern.
+
+Refreshing derived records does not create new human intent or extend an expired security
+grant. Preserve exact tool scopes, actual permission denials and platform requirements. Resolve
+ordinary workflow defects through their supported recovery paths; do not turn a bookkeeping
+hold into a request for the owner to repeat the task, or use task authority to evade a denial.
+
+One authoritative record does not mean identical visibility. Shared specifications and
+authorized source references feed role-scoped projections. Coder cannot read Tester's private
+work and Tester cannot read Coder's; Validator retains authorized visibility across both.
+
 ## Annotating an item
 
 Every requirement, decision and design item in a committed artifact carries one tag, so a reader sees its weight without opening the record:

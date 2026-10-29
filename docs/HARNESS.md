@@ -19,8 +19,9 @@
 > harness-bound green-endgame admission. Gate L requires that receipt for current-contract runs,
 > rechecks it under the close lock, and then seals resources and closes `harness.json`; it does not
 > itself create a RunStore `PROMOTED` transition, although that transition now independently
-> requires and binds the same sealed resource head. The evidence pipeline still does not automatically
-> produce `promotion_inputs.json`, and the R1 cross-run receipt binding and R4 chain-authenticity
+> requires and binds the same sealed resource head. `factory assemble-promotion-inputs` composes
+> existing reviewed documents; it does not automatically infer missing evidence or policy.
+> The R1 cross-run receipt binding and R4 chain-authenticity
 > gaps remain. A green build is not a verified run; a verified run is the cage refusing on every
 > gap.
 > Canonical copy: `$FACTORY_HOME/docs/HARNESS.md`. The former `HARNESS.md` mirror in the
@@ -979,6 +980,48 @@ remediation. A run becomes terminal only through Gate L writing `closed` after a
 promotion verdict and, for current runs, a candidate-bound green-endgame admission, or
 `record_no.sh` writing `no`; ending a model turn, closing a Kindex session
 tag, or declaring completion in chat has no lifecycle effect.
+
+### Reuse retained context and evidence
+
+The verified RunStore ledger retains intake authority, phase versions and material transitions;
+`execution_authority_digests` resolves the original Stage-E bindings after later transitions.
+Use that record and the existing externally anchored resume path, not a second authorization
+store or repeated intake. AUTHORITY's "Task authorization and continuity" governs operational
+decisions. Existing security grant expiry, role access and admission checks still apply.
+
+For a same-role continuation, compare the retained capsules:
+
+```sh
+factory context-delta --previous previous-capsule.json --current current-capsule.json
+```
+
+The output lists changed and unchanged dependency identities/digests, not source contents.
+It refuses comparisons across roles, runs, generations or targets. It does not authenticate
+the files independently, grant admission or certify test reuse. Full sources remain in their
+authorized role projections; never give Coder the Tester's capsule or private sources, or vice
+versa. Use the delta to focus review; let each evidence contract determine actual validity.
+
+The Validator can assemble the existing evidence inputs without hand-copying their fields:
+
+```sh
+factory assemble-promotion-inputs --runs "$H/runs" --run-id "$RUN" \
+  --request request.json --policy enrollment.json --profile criticality.json \
+  --candidate-digest "$CANDIDATE_DIGEST" --output promotion_inputs.new.json
+```
+
+Use `--delegation delegation.json` only for an existing authorized delegation. The command
+retains every supplied field, checks candidate/run consistency, uses the same receipt-chain
+and promotion checks as Gate L, and returns one consolidated diagnostic. A blocked diagnostic
+is not acceptance: its exit zero means assembly succeeded, not promotion. Malformed or
+unverifiable inputs fail without creating the output; an identical existing output is reused
+after fresh verification, and different existing evidence is never overwritten.
+Source document digests accompany the result. No receipt, attestation, classification or
+signature is manufactured. Place the reviewed result through the existing permitted host
+workflow; this command does not change protected-write permissions or close the run.
+
+Harness closure, RunStore promotion and delivery are distinct milestones. Report the verified
+requested endpoint and its access/commit evidence; do not treat a closed process or green test
+as a delivered user goal. Retain unresolved limitations and the next supported action.
 
 The active scripts live in `$FACTORY_HOME/harness/`; tests and the denial-probe registry are the
 enforcement inventory, not this prose.

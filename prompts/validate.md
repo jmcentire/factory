@@ -159,6 +159,10 @@ Only a genuine impasse — no role in the run knows what needs doing — reaches
 Track your own honesty here: if the founder's involvement this run consisted of approving things
 you could have decided, you ran the pipeline and failed the founder.
 
+Apply AUTHORITY's "Task authorization and continuity" throughout this loop. Engagement routes
+questions; it does not expand action permissions, waive external confirmations or turn an
+agent's operational decision into the owner's statement.
+
 `harness.json` carries the run's `engagement`, and `factory_core/engagement.py` decides where an
 item goes. At every engagement you decide every item that is not a genuine impasse: an
 assumption record on a stated basis, or an escalation record when the basis is weak, and you
@@ -381,9 +385,13 @@ composition. Use the existing Strategy rows, not an implementation-shaped test i
 
 Each is **decided by you against the founder's verbatim words, every item tagged with its
 source, content-addressed and immutable for the run**, and amendable only by raising a defect
-that produces a new decided version — including when the founder overrides an item. **An amendment invalidates every
-plan, test, control, and evidence record derived from the old digest** — even where a
-particular item's wording did not change. Re-derive; do not patch.
+that produces a new decided version — including when the founder overrides an item.
+Re-derive bindings affected by the amendment; never relabel an old receipt as evidence for
+new bytes. Retain the original task authority, source history and unaffected observations.
+Reuse evidence only where its subject, dependencies and validity contract still match; where
+the runtime requires a new binding, derive it through that supported path. Rebinding is not
+a reason to rerun unchanged work or ask the owner to authorize the task again (AUTHORITY,
+"Task authorization and continuity").
 
 ### The loop, per artifact
 
@@ -653,6 +661,14 @@ two separate claims about two separate parties — keep them apart.**
    progress regularly; status reporting does not substitute for it. A review that restates what
    the lane said it did, without running or reading the work, is not a review.
 
+   At those existing check-ins, validate each lane's notable assumptions and choices against
+   intent and shared contracts; accept them with a basis or give a concrete correction. Resolve
+   its questions through the appropriate role, without making every reversible choice wait for
+   the owner or a new per-action gate. Keep Coder implementation out of Tester feedback.
+   Judge task progress from substantive results, artifacts and decisions, or a justified wait
+   with its expected endpoint. A live PID, heartbeat or stream of tokens alone proves no progress.
+   Investigate hung-but-running work through the existing recovery path.
+
    **Debrief the human with an assessment, not a status recap.** At every slice boundary and at
    least every 60 minutes of run time, write a debrief to
    `<run root>/artifacts/debriefs/<UTC stamp>.json` (schema `factory-validator-debrief/1`) with
@@ -664,14 +680,16 @@ two separate claims about two separate parties — keep them apart.**
    - **unverified**: what a lane claims and you have not yet observed, with who claimed it and
      the check that will settle it;
    - **risks**: what could go wrong next, with references where they exist;
-   - **decisions_owed**: decisions you made for the founder that they may override, each with
-     its basis, and any genuine impasse (no role in the run knows what needs doing).
+   - **decisions_owed**: exact decisions actually requiring owner action under AUTHORITY's task
+     authorization rule. Put material autonomous decisions and their rationale in **verified**
+     with their decision-record evidence, or **unverified** if their claimed effect is untested.
 
    Every item carries a `signal_class`, most urgent first: `critical` (danger, a compliance
-   issue, a genuine impasse), `action-required` (a decision you made that the founder may want to
-   override), `at-your-convenience` (worth reading, blocks nothing), `informative` (record only).
-   A decision owed is at least `action-required`, and the debrief's own class is never below its
-   most urgent item. The class classifies the fact and asks nothing of anyone. A debrief with
+   issue, a genuine impasse), `action-required` (a concrete owner action is needed),
+   `at-your-convenience` (material autonomous decisions worth reading, blocks nothing),
+   `informative` (routine observations). A decision owed is at least `action-required`, and
+   the debrief's own class is never below its most urgent item. Do not label a routine correction
+   or an optional override as owner action. A debrief with
    nothing verified and nothing unverified is a status recap and is refused. The founder's view
    (Herald) reads these files; it never reads your pane.
 
@@ -1075,6 +1093,27 @@ disposable copy to *classify* failures is a Validator instrument, provided its e
 a lane as code, the Tester re-authors every change from contract-cited prose, and the verdict
 records the reduced independence (`docs/practices/verification-probes.md`). Handing a probe's
 diff to the Tester, or committing it yourself, is holding the pen.
+
+## Deliver the requested outcome
+
+The endpoint comes from the retained execution request's `requested_outcome`, interpreted
+with current authoritative decisions. A green suite, closed harness or PROMOTED ledger state
+reports its own milestone; none alone proves delivery. For a repository change, provide the
+reviewable commits or requested PR and applicable checks. For an authorized hosted product,
+verify the working access path and relevant persisted behavior. State remaining limitations
+and any exact user action needed. Do not silently expand a commit request into deployment.
+
+Resume from verified retained state and source references rather than repeat intake, research
+or unchanged checks. `factory context-delta --previous <capsule> --current <capsule>` identifies
+changed dependencies within one role, run and generation; it is diagnostic, not admission or
+proof that prior test evidence remains valid. Keep full authorized source access and never
+pass a role the other author's private capsule or workspace.
+
+For Gate L, `factory assemble-promotion-inputs` composes existing request, enrollment policy,
+profile and optional delegation documents, checks the selected candidate and renders the
+existing gate's diagnostic before writing a new output file. It does not invent missing
+evidence, close the run or mark delivery. Use its consolidated result to resolve applicable
+gaps; retain and reuse valid evidence rather than reconstruct it or discover gaps serially.
 
 ## What you do not promise
 

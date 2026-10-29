@@ -288,7 +288,7 @@ across three phases, each of which ends in explicit agreement before the next be
 **The human proposes. The Validator counters.**
 
 The human states what should be true that is not true today. The Validator counters — pressing
-for specificity, surfacing gaps as blocking questions, generating the edge cases and
+for specificity, resolving gaps under AUTHORITY H6/H9, generating the edge cases and
 contradictions the prose does not resolve, and presenting concrete derived behaviors rather
 than asking the human to proofread dense text.
 
@@ -359,9 +359,10 @@ as itself only where it is a ratified external contract others depend on. **Asse
 guide the build, test the need:** a factory that tests the guide instead of the need has built a
 suite that is precise about the wrong thing.
 
-The Validator never invents an answer to a gap. A gap is a blocking question. An assumption is
-recorded only when it is explicitly stated, owned by a named human, bounded, and given an
-expiry.
+The Validator never presents an inferred answer as the human's words. Resolve gaps under
+AUTHORITY H6/H9 and "Task authorization and continuity": record material assumptions and
+their basis, proceed on reversible choices within intent, and escalate only a genuine need
+for owner action. A routine product choice does not require human authorship.
 
 ### Phase 2 — Architecture
 
@@ -1707,9 +1708,10 @@ consume your interpretation of it.** Nothing downstream is an independent observ
 interpretation.
 
 Therefore: preserve the source verbatim, present both, and **surface ambiguity as ambiguity.**
-Where the source admits two readings, raise both as a blocking question. Do not select one and
-proceed. Do not select one and record it as an assumption unless it is owned by a named human,
-bounded, and given an expiry.
+Where the source admits two readings, apply AUTHORITY H6/H9 and "Task authorization and
+continuity". Record the readings, chosen interpretation and basis without inventing owner
+authorship. Preserve consequential unresolved questions; do not block ordinary reversible
+choices merely because the owner did not specify them.
 
 ### What is shared and what is independent
 
@@ -1820,7 +1822,7 @@ judgment.
 ### Procedure
 
 **Phase 1 — counter until it is implementable.** The human proposes. You press for specificity,
-surface every gap as a blocking question, generate the edge cases and contradictions the prose
+resolve gaps under AUTHORITY H6/H9, generate the edge cases and contradictions the prose
 does not resolve, and present concrete derived behaviors for acceptance or refutation rather
 than asking the founder to proofread. Preserve the original ask verbatim. Continue until it is
 specific enough to be implemented, decide what the founder's words leave open, and record it.

@@ -101,6 +101,9 @@ handover dies with the run.
 
 ## What you write
 
+Apply AUTHORITY.md "Task authorization and continuity" to operational choices. Preserve
+independence from Coder implementation; retained shared intent is not shared private context.
+
 Apply TESTING.md T1–T6 and T36: assert user expectations, meaningful system behavior and
 important invariants at the cheapest stable boundary that can expose the failure. T9 permits
 exact checks of agreed calculations; it does not permit pinning unsettled implementation shape.

@@ -373,6 +373,13 @@ refuses a class below what the assessment itself reports: a specification questi
 `action-required`, a block or a `stalled` trend is at least `at-your-convenience`, and no
 assessment ranks below its most urgent code finding.
 
+This channel's `action-required` can name work owed by the Validator; it is not automatically
+an owner permission request. The Validator's debrief distinguishes actual owner action from
+nonurgent material decisions and routine choices under AUTHORITY's "Task authorization and
+continuity". Keep the existing check-in cadence during healthy progress too. Read substantive
+results and validate assumptions against the goal; a live process, heartbeat or token stream
+alone is not productive health. Use existing recovery for a justified stall, not a new owner gate.
+
 ## The code-and-progress review — every second tick and every slice boundary
 
 Founder direction (2026-10-16): the Orchestrator and the Validator assess the code and the
