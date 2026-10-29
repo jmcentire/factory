@@ -21,33 +21,90 @@ import pathlib
 import signal
 import subprocess
 import sys
+import time
 
 TIMED_OUT = 124
 
 
 def run(argv: list[str], *, timeout_s: float, stdin_file: pathlib.Path | None,
         log: pathlib.Path | None) -> int:
-    stdin = stdin_file.open("rb") if stdin_file else subprocess.DEVNULL
-    stdout = log.open("ab") if log else None
+    cancelled = 0
+
+    def cancel(signum: int, _frame: object) -> None:
+        nonlocal cancelled
+        cancelled = signum
+
+    previous = {sig: signal.signal(sig, cancel) for sig in (signal.SIGTERM, signal.SIGINT)}
+    stdin = None
+    stdout = None
+    process = None
     try:
-        process = subprocess.Popen(argv, stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        try:
-            return process.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
+        stdin = stdin_file.open("rb") if stdin_file else None
+        stdout = log.open("ab") if log else None
+        process = subprocess.Popen(argv, stdin=stdin or subprocess.DEVNULL, stdout=stdout,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        deadline = time.monotonic() + timeout_s
+        while not cancelled:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                process.wait(timeout=10)
+                return process.wait(timeout=min(remaining, 0.1))
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-            print(f"agent-exec: stopped after {timeout_s / 60:g} min: {argv[0]}", file=sys.stderr)
-            return TIMED_OUT
+                continue
+        if cancelled:
+            return 128 + cancelled
+        print(f"agent-exec: stopped after {timeout_s / 60:g} min: {argv[0]}", file=sys.stderr)
+        return TIMED_OUT
     finally:
-        if stdin_file:
-            stdin.close()  # type: ignore[union-attr]
-        if stdout:
-            stdout.close()
+        try:
+            if process is not None and process.returncode is None:
+                stop_group(process)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            if stdin:
+                stdin.close()
+            if stdout:
+                stdout.close()
+
+
+def stop_group(process: subprocess.Popen[bytes]) -> None:
+    """Stop only our unreaped session leader's group, then reap it.
+
+    Keeping the child unreaped pins its PID until the final signal, including when it exits
+    during cleanup. Waiting before the group kill would allow PID/group reuse and could leave
+    TERM-resistant descendants running after their parent exited.
+    """
+
+    if process.returncode is not None:
+        return
+    try:
+        if os.getpgid(process.pid) != process.pid or os.getsid(process.pid) != process.pid:
+            raise RuntimeError("agent-exec: child no longer owns its launched session")
+    except ProcessLookupError:
+        # macOS no longer exposes a zombie leader's session; its unreaped PID still pins it.
+        pass
+    try:
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(process.pid, signum)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                # macOS reports EPERM for a group containing only zombies. Do not suppress
+                # a permission failure while any live member remains.
+                rows = subprocess.check_output(
+                    ["ps", "-axo", "pgid=,stat="], text=True, timeout=5,
+                )
+                if any(group == str(process.pid) and not state.startswith("Z")
+                       for group, state in (row.split() for row in rows.splitlines())):
+                    raise
+                break
+            if signum == signal.SIGTERM:
+                time.sleep(1)
+    finally:
+        process.wait(timeout=5)
 
 
 def main(argv: list[str] | None = None) -> int:
