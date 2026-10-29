@@ -9977,6 +9977,34 @@ def test_promote_refuses_invalid_monitoring_configuration(
     assert _run_status(root) == "open"
 
 
+
+@pytest.mark.parametrize("corruption", ["unknown", "missing", "partial-contract", "target"])
+def test_handoff_metadata_refuses_incompatible_run_without_closing(
+    tmp_path: Path, corruption: str,
+) -> None:
+    """A shared writer/reader schema must retain rejection of incompatible handoffs."""
+    root = _make_run(tmp_path)
+    harness = json.loads((root / "harness.json").read_text())
+    if corruption == "unknown":
+        harness["unreviewed_extension"] = True
+    elif corruption == "missing":
+        del harness["orchestrator_window"]
+    elif corruption == "partial-contract":
+        harness["guidance_generation"] = 1
+    else:
+        harness["resolved_commit"] = "0" * 40
+    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+
+    result = run(
+        ["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env(),
+    )
+
+    assert result.returncode == 66, result.stderr
+    assert "harness metadata" in result.stderr
+    assert _run_status(root) == "open"
+    assert not (root / "promotion_verdict.json").exists()
+
+
 def test_promote_refuses_current_contract_without_green_endgame_admission(
     tmp_path: Path,
 ) -> None:

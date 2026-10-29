@@ -300,14 +300,16 @@ python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
-  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" <<'PY'
+  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" "$D" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, engagement, question_channel, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
-    generation_text, guidance_admission_raw, jev_config_raw,
+    generation_text, guidance_admission_raw, jev_config_raw, harness_tools,
 ) = sys.argv[1:]
+sys.path.insert(0, harness_tools)
+from handoff_metadata import MetadataError, validate_metadata
 audit_value = int(audit)
 if audit_value < 1:
     raise SystemExit("factory: audit interval must be positive")
@@ -399,6 +401,11 @@ metadata = {
     "validator_contract": "docs/VALIDATION-DIRECTIVE.md + /validate",
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
+try:
+    validate_metadata(metadata, run=run, target_state=target_state_digest,
+                      commit=commit, checkout=checkout_id)
+except MetadataError as exc:
+    raise SystemExit(f"factory: {exc}") from exc
 path = pathlib.Path(metadata_path)
 tmp = tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False, encoding="utf-8")
 try:

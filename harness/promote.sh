@@ -59,11 +59,10 @@ refusal_event() {
 }
 CURRENT_CONTRACT=$(python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_DIGEST" \
     "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" "$D" <<'PY'
-import json, os, re, stat, sys
+import json, os, stat, sys
 path, run, target_state, commit, checkout, harness_tools = sys.argv[1:]
 sys.path.insert(0, harness_tools)
-from jev_screen import check_config
-from orchestrator_channel import progress_review_every
+from handoff_metadata import MetadataError, validate_metadata
 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
 try:
     if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -74,82 +73,12 @@ try:
 finally:
     if fd >= 0:
         os.close(fd)
-expected = {
-    "schema_version": "factory-harness/2", "run_id": run,
-    "target_state_digest": target_state, "resolved_commit": commit,
-    "checkout_id": checkout,
-}
-if any(doc.get(key) != value for key, value in expected.items()):
-    raise SystemExit("promote: harness metadata is not bound to current target-state")
-base_fields = {
-    "schema_version", "run_id", "status", "task_digest", "target_state_digest",
-    "target_manifest_digest", "resolved_commit", "checkout_id", "budget_usd",
-    "budget_enforcement", "audit_interval_min", "engagement", "question_channel",
-    "promise_window_min",
-    "launcher_qualification", "lane_isolation", "interactive_validator_boundary",
-    "validator_agent", "orchestrator_agent", "validator_contract", "created_at",
-}
-resident_fields = {
-    "orchestrator_mode", "orchestrator_window", "orchestrator_visibility",
-    "orchestrator_effects", "orchestrator_boundary", "orchestrator_cli_version",
-    "orchestrator_cli_contract",
-}
-contract_fields = {
-    "agreement_contract_version", "agreement_requirement_region_families",
-    "guidance_contract_version", "guidance_generation", "guidance_state",
-    "guidance_selection_digest", "guidance_source_digests",
-}
-close_fields = {"closed_at", "promotion_verdict", "promotion_verdict_digest"}
-# Every run has a resident Orchestrator (founder ruling 2026-09-21), so a
-# harness without the resident fields is not a closable run.
-allowed_shapes = {
-    frozenset(base_fields | resident_fields),
-    frozenset(base_fields | resident_fields | contract_fields),
-    frozenset(base_fields | resident_fields | close_fields),
-    frozenset(base_fields | resident_fields | contract_fields | close_fields),
-}
-# Current ignition adds these optional monitoring configurations. Validate them
-# with the same authorities as the runtime; never discard them from the subject.
-check_config(doc.get("jev_screen"))
-progress_review_every(doc)
-if frozenset(doc) - {"jev_screen", "progress_review"} not in allowed_shapes:
-    raise SystemExit("promote: harness metadata has unknown or missing fields")
-if doc.get("status") not in {"open", "closed"}:
-    raise SystemExit("promote: harness status is invalid")
-if doc.get("orchestrator_mode") != "resident-monitoring":
-    raise SystemExit("promote: run has no resident Orchestrator; every run requires one")
-if contract_fields <= set(doc):
-    digest = re.compile(r"^sha256:[0-9a-f]{64}$")
-    if doc["agreement_contract_version"] != "factory-agreement-contract/1":
-        raise SystemExit("promote: harness agreement contract is unsupported")
-    if doc["guidance_contract_version"] != "factory-run-guidance/1":
-        raise SystemExit("promote: harness guidance contract is unsupported")
-    generation = doc["guidance_generation"]
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
-        raise SystemExit("promote: harness guidance generation is invalid")
-    if doc["guidance_state"] not in {
-        "none", "pending-application", "routing-verified", "evidence-complete", "noncompliant"
-    }:
-        raise SystemExit("promote: harness guidance state is invalid")
-    selection = doc["guidance_selection_digest"]
-    sources = doc["guidance_source_digests"]
-    if not isinstance(sources, dict) or any(
-        not isinstance(name, str) or not name or not isinstance(address, str)
-        or not digest.fullmatch(address)
-        for name, address in sources.items()
-    ):
-        raise SystemExit("promote: harness guidance source map is invalid")
-    expected_regions = ["authored-product"]
-    if selection is None:
-        if doc["guidance_state"] != "none" or sources:
-            raise SystemExit("promote: unselected guidance carries selected state")
-    else:
-        if not isinstance(selection, str) or not digest.fullmatch(selection) or not sources:
-            raise SystemExit("promote: selected guidance identity is invalid")
-        expected_regions.append("run-guidance")
-    if doc["agreement_requirement_region_families"] != expected_regions:
-        raise SystemExit("promote: agreement region families differ from guidance selection")
-print("true" if contract_fields <= set(doc) else "false")
+try:
+    current = validate_metadata(doc, run=run, target_state=target_state,
+                                commit=commit, checkout=checkout)
+except MetadataError as exc:
+    raise SystemExit(f"promote: {exc}") from exc
+print("true" if current else "false")
 PY
 ) || { refusal_event "harness metadata check refused" 66; exit 66; }
 
