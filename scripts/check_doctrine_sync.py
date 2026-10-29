@@ -481,8 +481,14 @@ def check_repository(root: Path = ROOT) -> tuple[str, ...]:
         errors.append("notification-earned-rule-missing")
 
     criticality_monitors = _normalized("\n".join(criticality_section))
-    if "Monitor authorship is class-scoped." not in criticality_monitors:
-        errors.append("class-scoped-monitor-authorship-missing")
+    for required in (
+        "Monitor authorship is truthful, not a human gate.",
+        "generated monitors may cover Critical, Standard and cosmetic surfaces.",
+        "a claim of human authorship must still resolve to an enrolled human.",
+        "must remain spec-derived, understandable and bound to the criterion it watches.",
+    ):
+        if required not in criticality_monitors:
+            errors.append(f"monitor-authorship-rule-missing:{required}")
 
     evidence_plane = _normalized("\n".join(_section_lines(canonical, 2, "12. The evidence plane")))
     for required in (
