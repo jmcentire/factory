@@ -24,7 +24,12 @@ from typing import Any
 
 from agreement_contract import WITNESS_SCHEMA
 
-from factory_runtime.host_git import HostGitError, materialize_commit, resolve_commit_tree
+from factory_runtime.host_git import (
+    HostGitError,
+    contained_file_target,
+    materialize_commit,
+    resolve_commit_tree,
+)
 
 MAX_COMMAND_BYTES = 256 * 1024
 MAX_PATCH_BYTES = 32 * 1024 * 1024
@@ -116,7 +121,7 @@ def load_command(path: pathlib.Path, label: str) -> tuple[list[str], str]:
 
 
 def extract_candidate(repo: pathlib.Path, candidate_sha: str, destination: pathlib.Path) -> None:
-    """Write exactly the candidate commit's regular files from raw objects.
+    """Write the candidate's regular files and contained file links from raw objects.
 
     The candidate repository is agent-written; ``git archive`` there would run its smudge
     filters and honor its ``export-ignore`` and replace refs (factory_runtime/host_git.py)."""
@@ -126,7 +131,8 @@ def extract_candidate(repo: pathlib.Path, candidate_sha: str, destination: pathl
             repo,
             candidate_sha,
             destination,
-            admit_symlinks=False,
+            admit_symlinks=True,
+            contained_file_links=True,
             max_files=MAX_CANDIDATE_FILES,
             max_total_bytes=MAX_ARCHIVE_BYTES,
         )
@@ -138,29 +144,53 @@ def file_manifest(root: pathlib.Path, paths: Sequence[str]) -> tuple[str, int]:
     if list(paths) != sorted(set(paths)) or not paths:
         raise ProbeError("selected paths must be a sorted, unique, non-empty list")
     records: list[dict[str, Any]] = []
+    modes = {
+        pathlib.PurePosixPath(path.relative_to(root).as_posix()):
+        "120000" if path.is_symlink() else "100644"
+        for path in root.rglob("*") if path.is_symlink() or path.is_file()
+    }
+    directories = {parent for name in modes for parent in name.parents}
     total = 0
     for supplied in paths:
         relative = safe_relative(supplied, "selected path")
         selected = root.joinpath(*relative.parts)
+        if any(root.joinpath(*parent.parts).is_symlink() for parent in relative.parents):
+            raise ProbeError(f"selected path traverses a symbolic link: {supplied}")
         if not selected.exists() and not selected.is_symlink():
             raise ProbeError(f"selected path is absent: {supplied}")
         candidates = [selected]
-        if selected.is_dir():
-            candidates = sorted(path for path in selected.rglob("*") if not path.is_dir())
+        if selected.is_dir() and not selected.is_symlink():
+            candidates = sorted(path for path in selected.rglob("*")
+                                if path.is_symlink() or not path.is_dir())
             if not candidates:
                 raise ProbeError(f"selected directory contains no files: {supplied}")
         for candidate in candidates:
-            if candidate.is_symlink() or not candidate.is_file():
+            link: dict[str, str] = {}
+            content = candidate
+            if candidate.is_symlink():
+                target = os.readlink(candidate)
+                try:
+                    resolved = contained_file_target(
+                        pathlib.PurePosixPath(candidate.relative_to(root).as_posix()),
+                        target, modes, directories,
+                    )
+                except HostGitError as exc:
+                    raise ProbeError(str(exc)) from exc
+                content = root.joinpath(*resolved.parts)
+                link = {"link_target": target}
+                total += len(os.fsencode(target))
+            if not content.is_file():
                 raise ProbeError(f"selected surface contains a non-regular file: {candidate}")
-            raw = read_regular(candidate, ceiling=MAX_SELECTED_BYTES)
+            raw = read_regular(content, ceiling=MAX_SELECTED_BYTES)
             total += len(raw)
             if total > MAX_SELECTED_BYTES:
                 raise ProbeError("selected surfaces exceed their aggregate byte ceiling")
             records.append(
                 {
                     "path": candidate.relative_to(root).as_posix(),
-                    "mode": stat.S_IMODE(candidate.stat().st_mode),
+                    "mode": stat.S_IMODE(content.stat().st_mode),
                     "digest": address(raw),
+                    **link,
                 }
             )
     if len({record["path"] for record in records}) != len(records):

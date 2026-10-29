@@ -172,6 +172,7 @@ def materialize_commit(
     admit_symlinks: bool,
     max_files: int,
     max_total_bytes: int,
+    contained_file_links: bool = False,
     lfs_objects: str | Path | None = None,
     max_lfs_bytes: int | None = None,
     runner: Runner = subprocess.run,
@@ -191,6 +192,14 @@ def materialize_commit(
         max_files=max_files,
     )
     blobs = _read_blobs(repository, entries, max_total_bytes=max_total_bytes, runner=runner)
+    if contained_file_links:
+        modes = {entry.path: entry.mode for entry in entries}
+        directories = {parent for name in modes for parent in name.parents}
+        for entry in entries:
+            if entry.mode == _SYMLINK_MODE:
+                contained_file_target(
+                    entry.path, os.fsdecode(blobs[entry.object_id]), modes, directories,
+                )
     pointers = _lfs_pointers(entries, blobs)
     hydrate: dict[PurePosixPath, _LfsObject] = {}
     if lfs_objects is not None and pointers:
@@ -209,6 +218,34 @@ def materialize_commit(
         lfs_pointers_left=len(pointers) - len(hydrate),
         lfs_bytes=sum(found.size for found in hydrate.values()),
     )
+
+
+def contained_file_target(
+    path: PurePosixPath, target: str, modes: Mapping[PurePosixPath, str],
+    directories: set[PurePosixPath],
+) -> PurePosixPath:
+    """Resolve a relative link through real tree directories to one regular tree file.
+
+    Validate every traversed prefix, including those before ``..``; normalizing first could
+    hide a directory symlink that reaches outside the tree. Link chains are not admitted.
+    """
+
+    if not target or target.startswith("/") or "\0" in target:
+        raise HostGitError(f"{path} has an unsafe file link target")
+    current = path.parent
+    parts = target.split("/")
+    for index, part in enumerate(parts):
+        if part == "..":
+            if current == PurePosixPath("."):
+                raise HostGitError(f"{path} has an escaping file link target")
+            current = current.parent
+        elif part not in {"", "."}:
+            current /= part
+        if index < len(parts) - 1 and (current not in directories or current in modes):
+            raise HostGitError(f"{path} traverses a non-directory file link target")
+    if modes.get(current) not in _REGULAR_MODES or parts[-1] in {"", ".", ".."}:
+        raise HostGitError(f"{path} must link directly to a regular tree file")
+    return current
 
 
 def _lfs_pointers(
