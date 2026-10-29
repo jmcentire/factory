@@ -23,7 +23,7 @@ from factory_runtime.authority import (
 from factory_runtime.tessera import TesseraCli
 
 
-def delegation_subject(
+def _delegation_subject(
     run_id: str, identity: str, policy_digest: str, profile_digest: str
 ) -> dict[str, object]:
     return {
@@ -68,7 +68,7 @@ def apply_delegation(
         policy=authority,
         expected_action="activate-policy",
         expected_subject_digest=digest_obj(
-            delegation_subject(run_root.name, identity, policy_digest, profile_digest)
+            _delegation_subject(run_root.name, identity, policy_digest, profile_digest)
         ),
         expected_run_id=run_root.name,
         tessera=tessera,

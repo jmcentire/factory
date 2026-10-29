@@ -17,7 +17,7 @@ from factory_core.promotion import PromotionRequest
 from factory_core.tool_policy import authorize_tool_invocation, verify_tool_policy
 from factory_runtime.authority import AuthorityVerificationError
 from factory_runtime.project_init import init_project, record_human_statement
-from factory_runtime.promotion_delegation import apply_delegation, delegation_subject
+from factory_runtime.promotion_delegation import apply_delegation
 from factory_runtime.promotion_gate import _policy_from_dict
 from tests.test_criticality import _surface
 from tests.test_project_init import _cli
@@ -110,9 +110,14 @@ def test_real_owner_receipt_binds_delegation(tmp_path: Path, change: str):
     request = PromotionRequest.from_dict({
         "verifier": "agent:validator", "tool_policy": bundle.to_dict(),
     })
-    subject = delegation_subject(
-        run.name, "agent:validator", bundle.policy.content_digest, profile.content_digest
-    )
+    subject = {
+        "schema_version": "factory-promotion-delegation/1",
+        "run_id": run.name,
+        "identity": "agent:validator",
+        "actions": ["sign-derived-tool-policy", "classify-reviewed-surfaces"],
+        "policy_digest": bundle.policy.content_digest,
+        "profile_digest": profile.content_digest,
+    }
     record_human_statement(
         project, run_id=run.name, action="activate-policy", subject_digest=digest_obj(subject),
         said="Delegate these two reviewed subjects to this run's Validator.", said_at="fixture",

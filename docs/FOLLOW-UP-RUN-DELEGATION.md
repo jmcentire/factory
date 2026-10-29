@@ -15,8 +15,9 @@ allowlist would grant authority to the wrong class of identities.
 
 The current bounded support verifies an owner `activate-policy` receipt against
 the existing pinned genesis, run, enrolled Validator identity, exact tool-policy
-digest and reviewed criticality-profile digest. It does not change genesis,
-global permissions, Signet, human signoff-required authorizations or other runs.
+digest and reviewed criticality-profile digest.
+It does not change human signoff-required authorizations, genesis, global permissions,
+Signet or other runs.
 The receipt expires under the existing authority verifier. Changed subjects need
 a newly bound receipt under applicable owner authority; they cannot silently
 reuse the old grant. Raw promotion-input delegation allowlists are ignored.

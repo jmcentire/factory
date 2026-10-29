@@ -178,7 +178,8 @@ test-tessera: check-python ## run every real-Tessera integration and denial proo
 			tests/test_build_and_validate_cli.py \
 			tests/test_repair_ceremony.py \
 			tests/test_trust_root.py \
-			tests/test_project_init.py
+			tests/test_project_init.py \
+			tests/test_promotion_delegation.py
 
 lint: check-python ## ruff over core/runtime/scripts/tests and executable Python harness controls
 	$(PY) -m ruff check factory_core factory_runtime scripts tests \
