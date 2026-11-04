@@ -103,9 +103,17 @@ def test_doctor_names_each_missing_piece(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     layout.tessera.unlink()
     checks = inst.doctor(layout, _path_env(layout, tmp_path))
-    assert {"tessera", "launcher", "/validate", "/review"} <= _failing(checks)
+    assert {"launcher", "/validate", "/review"} <= _failing(checks)
+    assert "tessera" not in _failing(checks)
     text, ready = inst.report(checks)
     assert not ready and "make install" in text
+
+
+def test_normal_install_is_ready_without_historical_signer(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    layout.tessera.unlink()
+    inst.install(layout)
+    assert not _failing(inst.doctor(layout, _path_env(layout, tmp_path)))
 
 
 def test_doctor_fails_when_launcher_is_off_path_or_shadowed(tmp_path: Path) -> None:

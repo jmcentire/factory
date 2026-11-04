@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from harness.repo_rules import DIRNAME, MANIFEST, SCHEMA, RepoRulesError, snapshot
+from tests.test_coordinator_startup import launch as launch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "harness" / "repo_rules.py"
@@ -98,23 +99,19 @@ def test_cli_lists_each_rule_with_its_id(tmp_path: Path) -> None:
     assert ".rule-review/rules/08-missing.md\t08" in result.stdout.splitlines()
 
 
-def test_validator_contract_reads_the_repo_rules_before_phase_a() -> None:
-    procedure = (ROOT / "prompts" / "validate.md").read_text(encoding="utf-8")
-    section = procedure[procedure.index("## Repo rules"):procedure.index("## Phase A —")]
-    flat = " ".join(section.split())
+def test_validator_receives_scoped_repo_rules_guidance_before_author_assignment(launch) -> None:
+    _, _, _, capture, invocation, _ = launch
+    _, _, command = invocation(capture(), "validator")
+    # The native coordinator is directed to the canonical role file, not an old copy.
+    procedure = ROOT / "prompts/validate.md"
+    assert str(procedure) in command[-1]
+    flat = " ".join(procedure.read_text(encoding="utf-8").split())
     for source in ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "ARCHITECTURE.md",
                    ".claude/rules/**", ".rule-review/rules/**"):
         assert f"`{source}`" in flat
-    assert "harness/repo_rules.py snapshot" in flat
-    assert "**Repo rules** section" in flat
-    assert "verbatim into both lane briefs" in flat
-    assert "never a silent choice" in flat
-    assert "PR body states, per touched rule, why the change complies" in flat
-
-    directive = " ".join((ROOT / "docs" / "VALIDATION-DIRECTIVE.md").read_text("utf-8").split())
-    assert "artifacts/repo-rules/" in directive
-    assert "without a human-ratified exception is negative evidence" in directive
-
-    ignition = (ROOT / "harness" / "factory.sh").read_text(encoding="utf-8")
-    assert "VALIDATOR_PROMPT+=\" Before drafting Phase A, snapshot" in ignition
-    assert "$D/repo_rules.py snapshot" in ignition
+    assert flat.index("Find applicable") < flat.index("1. Separate the capability")
+    assert "rules scoped to the paths being changed" in flat
+    assert "each author's brief without leaking implementation or oracle details" in flat
+    assert "user's actual instructions" in flat
+    assert "do not silently invent a default or fallback" in flat
+    assert "Explain compliance with touched rules" in flat

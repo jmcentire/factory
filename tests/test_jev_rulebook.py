@@ -1,13 +1,14 @@
 """Structural checks on the jev rules screen (docs/proposals/jev-screen/).
 
-The rulebook is data the resident Orchestrator consumes by rule id, so its shape is load-bearing
-even though nothing calls jev in CI. These tests never touch the TypeSafe API: they import only
+The optional screen consumes the historical rulebook by rule id; its data shape still matters
+even though ordinary Factory work does not require this screen. These tests never touch the
+TypeSafe API: they import only
 `rules.py` and `cases_msg_r2.py`, never `jev.py` (which exits without a key).
 
 What must hold: every rule has an atomic question, the fields it reads, criteria with a `what`,
 and a three-way band (yes above 0.7, no below 0.3, escalate between); ids are unique; every case
 supplies exactly its rule's fields and has a label; each msg-r2 rule has a positive, a negative,
-and a lesson-drawn case; and prompts/orchestrate.md names every msg-r2 rule id it consumes.
+and a lesson-drawn case. Current role prompts retain concrete oversight and response duties.
 """
 
 from __future__ import annotations
@@ -38,13 +39,6 @@ def _load(name: str) -> ModuleType:
 RULES = _load("rules")
 CASES = _load("cases_msg_r2").CASES
 MSG_R2_IDS = [r["id"] for r in RULES.RULEBOOK if RULES.screened(r)]
-
-
-def _adherence_section() -> str:
-    text = ORCHESTRATE.read_text(encoding="utf-8")
-    start = text.index("## Adherence: what are you allowing to happen?")
-    end = text.index("\n## ", start + 1)
-    return text[start:end]
 
 
 def test_rule_ids_are_unique_and_snake_case() -> None:
@@ -135,19 +129,19 @@ def test_case_ids_are_unique() -> None:
     assert len(ids) == len(set(ids))
 
 
-def test_orchestrator_adherence_section_names_every_msg_r2_rule() -> None:
-    section = _adherence_section()
-    for rid in MSG_R2_IDS:
-        assert f"`{rid}`" in section, f"orchestrate.md Adherence does not consume {rid}"
-    tabled = re.findall(r"\| `([a-z0-9_]+)` \| §[A-Z]*\d+ \|", section)
-    assert sorted(tabled) == sorted(MSG_R2_IDS), "semantic table and rulebook disagree"
-    for check in ("D1", "D2", "D3", "D4"):
-        assert f"| {check} |" in section, f"deterministic check {check} missing"
-    assert "TESTING.md" in section and "T-rules" in section
+def test_orchestrator_owns_concrete_oversight_without_fixed_rulebook_ceremony() -> None:
+    text = ORCHESTRATE.read_text(encoding="utf-8")
+    assert "Own strategic oversight and process adherence" in text
+    assert "State the action, evidence and needed correction" in text
+    assert "Validator owns product acceptance" in text
+    assert "do not require assessments, grant permission or stop any process" in text
+    assert "Never send test implementation to the Coder" in text
 
 
-def test_validator_answers_adherence_challenges() -> None:
+
+def test_validator_addresses_concrete_orchestrator_findings() -> None:
     text = VALIDATE.read_text(encoding="utf-8")
-    assert "Adherence: what are you allowing to happen?" in text
-    assert "before your next dispatch" in text
-    assert "recorded reason" in text
+    assert "Orchestrator independently owns strategic oversight" in text
+    assert "Address its concrete findings" in text
+    assert "do not demote it to an on-demand reviewer or ignore it" in text
+    assert "user owns scope and agent/model choices" in text

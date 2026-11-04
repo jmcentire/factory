@@ -581,39 +581,17 @@ class Dispatcher:
             self._banner(f"[dispatcher] {kind} in {window}: {hit[:160]}")
 
     def answer_dialog(self, window: str, keys: tuple[str, ...]) -> bool:
-        """Send the dialog's accept keys to the seat's pane."""
-        try:
-            done = subprocess.run(
-                ["tmux", "send-keys", "-t", f"{self.run}:{window}", *keys],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        return done.returncode == 0
+        """Platform permission prompts belong to the operator, not a screen scraper."""
+        return False
 
     def notify_validator(self, notice: str) -> None:
-        """Wake the Validator with one line when a lane waits on it (a question, a DONE).
-
-        Without this a lane question sat until the Validator's next check-in (Q-0043 ~6 min,
-        Q-0046 ~11 min, a Tester DONE ~20 min) while both lanes idled. Only a live Validator
-        window is woken; the Orchestrator gets the same signal either way.
-        """
-        if "validator" not in self.live_windows:
-            return
-        environment = dict(os.environ)
-        environment.update({"INJECT_FROM": "dispatcher", "HARNESS_RUN_ROOT": str(self.root)})
+        """Retain notices even if the agent has exited; never type prose into its pane."""
+        from run_record import message
         try:
-            sent = subprocess.run(
-                [str(self.harness / "inject.sh"), self.run, "validator", notice],
-                capture_output=True, text=True, timeout=15, env=environment,
-            )
-            failure = "" if sent.returncode == 0 else (sent.stderr or sent.stdout).strip()
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            failure = str(exc)
-        if failure:
-            self.event("validator_notice_failed", f"{notice}: {failure}"[:300], wake=False)
+            message(self.root, "validator", "dispatcher", notice,
+                    log=os.environ.get("FACTORY_LOG", os.devnull))
+        except (OSError, ValueError) as error:
+            self.event("validator_notice_failed", str(error)[:300], wake=False)
 
     def record_pane_delta(self, window: str, tail: str) -> None:
         """Retain every changed pane snapshot; split only for transport ceilings.
@@ -1013,13 +991,101 @@ class Dispatcher:
             time.sleep(self.interval)
 
 
+def observe(root: pathlib.Path, previous: dict) -> dict:
+    """Read every lane's retained output without injecting input or judging progress.
+
+    The Orchestrator invokes this while resident. Its own conversation is already in
+    context, so its output log is excluded to avoid feeding each observation back into
+    the next. Offsets are pagination, never assessments or authority to suspend work.
+    Raw bytes remain in the original logs; a digest and byte range identify each chunk.
+    """
+    candidates = [*root.glob("*-lane.log"), *root.glob("*-exits.jsonl"),
+                  *(root / "tmux-lanes").glob("*-lane.log"),
+                  *(root / "tmux-lanes").glob("*-exits.jsonl"),
+                  *(root / "tmux-lanes").glob("*-launch.jsonl"),
+                  root / "validator" / "inbox.jsonl", root / "orchestrator" / "inbox.jsonl"]
+    entries, cursors = [], dict(previous)
+    for path in sorted(set(candidates)):
+        if path.name == "orchestrator-lane.log":
+            continue
+        name = path.relative_to(root).as_posix()
+        if any(parent.is_symlink() for parent in path.parents
+               if parent == root or root in parent.parents):
+            raise ValueError(f"activity source has a symlinked parent: {name}")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            continue
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError(f"activity source is not a regular file: {name}")
+            prior = previous.get(name, {})
+            offset = prior.get("offset", 0)
+            if not isinstance(offset, int) or offset < 0:
+                raise ValueError("invalid activity offset")
+            reset = (prior.get("identity") != [info.st_dev, info.st_ino]
+                     or offset > info.st_size)
+            if not reset and offset:
+                stream.seek(max(0, offset - 64))
+                anchor = hashlib.sha256(stream.read(min(offset, 64))).hexdigest()
+                reset = anchor != prior.get("anchor")
+            if reset:
+                offset = 0
+            stream.seek(offset)
+            data = stream.read(16 * 1024)
+            # Avoid splitting a valid UTF-8 character across observations.
+            if data:
+                for _ in range(3):
+                    try:
+                        data.decode("utf-8")
+                        break
+                    except UnicodeDecodeError as error:
+                        if error.reason != "unexpected end of data":
+                            break
+                        more = stream.read(1)
+                        if not more:
+                            # A writer may have appended only part of a character.
+                            # Keep those bytes behind the cursor until its next append.
+                            data = data[:error.start]
+                            break
+                        data += more
+            end = offset + len(data)
+            stream.seek(max(0, end - 64))
+            anchor = hashlib.sha256(stream.read(min(end, 64))).hexdigest()
+            cursors[name] = dict(identity=[info.st_dev, info.st_ino], offset=end, anchor=anchor)
+            if data or (reset and prior):
+                entries.append(dict(source=name, start=offset, end=end, reset=bool(reset and prior),
+                                    text=data.decode("utf-8", errors="replace"),
+                                    sha256=hashlib.sha256(data).hexdigest()))
+    return dict(entries=entries, cursors=cursors)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--run", required=True)
     p.add_argument("--root", required=True)
     p.add_argument("--interval", type=int, default=30)
+    p.add_argument("--observe", action="store_true",
+                   help="read retained activity without control actions")
+    p.add_argument("--after", default="{}", help="cursors JSON returned by the last observation")
+    p.add_argument("--wait-seconds", type=float, default=0)
     args = p.parse_args()
     root = pathlib.Path(args.root)
+    if args.observe:
+        from run_record import load
+
+        root, _ = load(root.parent, args.run)
+        previous = json.loads(args.after)
+        if not isinstance(previous, dict) or not 0 <= args.wait_seconds <= 60:
+            p.error("--after must be an object; --wait-seconds must be between 0 and 60")
+        deadline = time.monotonic() + args.wait_seconds
+        while True:
+            result = observe(root, previous)
+            if result["entries"] or time.monotonic() >= deadline:
+                print(json.dumps(result))
+                return
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
     if not (root / "run.json").exists() or not (root / "harness.json").exists():
         sys.exit(f"no checked run.json + harness.json under {root}")
     dispatcher = Dispatcher(args.run, root, args.interval)

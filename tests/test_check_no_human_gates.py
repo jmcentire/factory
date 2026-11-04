@@ -43,7 +43,8 @@ def test_the_gate_fires_on_a_planted_human_gate(tmp_path: Path, planted: str) ->
     )
     assert finished.returncode == 1
     assert "prompts/planted.md:3" in finished.stderr
-    assert "P-0001" in finished.stderr and "I ALREADY FUCKING ASKED YOU TO DO IT" in finished.stderr
+    assert "possible unnecessary human gate" in finished.stderr
+    assert "Check the user's actual request" in finished.stderr
 
 
 @pytest.mark.parametrize(
@@ -71,3 +72,33 @@ def test_archival_records_and_the_product_paging_standard_are_not_scanned(tmp_pa
 def test_the_factory_carries_no_human_gate() -> None:
     findings = scan()
     assert findings == [], "\n".join(finding.render() for finding in findings)
+
+
+def test_user_can_tune_severity_and_output_without_hiding_findings(tmp_path, capsys):
+    from scripts.check_no_human_gates import main
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "rule.md").write_text("Ask the user for approval.\n" * 4)
+    assert main(["--root", str(tmp_path), "--mode", "warn", "--max-findings", "1"]) == 0
+    output = capsys.readouterr()
+    assert "WARN" in output.err and "4 possible" in output.err and "showing 1" in output.err
+    assert output.err.count("prompts/rule.md:") == 1
+    assert main(["--root", str(tmp_path), "--max-findings", "0"]) == 1
+    assert "showing 0" in capsys.readouterr().err
+    assert main(["--root", str(tmp_path), "--mode", "off"]) == 0
+    assert "DISABLED" in capsys.readouterr().out
+
+
+def test_path_tuning_does_not_hide_other_paths(tmp_path, capsys):
+    from scripts.check_no_human_gates import main
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    for filename in ("optional.md", "required.md"):
+        (prompts / filename).write_text("Ask the user for approval.\n")
+    assert main(["--root", str(tmp_path), "--exclude", "prompts/optional.md"]) == 1
+    output = capsys.readouterr()
+    assert "prompts/required.md:1" in output.err
+    assert "prompts/optional.md:1" not in output.err
+    assert "excluded paths: prompts/optional.md" in output.out

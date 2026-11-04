@@ -49,6 +49,17 @@ def _append(path: Path, text: str) -> None:
     path.write_text(path.read_text(encoding="utf-8") + text, encoding="utf-8")
 
 
+def test_wiring_error_identifies_its_trigger_and_action(tmp_path: Path) -> None:
+    _make_clean_tree(tmp_path)
+    _append(tmp_path / "factory_core/alpha.py", _DEAD_EXPORT)
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert DEAD_FINDING in result.stdout.splitlines()
+    assert "ERROR factory_core/alpha.py:orphan_export" in result.stderr
+    assert "trigger: a public symbol has no caller reachable from an entrypoint" in result.stderr
+    assert "action: wire its intended caller" in result.stderr
+
+
 def _make_clean_tree(root: Path) -> None:
     """Build a synthetic mini-repo where every public symbol is reachable from an entrypoint.
 

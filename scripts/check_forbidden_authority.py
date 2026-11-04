@@ -8,9 +8,9 @@ guard existed, nothing enforced either one.
   (a) exemplar's ``TesseraSeal`` is a five-field model with ``content_hash`` /
       ``previous_hash`` / ``chain_hash`` / ``sealed_at`` / ``sealer_id`` and **no signature
       field of any kind**. It cannot verify a founder signature against a fingerprint, so it
-      cannot perform the genesis ceremony at all. Anything anchoring authority must use the real
-      ``jmcentire/tessera`` engine. Note the ban is on ``TesseraSeal``, NOT on Tessera: the
-      engine is required, the impostor is refused.
+      cannot serve as proof of authorization. This check does not require a signing engine
+      or a genesis ceremony for ordinary work. Any automated attestation must be verified
+      against what the user actually said; a hash alone does not establish that.
 
   (b) ``signet-sdk``'s ``check_authority`` computes a SHA-256 binding and then discards it —
       ``is_authority_granted`` returns true for any non-zero digest, which is every structurally
@@ -24,7 +24,9 @@ in the file it guards would be unusable. It does not close a deliberate
 ``getattr(mod, "check_authority")`` evasion; it is a guard against a banned seam reaching a
 Critical path, not a sandbox against an adversary with commit access.
 
-Stdlib only. Exit code 0 = green.
+Users may override specific symbols/modules through explicit command options. Overrides
+are reported, do not override parse/read failures, and do not grant platform permissions.
+Stdlib only. Exit code 0 = no unoverridden findings.
 """
 
 from __future__ import annotations
@@ -39,16 +41,16 @@ from pathlib import Path
 # gap, cited in the module docstring above.
 BANNED_SYMBOLS: dict[str, str] = {
     "TesseraSeal": "exemplar's TesseraSeal has no signature field; it cannot verify a founder "
-                   "signature. Use the real jmcentire/tessera engine.",
+    "signature or establish authorization from the user's actual request.",
     "check_authority": "signet-sdk's check_authority grants unconditionally. It must never "
-                       "appear on a Critical path.",
+    "appear on a Critical path.",
     "is_authority_granted": "signet-sdk's blanket-grant helper behind check_authority.",
 }
 
 # Top-level modules that may never be imported.
 BANNED_MODULES: dict[str, str] = {
     "exemplar": "exemplar is a reference implementation, not a dependency; its TesseraSeal "
-                "cannot verify signatures.",
+    "cannot verify signatures.",
     "signet_sdk": "the signet SDK's authority seam grants unconditionally; use signet-cred.",
 }
 
@@ -59,6 +61,7 @@ class Finding:
     path: str
     line: int
     detail: str
+    identifier: str = ""
 
     def __str__(self) -> str:
         return f"[{self.kind}] {self.path}:{self.line}: {self.detail}"
@@ -92,34 +95,56 @@ def check_file(path: Path, display: str) -> list[Finding]:
                 head = _module_head(alias.name)
                 if head in BANNED_MODULES:
                     findings.append(
-                        Finding("import", display, node.lineno,
-                                f"imports banned module {alias.name!r} — {BANNED_MODULES[head]}")
+                        Finding(
+                            "import",
+                            display,
+                            node.lineno,
+                            f"imports banned module {alias.name!r} — {BANNED_MODULES[head]}",
+                            head,
+                        )
                     )
         elif isinstance(node, ast.ImportFrom):
             head = _module_head(node.module or "")
             if head in BANNED_MODULES:
                 findings.append(
-                    Finding("import", display, node.lineno,
-                            f"imports from banned module {node.module!r} — "
-                            f"{BANNED_MODULES[head]}")
+                    Finding(
+                        "import",
+                        display,
+                        node.lineno,
+                        f"imports from banned module {node.module!r} — {BANNED_MODULES[head]}",
+                        head,
+                    )
                 )
             for alias in node.names:
                 if alias.name in BANNED_SYMBOLS:
                     findings.append(
-                        Finding("symbol", display, node.lineno,
-                                f"imports banned symbol {alias.name!r} — "
-                                f"{BANNED_SYMBOLS[alias.name]}")
+                        Finding(
+                            "symbol",
+                            display,
+                            node.lineno,
+                            f"imports banned symbol {alias.name!r} — {BANNED_SYMBOLS[alias.name]}",
+                            alias.name,
+                        )
                     )
         elif isinstance(node, ast.Name) and node.id in BANNED_SYMBOLS:
             findings.append(
-                Finding("symbol", display, node.lineno,
-                        f"references banned symbol {node.id!r} — {BANNED_SYMBOLS[node.id]}")
+                Finding(
+                    "symbol",
+                    display,
+                    node.lineno,
+                    f"references banned symbol {node.id!r} — {BANNED_SYMBOLS[node.id]}",
+                    node.id,
+                )
             )
         elif isinstance(node, ast.Attribute) and node.attr in BANNED_SYMBOLS:
             findings.append(
-                Finding("symbol", display, node.lineno,
-                        f"references banned attribute {node.attr!r} — "
-                        f"{BANNED_SYMBOLS[node.attr]}")
+                Finding(
+                    "symbol",
+                    display,
+                    node.lineno,
+                    f"references banned attribute {node.attr!r} — {BANNED_SYMBOLS[node.attr]}",
+                    node.attr,
+                )
             )
     return findings
 
@@ -128,9 +153,7 @@ def run(roots: list[Path]) -> list[Finding]:
     findings: list[Finding] = []
     for root in roots:
         if not root.exists():
-            findings.append(
-                Finding("root", str(root), 0, "scan root not found (fail closed)")
-            )
+            findings.append(Finding("root", str(root), 0, "scan root not found (fail closed)"))
             continue
         for path in _iter_py_files(root):
             try:
@@ -146,25 +169,67 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="ban exemplar's TesseraSeal and signet-sdk's authority seam"
     )
-    parser.add_argument("--root", type=Path, action="append", dest="roots",
-                        help="package directory to scan (repeatable)")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        dest="roots",
+        help="package directory to scan (repeatable)",
+    )
     parser.add_argument("--quiet", action="store_true", help="only print on failure")
+    parser.add_argument(
+        "--allow-symbol",
+        action="append",
+        default=[],
+        choices=sorted(BANNED_SYMBOLS),
+        help="explicit user override (repeatable)",
+    )
+    parser.add_argument(
+        "--allow-module",
+        action="append",
+        default=[],
+        choices=sorted(BANNED_MODULES),
+        help="explicit user override (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     roots = args.roots or [repo_root / "factory_core", repo_root / "factory_runtime"]
     findings = run(roots)
+    retained = []
+    overridden = 0
+    for finding in findings:
+        allowed = (finding.kind == "symbol" and finding.identifier in args.allow_symbol) or (
+            finding.kind == "import" and finding.identifier in args.allow_module
+        )
+        if allowed:
+            print(f"check_forbidden_authority: USER OVERRIDE — {finding}", file=sys.stderr)
+            overridden += 1
+        else:
+            retained.append(finding)
+    findings = retained
     if findings:
         print(f"check_forbidden_authority: FAIL — {len(findings)} finding(s):", file=sys.stderr)
         for f in findings:
             print(f"  {f}", file=sys.stderr)
-        print("\nThese seams are banned by capability, not preference: exemplar's TesseraSeal "
-              "cannot verify a signature, and signet-sdk's check_authority grants "
-              "unconditionally. Use the real Tessera engine and signet-cred.", file=sys.stderr)
+        print(
+            "\nThese helpers do not establish authorization. Correct the reference or use "
+            "an explicit user-selected --allow-symbol/--allow-module override. "
+            "This does not change platform permissions.",
+            file=sys.stderr,
+        )
         return 1
+    if overridden:
+        print(
+            f"check_forbidden_authority: PASS with {overridden} explicit override(s); "
+            "the referenced helpers have not been validated."
+        )
+        return 0
     if not args.quiet:
         names = ", ".join(sorted(BANNED_SYMBOLS))
-        print(f"check_forbidden_authority: GREEN — no banned authority seam referenced "
-              f"({names}; modules: {', '.join(sorted(BANNED_MODULES))}).")
+        print(
+            f"check_forbidden_authority: GREEN — no banned authority seam referenced "
+            f"({names}; modules: {', '.join(sorted(BANNED_MODULES))})."
+        )
     return 0
 
 

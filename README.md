@@ -1,15 +1,12 @@
 # Software Factory
 
-A founder-owned, **portable software-factory core and executable runtime**. It productizes a proven
-software-delivery discipline — content-addressed evidence, recorded decisions with
-segregation of duties, the founder involved only at a genuine impasse (P-0001), and a hard generic-core / target-as-data boundary — as a standalone,
-separately-shippable Python package that imports **nothing target-specific**. The pure
-`factory_core` policy layer is joined by `factory_runtime`, the impure orchestration boundary.
+Factory coordinates an ordinary repository task with a Validator, a resident strategic Orchestrator, and independent Coder and Tester conversations. Start with `factory run NAME TASK --repo /path/to/repository`. No catalog, approved-model list, signatures or human ratification are required.
+
+The current workflow is [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md). The signed state-machine and pattern-generation APIs described later are historical/research interfaces, not normal task prerequisites. They do not control native task startup, message delivery or validation.
 
 ## Install
 
-Needs git, Python 3.12+, and Rust (`cargo`, from https://rustup.rs) to build the pinned
-Tessera signer. To use the role commands you also need Claude Code.
+Needs git, Python 3.12+, tmux and the selected agent CLIs. Claude Code is needed only for its slash commands. Rust and Tessera are optional dependencies for the historical signing interfaces.
 
 ```bash
 git clone https://github.com/jmcentire/factory.git ~/Code/factory
@@ -17,7 +14,7 @@ cd ~/Code/factory
 make install
 ```
 
-`make install` sets up the virtualenv, builds the pinned Tessera, writes a `factory` launcher
+`make install` sets up the virtualenv, writes a `factory` launcher
 to `~/.local/bin`, and installs the Claude Code commands `/validate`, `/engineer`, `/test`,
 `/orchestrate`, `/build` and `/review` to `~/.claude/commands/`. Each command file is a short
 loader that reads its prompt from this checkout, so a `git pull` updates them all. It ends by
@@ -37,8 +34,19 @@ work, or `/validate` to start a full factory run. `factory --help` lists the CLI
 
 ### Choosing models
 
-The factory never picks a model and ships no list of them. Tell the AI which models to use, or
-ask it to recommend some; a launch that names none runs each agent's own configured default.
+User choices win: lane `--agent/--model/--effort`, then `FACTORY_<ROLE>_AGENT/MODEL/EFFORT`, then role defaults in `~/.config/factory/config.toml` (or `FACTORY_CONFIG`), then shipped defaults. Shipped adapters are Codex for Validator/Coder/Tester and Agy for Orchestrator; no model name is mandated. An empty model uses the selected CLI's configured model, then that CLI's built-in default. A malformed or explicitly missing configuration reports an error instead of silently falling back.
+
+For example, local defaults may contain:
+
+```toml
+[roles.coder]
+agent = "claude"
+model = "your-selected-model"
+```
+
+Changing the agent explicitly drops a different agent's model/effort defaults unless those are also assigned. Resuming a conversation preserves its recorded selection.
+
+If a provider reports a model retired, the Validator checks that provider's current replacement guidance and asks whether to use the suggested replacement. It does not silently migrate models. Unknown names, authentication failures and exhausted quota are not proof of retirement. No static model allowlist or background availability polling is needed.
 
 | Role | Agents it can run | Naming a model (optional) |
 |---|---|---|
@@ -57,7 +65,7 @@ A `codex` lane with no `--model` runs the model your own Codex config selects. E
 record states the model it actually ran. Ollama models must already be on the machine
 (`ollama pull` them yourself). `codex-ollama` is metered, and `--metered` marks any other launch
 metered: a metered lane launches only with a per-round spend cap, inside the run's `--budget`,
-and after a passing qualification probe (`docs/HARNESS.md`, control 10).
+with no prior model qualification required.
 
 **For an AI agent asked to install this:** clone it, run `make install`, then run `make doctor`
 until it prints `READY`. Apply each listed fix as you go. Editing the user's shell profile (for
@@ -108,7 +116,7 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `comprehensiveness.py` | The intake-completeness gate (the entrance) — a deterministic, injection-resistant registry of structural field predicates that decides comprehensive vs needs-info without an LLM. Fields/thresholds/rules are data. | **Implemented** |
 | `adapters.py` + `target.py` | The target-as-data boundary + the environment-ladder dependency seams — the five `Protocol` seams for all target contact, resolved by name from a signed data-only `TargetManifest` (never a code import). The manifest also binds the operational build ABI: authorized pattern-catalog digest, construction modes, and hard attempt ceiling. | **Implemented** |
 | `roles.py` | Target RBAC bundles — capabilities as the atomic unit, roles as per-target named bundles, grants as per-target data. These target roles are not additional factory workflow roles. | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
-| `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical four-role/three-phase structure. | **Implemented** |
+| `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical four-role workflow and retained evidence requirements. | **Implemented** |
 
 ### Executable runtime status
 

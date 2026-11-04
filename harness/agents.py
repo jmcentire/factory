@@ -50,7 +50,10 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 @dataclass(frozen=True)
 class Turn:
-    """One headless turn: the argv, how the prompt travels, and where a final message lands."""
+    """A native invocation: argv, prompt transport, and where a final message lands.
+
+    Persistent invocations keep stdin open for frames from ``persistent_input``.
+    """
 
     argv: tuple[str, ...]
     prompt_via: str  # "stdin" | "argv" (appended as the last argument)
@@ -87,6 +90,25 @@ class Harness:
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
         raise NotImplementedError
+
+    def persistent_turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
+                        extra: Sequence[str] = ()) -> Turn:
+        """Keep one native process alive for successive structured stdin messages.
+
+        Reuse the ordinary invocation so model defaults, resume, permissions and private
+        lane configuration remain identical. Other harnesses need their own qualified
+        stream-input protocol before they can opt into this transport.
+        """
+
+        if self.name not in ("claude", "agy"):
+            raise ValueError(f"{self.name} does not support persistent stream input")
+        built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
+        if self.name == "claude":
+            argv = (*built.argv, "--input-format", "stream-json", "--replay-user-messages")
+        else:
+            # agy's --print requires a value even when input arrives through the stream.
+            argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
+        return Turn(argv, "stdin")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         raise NotImplementedError
@@ -126,6 +148,21 @@ class Harness:
         seat keeps the operator's own configuration and Kindex; only billing is constrained."""
 
         return {}
+
+
+def persistent_input(agent_name: str, text: str, message_id: str) -> dict[str, object]:
+    """Encode literal user text; callers serialize each frame as one JSON line.
+
+    Claude replays the supplied UUID as its acknowledgement. Agy does not acknowledge
+    an input ID, so its caller must allow only one in-flight message at a time.
+    """
+
+    if agent_name == "claude":
+        return {"type": "user", "message": {"role": "user", "content": text},
+                "uuid": message_id}
+    if agent_name == "agy":
+        return {"event": "user", "message": {"content": text}}
+    raise ValueError(f"{agent_name} does not support persistent stream input")
 
 
 def _last_json(text: str) -> dict[str, object]:
@@ -660,6 +697,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     turn.add_argument("--effort", default="")
     turn.add_argument("--cwd", required=True, type=Path)
     turn.add_argument("--resume", default="")
+    turn.add_argument("--persistent", action="store_true",
+                      help="keep the native process open for structured stdin messages")
     turn.add_argument("--extra-arg", action="append", default=[])
     env = sub.add_parser("credential-env", help="print the admitted variable names, one a line")
     env.add_argument("--agent", required=True)
@@ -686,6 +725,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     record.add_argument("--agent", required=True)
     record.add_argument("--model", default="")
     record.add_argument("--effort", default="")
+    record.add_argument("--persistent", action="store_true")
     record.add_argument("--billing", choices=BILLINGS, required=True)
     record.add_argument("--env-file", required=True)
     record.add_argument("--setup", required=True, type=Path,
@@ -693,15 +733,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "turn-record":
-            harness(args.agent)
+            chosen = harness(args.agent)
+            if args.persistent:
+                chosen.persistent_turn(model=args.model, effort=args.effort, cwd=Path.cwd())
             extra = [part for part in args.setup.read_text(encoding="utf-8").split("\0") if part]
+            document = {"schema_version": TURN_RECORD, "agent": args.agent,
+                        "model": args.model, "effort": args.effort, "billing": args.billing,
+                        "env_file": args.env_file, "extra": extra}
+            if args.persistent:
+                document["persistent"] = True
             # The record holds no secret; the env file it names does, owner-only.
             descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
                                  | getattr(os, "O_NOFOLLOW", 0), 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump({"schema_version": TURN_RECORD, "agent": args.agent,
-                           "model": args.model, "effort": args.effort, "billing": args.billing,
-                           "env_file": args.env_file, "extra": extra}, handle)
+                json.dump(document, handle)
             return 0
         if args.command == "api-env":
             print("\n".join(harness(args.agent).api_env))
@@ -725,8 +770,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                                  env_file=args.env_file, environ=os.environ)
             sys.stdout.write("".join(part + "\0" for part in built.argv))
         else:
-            made = harness(args.agent).turn(model=args.model, effort=args.effort, cwd=args.cwd,
-                                            resume=args.resume, extra=args.extra_arg)
+            chosen = harness(args.agent)
+            build = chosen.persistent_turn if args.persistent else chosen.turn
+            made = build(model=args.model, effort=args.effort, cwd=args.cwd,
+                         resume=args.resume, extra=args.extra_arg)
             sys.stdout.write("\0".join((made.prompt_via, *made.argv)) + "\0")
     except (ValueError, OSError, json.JSONDecodeError) as error:
         print(f"agents: {error}", file=sys.stderr)

@@ -1,4 +1,4 @@
-"""Structural doctrine-parity guard tests, including scan sensitivity."""
+"""Planted policy losses must fail independently of the old document's size/ceremonies."""
 
 from __future__ import annotations
 
@@ -7,381 +7,145 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_doctrine_sync import check_repository
+from scripts.check_doctrine_sync import PRINCIPLES, RULES, check_repository
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _copy_guard_surface(tmp_path: Path) -> Path:
+@pytest.fixture
+def surface(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
-    root.mkdir()
-    for filename in ("README.md", "CLAUDE.md", "AGENTS.md"):
-        shutil.copy2(REPO_ROOT / filename, root / filename)
-    shutil.copytree(REPO_ROOT / "docs", root / "docs")
-    shutil.copytree(REPO_ROOT / "factory_core", root / "factory_core")
+    (root / "docs").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "docs/SOFTWARE-FACTORY.md", root / "docs/SOFTWARE-FACTORY.md")
+    shutil.copytree(REPO_ROOT / "prompts", root / "prompts")
+    assert check_repository(root) == ()
     return root
+
+
+def replace(root: Path, before: str, after: str) -> None:
+    path = root / "docs/SOFTWARE-FACTORY.md"
+    source = path.read_text()
+    assert before in source, "a mutation that changes no input cannot test this guard"
+    path.write_text(source.replace(before, after))
 
 
 def test_current_repository_doctrine_is_structurally_consistent() -> None:
     assert check_repository(REPO_ROOT) == ()
 
 
-def test_missing_role_directive_is_detected_structurally(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace("## Directive — Tester", "## Tester notes"),
-        encoding="utf-8",
+def test_retained_policy_inventory_cannot_silently_shrink() -> None:
+    # Independent policy inventory, not derived from what the checker happens to contain.
+    expected = """scope no-manual-signatures attestation-intent
+    concerns no-ceremony model-choice construction-authority tester-input
+    communication orchestrator no-lag-stop input-isolation scoped-memory self-reference independence
+    assignments capability platform-permissions critical-evidence risk-axes side-effects risk-owner
+    cited-evidence frozen-review reproduction unavailable-reproduction negative-control
+    positive-control
+    regression over-constraint determinism test-disposition no-test-weakening monitor-provenance
+    monitor-density monitor-authorship truthful-authorship monitor-triage monitor-state
+    notifications
+    recoverable-evidence model-record honest-model-record independence-record
+    coordination no-shell-input
+    delivery durability honesty""".split()
+    assert {name for name, _ in RULES} == set(expected)
+    assert len(RULES) == len(expected)
+    assert len(PRINCIPLES) == 8
+
+
+@pytest.mark.parametrize(("name", "requirement"), RULES, ids=[name for name, _ in RULES])
+def test_loss_of_each_retained_rule_is_detected(surface: Path, name: str, requirement: str) -> None:
+    replace(surface, requirement, "This requirement was removed.")
+    assert f"doctrine-rule-missing:{name}" in check_repository(surface)
+
+
+@pytest.mark.parametrize("principle", PRINCIPLES)
+def test_eight_principles_remain_protected(surface: Path, principle: str) -> None:
+    replace(surface, principle, "removed principle")
+    assert f"principle-missing:{principle}" in check_repository(surface)
+
+
+@pytest.mark.parametrize(
+    ("role", "filename"),
+    [
+        ("Validator", "validate.md"),
+        ("Orchestrator", "orchestrate.md"),
+        ("Coder", "engineer.md"),
+        ("Tester", "test.md"),
+    ],
+)
+def test_missing_role_directive_is_detected(surface: Path, role: str, filename: str) -> None:
+    (surface / "prompts" / filename).unlink()
+    assert f"missing-role-prompt:{role}" in check_repository(surface)
+
+
+def test_role_name_elsewhere_cannot_hide_lost_role_ownership(surface: Path) -> None:
+    replace(surface, "| Tester | Independently", "| Reviewer | Independently")
+    assert "role-map-mismatch" in check_repository(surface)
+
+
+def test_coder_cannot_become_its_own_judge(surface: Path) -> None:
+    replace(surface, "Implementation against the task and public contract.", "Accept its own work.")
+    assert "role-ownership-mismatch:Coder" in check_repository(surface)
+
+
+def test_coder_tester_direct_channel_is_detected(surface: Path) -> None:
+    replace(surface, "| Validator only |", "| Validator and peer author |")
+    errors = check_repository(surface)
+    assert "role-channel-mismatch:Coder" in errors
+    assert "role-channel-mismatch:Tester" in errors
+
+
+@pytest.mark.parametrize("role", ["Critical", "Standard", "Cosmetic"])
+def test_criticality_class_cannot_disappear(surface: Path, role: str) -> None:
+    replace(surface, f"| {role} |", "| Unclassified |")
+    assert "criticality-map-mismatch" in check_repository(surface)
+
+
+def test_critical_missing_evidence_cannot_be_waived(surface: Path) -> None:
+    replace(
+        surface, "No waiver can substitute for missing critical evidence.", "A waiver is enough."
     )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("role-directives-mismatch:") for error in errors)
+    assert "critical-gap-must-block" in check_repository(surface)
 
 
-def test_mutated_role_map_is_detected_even_when_name_remains_elsewhere(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    row = "| **Tester** | Validator only | Ratified build input only | The tests | Nothing |"
-    doctrine.write_text(
-        source.replace(
-            row,
-            "| **Reviewer** | Validator only | Ratified build input only | The tests | Nothing |",
-        ),
-        encoding="utf-8",
+def test_unknown_consequences_cannot_default_to_cosmetic(surface: Path) -> None:
+    replace(
+        surface,
+        "Unclassified behavior is treated as critical until examined.",
+        "Unknown behavior is cosmetic.",
     )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("role-map-mismatch:") for error in errors)
-
-
-def test_mutated_role_channel_is_detected_structurally(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    row = (
-        "| **Coder** | Validator only | Ratified build input + derived construction IR | "
-        "The implementation | Nothing it is judged by |"
-    )
-    doctrine.write_text(
-        source.replace(
-            row,
-            "| **Coder** | Nobody | Ratified build input + derived construction IR | "
-            "The implementation | Nothing it is judged by |",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("role-channel-map-mismatch:") for error in errors)
-
-
-def test_old_writer_to_judge_contradiction_cannot_return(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "does not control the judge, cannot negotiate the\n"
-            "> verdict, and cannot talk to the Tester.",
-            "does not control the judge, and cannot talk to them.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "core-doctrine-communication-mismatch" in errors
-
-
-def test_missing_criticality_class_is_detected_structurally(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    cosmetic_row = (
-        "| **Cosmetic** | Presentation, copy, layout, non-functional display where being wrong "
-        "costs an aesthetic defect and nothing else | Best available | Report and promote |"
-    )
-    doctrine.write_text(source.replace(cosmetic_row, ""), encoding="utf-8")
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("criticality-map-mismatch:") for error in errors)
-
-
-def test_oracle_criticality_matrix_cannot_silently_drift(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "| **Critical** | Promote after mandatory specialist review | **Block** |",
-            "| **Critical** | Promote after mandatory specialist review | Gate |",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "criticality-gate-matrix-mismatch" not in errors
-    assert "criticality-critical-gap-must-block" in errors
-
-
-def test_invariant_artifact_authority_cannot_be_replaced_by_a_ticket(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "> **Nothing outside these three authorizes a requirement.**",
-            "> **A ticket may authorize a requirement.**",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("invariant-document-rule-missing:") for error in errors)
-
-
-def test_recipe_book_cannot_be_promoted_into_behavioral_authority(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    rule = "it may not contain free behavioral authority."
-    assert rule in source
-    doctrine.write_text(
-        source.replace(rule, "it may add behavior when a standard pattern needs it."),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("construction-ir-rule-missing:") for error in errors)
-
-
-def test_tester_projection_cannot_receive_construction_ir(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    rule = "You never read the pattern catalog or build plan."
-    assert rule in source
-    doctrine.write_text(
-        source.replace(rule, "You may inspect the pattern catalog when useful."),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "tester-construction-ir-isolation-missing" in errors
-
-
-def test_missing_tool_tier_is_detected_structurally(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    row = (
-        "| **Verboten** | Not available | **Absent from the grant.** "
-        "Not present and forbidden — not present. |"
-    )
-    doctrine.write_text(source.replace(row, ""), encoding="utf-8")
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("tool-tier-map-mismatch:") for error in errors)
-
-
-def test_checklist_item_cannot_be_satisfied_by_recollection(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "an item is satisfied only by cited evidence.",
-            "an item may be satisfied by recollection.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "checklist-cited-evidence-rule-missing" in errors
-
-
-def test_the_red_guard_rule_cannot_be_softened_back_into_an_expectation(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "**A green guard that comes back red is not a forcing test.**",
-            "A green guard that comes back red usually means the spec moved.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "control-rule-missing:A green guard that comes back red is not a forcing test." in errors
-
-
-def test_signed_supersession_alone_cannot_authorize_a_test_change(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    rule = "firm affirmative recorded\nruling over its impact"
-    assert rule in source
-    doctrine.write_text(
-        source.replace(rule, "signed superseding item\nwithout a separate impact ruling"),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "existing-test-disposition-missing:firm affirmative recorded ruling" in errors
-
-
-def test_the_operational_control_names_cannot_be_dropped(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    row = (
-        "| **Negative** | **red-now** | The spec is not too weak | New tests must **fail** "
-        "against current broken main, at least one failing on the defect | The spec did not "
-        "catch the bug — rejected |"
-    )
-    assert row in source
-    doctrine.write_text(
-        source.replace(
-            row,
-            "| **Negative** | The spec is not too weak | New tests must **fail** against "
-            "current broken main | The spec did not catch the bug — rejected |",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "control-rule-missing:red-now" in errors
-
-
-def test_the_independence_tier_ladder_cannot_collapse_back_to_a_binary(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    row = (
-        "| **Moderate** | Same model, no shared context, **no channel** | Tuning to the oracle. "
-        "Still shares the frame. |"
-    )
-    assert row in source
-    doctrine.write_text(source.replace(row, ""), encoding="utf-8")
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("independence-tier-map-mismatch:") for error in errors)
-
-
-def test_a_monitor_may_not_become_authorized_without_resolution(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "**A monitor whose backreference does\nnot resolve is an unauthorized assertion "
-            "about production.**",
-            "A monitor should usually cite the criterion it watches.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("monitor-rule-missing:") for error in errors)
-
-
-def test_the_triage_silencing_prohibition_cannot_be_removed(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "> **An agent that evaluates an alert may not delete or weaken the monitor that "
-            "produced it.**",
-            "> An agent that evaluates an alert may tune the monitor that produced it.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("triage-rule-missing:") for error in errors)
-
-
-def test_the_reproduction_requirement_cannot_become_optional(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "**A defect is reproduced in a disposable environment before any repair is written, "
-            "and the\nreproduction is recorded.**",
-            "A defect is usually reproduced before a repair is written.",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("reproduction-rule-missing:") for error in errors)
-
-
-def test_per_agent_model_recording_cannot_leave_the_evidence_plane(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    doctrine.write_text(
-        source.replace(
-            "- **The model and version of every agent that produced or judged the change**, the",
-            "- The agents involved, and the",
-        ),
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert any(error.startswith("evidence-plane-record-missing:") for error in errors)
-
-
-def test_new_active_doc_cannot_escape_the_stale_commitment_scan(tmp_path: Path) -> None:
-    root = _copy_guard_surface(tmp_path)
-    new_surface = root / "docs" / "new-operating-guide.md"
-    new_surface.write_text(
-        "# New guide\n\nThe seven non-negotiables govern this process.\n",
-        encoding="utf-8",
-    )
-
-    errors = check_repository(root)
-
-    assert "stale-commitment:docs/new-operating-guide.md:the seven non-negotiables" in errors
-
-
-@pytest.mark.parametrize("requirement", [
-    "Monitor authorship is truthful, not a human gate.",
-    "generated monitors may cover Critical, Standard and cosmetic surfaces.",
-    "a claim of human authorship must still resolve to an enrolled human.",
-    "must remain spec-derived, understandable and bound to the criterion it watches.",
-])
-def test_monitor_authorship_and_provenance_requirements_cannot_disappear(
-    tmp_path: Path, requirement: str,
+    assert "unclassified-critical-default-missing" in check_repository(surface)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "docs/new.md",
+        "prompts/new.md",
+        "new.md",
+        "factory_runtime/new.py",
+        "harness/new.py",
+        "scripts/new.py",
+    ],
+)
+def test_new_active_surface_cannot_escape_stale_commitment_scan(
+    surface: Path, filename: str
 ) -> None:
-    root = _copy_guard_surface(tmp_path)
-    doctrine = root / "docs" / "SOFTWARE-FACTORY.md"
-    source = doctrine.read_text(encoding="utf-8")
-    assert source.count(requirement) == 1
-    doctrine.write_text(source.replace(requirement, "Requirement removed."), encoding="utf-8")
+    path = surface / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# The Orchestrator is invoked, not resident.\n")
+    assert f"stale-commitment:{filename}:invoked, not resident" in check_repository(surface)
 
-    assert f"monitor-authorship-rule-missing:{requirement}" in check_repository(root)
+
+def test_canonical_doc_is_also_scanned_for_contradictory_commitments(surface: Path) -> None:
+    path = surface / "docs/SOFTWARE-FACTORY.md"
+    path.write_text(path.read_text() + "\nThe Orchestrator is invoked, not resident.\n")
+    assert any(
+        error.startswith("stale-commitment:docs/SOFTWARE-FACTORY.md:")
+        for error in check_repository(surface)
+    )
+
+
+def test_missing_canonical_contract_is_not_green(surface: Path) -> None:
+    (surface / "docs/SOFTWARE-FACTORY.md").unlink()
+    assert check_repository(surface) == ("missing-canonical:docs/SOFTWARE-FACTORY.md",)

@@ -125,8 +125,6 @@ CLAUDE_COMMANDS_DIR ?= $(HOME)/.claude/commands
 INSTALL_ARGS = --bindir "$(BINDIR)" --commands-dir "$(CLAUDE_COMMANDS_DIR)" --tessera "$(FACTORY_TESSERA_BIN)"
 
 install: venv ## set up everything needed to use the factory, then run doctor
-	@if command -v cargo >/dev/null 2>&1; then $(MAKE) --no-print-directory tessera; \
-	else echo "install: cargo not found; skipping the Tessera build (doctor says how to fix)"; fi
 	@$(PY) scripts/install.py install $(INSTALL_ARGS)
 	@PATH="$(CALLER_PATH)" $(PY) scripts/install.py doctor $(INSTALL_ARGS)
 
@@ -195,7 +193,8 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/escalate.py harness/seat_supervisor.py harness/validator_mirror.py \
 		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
-		harness/spawn.py harness/with_secret.py
+		harness/spawn.py harness/with_secret.py harness/run_record.py harness/validate_candidate.py \
+		harness/persistent_lane.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
@@ -211,7 +210,8 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/escalate.py harness/seat_supervisor.py harness/validator_mirror.py \
 		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
-		harness/spawn.py harness/with_secret.py
+		harness/spawn.py harness/with_secret.py harness/run_record.py harness/validate_candidate.py \
+		harness/persistent_lane.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py
@@ -219,14 +219,17 @@ check-purity: check-python ## the anti-coupling guard (core imports nothing targ
 check-doctrine: check-python ## structural parity for active doctrine surfaces
 	$(PY) scripts/check_doctrine_sync.py
 
+HUMAN_GATES_ARGS ?=
+AUTHORITY_ARGS ?=
+
 check-human-gates: check-python ## P-0001: no false human gate or run-wide stop in the factory's own prompts, docs or code
-	$(PY) scripts/check_no_human_gates.py
+	$(PY) scripts/check_no_human_gates.py $(HUMAN_GATES_ARGS)
 
 check-wiring: check-python ## fail-closed wiring audit (every provided service reachable from an entrypoint)
 	$(PY) scripts/check_wiring.py
 
 check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's authority seam
-	$(PY) scripts/check_forbidden_authority.py
+	$(PY) scripts/check_forbidden_authority.py $(AUTHORITY_ARGS)
 
 # The harness gate is syntactic + chain-integrity only: scripts parse, are executable,
 # and any local directive ledger verifies. Behavioral enforcement (forced-negative

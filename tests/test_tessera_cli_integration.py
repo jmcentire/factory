@@ -1258,68 +1258,48 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
     )
     assert tree_digest(coder_snapshot.files_directory / "artifact") == outcome.candidate_digest
 
-    # The shared shell loader must reopen a PREVIEW run through the same externally pinned
-    # genesis/root/Tessera tuple used by the resume gate.  A structural RunStore can replay
-    # intake, but it must fail closed at PREVIEW because the retained evidence envelope requires
-    # authenticated signer verification.
-    resume_config_manifest = tmp_path / "resume-config.manifest"
-    resume_config_manifest.write_text(
-        f"runner={resume_config.resolve()}\n",
-        encoding="utf-8",
-    )
+    # The optional historical runtime replays PREVIEW through its explicit CLI,
+    # not through the ordinary task loader. Missing external anchors must still fail.
     repository_root = Path(__file__).resolve().parents[1]
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
-            "FACTORY_RESUME_CHECKPOINT": str(resume_checkpoint),
-            "FACTORY_RESUME_CHECKPOINT_DIGEST": digest_obj(resume_checkpoint_document),
-            "FACTORY_GENESIS": str(genesis_path),
-            "FACTORY_ROOT_PUBLIC_KEY": root_public_key,
-            "FACTORY_TESSERA_BIN": str(binary.resolve(strict=True)),
-            "FACTORY_RESUME_CONFIG_MANIFEST": str(resume_config_manifest),
-            "PYTHONPATH": os.pathsep.join(
-                filter(
-                    None,
-                    (str(repository_root), environment.get("PYTHONPATH", "")),
-                )
-            ),
-        }
+    anchors = ["--genesis", str(genesis_path), "--root-public-key", root_public_key,
+               "--tessera-bin", str(binary.resolve(strict=True))]
+
+    def replay(command: str, *arguments: str, anchored: bool = True):
+        return subprocess.run(
+            [sys.executable, "-m", "factory_runtime.cli", command,
+             "--runs", str(workflow.root), "--run-id", "synthetic-run",
+             *(anchors if anchored else []), *arguments],
+            cwd=repository_root, capture_output=True, text=True,
+        )
+
+    checkpoint = replay(
+        "verify-resume-checkpoint", "--checkpoint", str(resume_checkpoint),
+        "--checkpoint-digest", digest_obj(resume_checkpoint_document),
+        "--config-source", f"runner={resume_config.resolve()}",
     )
+    assert checkpoint.returncode == 0, checkpoint.stderr
     post_preview_resource = tmp_path / "post-preview-resource"
     post_preview_resource.mkdir()
-    harness_replay = subprocess.run(
-        [
-            "/bin/bash",
-            "-c",
-            'set -euo pipefail; source "$1"; factory_load_context "$2" "$3"; '
-            'factory_record_resource --runs "$3" --run-id "$2" '
-            "--resource-id post-preview-proof --resource-type object-store "
-            '--identifier "$4" --creator-action integration-test --ownership run-owned '
-            "--baseline-json '{\"absent_at_plan\":true}' --status planned "
-            "--actor integration-test >/dev/null; "
-            'factory_disposition_resource --runs "$3" --run-id "$2" '
-            "--resource-id post-preview-proof --status failed "
-            '--reason "injected disposition for authenticated replay proof" --residue true '
-            "--actor integration-test >/dev/null; "
-            'factory_disposition_resource --runs "$3" --run-id "$2" '
-            "--resource-id post-preview-proof --status retained "
-            '--reason "retained authenticated replay proof" --residue true '
-            "--actor integration-test >/dev/null; "
-            'printf "%s\\n" "$FACTORY_RUN_STATE"',
-            "factory-preview-replay",
-            str(repository_root / "harness" / "run_context.sh"),
-            "synthetic-run",
-            str(workflow.root),
-            str(post_preview_resource),
-        ],
-        cwd=tmp_path,
-        env=environment,
-        capture_output=True,
-        text=True,
-    )
-    assert harness_replay.returncode == 0, harness_replay.stderr
-    assert harness_replay.stdout.strip() == "preview"
+    resource_arguments = [
+        "--resource-id", "post-preview-proof", "--resource-type", "object-store",
+        "--identifier", str(post_preview_resource), "--creator-action", "integration-test",
+        "--ownership", "run-owned", "--baseline-json", '{"absent_at_plan":true}',
+        "--status", "planned", "--actor", "integration-test",
+    ]
+    refused = replay("record-resource", *resource_arguments, anchored=False)
+    assert refused.returncode != 0
+    assert "post-preview-proof" not in ResourceLedger(
+        workflow.root / "synthetic-run", "synthetic-run",
+    ).latest()
+    recorded = replay("record-resource", *resource_arguments)
+    assert recorded.returncode == 0, recorded.stderr
+    for status in ("failed", "retained"):
+        disposition = replay(
+            "disposition-resource", "--resource-id", "post-preview-proof",
+            "--status", status, "--reason", f"{status} authenticated replay proof",
+            "--residue", "true", "--actor", "integration-test",
+        )
+        assert disposition.returncode == 0, disposition.stderr
     retained_resource = ResourceLedger(
         workflow.root / "synthetic-run",
         "synthetic-run",

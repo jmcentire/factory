@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed structural parity guard for the active factory doctrine surfaces.
+"""Check the current four-role contract and active doctrine consistency.
 
-The canonical specification is intentionally prose, but its load-bearing shape is structural:
-sixteen numbered system sections plus §3.5 Criticality and §4.5 Invariant documents, three
-phase headings, four role directives, a four-row role map, three criticality classes, and
-eight numbered non-negotiables. This guard parses those structures rather than asking whether
-a phrase happens to occur somewhere in the file.
-
-It also scans every active Markdown surface (including future files) and core module for
-superseded commitment phrases. Historical provenance is explicitly excluded: a history should
-not be rewritten merely to make the present-tense parity scan green.
+This remains a mandatory release check. It protects role ownership, independent
+inputs, critical coverage, permission boundaries and truthful evidence. Exact
+section counts, signed phase documents and catalog ceremony were superseded by
+the user's direct cleanup instruction; their removal is not removal of those
+substantive protections. Behavioral tests, not this prose check, prove runtime
+properties. Every retained rule has a planted-deletion regression.
 """
 
 from __future__ import annotations
@@ -22,81 +19,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CANONICAL = Path("docs/SOFTWARE-FACTORY.md")
 HISTORICAL_MARKDOWN = frozenset({Path("docs/PROVENANCE-SYNC.md")})
-
-EXPECTED_PART_I_SECTIONS: tuple[str, ...] = (
-    "1. What this is, and why",
-    "2. What already exists, and what is missing from it",
-    "3. The four roles",
-    "3.5. Criticality",
-    "4. The three phases",
-    "4.5. Invariant documents",
-    "5. Translation boundaries",
-    "6. What is shared and what is independent",
-    "7. The eight non-negotiables",
-    "8. Two flows, one structure",
-    "9. The environment ladder",
-    "10. The build loop",
-    "11. The gate",
-    "12. The evidence plane",
-    "13. The factory is itself a regulated system",
-    "14. What the factory cannot reach",
-    "15. What changes for engineers",
-    "16. The core guarantee",
-)
-
-EXPECTED_PHASE_HEADINGS: tuple[str, ...] = (
-    "Phase 1 — Product specification",
-    "Phase 2 — Architecture",
-    "Phase 3 — Operational maturity",
-)
-
-EXPECTED_ROLE_DIRECTIVES: tuple[str, ...] = (
-    "Directive — Validator",
-    "Directive — Orchestrator",
-    "Directive — Coder",
-    "Directive — Tester",
-)
-
-EXPECTED_ROLE_ROWS: tuple[str, ...] = ("Validator", "Orchestrator", "Coder", "Tester")
-EXPECTED_ROLE_CHANNELS: tuple[tuple[str, str], ...] = (
-    ("Validator", "Human, Coder, Tester"),
-    ("Orchestrator", "Human, Validator"),
-    ("Coder", "Validator only"),
-    ("Tester", "Validator only"),
-)
-EXPECTED_PHASE_ROWS: tuple[str, ...] = (
-    "1. Product spec",
-    "2. Architecture",
-    "3. Operational maturity",
-)
-EXPECTED_CRITICALITY_ROWS: tuple[str, ...] = ("Critical", "Standard", "Cosmetic")
-EXPECTED_INVARIANT_ARTIFACT_ROWS: tuple[str, ...] = (
-    "Product Specification",
-    "Architecture Specification",
-    "Testing and Monitoring Strategy",
-)
-EXPECTED_TOOL_TIER_ROWS: tuple[str, ...] = ("Allowed", "Sign-off required", "Verboten")
-
-EXPECTED_INDEPENDENCE_TIER_ROWS: tuple[str, ...] = (
-    "Weakest",
-    "Weak",
-    "Moderate",
-    "Stronger",
-    "Strongest",
-)
-
-EXPECTED_CONTROL_ROWS: tuple[str, ...] = ("Negative", "Positive")
-
-EXPECTED_NON_NEGOTIABLES: tuple[str, ...] = (
-    "Fail closed on the hazards",
-    "Single authoritative owner per fact",
-    "Least privilege",
-    "Full auditability",
-    "No silent failure",
-    "Honesty in docs and self-reports",
-    "Provenance of intent",
-    "Live-verified, not self-attested",
-)
 
 STALE_COMMITMENTS: tuple[str, ...] = (
     "the seven non-negotiables",
@@ -119,7 +41,6 @@ STALE_COMMITMENTS: tuple[str, ...] = (
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-_NON_NEGOTIABLE_RE = re.compile(r"^\*\*(\d+)\.\s+(.+?)\.\*\*")
 
 
 def _read(root: Path, relative: Path) -> str:
@@ -211,9 +132,7 @@ def _active_markdown(root: Path) -> tuple[Path, ...]:
     # joins the scanned surface set — a new file is scanned with no registration
     # step. Generated ROLE-DOCTRINE.md and historical/proposal surfaces stay out.
     root_docs = tuple(
-        path.relative_to(root)
-        for path in sorted(root.glob("*.md"))
-        if path.is_file()
+        path.relative_to(root) for path in sorted(root.glob("*.md")) if path.is_file()
     )
     docs = tuple(
         path.relative_to(root)
@@ -224,9 +143,7 @@ def _active_markdown(root: Path) -> tuple[Path, ...]:
         and "proposals" not in path.parts
         and path.name != "ROLE-DOCTRINE.md"
     )
-    prompts = tuple(
-        path.relative_to(root) for path in sorted((root / "prompts").rglob("*.md"))
-    )
+    prompts = tuple(path.relative_to(root) for path in sorted((root / "prompts").rglob("*.md")))
     return root_docs + docs + prompts
 
 
@@ -235,322 +152,292 @@ def _active_python(root: Path) -> tuple[Path, ...]:
     # scope — the same one-line rglob per tree.
     trees = ("factory_core", "factory_runtime", "harness", "scripts")
     return tuple(
-        path.relative_to(root)
-        for tree in trees
-        for path in sorted((root / tree).rglob("*.py"))
+        path.relative_to(root) for tree in trees for path in sorted((root / tree).rglob("*.py"))
     )
+
+
+# One canonical statement per policy; prompts are role-specific applications.
+# These checks deliberately retain meaningful policy while allowing concise prose.
+RULES: tuple[tuple[str, str], ...] = (
+    (
+        "scope",
+        "The current user request is authoritative intent.",
+    ),
+    ("no-manual-signatures", "No manual signature or repeated authorization ceremony is required."),
+    ("attestation-intent", "verify that the claimed action and scope follow it"),
+    (
+        "concerns",
+        "the requested capability, architecture guidance, and testing/monitoring strategy",
+    ),
+    (
+        "no-ceremony",
+        "No catalog, signing key, human receipt, phase ratification, external checkpoint",
+    ),
+    (
+        "model-choice",
+        "There is no model approval list.",
+    ),
+    (
+        "construction-authority",
+        "they cannot add requirements or change expected behavior",
+    ),
+    (
+        "tester-input",
+        "The Tester never receives the Coder's construction plan, recipe selection or "
+        "implementation.",
+    ),
+    (
+        "communication",
+        "The writer of a fix does not control the judge, cannot negotiate the "
+        "verdict, and cannot talk to the Tester.",
+    ),
+    (
+        "orchestrator",
+        "The Orchestrator continuously watches all roles, owns strategic oversight "
+        "and process adherence",
+    ),
+    (
+        "no-lag-stop",
+        "no supervisor suspending productive roles for review lag",
+    ),
+    (
+        "input-isolation",
+        "A clean clone alone does not protect the Tester from implementation or the "
+        "Coder from independent test details.",
+    ),
+    (
+        "scoped-memory",
+        "the live author graphs are not a shared communication channel",
+    ),
+    (
+        "self-reference",
+        "the Validator helped interpret the specification and then judges against it",
+    ),
+    (
+        "independence",
+        "Input separation and model diversity address different failure modes.",
+    ),
+    (
+        "assignments",
+        "Explicit assignments govern.",
+    ),
+    (
+        "capability",
+        "A forbidden capability must be unavailable to the agent, not merely "
+        "discouraged in a prompt.",
+    ),
+    (
+        "platform-permissions",
+        "Actual platform permissions govern tool use; Factory cannot grant them or "
+        "click through their dialogs.",
+    ),
+    (
+        "critical-evidence",
+        "an unresolved critical coverage gap blocks acceptance of that behavior",
+    ),
+    (
+        "risk-axes",
+        "Oracle adequacy and consequence severity are separate questions",
+    ),
+    (
+        "side-effects",
+        "The classification includes the surfaces reached by side effects.",
+    ),
+    (
+        "risk-owner",
+        "The Validator assigns it per component and reachable surface.",
+    ),
+    (
+        "cited-evidence",
+        "An acceptance claim needs cited evidence; an unchecked item remains a visible gap.",
+    ),
+    (
+        "frozen-review",
+        "Review the exact frozen candidate, not a moving working tree.",
+    ),
+    (
+        "reproduction",
+        "reproduce the defect in a disposable environment when possible and retain "
+        "the failing result",
+    ),
+    (
+        "unavailable-reproduction",
+        "If reproduction is unavailable, state what remains unproven.",
+    ),
+    (
+        "negative-control",
+        "The negative control demonstrates the defect on the broken baseline",
+    ),
+    (
+        "positive-control",
+        "the positive control protects behavior that already works",
+    ),
+    (
+        "regression",
+        "A previously passing control that fails after a change is a regression to investigate",
+    ),
+    (
+        "over-constraint",
+        "Suspected over-constraint is a concrete contract question for the Validator.",
+    ),
+    (
+        "determinism",
+        "Critical deterministic guarantees need deterministic evidence; repeating a "
+        "flaky check until green is not qualification.",
+    ),
+    (
+        "test-disposition",
+        "the Validator determines whether the candidate violates its intended "
+        "contract, the baseline was already broken, or the test asserts obsolete "
+        "behavior",
+    ),
+    (
+        "no-test-weakening",
+        "The author may not silently weaken the test to claim success.",
+    ),
+    (
+        "monitor-provenance",
+        "each monitor must be understandable and traceable to the criterion it watches",
+    ),
+    (
+        "monitor-density",
+        "monitor count is diagnostic, not a target",
+    ),
+    (
+        "monitor-authorship",
+        "Generated monitors may cover any criticality class.",
+    ),
+    (
+        "truthful-authorship",
+        "never label agent output as human-authored or require human authorship as a gate",
+    ),
+    (
+        "monitor-triage",
+        "An alert-triage agent must not delete or weaken the monitor that raised its alert.",
+    ),
+    (
+        "monitor-state",
+        "Retain monitor state outside the agent's transient context.",
+    ),
+    (
+        "notifications",
+        "ensure each notification communicates a meaningful finding or requested action",
+    ),
+    (
+        "recoverable-evidence",
+        "Retain the recoverable subjects as well as their hashes.",
+    ),
+    (
+        "model-record",
+        "Record each role's assigned and observed model/client version",
+    ),
+    (
+        "honest-model-record",
+        "distinguishing unknown values and configured choices from live observations",
+    ),
+    (
+        "independence-record",
+        "Record the actual independence arrangement and its limits",
+    ),
+    (
+        "coordination",
+        "Keep transient coordination out of product commits",
+    ),
+    (
+        "no-shell-input",
+        "All coordination text is data.",
+    ),
+    (
+        "delivery",
+        "A queued message is not an acknowledgment.",
+    ),
+    (
+        "durability",
+        "Optional log suppression never discards decisions, blockers or handoffs.",
+    ),
+    (
+        "honesty",
+        "It does not assert that every implementation path or native provider is qualified.",
+    ),
+)
+PRINCIPLES = (
+    "fail closed on hazards",
+    "one authoritative owner per fact",
+    "least privilege",
+    "auditability",
+    "no silent failure",
+    "honest documentation and reports",
+    "provenance of intent",
+    "observed verification rather than self-attestation",
+)
+ROLES = {
+    "Validator": ("validate.md", "User, Orchestrator, Coder, Tester", "accept or reject"),
+    "Orchestrator": (
+        "orchestrate.md",
+        "User, Validator; typed author status probes",
+        "Resident strategic oversight",
+    ),
+    "Coder": ("engineer.md", "Validator only", "Implementation against the task"),
+    "Tester": ("test.md", "Validator only", "Independently derive and implement checks"),
+}
 
 
 def check_repository(root: Path = ROOT) -> tuple[str, ...]:
-    errors: list[str] = []
-    canonical_path = root / CANONICAL
-    if not canonical_path.exists():
+    if not (root / CANONICAL).is_file():
         return (f"missing-canonical:{CANONICAL}",)
-
+    errors: list[str] = []
     canonical = _read(root, CANONICAL)
-    headings = _headings(canonical)
-
-    h1 = tuple(title for level, title in headings if level == 1)
-    expected_h1 = (
-        "The Software Factory",
-        "Part I — The System",
-        "Part II — Role Directives",
-    )
-    if h1 != expected_h1:
-        errors.append(f"canonical-h1-mismatch:{h1!r}")
-
-    part_i_lines = _section_lines(canonical, 1, "Part I — The System")
-    part_i_headings = tuple(
-        title for level, title in _headings("\n".join(part_i_lines)) if level == 2
-    )
-    if part_i_headings != EXPECTED_PART_I_SECTIONS:
-        errors.append(f"part-i-sections-mismatch:{part_i_headings!r}")
-
-    phase_section = _section_lines(canonical, 2, "4. The three phases")
-    phase_headings = tuple(
-        title
-        for level, title in _headings("\n".join(phase_section))
-        if level == 3 and title.startswith("Phase ")
-    )
-    if phase_headings != EXPECTED_PHASE_HEADINGS:
-        errors.append(f"phase-headings-mismatch:{phase_headings!r}")
-
-    invariant_documents = _section_lines(canonical, 2, "4.5. Invariant documents")
-    invariant_rows = _table_first_column(invariant_documents)
-    if invariant_rows != EXPECTED_INVARIANT_ARTIFACT_ROWS:
-        errors.append(f"invariant-artifact-map-mismatch:{invariant_rows!r}")
-    invariant_text = _normalized("\n".join(invariant_documents))
-    for required in (
-        "Signed.",
-        "Content-addressed.",
-        "Immutable for the run.",
-        "Amendable only through the specification-defect path.",
-        "Nothing outside these three authorizes a requirement.",
-        "A trivial change collapses the three phases into one confirmation.",
+    normalized = _normalized(canonical)
+    if tuple(title for level, title in _headings(canonical) if level == 1) != ("Software Factory",):
+        errors.append("canonical-title-mismatch")
+    for name, required in RULES:
+        if required not in normalized:
+            errors.append(f"doctrine-rule-missing:{name}")
+    for required in PRINCIPLES:
+        if required not in normalized:
+            errors.append(f"principle-missing:{required}")
+    rows = _table_rows(_section_lines(canonical, 2, "Decisions that remain necessary"))
+    if tuple(row[0] for row in rows) != tuple(ROLES):
+        errors.append("role-map-mismatch")
+    by_role = {row[0]: row for row in rows}
+    for role, (filename, channel, responsibility) in ROLES.items():
+        row = by_role.get(role, ())
+        if len(row) != 4 or row[2] != channel:
+            errors.append(f"role-channel-mismatch:{role}")
+        if len(row) != 4 or responsibility not in row[1]:
+            errors.append(f"role-ownership-mismatch:{role}")
+        prompt = root / "prompts" / filename
+        if not prompt.is_file():
+            errors.append(f"missing-role-prompt:{role}")
+            continue
+        text = prompt.read_text(encoding="utf-8")
+        if not text.startswith(f"# {role}\n"):
+            errors.append(f"role-prompt-title-mismatch:{role}")
+        if "Kindex" not in text:
+            errors.append(f"role-memory-guidance-missing:{role}")
+    criticality = _table_rows(_section_lines(canonical, 2, "Evidence and consequences"))
+    if tuple(row[0] for row in criticality) != ("Critical", "Standard", "Cosmetic"):
+        errors.append("criticality-map-mismatch")
+    critical = next((row for row in criticality if row[0] == "Critical"), ())
+    if (
+        len(critical) != 3
+        or "No waiver can substitute for missing critical evidence." not in critical[2]
     ):
-        if required not in invariant_text:
-            errors.append(f"invariant-document-rule-missing:{required}")
-
-    construction_ir = _normalized(
-        "\n".join(
-            _section_lines(canonical, 3, "Recipes are derived construction IR, not authority")
-        )
-    )
-    for required in (
-        "It is not a fourth invariant document.",
-        "it may not contain free behavioral authority.",
-        (
-            "The Tester receives only the ratified build input, never the plan, catalog, "
-            "or Coder output"
-        ),
-        (
-            "Cheap rewriting is freedom to replace an implementation, not permission to "
-            "move the target."
-        ),
+        errors.append("critical-gap-must-block")
+    if (
+        len(critical) != 3
+        or "Unclassified behavior is treated as critical until examined." not in critical[1]
     ):
-        if required not in construction_ir:
-            errors.append(f"construction-ir-rule-missing:{required}")
-
-    criticality_section = _section_lines(canonical, 2, "3.5. Criticality")
-    criticality_rows = _table_first_column(criticality_section)
-    if criticality_rows != EXPECTED_CRITICALITY_ROWS:
-        errors.append(f"criticality-map-mismatch:{criticality_rows!r}")
-    criticality_text = _normalized("\n".join(criticality_section))
-    if "An unclassified surface is critical." not in criticality_text:
         errors.append("unclassified-critical-default-missing")
-    if "including the surfaces its side effects reach" not in criticality_text:
-        errors.append("side-effect-criticality-inheritance-missing")
-
-    role_directives = tuple(
-        title for level, title in headings if level == 2 and title.startswith("Directive — ")
-    )
-    if role_directives != EXPECTED_ROLE_DIRECTIVES:
-        errors.append(f"role-directives-mismatch:{role_directives!r}")
-
-    role_section = _section_lines(canonical, 3, "Roles")
-    role_rows = _table_first_column(role_section)
-    if role_rows != EXPECTED_ROLE_ROWS:
-        errors.append(f"role-map-mismatch:{role_rows!r}")
-    role_channels = tuple((row[0], row[1]) for row in _table_rows(role_section) if len(row) >= 2)
-    if role_channels != EXPECTED_ROLE_CHANNELS:
-        errors.append(f"role-channel-map-mismatch:{role_channels!r}")
-
-    phase_rows = _table_first_column(_section_lines(canonical, 3, "Phases"))
-    if phase_rows != EXPECTED_PHASE_ROWS:
-        errors.append(f"phase-map-mismatch:{phase_rows!r}")
-
-    non_negotiable_lines = _section_lines(canonical, 2, "7. The eight non-negotiables")
-    numbered: list[tuple[int, str]] = []
-    for line in non_negotiable_lines:
-        match = _NON_NEGOTIABLE_RE.match(line)
-        if match:
-            numbered.append((int(match.group(1)), match.group(2)))
-    expected_numbered = tuple(enumerate(EXPECTED_NON_NEGOTIABLES, start=1))
-    if tuple(numbered) != expected_numbered:
-        errors.append(f"non-negotiables-mismatch:{tuple(numbered)!r}")
-
-    status = "\n".join(_section_lines(canonical, 2, "Status of this document")).casefold()
-    if "this document specifies the system. it does not report the system." not in status:
-        errors.append("status-honesty-boundary-missing")
-    if "readme.md#doctrine--code-mapping" not in status:
-        errors.append("operational-guide-link-missing")
-
-    shared_foundation = _normalized("\n".join(_section_lines(canonical, 2, "Shared foundation")))
-    communication_contract = (
-        "The writer of a fix does not control the judge, cannot negotiate the verdict, "
-        "and cannot talk to the Tester."
-    )
-    if communication_contract not in shared_foundation:
-        errors.append("core-doctrine-communication-mismatch")
     if "Working-copy question" in canonical:
         errors.append("unresolved-working-copy-question")
-
-    determinism = _section_lines(canonical, 3, "Determinism is class-scoped, and retry is search")
-    determinism_rows = _table_first_column(determinism)
-    if determinism_rows != EXPECTED_CRITICALITY_ROWS:
-        errors.append(f"determinism-policy-mismatch:{determinism_rows!r}")
-
-    gate_axes = _section_lines(canonical, 3, "The two axes compose")
-    gate_rows = _table_first_column(gate_axes)
-    if gate_rows != EXPECTED_CRITICALITY_ROWS:
-        errors.append(f"criticality-gate-matrix-mismatch:{gate_rows!r}")
-    gate_matrix = _table_rows(gate_axes)
-    critical_row = next((row for row in gate_matrix if row and row[0] == "Critical"), ())
-    if len(critical_row) < 3 or critical_row[2] != "Block":
-        errors.append("criticality-critical-gap-must-block")
-    gate_text = _normalized("\n".join(gate_axes))
-    if "Oracle adequacy and criticality are independent and both apply." not in gate_text:
-        errors.append("oracle-criticality-independence-missing")
-
-    checklist_gate = _normalized(
-        "\n".join(_section_lines(canonical, 3, "A gate is a checklist, not a recollection"))
-    )
-    if "an item is satisfied only by cited evidence" not in checklist_gate:
-        errors.append("checklist-cited-evidence-rule-missing")
-    if "an unchecked item is a visible gap" not in checklist_gate:
-        errors.append("checklist-visible-gap-rule-missing")
-
-    existing_test = _normalized(
-        "\n".join(_section_lines(canonical, 3, "When an existing test fails"))
-    )
-    for required in (
-        "The control is authorization, not immutability",
-        "immutable by default",
-        "firm affirmative recorded ruling",
-        "membership-frozen test family",
-        "Fix the code, not the test.",
-        "The Validator decides it",
-    ):
-        if required not in existing_test:
-            errors.append(f"existing-test-disposition-missing:{required}")
-
-    # The errata's corrections and additions are structural, not decorative: each one closes a
-    # failing leg that the prose previously left to inference.
-    controls = _section_lines(canonical, 3, "The two controls")
-    control_rows = _table_first_column(controls)
-    if control_rows != EXPECTED_CONTROL_ROWS:
-        errors.append(f"correction-control-map-mismatch:{control_rows!r}")
-    controls_text = _normalized("\n".join(controls))
-    for required in (
-        "red-now",
-        "green-now",
-        "A green guard that comes back red is not a forcing test.",
-        "suspected over-constraint",
-        "The recognition check runs at test-writing time.",
-    ):
-        if required not in controls_text:
-            errors.append(f"control-rule-missing:{required}")
-
-    reproduction = _normalized(
-        "\n".join(
-            _section_lines(canonical, 3, "Reproduction is the correction flow's negative control")
-        )
-    )
-    for required in (
-        "A defect is reproduced in a disposable environment before any repair is written",
-        "that is a stated condition of the lane and it gates",
-    ):
-        if required not in reproduction:
-            errors.append(f"reproduction-rule-missing:{required}")
-
-    self_reference = _normalized(
-        "\n".join(
-            _section_lines(
-                canonical,
-                3,
-                "The Validator judges against a spec it helped write",
-            )
-        )
-    )
-    if "This is a real limitation rather than a clean separation." not in self_reference:
-        errors.append("validator-self-reference-limitation-missing")
-
-    independence = _section_lines(canonical, 3, "Independence is graded, not binary")
-    independence_rows = _table_first_column(independence)
-    if independence_rows != EXPECTED_INDEPENDENCE_TIER_ROWS:
-        errors.append(f"independence-tier-map-mismatch:{independence_rows!r}")
-    independence_text = _normalized("\n".join(independence))
-    if "The tier is recorded in the manifest" not in independence_text:
-        errors.append("independence-tier-recording-rule-missing")
-
-    monitors = _normalized(
-        "\n".join(_section_lines(canonical, 3, "Monitors are spec-derived, not diff-derived"))
-    )
-    for required in (
-        "A monitor whose backreference does not resolve is an unauthorized assertion about "
-        "production.",
-        "Monitor density is a diagnostic, never a target.",
-    ):
-        if required not in monitors:
-            errors.append(f"monitor-rule-missing:{required}")
-
-    triage = _normalized(
-        "\n".join(_section_lines(canonical, 3, "The triage agent may not silence the monitor"))
-    )
-    for required in (
-        "An agent that evaluates an alert may not delete or weaken the monitor that produced it.",
-        "State lives on the monitor rather than in the agent.",
-    ):
-        if required not in triage:
-            errors.append(f"triage-rule-missing:{required}")
-
-    notification = _normalized(
-        "\n".join(_section_lines(canonical, 3, "Detect everything, notify selectively"))
-    )
-    if "Every alert that reaches a human means something." not in notification:
-        errors.append("notification-earned-rule-missing")
-
-    criticality_monitors = _normalized("\n".join(criticality_section))
-    for required in (
-        "Monitor authorship is truthful, not a human gate.",
-        "generated monitors may cover Critical, Standard and cosmetic surfaces.",
-        "a claim of human authorship must still resolve to an enrolled human.",
-        "must remain spec-derived, understandable and bound to the criterion it watches.",
-    ):
-        if required not in criticality_monitors:
-            errors.append(f"monitor-authorship-rule-missing:{required}")
-
-    evidence_plane = _normalized("\n".join(_section_lines(canonical, 2, "12. The evidence plane")))
-    for required in (
-        "The model and version of every agent that produced or judged the change",
-        "the **independence tier** of the arrangement they ran in",
-        "working coordination between the roles is ephemeral and never committed",
-        "a manifest of hashes without the recoverable subjects does not satisfy this record",
-    ):
-        if required not in evidence_plane:
-            errors.append(f"evidence-plane-record-missing:{required}")
-
-    tools = _section_lines(canonical, 3, "Tools and integrations")
-    tool_rows = _table_first_column(tools)
-    if tool_rows != EXPECTED_TOOL_TIER_ROWS:
-        errors.append(f"tool-tier-map-mismatch:{tool_rows!r}")
-    tools_text = _normalized("\n".join(tools))
-    if "A prohibition an agent can execute is a suggestion." not in tools_text:
-        errors.append("verboten-capability-absence-rule-missing")
-    if "The tool policy is itself an invariant document." not in tools_text:
-        errors.append("tool-policy-invariant-rule-missing")
-
-    validator = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Validator")))
-    if "Assign criticality per component and externally reachable surface." not in validator:
-        errors.append("validator-criticality-assignment-missing")
-    if "You never promote a Critical surface on a waiver." not in validator:
-        errors.append("validator-critical-no-waiver-missing")
-    if "Dispose of failing existing tests by authorization, not by preference." not in validator:
-        errors.append("validator-existing-test-disposition-missing")
-    if "Compile and verify the construction IR after ratification." not in validator:
-        errors.append("validator-construction-ir-boundary-missing")
-    if "Freeze before review." not in validator:
-        errors.append("validator-review-freeze-missing")
-    if "Externalize as you go." not in validator:
-        errors.append("validator-checklist-externalization-missing")
-
-    coder = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Coder")))
-    if "A capability you do not hold is a decision someone made." not in coder:
-        errors.append("coder-tool-policy-prohibition-missing")
-    if "Treat the build plan as mechanism, not authority." not in coder:
-        errors.append("coder-construction-ir-boundary-missing")
-
-    tester = _normalized("\n".join(_section_lines(canonical, 2, "Directive — Tester")))
-    if "Write deterministically on critical surfaces." not in tester:
-        errors.append("tester-critical-determinism-missing")
-    if "Report contradictions; do not resolve them." not in tester:
-        errors.append("tester-existing-test-contradiction-rule-missing")
-    if "Alter an existing expectation only under an exact test-change authorization." not in tester:
-        errors.append("tester-test-change-authorization-missing")
-    if "You never read the pattern catalog or build plan." not in tester:
-        errors.append("tester-construction-ir-isolation-missing")
-
-    for path in _active_markdown(root) + _active_python(root):
+    for path in (CANONICAL, *_active_markdown(root), *_active_python(root)):
         if path.name == "check_doctrine_sync.py":
-            # The denylist's own definition site: the tokens appear here as the
-            # LIST, not as commitments — a denylist that flagged itself would
-            # make every entry unaddable.
-            continue
+            continue  # The list's definition is not an operating instruction.
         text = _read(root, path).casefold()
         for stale in STALE_COMMITMENTS:
             if stale in text:
                 errors.append(f"stale-commitment:{path}:{stale}")
-
     return tuple(dict.fromkeys(errors))
 
 
@@ -562,9 +449,8 @@ def main() -> int:
             print(f"  {error}")
         return 1
     print(
-        "check_doctrine_sync: GREEN — canonical four-role/three-phase/eight-rule structure, "
-        "invariant artifacts, tool policy, checklist/test disposition, criticality/determinism, "
-        "communication contract, and active-surface parity hold"
+        "check_doctrine_sync: GREEN — four roles, independent inputs, critical evidence, "
+        "permissions, provenance and active-surface consistency checked"
     )
     return 0
 

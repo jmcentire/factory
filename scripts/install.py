@@ -273,7 +273,7 @@ def _timeout_check(path_env: str) -> Check:
 
 
 def doctor(layout: Layout, path_env: str) -> list[Check]:
-    checks = [_python_check(layout), _tessera_check(layout, path_env)]
+    checks = [_python_check(layout)]
     checks += _launcher_check(layout, path_env)
     checks += _loader_checks(layout)
     checks.append(_kindex_check(path_env))

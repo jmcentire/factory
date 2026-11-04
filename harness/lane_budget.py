@@ -3,10 +3,10 @@
 
 ``harness.json`` carries the run's objective budget (``factory.sh --budget <usd>``). Every
 metered lane start reserves its ceiling in ``budget-reservations.jsonl`` before it starts:
-``dispatch_lane.sh`` reserves the qualified runner's ``max_cost_microusd``, ``tmux_lane.sh``
-reserves a metered round's spend cap. The ledger is a hash chain; a start whose ceiling would
-take the sum of reservations past the objective budget is refused, and a run with no objective
-budget cannot start a metered lane at all.
+``tmux_lane.sh`` reserves a metered round's spend cap. Historical runtime callers may
+also reserve explicit ceilings; ordinary plan subscriptions do not require one. The ledger
+is a hash chain. A start whose ceiling takes total reservations past the objective budget
+is refused. A run with no objective budget cannot start a metered lane.
 
   reserve   print ``sha256:<row hash>`` of the reservation (an exact replay of an existing
             reservation id returns the existing row); exit non-zero with the reason otherwise.

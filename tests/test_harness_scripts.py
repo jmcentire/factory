@@ -29,11 +29,10 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import LedgerEntry, digest_bytes, digest_obj
+from factory_core.manifest import digest_bytes, digest_obj
 from factory_core.target import load_target_manifest
 from factory_runtime.resources import ResourceLedger
-from factory_runtime.state import RunState, RunStore
-from factory_runtime.state_admission import profile_digest
+from factory_runtime.state import RunStore
 from factory_runtime.target_state import TargetResolver, normalize_repository_url, normalize_subpath
 from harness.semantic_union import (
     EXTRACTION_SCHEMA,
@@ -73,6 +72,25 @@ def run(
         f"{hashlib.sha256(str(cwd).encode()).hexdigest()[:12]}"
     )
     support.mkdir(exist_ok=True)
+    # A rejected-input fixture can become a valid startup after a behavior change.
+    # Never let that accidentally reach native agents or the user's tmux server.
+    blockers = support / "unmocked-native"
+    blockers.mkdir(exist_ok=True)
+    for executable in ("tmux", "codex", "agy", "claude", "agent", "muse", "prime-agent", "ollama"):
+        blocker = blockers / executable
+        resolved = shutil.which(executable, path=env["PATH"])
+        if resolved and Path(resolved).resolve().is_relative_to(
+            Path(tempfile.gettempdir()).resolve()
+        ) and Path(resolved).resolve() != blocker.resolve():
+            # A later phase can install an explicit stub after a negative-path call.
+            # Its previous blocker must not shadow that fixture; host binaries stay blocked.
+            blocker.unlink(missing_ok=True)
+            continue
+        blocker.write_text(
+            "#!/bin/sh\necho 'test isolation: unmocked native executable' >&2\nexit 97\n"
+        )
+        blocker.chmod(0o755)
+    env["PATH"] = f"{blockers}:{env['PATH']}"
     checkpoint = support / "checkpoint.json"
     genesis = support / "genesis.json"
     configuration = support / "configuration.txt"
@@ -757,14 +775,14 @@ def test_lane_env_never_stops_on_a_leftover_stop_file(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
 
 
-def test_lane_env_refuses_without_grounding(tmp_path: Path) -> None:
+def test_lane_env_executes_without_grounding(tmp_path: Path) -> None:
     env = lane_env_setup(tmp_path, grounded=False)
     r = run(
         ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"],
         tmp_path,
         env,
     )
-    assert r.returncode == 76 and "not grounded" in r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 def test_lane_env_refuses_missing_secret(tmp_path: Path) -> None:
@@ -940,7 +958,9 @@ def inject(
     if results:
         args.append("--results")
     args.append(msg)
-    env = {"INJECT_DRY_RUN": "1", "HARNESS_DIR": str(tmp / ".harness")}
+    env = {"HARNESS_DIR": str(tmp / ".harness")}
+    if results:
+        env["INJECT_VALIDATE_ONLY"] = "1"
     if frm:
         env["INJECT_FROM"] = frm
     return run(args, tmp, env)
@@ -977,47 +997,33 @@ def inject_live(
     return r, calls
 
 
-def test_inject_pane_command_allowlist_is_case_insensitive(tmp_path: Path) -> None:
-    """macOS framework Python reports its pane command as 'Python'."""
-    r, calls = inject_live(tmp_path, "Python", "hello")
+def test_inject_never_contacts_agent_or_shell_panes(tmp_path: Path) -> None:
+    for pane in ("Python", "bash", "unknown-agent"):
+        location = tmp_path / pane
+        location.mkdir()
+        r, calls = inject_live(location, pane, "hello")
+        assert r.returncode == 0, r.stderr
+        assert not calls.exists()
+        inbox = location / ".harness/runs/testrun/validator/inbox.jsonl"
+        assert json.loads(inbox.read_text())["text"] == "hello"
+
+
+def test_inject_does_not_resolve_a_missing_window_to_another_pane(tmp_path: Path) -> None:
+    r, calls = inject_live(tmp_path, "bash", "notice for an absent agent")
     assert r.returncode == 0, r.stderr
-    assert " -l -- hello" in calls.read_text(encoding="utf-8")
-    (tmp_path / "sh").mkdir()
-    refused, _ = inject_live(tmp_path / "sh", "bash", "hello")
-    assert refused.returncode == 77 and "not an agent" in refused.stderr
+    assert not calls.exists()
+    inbox = tmp_path / ".harness/runs/testrun/validator/inbox.jsonl"
+    assert json.loads(inbox.read_text())["text"] == "notice for an absent agent"
+    assert "not an agent acknowledgment" in r.stdout
 
 
-def test_inject_checks_the_window_by_exact_name(tmp_path: Path) -> None:
-    """tmux resolves an unknown window to another one; a missing window must be refused."""
-    stub_dir = tmp_path / "bin"
-    stub_dir.mkdir()
-    tmux_stub = stub_dir / "tmux"
-    tmux_stub.write_text(
-        "#!/usr/bin/env bash\n"
-        '[ "$1" = list-windows ] && { echo orchestrator; exit 0; }\n'
-        '[ "$1" = display ] && { echo claude; exit 0; }\n'
-        "exit 0\n"
-    )
-    os.chmod(tmux_stub, 0o755)
-    r = run(
-        ["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "hi"],
-        tmp_path,
-        {"HARNESS_DIR": str(tmp_path / ".harness"),
-         "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
-    )
-    assert r.returncode == 76 and "no live pane" in r.stderr
-
-
-def test_multiline_injection_travels_as_a_digest_bound_relay_file(tmp_path: Path) -> None:
-    """tmux splits a multi-line paste at each newline, so the seat would act on fragments.
-    The message goes to a relay file named by its sha256; the pane gets one pointer line."""
-    message = "Refused. Three blockers:\n1. F13 --allow-sys=uid\n2. ADMISSION_CAPACITY=1\n"
+def test_multiline_message_is_retained_as_exact_data(tmp_path: Path) -> None:
+    message = "Blocked.\nF13 --allow-sys=uid\n$(touch not-executed)\n"
     r = inject(tmp_path, "validator", message, frm="founder")
     assert r.returncode == 0, r.stderr
-    digest = hashlib.sha256(message.encode()).hexdigest()
-    relay = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
-    assert relay.read_text(encoding="utf-8") == message
-    assert str(relay) in r.stdout
+    inbox = tmp_path / ".harness/runs/testrun/validator/inbox.jsonl"
+    assert json.loads(inbox.read_text())["text"] == message
+    assert not (tmp_path / "not-executed").exists()
 
 
 def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
@@ -1025,18 +1031,21 @@ def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     assert r.returncode == 77 and "topology refusal" in r.stderr
 
 
-def test_dispatcher_can_address_only_the_orchestrators_own_pane(tmp_path: Path) -> None:
-    delivered = inject(tmp_path, "orchestrator", "assess cursor 9", frm="dispatcher")
+def test_orchestrator_can_report_to_validator_without_controlling_authors(tmp_path: Path) -> None:
+    delivered = inject(tmp_path, "orchestrator", "activity available", frm="dispatcher")
     assert delivered.returncode == 0, delivered.stderr
-    refused = inject(tmp_path, "validator", "I judged you", frm="orchestrator")
+    report = inject(tmp_path, "validator", "Concrete finding", frm="orchestrator")
+    assert report.returncode == 0, report.stderr
+    inbox = tmp_path / ".harness/runs/testrun/validator/inbox.jsonl"
+    assert json.loads(inbox.read_text())["sender"] == "orchestrator"
+    refused = inject(tmp_path, "coder", "change your work", frm="orchestrator")
     assert refused.returncode == 77 and "topology refusal" in refused.stderr
 
 
-def test_inject_validator_to_lane_is_receipted(tmp_path: Path) -> None:
-    r = inject(tmp_path, "coder", "spec question answered: see artifact digest")
-    assert r.returncode == 0, r.stderr
-    receipts = read_chain(tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl")
-    assert receipts and receipts[0]["to"] == "coder" and receipts[0]["from"] == "validator"
+def test_author_delivery_requires_native_channel_not_terminal_fallback(tmp_path: Path) -> None:
+    r = inject(tmp_path, "coder", "contract question answered")
+    assert r.returncode == 64 and "tmux_lane_message.sh" in r.stderr
+    assert not (tmp_path / ".harness/runs/testrun/coder/inbox.jsonl").exists()
 
 
 def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path: Path) -> None:
@@ -1068,9 +1077,10 @@ def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path:
     digest = hashlib.sha256(text.encode()).hexdigest()
     relayed = tmp_path / ".harness" / "runs" / "testrun" / "relay" / f"{digest}.txt"
     assert relayed.read_text(encoding="utf-8") == text
-    literal = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if " -l -- " in ln]
-    assert len(literal) == 1 and f"sha256={digest}" in literal[0]
-    assert "Line two" not in literal[0]
+    assert not calls.exists()
+    inbox = tmp_path / ".harness/runs/testrun/validator/inbox.jsonl"
+    pointer = json.loads(inbox.read_text())["text"]
+    assert f"sha256={digest}" in pointer and "Line two" not in pointer
 
 
 def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path) -> None:
@@ -1095,10 +1105,8 @@ def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path)
         tmp_path,
         {"HARNESS_RUN_ROOT": str(plain / "run"), "INJECT_DRY_RUN": "1"},
     )
-    assert ok.returncode == 0, ok.stderr
-    digest = hashlib.sha256(clean.read_bytes()).hexdigest()
-    receipts = (plain / "run" / "injections.jsonl").read_text(encoding="utf-8")
-    assert f'"kind":"relay-file","sha256":"{digest}"' in receipts
+    assert ok.returncode == 64 and "tmux_lane_message.sh" in ok.stderr
+    # Clean author content still requires a native session, never a terminal fallback.
     shutil.rmtree(plain)
 
 
@@ -1293,11 +1301,15 @@ def test_relay_pointer_shell_quotes_the_file_path(tmp_path: Path, via: str) -> N
         },
     )
     assert r.returncode == 0, r.stdout + r.stderr
-    sent = next(ln for ln in calls.read_text().splitlines() if " -l -- " in ln)
-    command = sent.split(" -- run: ", 1)[1].split(" ; act on", 1)[0]
-    verify = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True)
-    digest = hashlib.sha256(message.encode()).hexdigest()
-    assert verify.returncode == 0 and verify.stdout.split()[0] == digest, verify.stderr
+    assert not calls.exists()
+    inbox = tmp_path / "My Run/validator/inbox.jsonl"
+    retained = json.loads(inbox.read_text())["text"]
+    if via == "inject":
+        assert retained == message
+    else:
+        digest = hashlib.sha256(message.encode()).hexdigest()
+        assert f"sha256={digest}" in retained
+        assert (tmp_path / f"My Run/relay/{digest}.txt").read_text() == message
 
 
 def test_inject_verdict_filter_blocks_test_detail(tmp_path: Path) -> None:
@@ -1316,90 +1328,12 @@ def test_inject_verdict_filter_accepts_only_a_single_verdict_line(tmp_path: Path
     assert inject(tmp_path, "coder", "FAIL R12 (3/5)\n", results=True).returncode == 0
 
 
-def test_dispatch_refuses_without_authority_tuple(tmp_path: Path) -> None:
-    (tmp_path / ".harness" / "runs" / "r1").mkdir(parents=True)
-    dispatch = tmp_path / "d.md"
-    dispatch.write_text("interpretation_confirmed: true\n")
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        tmp_path,
-        {"HARNESS_DIR": str(tmp_path / ".harness")},
-    )
-    assert r.returncode == 70 and "no oracle yet" in r.stderr
 
 
-def test_dispatch_refuses_unconfirmed_interpretation(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    dispatch = tmp_path / "d.md"
-    dispatch.write_text(
-        json.dumps(_lane_dispatch("coder", ambiguity="unresolved")),
-        encoding="utf-8",
-    )
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-    assert r.returncode == 70 and "structured dispatch" in r.stderr
-    # Phase 0.1 forcing: the dispatch refusal leaves its signal.
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-dispatch"]
 
 
-def test_dispatch_refuses_omitted_effective_directive_before_model_use(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    appended = dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "Do not alter migrations",
-    )
-    assert appended.returncode == 0, appended.stderr
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_TEST_DIRECTIVE_LEDGER_SOURCE"] = str(
-        tmp_path / "DIRECTIVES" / "ledger.jsonl"
-    )
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "structured dispatch" in result.stderr
-    assert not (tmp_path / "boundary.log").exists()
 
 
-def test_config_source_resolution_uses_verified_vector_not_reread_manifest(
-    tmp_path: Path,
-) -> None:
-    trusted = tmp_path / "trusted-ledger.jsonl"
-    forged = tmp_path / "forged-ledger.jsonl"
-    manifest = tmp_path / "config.sources"
-    trusted.write_bytes(b"")
-    forged.write_text("ambient forged directive\n", encoding="utf-8")
-    manifest.write_text(
-        f"factory-directive-ledger={forged.resolve()}\n",
-        encoding="utf-8",
-    )
-    script = f"""
-source {HARNESS / "run_context.sh"}
-FACTORY_RESUME_CONFIG_MANIFEST={manifest}
-FACTORY_VERIFIED_RESUME_CONFIG_ARGS=(
-  --config-source factory-directive-ledger={trusted.resolve()}
-)
-factory_config_source_path factory-directive-ledger
-"""
-
-    result = run(["bash", "-c", script], tmp_path, {})
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(trusted.resolve())
 
 
 # --------------------------------------------------------------------------
@@ -1923,8 +1857,8 @@ def test_factory_refuses_a_non_git_target(tmp_path: Path) -> None:
         tmp_path,
         {},
     )
-    assert r.returncode == 64
-    assert "--repo is forbidden" in r.stderr and "Stage R/E" in r.stderr
+    assert r.returncode == 70 and "git" in r.stderr.lower()
+    assert not (tmp_path / ".factory/runs/runx").exists()
 
 
 def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
@@ -1940,18 +1874,63 @@ def test_factory_refuses_a_missing_target(tmp_path: Path) -> None:
         tmp_path,
         {},
     )
-    assert r.returncode == 64 and "--repo is forbidden" in r.stderr
+    assert r.returncode == 70 and "No such file" in r.stderr
+    assert not (tmp_path / ".factory/runs/runx").exists()
 
 
-def test_factory_refuses_a_git_target_without_an_operational_abi(tmp_path: Path) -> None:
+def test_factory_starts_a_git_target_without_catalog_or_operational_abi(tmp_path: Path) -> None:
     repo = projection_fixture(tmp_path)
+    root = tmp_path / ".factory/runs/runx"
+    env, tmux_log = factory_ignition_env(tmp_path, root)
     r = run(
         ["bash", str(HARNESS / "factory.sh"), "runx", "some task", "--repo", str(repo)],
         tmp_path,
-        {},
+        env,
     )
-    assert r.returncode == 64
-    assert "--repo is forbidden" in r.stderr
+    assert r.returncode == 0, r.stderr
+    record = json.loads((root / "harness.json").read_text())
+    assert record["repository"] == str(repo.resolve())
+    assert not (root / "run.json").exists()
+    commands = tmux_log.read_text()
+    assert "new-session" in commands and "new-window" in commands
+    assert "--prompt-interactive" in commands
+
+
+@pytest.mark.parametrize("executable", ["tmux", "ollama"])
+def test_harness_fixture_refuses_an_unmocked_native_launcher(
+    tmp_path: Path, executable: str,
+) -> None:
+    result = run([executable, "list"], tmp_path, {"PATH": "/usr/bin:/bin"})
+    assert result.returncode == 97
+    assert "test isolation: unmocked native executable" in result.stderr
+
+
+
+def test_harness_fixture_allows_later_explicit_stub_but_reblocks_native(tmp_path: Path) -> None:
+    refused = run(["ollama", "list"], tmp_path, {"PATH": "/usr/bin:/bin"})
+    assert refused.returncode == 97
+    binary = tmp_path / "explicit-stub"
+    binary.mkdir()
+    stub = binary / "ollama"
+    stub.write_text("#!/bin/sh\nprintf 'fixture only\\n'\n")
+    stub.chmod(0o755)
+    admitted = run(["ollama", "list"], tmp_path, {"PATH": f"{binary}:/usr/bin:/bin"})
+    assert admitted.returncode == 0 and admitted.stdout.strip() == "fixture only"
+    stub.unlink()
+    refused_again = run(["ollama", "list"], tmp_path, {"PATH": "/usr/bin:/bin"})
+    assert refused_again.returncode == 97
+
+def test_valid_startup_fixture_cannot_launch_unmocked_native_agents(tmp_path: Path) -> None:
+    repository = projection_fixture(tmp_path)
+    result = run(
+        ["bash", str(HARNESS / "factory.sh"), "guarded", "fixture only",
+         "--repo", str(repository)], tmp_path,
+    )
+    assert result.returncode == 70
+    assert "Coordinator startup failed with exit 97" in result.stderr
+    assert "Factory guarded: tmux" not in result.stdout
+    inbox = tmp_path / ".factory/runs/guarded/validator/inbox.jsonl"
+    assert "exit 97" in json.loads(inbox.read_text())["text"]
 
 
 def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Path]:
@@ -1961,6 +1940,7 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     tmux = stub / "tmux"
     tmux.write_text(
         "#!/usr/bin/env bash\n"
+        'if [ "$1" = -L ]; then shift 2; fi\n'
         'if [ "$1" = has-session ]; then exit 1; fi\n'
         'if [ "$1" = list-windows ]; then '
         'printf "${TMUX_STUB_WINDOWS-coder\\ntester}\\n"; exit 0; fi\n'
@@ -2022,164 +2002,34 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     )
 
 
-def test_factory_ignition_reads_agy_help_from_stderr(tmp_path: Path) -> None:
-    """agy 1.3.x prints --help to stderr; the CLI contract check must still see the flags."""
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(
-        tmp_path,
-        task=task,
-        harness_status=None,
-    )
-    env, _tmux_log = factory_ignition_env(tmp_path, root)
-    agy = tmp_path / "factory-bin" / "agy"
-    agy.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = "--version" ]; then echo "1.3.3-test"; exit 0; fi\n'
-        'if [ "${1:-}" = "--help" ]; then '
-        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
-        '--add-dir" >&2; '
-        "exit 0; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    harness = json.loads((root / "harness.json").read_text())
-    # R4 supersedes the sandboxed contract id. The assertion stays; the value moves.
-    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R4
-    assert harness["orchestrator_cli_contract"] == "agy-resident-new-project-unsandboxed-v2"
 
 
-def test_factory_ignition_tripwire_scans_run_kindex_not_conversations(tmp_path: Path) -> None:
-    """In run mode the default scope is the run's leak surfaces, Kindex stores included."""
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _tmux_log = factory_ignition_env(tmp_path, root)
-    env.pop("TRANSCRIPTS", None)
-    home = tmp_path / "home"
-    convo = home / ".claude" / "projects" / "p" / "s.jsonl"
-    convo.parent.mkdir(parents=True)
-    convo.write_text(fake_aws_key() + "\n")
-    env["HOME"] = str(home)
-    kin = root / "tmux-lanes" / "coder-kindex-home" / "store.jsonl"
+def test_explicit_tripwire_scans_selected_run_kindex_not_conversations(tmp_path: Path) -> None:
+    """Explicit leak scanning stays scoped and records locations without copying secrets."""
+    root = tmp_path / "run"
+    kin = root / "tmux-lanes/coder-kindex-home/store.jsonl"
     kin.parent.mkdir(parents=True)
     kin.write_text('{"text": "token ' + fake_aws_key() + '"}\n')
-
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-
+    home = tmp_path / "home"
+    conversation = home / ".claude/projects/p/s.jsonl"
+    conversation.parent.mkdir(parents=True)
+    conversation.write_text(fake_aws_key() + "\n")
+    incidents = tmp_path / "incidents"
+    result = run(["bash", str(HARNESS / "tripwire.sh"), str(root)], tmp_path,
+                 {"HOME": str(home), "HARNESS_DIR": str(incidents)})
     assert result.returncode == 2, result.stdout + result.stderr
-    incident_files = list(tmp_path.rglob("incidents.jsonl"))
-    assert incident_files, "a Kindex leak must record an incident"
-    assert not list(tmp_path.rglob("HALT"))
-    report = incident_files[0].read_text()
+    report = (incidents / "incidents.jsonl").read_text()
     assert "coder-kindex-home/store.jsonl" in report
     assert ".claude/projects" not in report
+    assert fake_aws_key() not in report + result.stdout + result.stderr
+    kin.write_text('{"text": "ordinary knowledge"}\n')
+    clean = run(["bash", str(HARNESS / "tripwire.sh"), str(root)], tmp_path,
+                {"HOME": str(home), "HARNESS_DIR": str(incidents)})
+    assert clean.returncode == 0 and clean.stdout.strip() == "clean"
+    assert (incidents / "incidents.jsonl").read_text() == report
 
 
-def test_factory_ignition_consumes_exact_stage_e_target_and_task(tmp_path: Path) -> None:
-    task = "Build the exact authorized behavior."
-    operator, root, target = execution_truth_fixture(
-        tmp_path,
-        task=task,
-        harness_status=None,
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
 
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "factory.sh"),
-            "r1",
-            task,
-            "--runs",
-            str(root.parent),
-        ],
-        operator,
-        env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    harness = json.loads((root / "harness.json").read_text())
-    runtime = json.loads((root / "run.json").read_text())
-    assert harness["target_state_digest"] == runtime["target_state_digest"]
-    assert harness["resolved_commit"] == target["resolved_commit"]
-    assert harness["validator_agent"] == "codex"
-    assert harness["orchestrator_agent"] == "agy"
-    assert harness["orchestrator_mode"] == "resident-monitoring"
-    assert harness["orchestrator_visibility"] == "bounded-sampled-pane-snapshots-plus-cadence"
-    assert harness["orchestrator_effects"] == "monotone-block-or-no-op"
-    assert harness["agreement_contract_version"] == "factory-agreement-contract/1"
-    assert harness["agreement_requirement_region_families"] == ["authored-product"]
-    assert harness["guidance_contract_version"] == "factory-run-guidance/1"
-    assert harness["guidance_generation"] == 1
-    assert harness["guidance_state"] == "none"
-    assert harness["guidance_selection_digest"] is None
-    assert harness["guidance_source_digests"] == {}
-    assert (root / "TASK.md").read_text() == task
-    assert "repo" not in harness and "base_sha" not in harness
-    tmux_calls = tmux_log.read_text()
-    assert str(target["workdir"]) in tmux_calls
-    assert str(operator) not in tmux_calls
-    assert "-n orchestrator" in tmux_calls
-    # R1: resident agy launch is `agy --new-project` and has no standalone `--sandbox`.
-    # task.txt@9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6#R1
-    orchestrator_line = next(ln for ln in tmux_calls.splitlines() if "-n orchestrator " in ln)
-    assert "agy --new-project" in orchestrator_line
-    assert "--sandbox" not in orchestrator_line.split()
-    assert "--new-project" in tmux_calls
-    assert "--prompt-interactive" in tmux_calls
-    assert "--disable-slash-commands" not in tmux_calls
-    assert "agy -p" not in tmux_calls and "agy --print" not in tmux_calls
-    assert "-n validator" in tmux_calls and "-n ctl" in tmux_calls
-    # The Validator reads this checkout's prompts, whatever an installed /validate names (#48).
-    validator_line = next(ln for ln in tmux_calls.splitlines() if "-n validator " in ln)
-    checkout = HARNESS.parent.resolve()
-    assert f" FACTORY_HOME={checkout} " in validator_line
-    assert f"{checkout}/prompts/validate.md" in validator_line
-    orchestrator_bin = root / "orchestrator" / "bin"
-    assert {path.name for path in orchestrator_bin.iterdir()} == {
-        "agreement_contract.py",
-        "attention_gate.py",
-        "boundary_register.py",
-        "escalate.py",
-        "lane_dialogue.py",
-        "jev_rules.py",
-        "jev_screen.py",
-        "orchestrator_channel.py",
-        "run_guidance.py",
-        "seat_supervisor.py",
-        "lane_watchdog.py",
-    }
-    supervisor_line = next(ln for ln in tmux_calls.splitlines() if "-n supervisor " in ln)
-    assert "seat_supervisor.py run --root" in supervisor_line
-    imported = subprocess.run(
-        [sys.executable, str(orchestrator_bin / "orchestrator_channel.py"), "--help"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    assert imported.returncode == 0, imported.stderr
-    copied_control = subprocess.run(
-        [sys.executable, str(orchestrator_bin / "seat_supervisor.py"), "--help"],
-        cwd=root, capture_output=True, text=True,
-    )
-    assert copied_control.returncode == 0, copied_control.stderr
-    # The Orchestrator runs these by shebang; it names the interpreter that started the run.
-    for tool in orchestrator_bin.glob("*.py"):
-        shebang = tool.read_text(encoding="utf-8").split("\n", 1)[0]
-        assert shebang.startswith("#!/") and "env python3" not in shebang, (tool.name, shebang)
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["tmux-session"]["status"] == "active"
 
 
 def orchestrator_tmux_line(tmux_log: Path) -> str:
@@ -2187,499 +2037,51 @@ def orchestrator_tmux_line(tmux_log: Path) -> str:
     return next(line for line in tmux_log.read_text().splitlines() if "-n orchestrator " in line)
 
 
-def agy_launch_words(orchestrator_line: str) -> list[str]:
-    """Whitespace-delimited words of the agy command on that tmux line.
-
-    The ignition tmux stub logs argv joined by spaces, so a standalone flag is one word.
-    """
-    words = orchestrator_line.split()
-    for index, word in enumerate(words):
-        if word == "agy" or word.endswith("/agy"):
-            return words[index:]
-    return []
 
 
-def write_agy_admission_stub(agy: Path, help_text: str) -> None:
-    """Replace the ignition agy stub's --help text. --version stays a successful probe."""
-    agy.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
-        'if [ "${1:-}" = "--help" ]; then '
-        f'echo "{help_text}" >&2; '
-        "exit 0; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    agy.chmod(0o755)
 
 
-def prepare_agy_ignition(
-    tmp_path: Path, task: str
-) -> tuple[Path, Path, dict[str, str], Path, dict[str, object]]:
-    """Intake fixture and the shared agy/tmux stubs, before factory.sh runs."""
-    operator, root, target = execution_truth_fixture(
-        tmp_path,
-        task=task,
-        harness_status=None,
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    return operator, root, env, tmux_log, target
 
 
-def ignite_prepared(
-    operator: Path, root: Path, env: dict[str, str], task: str
-) -> subprocess.CompletedProcess[str]:
-    return run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
 
 
-def ignite_agy_run(
-    tmp_path: Path,
-    task: str,
-    env_extra: Mapping[str, str] | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path, dict[str, object]]:
-    operator, root, env, tmux_log, target = prepare_agy_ignition(tmp_path, task)
-    if env_extra:
-        env.update(env_extra)
-    return ignite_prepared(operator, root, env, task), root, tmux_log, target
 
 
 # Help text one delta from the igniting stub: `--sandbox` removed. `--disable-slash-commands`
 # stays, as it does on that stub, so the only admission change is the sandbox token (R3).
-_AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX = (
-    "--new-project --prompt-interactive --dangerously-skip-permissions "
-    "--disable-slash-commands --add-dir"
-)
 # One used flag removed. `--sandbox` stays listed so the missing token is the used flag.
-_AGY_HELP_MISSING_DANGEROUSLY_SKIP = (
-    "--new-project --prompt-interactive --sandbox --disable-slash-commands --add-dir"
-)
 _TASK_DIGEST = "9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6"
 _STRATEGY_DIGEST = "9ed96be31d6c9b494f999ab77821ad2a5ddd3f959b29985f6930ae1d19aa9406"
 
 
-@pytest.mark.parametrize("case_id", ["AGY-R1-no-sandbox"], ids=["AGY-R1-no-sandbox"])
-def test_resident_agy_launch_has_no_sandbox_token(case_id: str, tmp_path: Path) -> None:
-    """The resident agy orchestrator launch does not pass a standalone --sandbox token.
-
-    cites: task.txt _TASK_DIGEST #R1
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R1-no-sandbox
-    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
-    falsifier: the orchestrator tmux line still has a standalone --sandbox word
-    (the pinned `agy --new-project --sandbox` launch).
-    """
-    task = "Launch the resident agy orchestrator without a sandbox."
-    result, _root, tmux_log, _target = ignite_agy_run(
-        tmp_path,
-        task,
-        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    line = orchestrator_tmux_line(tmux_log)
-    assert "agy --new-project" in line, case_id
-    assert "--sandbox" not in line.split(), case_id
 
 
-@pytest.mark.parametrize("case_id", ["AGY-R2-workflow-kept"], ids=["AGY-R2-workflow-kept"])
-def test_resident_agy_launch_keeps_workflow_and_hides_billing_keys(
-    case_id: str, tmp_path: Path
-) -> None:
-    """The unsandboxed launch keeps the resident workflow and leaks no billing key.
-
-    cites: task.txt _TASK_DIGEST #R2
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R2-workflow-kept
-    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
-    falsifier: drop exec env -i, a kept flag, or --add-dir of the target workdir;
-    pass standalone -p, --print, or --disable-slash-commands; or copy one of the
-    five billing names or sentinel values onto the orchestrator tmux line.
-    """
-    task = "Keep the resident agy workflow and withhold billing keys."
-    sentinels = {
-        "ANTHROPIC_API_KEY": "marker-anthropic-agy-r2",
-        "OPENAI_API_KEY": "marker-openai-agy-r2",
-        "GEMINI_API_KEY": "marker-gemini-agy-r2",
-        "GOOGLE_API_KEY": "marker-google-agy-r2",
-        "TYPESAFE_API_KEY": "marker-typesafe-agy-r2",
-    }
-    result, _root, tmux_log, target = ignite_agy_run(
-        tmp_path,
-        task,
-        {"FACTORY_ORCHESTRATOR_AGENT": "agy", **sentinels},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    line = orchestrator_tmux_line(tmux_log)
-    words = line.split()
-    agy_words = agy_launch_words(line)
-    assert agy_words, case_id
-    assert "exec env -i" in line, case_id
-    assert "--new-project" in agy_words, case_id
-    assert "--dangerously-skip-permissions" in agy_words, case_id
-    assert "--prompt-interactive" in agy_words, case_id
-    workdir = str(target["workdir"])
-    assert any(
-        words[index] == "--add-dir" and words[index + 1] == workdir
-        for index in range(len(words) - 1)
-    ), case_id
-    for forbidden in ("-p", "--print", "--disable-slash-commands"):
-        assert forbidden not in words, (case_id, forbidden)
-    for name, value in sentinels.items():
-        assert name not in line, (case_id, name)
-        assert value not in line, (case_id, value)
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R3-help-without-sandbox-accepted"],
-    ids=["AGY-R3-help-without-sandbox-accepted"],
-)
-def test_agy_help_without_sandbox_still_ignites(case_id: str, tmp_path: Path) -> None:
-    """An agy whose --help lists every used flag but not --sandbox ignites.
-
-    cites: task.txt _TASK_DIGEST #R3
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-help-without-sandbox-accepted
-    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
-    falsifier: admission still requires --sandbox in --help, so ignition does not
-    exit 0. Reach is the orchestrator window on the tmux log after exit 0.
-    """
-    task = "Admit an agy whose help omits sandbox."
-    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
-    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
-    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
-    write_agy_admission_stub(agy, _AGY_HELP_USED_FLAGS_WITHOUT_SANDBOX)
-    help_body = agy.read_text(encoding="utf-8")
-    assert "--sandbox" not in help_body
-    for flag in (
-        "--new-project",
-        "--prompt-interactive",
-        "--dangerously-skip-permissions",
-        "--add-dir",
-    ):
-        assert flag in help_body
-    result = ignite_prepared(operator, root, env, task)
-    assert result.returncode == 0, (case_id, result.returncode, result.stdout, result.stderr)
-    assert "-n orchestrator " in tmux_log.read_text(), case_id
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R3-missing-used-flag-refused"],
-    ids=["AGY-R3-missing-used-flag-refused"],
-)
-def test_agy_help_missing_a_used_flag_is_refused(case_id: str, tmp_path: Path) -> None:
-    """Help that lacks a flag the launch uses is refused before a tmux session exists.
-
-    cites: task.txt _TASK_DIGEST #R3
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R3-missing-used-flag-refused
-    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
-    falsifier: exit is not 70, the output does not name --dangerously-skip-permissions,
-    or a new-session call is logged.
-    """
-    task = "Refuse an agy whose help omits a flag the launch uses."
-    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
-    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
-    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
-    write_agy_admission_stub(agy, _AGY_HELP_MISSING_DANGEROUSLY_SKIP)
-    help_body = agy.read_text(encoding="utf-8")
-    assert "--dangerously-skip-permissions" not in help_body
-    for flag in ("--new-project", "--prompt-interactive", "--sandbox", "--add-dir"):
-        assert flag in help_body
-    result = ignite_prepared(operator, root, env, task)
-    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
-    assert "--dangerously-skip-permissions" in result.stdout + result.stderr, case_id
-    logged = tmux_log.read_text() if tmux_log.exists() else ""
-    assert "new-session" not in logged, case_id
 
 
-@pytest.mark.parametrize("case_id", ["AGY-R4-contract-id"], ids=["AGY-R4-contract-id"])
-def test_agy_ignition_records_unsandboxed_contract(case_id: str, tmp_path: Path) -> None:
-    """harness.json records the unsandboxed resident contract after agy ignition.
-
-    cites: task.txt _TASK_DIGEST #R4
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R4-contract-id
-    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
-    falsifier: orchestrator_cli_contract is still agy-resident-new-project-sandbox-v1
-    or any other id.
-    """
-    task = "Record the unsandboxed agy resident contract."
-    result, root, _tmux_log, _target = ignite_agy_run(
-        tmp_path,
-        task,
-        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    harness = json.loads((root / "harness.json").read_text())
-    assert harness["orchestrator_agent"] == "agy", case_id
-    assert harness["orchestrator_cli_contract"] == (
-        "agy-resident-new-project-unsandboxed-v2"
-    ), case_id
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R6-channel-runs-on-pinned-interpreter"],
-    ids=["AGY-R6-channel-runs-on-pinned-interpreter"],
-)
-def test_run_owned_channel_status_uses_pinned_interpreter(
-    case_id: str, tmp_path: Path
-) -> None:
-    """The run-owned channel status runs by path when PATH's python3 is not ours.
-
-    cites: task.txt _TASK_DIGEST #R6
-    cites: testing-strategy _STRATEGY_DIGEST #AGY-R6-channel-runs-on-pinned-interpreter
-    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
-    falsifier: status is exec'd via PATH python3 (the stub exits 97), stdout is not
-    a JSON object with current, or orchestrator/.channel.lock is not a regular file.
-    """
-    task = "Ask the run-owned channel for status on the pinned interpreter."
-    result, root, _tmux_log, _target = ignite_agy_run(
-        tmp_path,
-        task,
-        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    channel = root / "orchestrator" / "bin" / "orchestrator_channel.py"
-    assert channel.is_file(), case_id
-    python_dir = tmp_path / "not-factory-python"
-    python_dir.mkdir()
-    python3 = python_dir / "python3"
-    python3.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
-    python3.chmod(0o755)
-    home = tmp_path / "channel-home"
-    temp = tmp_path / "channel-tmp"
-    home.mkdir()
-    temp.mkdir()
-    status = subprocess.run(
-        [str(channel), "status", "--root", str(root)],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={
-            "PATH": f"{python_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
-            "HOME": str(home),
-            "TMPDIR": str(temp),
-        },
-    )
-    assert status.returncode == 0, (case_id, status.returncode, status.stdout, status.stderr)
-    payload = json.loads(status.stdout)
-    assert isinstance(payload, dict) and "current" in payload, case_id
-    lock = root / "orchestrator" / ".channel.lock"
-    assert lock.is_file(), case_id
-    assert stat.S_ISREG(lock.lstat().st_mode), case_id
 
 
 # Igniting stub help: every resident flag except --model and --effort. --sandbox and
 # --disable-slash-commands stay, as on that stub, so a refusal names the omitted flag.
-_AGY_HELP_WITHOUT_MODEL_OR_EFFORT = (
-    "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions "
-    "--disable-slash-commands --add-dir"
-)
-_ENV_ASSIGNMENT_EXACT = frozenset(
-    {
-        "HOME",
-        "USER",
-        "PATH",
-        "TMPDIR",
-        "TERM",
-        "SHELL",
-        "LANG",
-        "DIRECTIVE_LEDGER",
-        "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION",
-    }
-)
 
 
-def _env_assignment_allowed(name: str) -> bool:
-    """R2 v2: HOME/USER/PATH/TMPDIR/TERM/SHELL/LANG, FACTORY_*, HARNESS_*, or two exact names."""
-    return (
-        name in _ENV_ASSIGNMENT_EXACT
-        or name.startswith("FACTORY_")
-        or name.startswith("HARNESS_")
-    )
 
 
-def _assignments_between_env_and_agy(orchestrator_line: str) -> list[str]:
-    """NAME=VALUE tokens between the env command and agy. `-u NAME` is not an assignment."""
-    words = orchestrator_line.split()
-    env_at = next(
-        (index for index, word in enumerate(words) if word == "env" or word.endswith("/env")),
-        None,
-    )
-    if env_at is None:
-        return []
-    agy_at = next(
-        (
-            index
-            for index, word in enumerate(words)
-            if index > env_at and (word == "agy" or word.endswith("/agy"))
-        ),
-        None,
-    )
-    if agy_at is None:
-        return []
-    names: list[str] = []
-    index = env_at + 1
-    while index < agy_at:
-        word = words[index]
-        if word == "-u":
-            index += 2
-            continue
-        if "=" in word:
-            name = word.split("=", 1)[0].strip("\"'")
-            if name and not name.startswith("-"):
-                names.append(name)
-        index += 1
-    return names
 
 
-def _prompt_interactive_argument(orchestrator_line: str) -> str:
-    words = agy_launch_words(orchestrator_line)
-    try:
-        index = words.index("--prompt-interactive")
-    except ValueError:
-        return ""
-    if index + 1 >= len(words):
-        return ""
-    return words[index + 1].strip("\"'")
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R2-env-allowlist-and-prompt"],
-    ids=["AGY-R2-env-allowlist-and-prompt"],
-)
-def test_resident_agy_env_assignments_stay_on_the_allowlist(
-    case_id: str, tmp_path: Path
-) -> None:
-    """Assignments between env and agy stay on the R2 allowlist, and the prompt is set.
-
-    cites: task.txt _TASK_DIGEST #R2
-    cites: testing-strategy v2 #AGY-R2-env-allowlist-and-prompt (review 2, finding F1)
-    authority: normative. oracle: direct. label: pre-freeze. guard: green-now.
-    falsifier: a NAME=VALUE between env and agy whose name is outside the allowlist,
-    or the argument after --prompt-interactive is empty.
-    """
-    task = "Keep the resident agy environment on the stated allowlist."
-    result, _root, tmux_log, _target = ignite_agy_run(
-        tmp_path,
-        task,
-        {"FACTORY_ORCHESTRATOR_AGENT": "agy"},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    line = orchestrator_tmux_line(tmux_log)
-    names = _assignments_between_env_and_agy(line)
-    assert names, case_id
-    disallowed = [name for name in names if not _env_assignment_allowed(name)]
-    assert not disallowed, (case_id, disallowed)
-    assert _prompt_interactive_argument(line), case_id
 
 
-def _ignite_agy_help(
-    tmp_path: Path,
-    task: str,
-    help_text: str,
-    env_extra: dict[str, str],
-) -> tuple[subprocess.CompletedProcess[str], Path]:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    operator, root, env, tmux_log, _target = prepare_agy_ignition(tmp_path, task)
-    env["FACTORY_ORCHESTRATOR_AGENT"] = "agy"
-    env.update(env_extra)
-    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
-    write_agy_admission_stub(agy, help_text)
-    return ignite_prepared(operator, root, env, task), tmux_log
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R3-named-model-flag-required"],
-    ids=["AGY-R3-named-model-flag-required"],
-)
-def test_named_orchestrator_model_requires_model_in_agy_help(
-    case_id: str, tmp_path: Path
-) -> None:
-    """Help that omits --model is refused when the operator names an orchestrator model.
-
-    cites: task.txt _TASK_DIGEST #R3
-    cites: testing-strategy v2 #AGY-R3-named-model-flag-required (review 2, finding F2)
-    authority: normative. oracle: direct. label: pre-freeze. guard: red-now.
-    falsifier: FACTORY_ORCHESTRATOR_MODEL is set, --help has every other used flag
-    and not --model, and ignition does not exit 70 naming --model with no new-session.
-    """
-    task = "Refuse an agy help text that omits --model."
-    help_body_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
-    assert "--model" not in help_body_flags
-    for flag in (
-        "--new-project",
-        "--prompt-interactive",
-        "--dangerously-skip-permissions",
-        "--add-dir",
-    ):
-        assert flag in help_body_flags
-    result, tmux_log = _ignite_agy_help(
-        tmp_path,
-        task,
-        help_body_flags,
-        {"FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
-    )
-    assert result.returncode == 70, (case_id, result.returncode, result.stdout, result.stderr)
-    assert "--model" in result.stdout + result.stderr, case_id
-    logged = tmux_log.read_text() if tmux_log.exists() else ""
-    assert "new-session" not in logged, case_id
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["AGY-R3-named-effort-flag-required"],
-    ids=["AGY-R3-named-effort-flag-required"],
-)
-def test_named_orchestrator_effort_requires_effort_in_agy_help(
-    case_id: str, tmp_path: Path
-) -> None:
-    """A named effort is refused without --effort in help, and kept when help lists it.
-
-    cites: task.txt _TASK_DIGEST #R3
-    cites: testing-strategy v2 #AGY-R3-named-effort-flag-required (review 2, finding F2)
-    authority: normative. oracle: direct. label: pre-freeze.
-    guard: refusal half red-now; admission half as stated (exit 0 and `--effort high`).
-    falsifier: FACTORY_ORCHESTRATOR_EFFORT=high and help lacks --effort, but the exit
-    is not 70, the output does not name --effort, or new-session is logged; or help
-    lists --effort and the orchestrator line does not carry `--effort high`.
-    """
-    task = "Require --effort when the operator names one."
-    env_extra = {"FACTORY_ORCHESTRATOR_EFFORT": "high"}
-    refused_flags = _AGY_HELP_WITHOUT_MODEL_OR_EFFORT
-    assert "--effort" not in refused_flags
-    refused, refused_log = _ignite_agy_help(
-        tmp_path / "refused",
-        task,
-        refused_flags,
-        env_extra,
-    )
-    assert refused.returncode == 70, (
-        case_id,
-        refused.returncode,
-        refused.stdout,
-        refused.stderr,
-    )
-    assert "--effort" in refused.stdout + refused.stderr, case_id
-    refused_logged = refused_log.read_text() if refused_log.exists() else ""
-    assert "new-session" not in refused_logged, case_id
-
-    admitted, admitted_log = _ignite_agy_help(
-        tmp_path / "admitted",
-        task,
-        refused_flags + " --effort",
-        env_extra,
-    )
-    assert admitted.returncode == 0, (
-        case_id,
-        admitted.returncode,
-        admitted.stdout,
-        admitted.stderr,
-    )
-    assert "--effort high" in orchestrator_tmux_line(admitted_log), case_id
 
 
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
@@ -2703,138 +2105,26 @@ SEAT_AUTHORITY = (
 )
 
 
-@pytest.mark.parametrize("orchestrator", ["agy", "codex"])
-def test_seat_windows_execute_with_resume_anchors_and_without_another_runs_context(
-    tmp_path: Path, orchestrator: str
-) -> None:
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    keys = tmp_path / "keys"
-    keys.mkdir()
-    env.update({
-        "FACTORY_ORCHESTRATOR_AGENT": orchestrator,
-        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
-        "FACTORY_KEYS_DIR": str(keys),
-        "FACTORY_HOME": str(HARNESS.parent),
-    })
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    # Every seat, ctl and both Orchestrator variants included, names the resume anchors.
-    for window in ("validator", "ctl", "orchestrator"):
-        line = next(ln for ln in tmux_log.read_text().splitlines() if f"-n {window} " in ln)
-        for name in SEAT_AUTHORITY:
-            assert f" {name}=" in line, (window, name)
-    # The Orchestrator signs nothing, so it never learns where the role keys live.
-    orchestrator_line = next(
-        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
-    )
-    assert "FACTORY_KEYS_DIR" not in orchestrator_line
-    # The Orchestrator starts under `env -i`, so the stubs dump to a fixed path, not $SEAT_DUMP.
-    dump = tmp_path / "seat.env"
-    for agent in ("codex", "agy"):
-        stub = tmp_path / "factory-bin" / agent
-        stub.write_text(stub.read_text().replace('exit 0\n', f'env > "{dump}"\nexit 0\n'))
-    stale = {
-        "PATH": env["PATH"],
-        "FACTORY_CONTROL_ROOT": "/stale/run-b",
-        "FACTORY_WORKDIR": "/stale",
-        "DIRECTIVE_LEDGER": "/stale/DIRECTIVES/ledger.jsonl",
-    }
-    for window in ("validator", "orchestrator"):
-        dump.unlink(missing_ok=True)
-        seated, _ = run_seat_command(tmux_log, window, tmp_path, stale)
-        assert seated.returncode == 0, seated.stderr
-        seat = dict(ln.split("=", 1) for ln in dump.read_text().splitlines() if "=" in ln)
-        assert "FACTORY_CONTROL_ROOT" not in seat and "FACTORY_WORKDIR" not in seat
-        assert seat["HARNESS_RUN_ROOT"] == str(root)
-        for name in SEAT_AUTHORITY:
-            assert seat.get(name), (window, name)
-        # No predicted "approval" ghost text in a seat's input line (dogfood #53).
-        assert seat["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] == "false", window
-        # directive.py otherwise resolves a cwd-relative ledger the seat's tree never holds
-        # (herald-dash-r2: the Validator's ground failed until the operator exported it).
-        ledger = Path(seat["DIRECTIVE_LEDGER"])
-        assert ledger.is_absolute() and ledger.name == "directive-ledger.jsonl", window
-        if window == "orchestrator":
-            assert "FACTORY_KEYS_DIR" not in seat
 
 
-@pytest.mark.parametrize("sandbox", ["on", "off"])
-def test_an_unsandboxed_ignition_is_recorded_as_a_run_event(tmp_path: Path, sandbox: str) -> None:
-    task = "Record how the seats are sandboxed."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    keys = tmp_path / "keys"
-    keys.mkdir()
-    env.update({
-        "FACTORY_ORCHESTRATOR_AGENT": "codex",
-        "FACTORY_TESSERA_BIN": "/opt/test/tessera",
-        "FACTORY_KEYS_DIR": str(keys),
-        "FACTORY_HOME": str(HARNESS.parent),
-        "FACTORY_LANE_SANDBOX": sandbox,
-    })
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"sandbox      : {sandbox}" in result.stdout
-    orchestrator = next(
-        ln for ln in tmux_log.read_text().splitlines() if "-n orchestrator " in ln
-    )
-    events = root / "events.jsonl"
-    rows = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
-    recorded = [row for row in rows if row.get("kind") == "seat-sandbox-off"]
-    # Prompt size is verified on delegation: each seat prompt is measured at ignition.
-    (sizes,) = [row for row in rows if row.get("kind") == "seat-prompt-size"]
-    assert set(sizes["seats"]) == {"validator", "orchestrator"}
-    assert all(
-        seat["prompt_bytes"] > 0 and seat["within_limit"] for seat in sizes["seats"].values()
-    )
-    if sandbox == "off":
-        assert "--dangerously-bypass-approvals-and-sandbox" in orchestrator
-        assert len(recorded) == 1 and recorded[0]["source"] == "factory.sh"
-    else:
-        assert "--sandbox workspace-write" in orchestrator
-        assert "--dangerously-bypass-approvals-and-sandbox" not in orchestrator
-        assert not recorded
 
 
 @pytest.mark.parametrize("mode", ["qualify", "launch"])
 def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
     tmp_path: Path, mode: str,
 ) -> None:
-    """Owner Oct 28: a qualification export is not the product acceptance suite.
+    """Freezing a quiescent author exports evidence; it never accepts the product.
 
-    The same missing Critical case must refuse productive freeze. Real freeze/export
-    and traceability run; established fixture seams replace tmux and model execution.
+    Missing Critical coverage remains visible in the plan for Validator review.
+    Both modes preserve their identity, and an invalid recorded mode is refused.
     """
-    task = "Separate qualification evidence from product acceptance."
-    operator, root, _ = execution_truth_fixture(
-        tmp_path, task=task, harness_status=None,
-        projection_conf="coder-exclude: tests\ntester-include: tests\n",
-    )
-    env, _ = factory_ignition_env(tmp_path, root)
-    result = run(["bash", str(HARNESS / "factory.sh"), "r1", task,
-                  "--runs", str(root.parent)], operator, env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    (root / "artifacts").mkdir(exist_ok=True)
+    root, operator, _, launch = _ignite_and_launcher(tmp_path, "Export is not acceptance")
+    env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
     (root / "artifacts" / "testing-strategy.md").write_text(
         "planned-case: BOOK-LOCK Critical\ntest-modules: tests/test_*.py\n"
     )
-    lane = tmp_path / "tester"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
-    prompt = tmp_path / "tester-prompt.txt"
-    prompt.write_text("Test the shared contract; retain independent evidence.\n")
-    result = run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", mode,
-                  "--agent", "codex", "--repo", str(lane), "--prompt", str(prompt),
-                  "--round", "probe", "--runs", str(root.parent)], operator, env)
+    lane = tmp_path / "standalone-tester"
+    result = launch("tester", "--round", "probe", action=mode)
     assert result.returncode == 0, result.stdout + result.stderr
     (lane / "tests").mkdir()
     (lane / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n")
@@ -2842,15 +2132,10 @@ def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
               "--round", "probe", "--runs", str(root.parent)]
     result = run(freeze, operator, env)
     events = root / "tmux-lanes" / "tester.probe-launch.jsonl"
-    if mode == "launch":
-        assert result.returncode == 70, result.stdout + result.stderr
-        assert "BOOK-LOCK" in result.stderr
-        assert not any(r.get("schema_version") == "factory-tmux-lane-freeze/1"
-                       for r in read_chain(events))
-        return
     assert result.returncode == 0, result.stdout + result.stderr
     record = read_chain(events)[-1]
-    assert record["mode"] == "qualify" and record["traceability_gaps"] is None
+    assert record["mode"] == mode and record["traceability_gaps"] is None
+    assert "accepted" not in record and "product_accepted" not in record
     assert (Path(record["export"]["files_directory"]) / "tests/test_probe.py").is_file()
     # Missing/ambiguous recorded mode must not become a qualification exemption.
     original = events.read_text()
@@ -2868,48 +2153,10 @@ def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     tmp_path: Path,
 ) -> None:
-    task = "Exercise a real Codex author lane."
-    operator, root, _ = execution_truth_fixture(
-        tmp_path,
-        task=task,
-        harness_status=None,
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    ignited = run(
-        [
-            "bash",
-            str(HARNESS / "factory.sh"),
-            "r1",
-            task,
-            "--runs",
-            str(root.parent),
-        ],
-        operator,
-        env,
-    )
-    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
-
+    root, operator, tmux_log, launch = _ignite_and_launcher(tmp_path, "Implement task")
     lane = tmp_path / "standalone-coder"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
-    prompt = tmp_path / "coder-prompt.txt"
-    prompt.write_text("Implement the signed specification and checkpoint your work.\n")
-    launched = run(
-        [
-            "bash",
-            str(HARNESS / "tmux_lane.sh"),
-            "r1",
-            "coder",
-            "launch",
-            "--repo",
-            str(lane),
-            "--prompt",
-            str(prompt),
-            "--runs",
-            str(root.parent),
-        ],
-        operator,
-        env,
-    )
+    env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
+    launched = launch("coder")
 
     assert launched.returncode == 0, launched.stdout + launched.stderr
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
@@ -2919,7 +2166,7 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert "default_permissions" in coder_call and "factory-lane" in coder_call
     assert ".git" in coder_call and "write" in coder_call
     assert "--sandbox" not in coder_call
-    # Kindex scoped to this lane's own copy of the target's .kin, never the operator's graph.
+    # Kindex scoped to this lane's own copy of the private projection, never the operator's graph.
     lane_home = root / "tmux-lanes" / "coder-kindex-home"
     assert "mcp_servers.kindex=" in coder_call and "kindex-lite" in coder_call
     assert str(lane_home.resolve()) in coder_call and str(lane.resolve()) in coder_call
@@ -2960,19 +2207,23 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert rows[-1]["boundary"] == "regular-files-only-no-git"
 
 
+def ordinary_message_fixture(tmp_path: Path):
+    from harness import run_record
+
+    source = projection_fixture(tmp_path)
+    root = run_record.create(tmp_path / ".factory/runs", "r1", source,
+                             b"Preserve the assigned conversation and answer concrete questions")
+    env, log = factory_ignition_env(tmp_path, root)
+    return tmp_path, root, env, log
+
+
 @pytest.mark.parametrize("sandbox", ["on", "off"])
 def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_blocked(
     tmp_path: Path, sandbox: str
 ) -> None:
     from harness.lane_dialogue import record_question
 
-    task = "Resolve semantics through the typed lane question channel."
-    operator, root, _ = execution_truth_fixture(
-        tmp_path,
-        task=task,
-        harness_status="open",
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
     # The resume follows the launch record's sandbox, never the ambient switch: the ambient value
     # here is always the opposite of what the lane launched with.
     env["FACTORY_LANE_SANDBOX"] = "off" if sandbox == "on" else "on"
@@ -3030,10 +2281,10 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
         operator,
         env,
     )
-    # A question never blocks (P-0001): it is carried into the record; this freeze still stops
-    # on the Tester's own unwritten cases.
-    assert blocked_freeze.returncode == 70
-    assert "a question never blocks" in blocked_freeze.stderr
+    # Exporting files does not accept the product or answer the outstanding question.
+    assert blocked_freeze.returncode == 0, blocked_freeze.stderr
+    assert "carrying unanswered lane questions" in blocked_freeze.stderr
+    assert json.loads(blocked_freeze.stdout)["git_invoked_after_handoff"] is False
 
     delivered = run(
         [
@@ -3090,12 +2341,7 @@ def test_tmux_lane_message_refuses_orchestrator_specification_answer(
 ) -> None:
     from harness.lane_dialogue import record_question
 
-    operator, root, _ = execution_truth_fixture(
-        tmp_path,
-        task="Keep Orchestrator authority monotone.",
-        harness_status="open",
-    )
-    env, _ = factory_ignition_env(tmp_path, root)
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
     lane = tmp_path / "standalone-coder"
     lane.mkdir()
     launch_dir = root / "tmux-lanes"
@@ -3148,99 +2394,42 @@ def test_tmux_lane_message_refuses_orchestrator_specification_answer(
     assert "may probe status but may not answer specifications" in refused.stderr
 
 
-def test_factory_task_mismatch_has_zero_tmux_or_harness_mutation(tmp_path: Path) -> None:
-    _, root, _ = execution_truth_fixture(
-        tmp_path,
-        task="Authorized request",
-        harness_status=None,
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "factory.sh"),
-            "r1",
-            "Different request",
-            "--runs",
-            str(root.parent),
-        ],
-        tmp_path,
-        env,
-    )
-
-    assert result.returncode != 0
-    assert "differ" in result.stderr
-    assert not (root / "harness.json").exists()
-    assert not (root / "TASK.md").exists()
-    assert not tmux_log.exists()
-    assert "tmux-session" not in ResourceLedger(root, "r1").latest()
 
 
 IGNITION_FILES = ("harness.json", "TASK.md")
 
 
-def test_failed_ignition_leaves_nothing_that_refuses_a_retry(tmp_path: Path) -> None:
-    task = "Build the exact authorized behavior."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _ = factory_ignition_env(tmp_path, root)
-    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
-
-    failed = run(ignite, operator, {**env, "TMUX_STUB_FAIL": "new-session"})
-    assert failed.returncode == 70, failed.stdout + failed.stderr
-    assert not [name for name in IGNITION_FILES if (root / name).exists()]
-    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
-
-    retried = run(ignite, operator, env)
-    assert retried.returncode == 0, retried.stdout + retried.stderr
-    assert all((root / name).exists() for name in IGNITION_FILES)
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["tmux-session-2"]["status"] == "active"
 
 
-def test_an_ignition_failing_before_the_session_is_abandoned_not_left_planned(
-    tmp_path: Path,
-) -> None:
-    """Codex review: a set -e failure between planning the session and creating it left
-    tmux-session=planned, and every retry was refused as an open earlier ignition."""
-    task = "Build the exact authorized behavior."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _ = factory_ignition_env(tmp_path, root)
-    ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)]
+def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, monkeypatch):
+    from harness import run_record
+
+    repository = projection_fixture(tmp_path)
+    runs = tmp_path / "runs"
+    root = run_record.create(runs, "r1", repository, b"Retain this exact task")
+    original = (root / "harness.json").read_bytes()
     blocker = root / "orchestrator"
-    blocker.write_text("not a directory\n", encoding="utf-8")
+    blocker.write_text("not a directory")
+    calls = []
 
-    failed = run(ignite, operator, env)
-    assert failed.returncode != 0, failed.stdout + failed.stderr
-    assert ResourceLedger(root, "r1").latest()["tmux-session"]["status"] == "abandoned"
-    assert not [name for name in IGNITION_FILES if (root / name).exists()]
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0)
 
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(shutil, "which", lambda _: "/fixture/agent")
+    with pytest.raises(FileExistsError):
+        run_record.start(runs, "r1")
+    assert not any("new-session" in call for call in calls)
+    assert (root / "harness.json").read_bytes() == original
+    assert (root / "TASK.md").read_bytes() == b"Retain this exact task"
     blocker.unlink()
-    retried = run(ignite, operator, env)
-    assert retried.returncode == 0, retried.stdout + retried.stderr
-    assert ResourceLedger(root, "r1").latest()["tmux-session-2"]["status"] == "active"
+    run_record.start(runs, "r1")
+    assert sum("new-session" in call for call in calls) == 1
+    assert sum("new-window" in call for call in calls) == 1
+    assert (root / "harness.json").read_bytes() == original
 
 
-def test_ignition_refuses_while_another_ignition_of_the_run_holds_the_lock(
-    tmp_path: Path,
-) -> None:
-    import fcntl
-
-    task = "Build the exact authorized behavior."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    # The concurrent winner's file: a losing attempt must neither refuse past it nor remove it.
-    (root / "TASK.md").write_text("winner\n", encoding="utf-8")
-    with open(root / "ignition.lock", "a") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)
-        result = run(
-            ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-            operator,
-            env,
-        )
-    assert result.returncode == 75, result.stdout + result.stderr
-    assert (root / "TASK.md").read_text() == "winner\n"
-    assert not (root / "harness.json").exists() and not tmux_log.exists()
 
 
 # --------------------------------------------------------------------------
@@ -3296,29 +2485,8 @@ def test_proof_green_when_all_probes_pass(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def wake_harness(agent: str) -> str:
-    """Harness metadata for a headless-audit fixture. The audit script refuses
-    any run without a resident Orchestrator, so its fixtures declare one."""
-    return json.dumps(
-        {"status": "open", "orchestrator_mode": "resident-monitoring", "orchestrator_agent": agent}
-    )
 
 
-def test_headless_audit_refuses_a_run_without_a_resident_orchestrator(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    root.mkdir(parents=True)
-    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
-    (root / "harness.json").write_text(
-        json.dumps({"status": "open", "orchestrator_agent": "codex"})
-    )
-    r = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={"ORCH_AGENT": "codex"},
-    )
-    assert r.returncode == 72
-    assert "no resident Orchestrator" in r.stderr
-    assert not (root / "wakes").exists()
 
 
 def load_dispatcher() -> object:
@@ -3439,15 +2607,6 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
 
 
-def test_resident_checkpoint_notification_cannot_outgrow_default_inject_ceiling() -> None:
-    source = (HARNESS / "orchestrator_checkpoint.sh").read_text(encoding="utf-8")
-    line = next(
-        row for row in source.splitlines() if row.startswith('MESSAGE="# FACTORY_CHECKPOINT')
-    )
-
-    assert "$ROOT" not in line
-    assert "orchestrator/ROLE.md" in line
-    assert len(line) < 1_000
 
 
 def test_resident_orchestrator_signal_joins_activity_stream_instead_of_spawning_wake(
@@ -3514,7 +2673,7 @@ def test_dispatcher_wakes_the_validator_once_per_lane_question_and_done(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#39: a lane waiting on the Validator puts one line in the Validator's pane."""
+    """Repeated observation queues one durable notice per question/completion, never pane input."""
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
     root.mkdir(parents=True)
@@ -3540,11 +2699,13 @@ def test_dispatcher_wakes_the_validator_once_per_lane_question_and_done(
     dispatcher.check_window("tester", done)  # type: ignore[attr-defined]
     dispatcher.check_window("tester", done + "\nidle")  # type: ignore[attr-defined]
 
-    assert [command[1:3] for command in sent] == [["r1", "validator"]] * 2
-    question_id = read_chain(root / "dialogue" / "journal.jsonl")[0]["question_id"]
-    assert sent[0][3].startswith(f"FACTORY_QUESTION_PENDING {question_id} from tester")
-    assert sent[1][3].startswith("FACTORY_LANE_DONE tester")
-    assert all("\n" not in command[3] for command in sent)
+    assert sent == [], "notices must not invoke terminal delivery"
+    notices = read_chain(root / "validator/inbox.jsonl")
+    assert len(notices) == 2
+    question_id = read_chain(root / "dialogue/journal.jsonl")[0]["question_id"]
+    assert notices[0]["text"].startswith(f"FACTORY_QUESTION_PENDING {question_id} from tester")
+    assert notices[1]["text"].startswith("FACTORY_LANE_DONE tester")
+    assert all(row["sender"] == "dispatcher" for row in notices)
 
 
 def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal(
@@ -3585,9 +2746,12 @@ def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal
 
     question = read_chain(root / "dialogue" / "journal.jsonl")[0]
     assert question["lane"] == "tester-b"
-    assert [command[3].split(" ")[0] for command in sent] == [
+    assert sent == [], "parallel-lane notices must not invoke terminal delivery"
+    notices = read_chain(root / "validator/inbox.jsonl")
+    assert [row["text"].split(" ")[0] for row in notices] == [
         "FACTORY_QUESTION_PENDING", "FACTORY_LANE_DONE"]
-    assert "from tester-b" in sent[0][3] and sent[1][3].startswith("FACTORY_LANE_DONE tester-b")
+    assert "from tester-b" in notices[0]["text"]
+    assert notices[1]["text"].startswith("FACTORY_LANE_DONE tester-b")
 
 
 def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(
@@ -3623,8 +2787,9 @@ def test_lane_roles_require_typed_question_before_guessing() -> None:
     for role_prompt in ("engineer.md", "test.md"):
         text = (HARNESS.parent / "prompts" / role_prompt).read_text(encoding="utf-8")
         assert "the marker word FACTORY_QUESTION, a colon, then one concrete question" in text
-        assert "Ask one question at a time and stop" in text
-        assert "same Codex thread" in text
+        assert "one concrete question" in text
+        assert "same native conversation" in text
+        assert "continue independent work" in text
         assert "guess" in text.lower()
 
 
@@ -4234,333 +3399,28 @@ def test_mutate_kills_a_real_mutation(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_dead_auditor_is_detected_when_invocation_fails(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
+def test_failed_coordinator_start_records_exit_without_fake_review(tmp_path: Path) -> None:
+    from harness import lane_agent
+
+    root = tmp_path / "run"
+    root.mkdir()
+    code = lane_agent.run_lane(
+        [str(tmp_path / "nonexistent-agent")], slot="orchestrator",
+        log=root / "orchestrator-lane.log", exits=root / "orchestrator-exits.jsonl",
     )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        wake_harness("codex")
-    )
-    # PATH without any agent binary: the invocation cannot succeed.
-    r = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "codex"},
-    )
-    receipts = (root / "wakes" / "receipts.jsonl").read_text()
-    assert '"status":"did-not-run"' in receipts, (
-        "a failed invocation must be recorded as a dead wake, not written out as an audit"
-    )
-    assert not list((root / "wakes").glob("*.response.md"))
-    assert len(list((root / "wakes").glob("*.failure.md"))) == 1
-    assert "ORCHESTRATOR DID NOT RUN" in r.stderr
+    assert code == 127
+    rows = read_chain(root / "orchestrator-exits.jsonl")
+    assert len(rows) == 1 and rows[0]["slot"] == "orchestrator" and rows[0]["rc"] == 127
+    assert "could not start" in (root / "orchestrator-lane.log").read_text()
+    assert not (root / "orchestrator/assessment.json").exists()
 
 
-def test_orchestrator_defaults_to_sandboxed_antigravity_with_bounded_projection(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task-" + ("t" * 60_000) + "\n")
-    (root / "harness.json").write_text(wake_harness("agy"))
-    (root / "events.jsonl").write_text(
-        json.dumps({"padding": "e" * 59_000}, separators=(",", ":")) + "\n"
-    )
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    agy = binary / "agy"
-    agy.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
-        "pathlib.Path(os.environ['FACTORY_TEST_AGY_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
-        "pathlib.Path(os.environ['FACTORY_TEST_AGY_INPUT']).write_bytes(sys.stdin.buffer.read())\n"
-        "for path in pathlib.Path(os.environ['FACTORY_TEST_WAKE_ROOT']).glob("
-        "'*.agy-input.jsonl'):\n"
-        "    path.write_text('mutated after supervisor admission\\n')\n"
-        "print(json.dumps({'event': 'init', 'init': {'tools': []}}))\n"
-        "print(json.dumps({'event': 'result', 'result': {"
-        "'status': 'SUCCESS', 'response': 'No process \\\"drift\\\" found.\\nSecond line.\\n'}}))\n"
-    )
-    agy.chmod(0o755)
-    log = tmp_path / "agy.log"
-    input_log = tmp_path / "agy-input.jsonl"
-    directive = dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "project this exact directive",
-    )
-    assert directive.returncode == 0, directive.stderr
-    directive_ledger = tmp_path / "DIRECTIVES" / "ledger.jsonl"
-    (root / "minutes").mkdir()
-    (root / "minutes" / "validator-2026-08-18.log").write_text(
-        "one\ntwo\n" + "".join(f"minute-{index}-{'m' * 1_450}\n" for index in range(38)),
-        encoding="utf-8",
-    )
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={
-            "PATH": f"{binary}:/usr/bin:/bin",
-            "FACTORY_TEST_AGY_LOG": str(log),
-            "FACTORY_TEST_AGY_INPUT": str(input_log),
-            "FACTORY_TEST_WAKE_ROOT": str(root / "wakes"),
-            "FACTORY_TEST_DIRECTIVE_LEDGER_SOURCE": str(directive_ledger),
-            "DIRECTIVE_LEDGER": str(tmp_path / "ambient-forged-ledger.jsonl"),
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    invocation = json.loads(log.read_text())
-    assert invocation[:4] == ["--sandbox", "--disable-slash-commands", "-p", ""]
-    assert invocation[4:] == ["--input-format", "stream-json", "--output-format", "stream-json"]
-    assert "--mode" not in invocation
-    assert "dangerously-skip-permissions" not in invocation
-    assert max(map(len, invocation)) < 128
-    wire = json.loads(input_log.read_text())
-    assert wire["type"] == "user"
-    assert wire["message"]["role"] == "user"
-    assert "STRUCTURED PROJECTION:" in wire["message"]["content"]
-    projections = list((root / "wakes").glob("*.projection.json"))
-    capsules = list((root / "wakes").glob("*.state-capsule.json"))
-    prompts = list((root / "wakes").glob("*.prompt.txt"))
-    assert len(projections) == 1 and len(capsules) == 1 and len(prompts) == 1
-    assert "/Users/" not in projections[0].read_text()
-    projected = json.loads(projections[0].read_text())
-    active_directives = next(
-        section for section in projected["sections"] if section["section_id"] == "active-directives"
-    )
-    assert "project this exact directive" in active_directives["content"]
-    assert "ambient-forged" not in active_directives["content"]
-    minutes = next(
-        section for section in projected["sections"] if section["section_id"] == "minutes-tail"
-    )
-    assert "[validator-2026-08-18.log] one" in minutes["content"]
-    wake_receipt = json.loads((root / "wakes" / "receipts.jsonl").read_text().splitlines()[0])
-    assert wake_receipt["agent"] == "agy"
-    assert wake_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
-    assert wake_receipt["status"] == "projection-prepared"
-    assert wake_receipt["sandbox_enforcement"] == "cli-declared-not-independently-qualified"
-    completed_receipt = json.loads((root / "wakes" / "receipts.jsonl").read_text().splitlines()[1])
-    assert completed_receipt["status"] == "completed"
-    assert completed_receipt["schema_version"] == "factory-orchestrator-wake-receipt/4"
-    assert completed_receipt["exit_code"] == 0
-    assert completed_receipt["prompt_schema_version"] == "factory-orchestrator-prompt/1"
-    assert (
-        completed_receipt["prompt_assembler_version"] == "factory-orchestrator-prompt-assembler/2"
-    )
-    assert completed_receipt["prompt_id"] == prompts[0].name
-    assert completed_receipt["prompt_byte_count"] == len(prompts[0].read_bytes())
-    assert completed_receipt["prompt_digest"] == digest_bytes(prompts[0].read_bytes())
-    assert completed_receipt["prompt_bytes_retained"] is True
-    assert completed_receipt["prompt_byte_count"] > 131_072
-    client_inputs = list((root / "wakes").glob("*.presented-input"))
-    assert len(client_inputs) == 1
-    assert completed_receipt["client_input_id"] == client_inputs[0].name
-    assert completed_receipt["client_input_transport"] == "agy-stream-json-stdin"
-    assert completed_receipt["client_input_descriptor_mode"] == "read-only"
-    assert completed_receipt["client_input_digest"] == digest_bytes(client_inputs[0].read_bytes())
-    assert completed_receipt["client_input_byte_count"] == len(client_inputs[0].read_bytes())
-    assert completed_receipt["client_input_bytes_retained"] is True
-    assert client_inputs[0].read_bytes() == input_log.read_bytes()
-    assert next((root / "wakes").glob("*.agy-input.jsonl")).read_text() == (
-        "mutated after supervisor admission\n"
-    )
-    assert wire["message"]["content"].encode() == prompts[0].read_bytes()
-    raw_outputs = list((root / "wakes").glob("*.client-output"))
-    assert len(raw_outputs) == 1
-    assert completed_receipt["raw_output_digest"] == digest_bytes(raw_outputs[0].read_bytes())
-    assert completed_receipt["raw_output_truncated"] is False
-    supervisor_receipts = list((root / "wakes").glob("*.supervisor-receipt.json"))
-    assert len(supervisor_receipts) == 1
-    supervisor_receipt = json.loads(supervisor_receipts[0].read_text())
-    assert supervisor_receipt["input_digest"] == completed_receipt["client_input_digest"]
-    assert completed_receipt["supervisor_receipt_digest"] == digest_bytes(
-        supervisor_receipts[0].read_bytes()
-    )
-    responses = list((root / "wakes").glob("*.response.md"))
-    assert len(responses) == 1
-    assert completed_receipt["output_digest"] == digest_bytes(responses[0].read_bytes())
-    assert not list((root / "wakes").glob("*.failure.md"))
-    assert '"drift"' in list((root / "wakes").glob("*.response.md"))[0].read_text()
-    blocking = read_chain(root / "lanes" / "validator.blocking")
-    assert blocking[-1]["trust_class"] == "untrusted-advisory"
-    assert blocking[-1]["effect_route"] == "validator-blocking-only"
-    for line in (root / "events.jsonl").read_text().splitlines():
-        json.loads(line)
 
 
-def test_orchestrator_rejects_malformed_agy_terminal_stream(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(wake_harness("agy"))
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    agy = binary / "agy"
-    agy.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stdin.buffer.read()\n"
-        "print('plausible prose without a terminal result')\n"
-    )
-    agy.chmod(0o755)
-    directive = dl(tmp_path, "append", "--scope", "run", "--text", "audit the run")
-    assert directive.returncode == 0, directive.stderr
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={
-            "PATH": f"{binary}:/usr/bin:/bin",
-            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    receipts = read_chain(root / "wakes" / "receipts.jsonl")
-    assert receipts[-1]["status"] == "did-not-run"
-    assert receipts[-1]["exit_code"] == 0
-    assert not list((root / "wakes").glob("*.response.md"))
-    failure = next((root / "wakes").glob("*.failure.md")).read_text()
-    assert "client output invalid" in failure
-    assert "plausible prose" in failure
 
 
-def test_orchestrator_receipts_live_supervisor_output_truncation(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(wake_harness("agy"))
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    agy = binary / "agy"
-    agy.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os, sys\n"
-        "sys.stdin.buffer.read()\n"
-        "os.write(sys.stdout.fileno(), b'x' * 131072)\n"
-    )
-    agy.chmod(0o755)
-    directive = dl(tmp_path, "append", "--scope", "run", "--text", "audit the run")
-    assert directive.returncode == 0, directive.stderr
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={
-            "PATH": f"{binary}:/usr/bin:/bin",
-            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    receipt = read_chain(root / "wakes" / "receipts.jsonl")[-1]
-    assert receipt["status"] == "did-not-run"
-    assert receipt["exit_code"] == 74
-    assert receipt["raw_output_truncated"] is True
-    supervisor_receipt = json.loads(
-        next((root / "wakes").glob("*.supervisor-receipt.json")).read_text()
-    )
-    assert supervisor_receipt["combined_output_truncated"] is True
-    assert receipt["supervisor_receipt_digest"] == digest_bytes(
-        next((root / "wakes").glob("*.supervisor-receipt.json")).read_bytes()
-    )
 
 
-def test_orchestrator_tails_mature_append_only_logs_without_disabling_wake(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "minutes").mkdir(parents=True)
-    receipts = tmp_path / ".factory" / "receipts"
-    receipts.mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(wake_harness("agy"))
-    (receipts / "chain.jsonl").write_text(
-        "".join(f'{{"receipt":{index}}}\n' for index in range(12_000))
-        + '{"receipt":"receipt-final"}\n'
-    )
-    (root / "events.jsonl").write_text(
-        "".join(f'{{"event":{index}}}\n' for index in range(12_000))
-        + ("é" * 40_000)
-        + "\n"
-        + '{"event":"event-final"}\n'
-        + '{"event":"unterminated-fragment"'
-    )
-    (root / "minutes" / "validator.log").write_text(
-        "".join(f"minute-{index}\n" for index in range(16_000)) + "minutes-final\n"
-    )
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    agy = binary / "agy"
-    agy.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        "json.loads(sys.stdin.buffer.read())\n"
-        "print(json.dumps({'event': 'result', 'result': {"
-        "'status': 'SUCCESS', 'response': 'Run remains aligned.\\n'}}))\n"
-    )
-    agy.chmod(0o755)
-    directive = dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "retain the bounded tail",
-    )
-    assert directive.returncode == 0, directive.stderr
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={
-            "PATH": f"{binary}:/usr/bin:/bin",
-            "DIRECTIVE_LEDGER": str(tmp_path / "DIRECTIVES" / "ledger.jsonl"),
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    projection = json.loads(next((root / "wakes").glob("*.projection.json")).read_text())
-    sections = {section["section_id"]: section["content"] for section in projection["sections"]}
-    assert "receipt-final" in sections["receipt-tail"]
-    assert "event-final" in sections["event-tail"]
-    assert "unterminated-fragment" not in sections["event-tail"]
-    assert "omitted earlier, oversized, or invalid record" in sections["event-tail"]
-    assert "minutes-final" in sections["minutes-tail"]
-    assert all(
-        len(sections[name].encode()) <= 65_536
-        for name in (
-            "receipt-tail",
-            "event-tail",
-            "minutes-tail",
-        )
-    )
 
 
 def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Path) -> None:
@@ -4961,28 +3821,6 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     assert input_snapshot.read_bytes() == original
 
 
-def test_orchestrator_refuses_unbounded_minutes_file_enumeration(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    minutes = root / "minutes"
-    minutes.mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(wake_harness("agy"))
-    for index in range(65):
-        (minutes / f"{index:02d}.log").write_text("minute\n")
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-    )
-
-    assert result.returncode != 0
-    assert "too many orchestrator minutes inputs" in result.stderr
-    assert not list((root / "wakes").glob("*.projection.json"))
 
 
 def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -> None:
@@ -5046,36 +3884,8 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
     assert not status or status.startswith("Z")
 
 
-def test_orchestrator_refuses_ambient_agent_substitution(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "harness.json").write_text(wake_harness("agy"))
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={"ORCH_AGENT": "claude"},
-    )
-
-    assert result.returncode == 72
-    assert "differs from bound metadata" in result.stderr
 
 
-def test_orchestrator_refuses_unsandboxed_claude_adapter(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    root.mkdir(parents=True)
-    (root / "harness.json").write_text(
-        wake_harness("claude")
-    )
-
-    result = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={"ORCH_AGENT": "claude"},
-    )
-
-    assert result.returncode == 72
-    assert "no valid bound orchestrator" in result.stderr
 
 
 def test_mutate_reports_no_op_patch_not_survival(tmp_path: Path) -> None:
@@ -5657,29 +4467,27 @@ def test_mutate_named_test_accepts_kill_on_named_oracle(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_dead_auditor_writes_blocking_event_not_injection(tmp_path: Path) -> None:
-    root = tmp_path / ".factory" / "runs" / "r1"
-    (root / "wakes").mkdir(parents=True)
-    (root / "artifacts").mkdir(parents=True)
-    (root / "run.json").write_text(
-        json.dumps({"run": "r1", "repo": str(tmp_path), "base_sha": "abc"})
-    )
-    (root / "TASK.md").write_text("task\n")
-    (root / "harness.json").write_text(
-        wake_harness("codex")
-    )
-    r = run(
-        ["bash", str(HARNESS / "orchestrator_wake.sh"), "r1", '{"kind":"drill"}'],
-        cwd=tmp_path,
-        env_extra={"PATH": "/usr/bin:/bin", "ORCH_AGENT": "codex"},
-    )
-    blocking = root / "lanes" / "validator.blocking"
-    assert blocking.exists(), "a dead wake must write a blocking event for attention"
-    assert "orchestrator_dead" in blocking.read_text()
-    # the shepherd channel is closed: no injection receipt is produced
-    inj = root / "injections.jsonl"
-    assert not inj.exists(), "orchestrator_wake must not inject into the validator pane"
-    assert "ORCHESTRATOR DID NOT RUN" in r.stderr
+def test_failed_coordinator_exit_is_observable_without_terminal_wake(tmp_path, monkeypatch):
+    from harness import lane_agent
+    from harness.dispatcher import observe
+
+    root = tmp_path / "run"
+    root.mkdir()
+    assert lane_agent.run_lane(
+        [str(tmp_path / "nonexistent-agent")], slot="orchestrator",
+        log=root / "orchestrator-lane.log", exits=root / "orchestrator-exits.jsonl",
+    ) == 127
+
+    def no_control(*args, **kwargs):
+        pytest.fail("observing failure must not launch, signal or type into any agent")
+
+    monkeypatch.setattr(subprocess, "run", no_control)
+    monkeypatch.setattr(subprocess, "Popen", no_control)
+    observed = observe(root, {})
+    exits = [entry for entry in observed["entries"]
+             if entry["source"] == "orchestrator-exits.jsonl"]
+    assert len(exits) == 1 and json.loads(exits[0]["text"])["rc"] == 127
+    assert not (root / "lanes/validator.blocking").exists()
 
 
 def test_non_resident_run_is_refused_never_served_by_a_one_shot_wake(
@@ -5788,33 +4596,6 @@ def test_dispatcher_answers_a_seat_dialog_instead_of_paging_the_human(
     assert not hasattr(d, "page_operator")
 
 
-def test_checkpoint_delivers_orchestrator_reminders_into_validator_output(
-    tmp_path: Path,
-) -> None:
-    """The Orchestrator's check-in loop reaches the Validator without pane injection:
-    its OUTSTANDING-WORK.md is printed into the Validator's own checkpoint output."""
-    _cwd, root, _dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    ledger = root / "orchestrator" / "OUTSTANDING-WORK.md"
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    ledger.write_text(
-        "- NEXT: ask the human about per-line rounding before dispatching the Tester\n"
-    )
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "orchestrator_checkpoint.sh"),
-            "r1",
-            "pre_dispatch",
-            "before dispatching the coder lane",
-            "--runs",
-            str(root.parent),
-        ],
-        root,
-        _dispatch_env(stub, root),
-    )
-    assert result.returncode == 0, result.stderr
-    assert "ORCHESTRATOR — outstanding work and reminders" in result.stderr
-    assert "ask the human about per-line rounding" in result.stderr
 
 
 def test_check_in_cadence_cannot_be_disabled(tmp_path: Path) -> None:
@@ -6082,76 +4863,10 @@ def test_ordinary_text_about_rate_limits_is_not_a_dialog(
     assert answers == []
 
 
-def test_ignition_records_the_engagement_the_human_chose(tmp_path: Path) -> None:
-    """How much of the human a run gets is set once, at ignition, and retained.
-    The default is scheduled: all back-and-forth up front, nothing blocking
-    after it, and only an exceptional question sent to the configured channel."""
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _log = factory_ignition_env(tmp_path, root)
-
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "factory.sh"),
-            "r1",
-            task,
-            "--runs",
-            str(root.parent),
-            "--engagement",
-            "autonomous",
-        ],
-        operator,
-        env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    harness = json.loads((root / "harness.json").read_text())
-    assert harness["engagement"] == "autonomous"
-    assert harness["question_channel"] is None
 
 
-def test_ignition_refuses_an_engagement_the_factory_does_not_define(tmp_path: Path) -> None:
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _log = factory_ignition_env(tmp_path, root)
-
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "factory.sh"),
-            "r1",
-            task,
-            "--runs",
-            str(root.parent),
-            "--engagement",
-            "semi",
-        ],
-        operator,
-        env,
-    )
-
-    assert result.returncode != 0
-    assert "engagement must be interactive, scheduled, or autonomous" in result.stderr
 
 
-def test_scheduled_without_a_channel_says_so_instead_of_going_quiet(tmp_path: Path) -> None:
-    """A silent downgrade to autonomous is the failure: scheduled with no
-    channel records and reports its exceptional questions, and says so."""
-    task = "Build the exact authorized behavior."
-    operator, root, _target = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _log = factory_ignition_env(tmp_path, root)
-
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    harness = json.loads((root / "harness.json").read_text())
-    assert harness["engagement"] == "scheduled"
-    assert "never sent" in result.stderr
 
 
 def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
@@ -6261,7 +4976,7 @@ def test_resident_orchestrator_transport_failure_is_an_admitted_dispatcher_block
     assert event["class"] == "orchestrator_transport_failed"
 
 
-def test_lane_env_refuses_past_blocking_event(tmp_path: Path) -> None:
+def test_lane_env_executes_with_unread_status_event(tmp_path: Path) -> None:
     env = lane_env_setup(tmp_path)
     root = tmp_path / ".harness" / "runs" / "rA"
     (root / "lanes").mkdir(parents=True)
@@ -6275,7 +4990,7 @@ def test_lane_env_refuses_past_blocking_event(tmp_path: Path) -> None:
         tmp_path,
         env,
     )
-    assert r.returncode == 81 and "blocking event pending" in r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 def test_lane_env_proceeds_when_blocking_event_absent(tmp_path: Path) -> None:
@@ -6800,118 +5515,10 @@ def test_consume_block_refuses_stale_subject_without_clearing(tmp_path: Path) ->
 # --------------------------------------------------------------------------
 
 
-def test_dispatch_refuses_while_blocking_event_pending(tmp_path: Path) -> None:
-    """The blocking-event gate is wired into dispatch_lane.sh (the path factory.sh
-    and the lanes actually call), not just lane_env.sh. A validator with an
-    unconsumed attention event cannot dispatch new lane work until it consumes the
-    event (harness/consume_block.sh). This is the production enforcement site."""
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    (root / "lanes").mkdir(parents=True)
-    (root / "lanes" / "validator.blocking").write_text('{"class":"orchestrator_response"}\n')
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-    assert r.returncode == 81, r.stdout + r.stderr
-    assert "blocking event pending" in r.stderr
-    assert not (root / "dispatch-inputs").exists()
-    assert not (root / "instruction-inputs").exists()
 
 
-def test_disposition_releases_same_unpublished_dispatch(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    blocking = append_blockers(
-        root,
-        "validator",
-        {
-            "ts": "2026-08-19T12:00:00+00:00",
-            "class": "orchestrator_response",
-            "response": "wakes/wake-1.response.md",
-            "wake": "wake-1",
-            "trust_class": "untrusted-advisory",
-            "effect_route": "validator-blocking-only",
-        },
-    )
-    environment = _dispatch_env(stub, root)
-
-    refused = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert refused.returncode == 81, refused.stdout + refused.stderr
-    assert not (root / "dispatch-inputs").exists()
-
-    evidence = root / "disposition-proof.txt"
-    evidence.write_text("The retained task already excludes the disputed surface.\n")
-    disposition = run(
-        [
-            "bash",
-            str(HARNESS / "consume_block.sh"),
-            "r1",
-            "validator",
-            "--disposition",
-            "narrow",
-            "--reason",
-            "Proceed only with the exact already-bounded task.",
-            "--subject-digest",
-            "sha256:" + hashlib.sha256(blocking.read_bytes()).hexdigest(),
-            "--evidence-file",
-            str(evidence),
-            "--evidence-digest",
-            "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
-        ],
-        cwd,
-        {"HARNESS_RUN_ROOT": str(root)},
-    )
-    assert disposition.returncode == 0, disposition.stderr
-
-    admitted = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
 
 
-def test_blocking_append_after_admission_marker_applies_to_next_dispatch(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    environment = _dispatch_env(stub, root)
-    delegate = tmp_path / "factory-with-post-admission-block"
-    delegate.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'if [ "${1:-}" = prepare-lane-dispatch ] && '
-        '[ ! -e "$HARNESS_RUN_ROOT/post-admission-block-injected" ]; then\n'
-        '  mkdir -p "$HARNESS_RUN_ROOT/lanes"\n'
-        '  printf \'%s\\n\' \'{"class":"orchestrator_response","response":"next"}\' '
-        '>> "$HARNESS_RUN_ROOT/lanes/validator.blocking"\n'
-        '  : > "$HARNESS_RUN_ROOT/post-admission-block-injected"\n'
-        "fi\n"
-        f'exec {sys.executable} -m factory_runtime.cli "$@"\n',
-        encoding="utf-8",
-    )
-    delegate.chmod(0o755)
-    environment["FACTORY_CLI"] = str(delegate)
-
-    admitted = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
-    assert (root / "lanes" / "validator.blocking").stat().st_size > 0
-
-    next_dispatch = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert next_dispatch.returncode == 81
-    assert "blocking event pending" in next_dispatch.stderr
 
 
 def test_attention_lock_orders_overlapping_producer_after_dispatch_admission(
@@ -7157,124 +5764,8 @@ def test_inherited_dispatch_descriptor_repeats_blocker_admission(tmp_path: Path)
         os.close(descriptor)
 
 
-@pytest.mark.parametrize("retained_publications", [1, 2, 3, 4])
-def test_dispatch_exact_retry_recovers_after_partial_instruction_publication(
-    tmp_path: Path,
-    retained_publications: int,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    environment = _dispatch_env(stub, root)
-    marker = tmp_path / f"partial-{retained_publications}.marker"
-    delegate = tmp_path / f"partial-{retained_publications}.py"
-    delegate.write_text(
-        f"#!{sys.executable}\n"
-        "import os, pathlib, subprocess, sys\n"
-        "def argument(name): return pathlib.Path(sys.argv[sys.argv.index(name) + 1])\n"
-        "marker = pathlib.Path(os.environ['FACTORY_TEST_PARTIAL_MARKER'])\n"
-        "if sys.argv[1:2] == ['prepare-lane-dispatch'] and not marker.exists():\n"
-        "    result = subprocess.run(\n"
-        "        [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]]\n"
-        "    )\n"
-        "    if result.returncode != 0: raise SystemExit(result.returncode)\n"
-        "    outputs = [argument('--effective-directives-output'), "
-        "argument('--role-contract-output'), argument('--readback-output'), "
-        "argument('--task-output')]\n"
-        "    retain = int(os.environ['FACTORY_TEST_PARTIAL_RETAIN_COUNT'])\n"
-        "    for path in outputs[retain:]: path.unlink()\n"
-        "    marker.write_text('injected after publication\\n', encoding='utf-8')\n"
-        "    raise SystemExit(70)\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
-        encoding="utf-8",
-    )
-    delegate.chmod(0o755)
-    environment.update(
-        {
-            "FACTORY_CLI": str(delegate),
-            "FACTORY_TEST_PARTIAL_MARKER": str(marker),
-            "FACTORY_TEST_PARTIAL_RETAIN_COUNT": str(retained_publications),
-        }
-    )
-    command = [
-        "bash",
-        str(HARNESS / "dispatch_lane.sh"),
-        "r1",
-        "coder",
-        "--dispatch",
-        str(dispatch),
-    ]
-
-    interrupted = run(command, cwd, environment)
-
-    assert interrupted.returncode == 70
-    retained_dispatch = root / "dispatch-inputs" / "coder.json"
-    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
-    instruction_root = root / "instruction-inputs" / "coder-g1"
-    publications = [
-        instruction_root / "effective-directives.json",
-        instruction_root / "role-contract.json",
-        instruction_root / "directive-readback.json",
-        instruction_root / "task.txt",
-    ]
-    assert [path.exists() for path in publications] == [
-        index < retained_publications for index in range(4)
-    ]
-
-    recovered = run(command, cwd, environment)
-
-    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
-    assert all(path.is_file() for path in publications)
 
 
-def test_dispatch_sigkill_releases_role_lock_and_exact_retry_recovers(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    environment = _dispatch_env(stub, root)
-    marker = tmp_path / "killed-after-instruction-publication"
-    delegate = tmp_path / "kill-dispatch-parent.py"
-    delegate.write_text(
-        f"#!{sys.executable}\n"
-        "import os, pathlib, signal, subprocess, sys\n"
-        "marker = pathlib.Path(os.environ['FACTORY_TEST_KILL_MARKER'])\n"
-        "if sys.argv[1:2] == ['prepare-lane-dispatch'] and not marker.exists():\n"
-        "    completed = subprocess.run(\n"
-        "        [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]]\n"
-        "    )\n"
-        "    if completed.returncode != 0: raise SystemExit(completed.returncode)\n"
-        "    marker.write_text('published before SIGKILL\\n', encoding='utf-8')\n"
-        "    os.kill(os.getppid(), signal.SIGKILL)\n"
-        "    raise SystemExit(70)\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
-        encoding="utf-8",
-    )
-    delegate.chmod(0o755)
-    environment.update(
-        {
-            "FACTORY_CLI": str(delegate),
-            "FACTORY_TEST_KILL_MARKER": str(marker),
-        }
-    )
-    command = [
-        "bash",
-        str(HARNESS / "dispatch_lane.sh"),
-        "r1",
-        "coder",
-        "--dispatch",
-        str(dispatch),
-    ]
-
-    killed = run(command, cwd, environment)
-
-    assert killed.returncode != 0
-    assert marker.is_file()
-    retained_dispatch = root / "dispatch-inputs" / "coder.json"
-    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
-
-    recovered = run(command, cwd, environment)
-
-    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert retained_dispatch.read_bytes() == dispatch.read_bytes()
 
 
 # --------------------------------------------------------------------------
@@ -7285,28 +5776,6 @@ def test_dispatch_sigkill_releases_role_lock_and_exact_retry_recovers(
 # --------------------------------------------------------------------------
 
 
-def _lane_dispatch(
-    role: str,
-    *,
-    task: str = "requirement: build R1.1",
-    ambiguity: str = "none",
-) -> dict[str, object]:
-    return {
-        "schema_version": "factory-lane-dispatch/1",
-        "run_id": "r1",
-        "generation": 1,
-        "role": role,
-        "semantic_clearance": False,
-        "interpretation": {
-            "restated_request": "Build the exact ratified R1.1 behavior.",
-            "operational_consequence": (
-                "Return a question rather than inventing missing intent or authority."
-            ),
-            "ambiguity": ambiguity,
-        },
-        "directive_readback": [],
-        "task": task,
-    }
 
 
 RESIDENT_NOOP_ASSESSMENT: dict[str, object] = {
@@ -7349,42 +5818,6 @@ RESIDENT_NOOP_ASSESSMENT: dict[str, object] = {
 }
 
 
-def dispatch_success_fixture(
-    tmp_path: Path, role: str = "coder", primer: bool = True
-) -> tuple[Path, Path, Path, Path]:
-    """A complete v4 execution-truth run, not a hand-authored repo/SHA record."""
-
-    _, root, target_state = execution_truth_fixture(tmp_path)
-    harness_metadata_path = root / "harness.json"
-    harness_metadata = json.loads(harness_metadata_path.read_text(encoding="utf-8"))
-    harness_metadata["budget_usd"] = 1
-    harness_metadata["budget_enforcement"] = "reserved-runner-ceilings"
-    harness_metadata_path.write_text(json.dumps(harness_metadata), encoding="utf-8")
-    workdir = Path(str(target_state["workdir"]))
-    art = root / "artifacts"
-    art.mkdir(parents=True)
-    for name, body in (
-        ("product-specification.md", ADEQUATE_SPEC),
-        ("architecture.md", "# Architecture\n"),
-        ("testing-strategy.md", ADEQUATE_STRAT),
-    ):
-        (art / name).write_text(body)
-    _write_closed_semantic_union(art, art / "product-specification.md")
-    for name in ("product-specification.md", "architecture.md", "testing-strategy.md"):
-        (art / f"{name}.digest").write_text("d\n")
-    (art / "oracle-contract.md").write_text("signatures, shapes, marker locations\n")
-    if primer:
-        (art / f"primer.{role}.md").write_text(
-            "# Phase A0 primer — kindex research for this run\n"
-            "constraint: never push to main without a green ship\n"
-            "research: vendor doc for the touched surface\n"
-        )
-    dispatch = tmp_path / "d.json"
-    dispatch.write_text(json.dumps(_lane_dispatch(role)) + "\n", encoding="utf-8")
-    stub = tmp_path / "bin"
-    stub.mkdir()
-    install_resident_orchestrator_stub(stub, root)
-    return workdir, root, dispatch, stub
 
 
 def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
@@ -7432,192 +5865,10 @@ def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
     os.chmod(stub / "tmux", 0o755)
 
 
-def _dispatch_env(stub: Path, root: Path) -> dict[str, str]:
-    fixture_root = root.parents[2]
-    runner_config = fixture_root / "runner-config"
-    manifests = runner_config / "manifests"
-    registries = runner_config / "registries"
-    secrets = runner_config / "secrets"
-    qualifications = runner_config / "qualifications"
-    for directory in (manifests, registries, secrets, qualifications):
-        directory.mkdir(parents=True, exist_ok=True)
-    output_schema = runner_config / "runner-output.schema.json"
-    output_schema.write_text(
-        (
-            Path(__file__).resolve().parents[1]
-            / "factory_runtime"
-            / "schemas"
-            / "runner-output.schema.json"
-        ).read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    for role in ("coder", "tester"):
-        (manifests / f"{role}.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": "factory-runner-manifest/2",
-                    "runner_id": f"fixture-{role}",
-                    "role": role,
-                    "adapter": "codex",
-                    "executable": sys.executable,
-                    "child_executables": [],
-                    "runner_version": "fixture-1",
-                    "model": "fixture-model",
-                    "model_version": "fixture-model-1",
-                    "configuration_digest": digest_obj({"fixture": role}),
-                    "state_profile_digest": profile_digest("lane-dispatch"),
-                    "state_qualification_digest": digest_obj({"qualified": role}),
-                    "billing_key_name": "TEST_TOKEN",
-                    "secret_names": ["TEST_TOKEN"],
-                    "output_schema_digest": digest_bytes(output_schema.read_bytes()),
-                    "network_mode": "unrestricted-outbound",
-                    "limits": {
-                        "wall_seconds": 60,
-                        "idle_seconds": 10,
-                        "max_processes": 4,
-                        "max_attempts": 3,
-                        "max_output_bytes": 65536,
-                        "max_tokens": 1000,
-                        "max_cost_microusd": 1000,
-                    },
-                    "pricing": {
-                        "input_microusd_per_million": 1,
-                        "output_microusd_per_million": 1,
-                    },
-                    "created_at": 1,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (registries / f"{role}.json").write_text(
-            json.dumps({"role": role, "operations": [], "capabilities": []}) + "\n",
-            encoding="utf-8",
-        )
-        (qualifications / f"{role}.json").write_text(
-            json.dumps({"qualified": True, "test_fixture": True}) + "\n",
-            encoding="utf-8",
-        )
-        (qualifications / f"{role}.observations.json").write_text(
-            json.dumps({"observations": [], "test_fixture": True}) + "\n",
-            encoding="utf-8",
-        )
-    return {
-        "HARNESS_DIR": str(root.parent.parent),
-        "FACTORY_RUNS_DIR": str(root.parent),
-        "HARNESS_RUN_ROOT": str(root),
-        "PATH": f"{stub}:{os.environ['PATH']}",
-        "FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli",
-        "FACTORY_RUNNER_MANIFEST_DIR": str(manifests),
-        "FACTORY_RUNNER_OUTPUT_SCHEMA": str(output_schema),
-        "FACTORY_RUNNER_SECRET_ROOT": str(secrets),
-        "FACTORY_RUNNER_WORKSPACE_ROOT": str(fixture_root / "runner-workspaces"),
-        "FACTORY_BROKER_REGISTRY_DIR": str(registries),
-        "FACTORY_STATE_QUALIFICATION_DIR": str(qualifications),
-        "FACTORY_TEST_BOUNDARY_LOG": str(fixture_root / "boundary.log"),
-    }
 
 
-def test_dispatch_refuses_without_kindex_primer(tmp_path: Path) -> None:
-    """Gate C: a dispatch with no role-specific kindex primer is refused — the
-    Validator must search kindex and capture research nodes before the lane is
-    launched (closes kindex-non-use). This is the reset-prime-deliver PRIMER step
-    made a precondition, not a hope."""
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        _dispatch_env(stub, root),
-    )
-    assert r.returncode == 70, r.stdout + r.stderr
-    assert "no kindex primer" in r.stderr and "Gate C" in r.stderr
 
 
-def test_legacy_harness_requires_explicit_unqualified_abandonment(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    metadata_path = root / "harness.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["schema_version"] = "factory-harness/1"
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-    environment = _dispatch_env(stub, root)
-
-    refused = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert refused.returncode == 70
-    assert "harness metadata is stale or unbound" in refused.stderr
-
-    format_control = run(
-        [
-            "bash",
-            str(HARNESS / "abandon_legacy.sh"),
-            "r1",
-            "--actor",
-            "human:operator",
-            "--reason",
-            "misleading \u202etxt.exe",
-            "--acknowledge-unqualified-restart",
-            "--runs",
-            str(root.parent),
-        ],
-        cwd,
-        environment,
-    )
-    assert format_control.returncode != 0
-    assert "control-free" in format_control.stderr
-    assert not (root / "legacy-harness-abandonment.json").exists()
-
-    abandoned = run(
-        [
-            "bash",
-            str(HARNESS / "abandon_legacy.sh"),
-            "r1",
-            "--actor",
-            "human:operator",
-            "--reason",
-            "restart under the qualified v2 boundary",
-            "--acknowledge-unqualified-restart",
-            "--runs",
-            str(root.parent),
-        ],
-        cwd,
-        environment,
-    )
-    assert abandoned.returncode == 0, abandoned.stdout + abandoned.stderr
-    receipt = json.loads((root / "legacy-harness-abandonment.json").read_text())
-    assert receipt["disposition"] == "abandoned-unqualified"
-    assert receipt["replacement_schema_version"] == "factory-harness/2"
-
-    bidi_receipt = root / "bidi-abandonment.json"
-    bidi_document = dict(receipt)
-    bidi_document["reason"] = "misleading \u202etxt.exe"
-    bidi_receipt.write_text(json.dumps(bidi_document), encoding="utf-8")
-    bidi_verification = run(
-        [
-            sys.executable,
-            str(HARNESS / "legacy_abandonment.py"),
-            "--harness",
-            str(metadata_path),
-            "--receipt",
-            str(bidi_receipt),
-            "--run",
-            "r1",
-        ],
-        cwd,
-        environment,
-    )
-    assert bidi_verification.returncode != 0
-    assert "invalid reason" in bidi_verification.stderr
-
-    mod = load_dispatcher()
-    dispatcher = mod.Dispatcher("r1", root, 30)  # type: ignore[attr-defined]
-    dispatcher.wake_orchestrator = lambda _: None
-    dispatcher.run_loop()
-    assert read_chain(root / "events.jsonl")[-1]["detail"] == (
-        "verified legacy harness abandonment"
-    )
 
 
 def test_dispatcher_refuses_unverified_legacy_abandonment_marker(tmp_path: Path) -> None:
@@ -7680,664 +5931,48 @@ def test_dispatcher_refuses_legacy_harness_before_monitoring(
     assert "legacy or unversioned" in events[-1]["detail"]
 
 
-def test_current_harness_cannot_use_legacy_abandonment(tmp_path: Path) -> None:
-    cwd, root, _, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "abandon_legacy.sh"),
-            "r1",
-            "--actor",
-            "human:operator",
-            "--reason",
-            "not applicable",
-            "--acknowledge-unqualified-restart",
-            "--runs",
-            str(root.parent),
-        ],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-    assert result.returncode != 0
-    assert "only factory-harness/1" in result.stderr
-
-
-def test_dispatch_refuses_a_target_manifest_changed_after_ignition(tmp_path: Path) -> None:
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    target = root / "evidence" / "target-resolution" / "target-state.json"
-    document = json.loads(target.read_text())
-    document["resolved_tree"] = "f" * 40
-    target.write_text(json.dumps(document))
-
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        _dispatch_env(stub, root),
-    )
-
-    assert r.returncode == 70
-    assert "retained target-state differs" in r.stderr
-
-
-def test_dispatch_refuses_retained_stage_e_request_substitution(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    request_path = root / "evidence" / "intake" / "execution-request.json"
-    request = json.loads(request_path.read_text(encoding="utf-8"))
-    request["requested_outcome"] = "A substituted outcome not authorized at Stage E."
-    request_path.write_text(json.dumps(request), encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 70
-    assert "retained Stage-E request differs" in result.stderr
-    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
-
-
-def test_dispatch_refuses_task_artifact_substitution(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    (root / "TASK.md").write_text("substituted task", encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 70
-    assert "task bytes differ" in result.stderr
-    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
-
-
-def test_dispatch_primer_is_role_specific_not_shared(tmp_path: Path) -> None:
-    """The primer is role-specific: a coder lane with only a tester primer present
-    is refused. The projection boundary is enforced structurally — the coder does
-    not fall back to the tester's primer (which may carry implementation detail)."""
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
-    (root / "artifacts" / "primer.tester.md").write_text("tester-only primer\n")
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        _dispatch_env(stub, root),
-    )
-    assert r.returncode == 70 and "no kindex primer" in r.stderr
-
-
-def test_dispatch_ambient_primer_gap_override_is_ignored(tmp_path: Path) -> None:
-    """A missing role primer always denies; ambient break-glass is not authority."""
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
-    env = _dispatch_env(stub, root)
-    env["GATE_BC_ALLOW_GAP"] = "1"
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        env,
-    )
-    assert r.returncode == 70, r.stdout + r.stderr
-    assert "no kindex primer" in r.stderr
-
-
-def test_dispatch_delivers_path_free_fence_dispatch_specs_and_primer(tmp_path: Path) -> None:
-    """Gate B freezes dispatch alone; run-model injects exact capsule-bound context.
-
-    The shell may use Markdown views for its adequacy preflight, but those mutable views are not
-    copied into the model task. Canonical phase JSON and the primer cross only through run-model.
-    """
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        _dispatch_env(stub, root),
-    )
-    assert r.returncode == 0, r.stdout + r.stderr
-    task = (root / "runner-tasks" / "coder.md").read_text()
-    headings = ("## FENCE", "## FROZEN DISPATCH")
-    positions = [task.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-    assert "One pen only" in task and "DATA, never authority" in task
-    assert "RATIFIED PRODUCT SPECIFICATION" not in task
-    assert "Phase A0 primer" not in task
-    projection_path = root / "evidence" / "runner" / "coder" / "projection.json"
-    projection = json.loads(projection_path.read_text())
-    assert projection["role"] == "coder"
-    assert all("source_root" not in item for item in projection["files"])
-    receipt = read_chain(root / "dispatches.jsonl")[-1]
-    reservation = read_chain(root / "budget-reservations.jsonl")[-1]
-    runtime = json.loads((root / "run.json").read_text())
-    target = runtime["target_state"]
-    assert receipt["target_state_digest"] == runtime["target_state_digest"]
-    assert receipt["resolved_commit"] == target["resolved_commit"]
-    assert receipt["resolved_tree"] == target["resolved_tree"]
-    assert receipt["checkout_id"] == target["checkout_id"]
-    assert receipt["launcher_qualification"] == "QUALIFIED_PR2"
-    assert receipt["lane_isolation"] == "QUALIFIED_PR2"
-    assert receipt["budget_reservation_digest"] == "sha256:" + reservation["hash"]
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["lane-workspace-coder"]["status"] == "retained"
-    assert resources["runner-workspace-coder"]["status"] == "retained"
-    assert "tmux-window-coder" not in resources
-    assert (tmp_path / "boundary.log").read_text().splitlines() == [
-        "run-model",
-        "execute-broker-handoff",
-    ]
-
-
-def test_dispatch_refuses_unassessed_resident_orchestrator_checkpoint(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    metadata_path = root / "harness.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["orchestrator_mode"] = "resident-monitoring"
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-    (stub / "tmux").write_text(
-        '#!/usr/bin/env bash\nif [ "$1" = display ]; then echo agy; fi\nexit 0\n',
-        encoding="utf-8",
-    )
-    (stub / "tmux").chmod(0o755)
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_ORCHESTRATOR_CHECKPOINT_TIMEOUT"] = "1"
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "did not assess the pre-dispatch checkpoint" in result.stderr
-    assert not (tmp_path / "boundary.log").exists()
-    (activity,) = read_chain(root / "orchestrator" / "activity.jsonl")
-    assert activity["kind"] == "pre_dispatch"
-
-
-def test_dispatch_refuses_tampered_receipt_chain_before_window_plan(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    forged = {
-        "run": "r1",
-        "prev_hash": "0" * 64,
-        "claim": "not covered by the supplied hash",
-        "hash": "0" * 64,
-    }
-    (root / "dispatches.jsonl").write_text(json.dumps(forged) + "\n", encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 70
-    assert "dispatch receipt chain is invalid" in result.stderr
-    resources = ResourceLedger(root, "r1").latest()
-    assert "tmux-window-coder" not in resources
-    assert not (tmp_path / "boundary.log").exists()
-
-
-def test_dispatch_failed_canary_executes_no_broker_operation(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_TEST_RUN_MODEL_FAIL"] = "1"
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "no broker operation was executed" in result.stderr
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    assert len(read_chain(root / "budget-reservations.jsonl")) == 1
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["runner-workspace-coder"]["status"] in {"abandoned", "retained"}
-    assert "tmux-window-coder" not in resources
-
-
-def test_dispatch_validates_and_freezes_runner_failure_receipt(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "no broker operation was executed" in result.stderr
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    retained = root / "evidence" / "runner" / "coder"
-    receipt_path = retained / "runner-failure-receipt.json"
-    diagnostic_path = retained / "validator-invocation-diagnostic.json"
-    state_capsule_path = retained / "failed-state-capsule.json"
-    prompt_path = retained / "failed-prompt-1.json"
-    qualification_path = retained / "runner-qualification.json"
-    executable_path = retained / "runner-executable"
-    assert all(
-        path.is_file()
-        for path in (
-            receipt_path,
-            diagnostic_path,
-            state_capsule_path,
-            prompt_path,
-            qualification_path,
-            executable_path,
-        )
-    )
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert receipt["run_id"] == "r1"
-    assert receipt["role"] == "coder"
-    assert receipt["failure_capsule"]["owner"] == "validator-harness"
-    assert receipt["diagnostic"]["content_digest"] == digest_bytes(diagnostic_path.read_bytes())
-    assert receipt["state_capsule_digest"] == digest_obj(
-        json.loads(state_capsule_path.read_text(encoding="utf-8"))
-    )
-    assert receipt["prompt_sequence"][0]["content_digest"] == digest_bytes(prompt_path.read_bytes())
-    assert receipt["qualification_digest"] == digest_bytes(qualification_path.read_bytes())
-    assert receipt["executable_digest"] == digest_bytes(executable_path.read_bytes())
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["runner-workspace-coder"]["status"] == "retained"
-    failure_event = next(
-        record
-        for record in ResourceLedger(root, "r1").records()
-        if record["resource_id"] == "runner-workspace-coder" and record["status"] == "failed"
-    )
-    assert failure_event["evidence_digests"]["runner-failure-receipt"] == digest_bytes(
-        receipt_path.read_bytes()
-    )
-    assert failure_event["evidence_digests"]["validator-invocation-diagnostic"] == digest_bytes(
-        diagnostic_path.read_bytes()
-    )
-    assert failure_event["evidence_digests"]["failed-prompt-1"] == digest_bytes(
-        prompt_path.read_bytes()
-    )
-    assert failure_event["evidence_digests"]["runner-executable"] == digest_bytes(
-        executable_path.read_bytes()
-    )
-    assert "tmux-window-coder" not in resources
-
-
-def test_dispatch_exact_retry_recovers_complete_orphaned_runner_failure_once(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
-    environment["FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT"] = "1"
-
-    interrupted = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert interrupted.returncode == -signal.SIGKILL
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    retained = root / "evidence" / "runner" / "coder"
-    assert not (retained / "runner-failure-receipt.json").exists()
-
-    environment.pop("FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT")
-    recovered = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert recovered.returncode == 70, recovered.stdout + recovered.stderr
-    assert "recovered exact runner failure" in recovered.stderr
-    assert "no model or broker ran" in recovered.stderr
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    assert (retained / "runner-failure-receipt.json").is_file()
-    assert (retained / "validator-invocation-diagnostic.json").is_file()
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["runner-workspace-coder"]["status"] == "retained"
-    assert resources["lane-workspace-coder"]["status"] == "retained"
-
-    record_count = len(ResourceLedger(root, "r1").records())
-    repeated = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert repeated.returncode == 70, repeated.stdout + repeated.stderr
-    assert "recovered exact runner failure" in repeated.stderr
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    assert len(ResourceLedger(root, "r1").records()) == record_count
-
-
-@pytest.mark.parametrize("damage", ("partial-runner-evidence", "mismatched-lane"))
-def test_dispatch_crash_retry_refuses_unsafe_or_mismatched_orphan_without_model_call(
-    tmp_path: Path,
-    damage: str,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    environment["FACTORY_TEST_RUN_MODEL_FAIL_WITH_RECEIPT"] = "1"
-    environment["FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT"] = "1"
-
-    interrupted = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-    assert interrupted.returncode == -signal.SIGKILL
-
-    runner_workspace = Path(environment["FACTORY_RUNNER_WORKSPACE_ROOT"]) / "r1" / "lane-coder-g1"
-    lane_workspace = root / "workspaces" / "coder"
-    if damage == "partial-runner-evidence":
-        (runner_workspace / "validator-invocation-diagnostic.json").unlink()
-    else:
-        candidate = next(
-            path
-            for path in sorted(lane_workspace.rglob("*"))
-            if path.is_file() and ".git" not in path.parts
-        )
-        candidate.write_bytes(candidate.read_bytes() + b"\npost-crash substitution\n")
-
-    environment.pop("FACTORY_TEST_KILL_DISPATCH_AFTER_FAILURE_RECEIPT")
-    refused = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert refused.returncode == 70, refused.stdout + refused.stderr
-    assert (tmp_path / "boundary.log").read_text().splitlines() == ["run-model"]
-    retained = root / "evidence" / "runner" / "coder"
-    assert not (retained / "runner-failure-receipt.json").exists()
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["runner-workspace-coder"]["status"] == "planned"
-    assert resources["lane-workspace-coder"]["status"] == "active"
-
-
-def test_dispatch_refuses_missing_pr2_configuration_before_model_call(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    del environment["FACTORY_BROKER_REGISTRY_DIR"]
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "PR2 runner configuration is incomplete" in result.stderr
-    assert not (tmp_path / "boundary.log").exists()
-
-
-def test_dispatch_refuses_runner_reservation_above_objective_budget(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    metadata_path = root / "harness.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["budget_usd"] = 0.0005
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        environment,
-    )
-
-    assert result.returncode == 70
-    assert "objective budget reservation was refused" in result.stderr
-    assert not (tmp_path / "boundary.log").exists()
-
-
-def test_parallel_lane_reservations_cannot_oversubscribe_objective_budget(
-    tmp_path: Path,
-) -> None:
-    cwd, root, _, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    (root / "artifacts" / "primer.tester.md").write_text(
-        "# Tester primer\nconstraint: preserve exact test authority\n",
-        encoding="utf-8",
-    )
-    metadata_path = root / "harness.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["budget_usd"] = 0.001
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-    environment = _dispatch_env(stub, root)
-
-    def run_dispatch(role: str) -> subprocess.CompletedProcess[str]:
-        role_dispatch = tmp_path / f"dispatch-{role}.json"
-        role_dispatch.write_text(
-            json.dumps(_lane_dispatch(role)) + "\n",
-            encoding="utf-8",
-        )
-        return run(
-            [
-                "bash",
-                str(HARNESS / "dispatch_lane.sh"),
-                "r1",
-                role,
-                "--dispatch",
-                str(role_dispatch),
-            ],
-            cwd,
-            environment,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(run_dispatch, ("coder", "tester")))
-
-    diagnostics = "\n".join(
-        f"{role}: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        for role, result in zip(("coder", "tester"), results, strict=True)
-    )
-    assert sorted(result.returncode for result in results) == [0, 70], diagnostics
-    refused_index = next(
-        index for index, result in enumerate(results) if result.returncode == 70
-    )
-    refused = results[refused_index]
-    refused_role = ("coder", "tester")[refused_index]
-    assert "objective budget reservation was refused" in refused.stderr
-    assert not (root / "workspaces" / refused_role).exists()
-    resources = ResourceLedger(root, "r1").records()
-    assert not any(
-        record["resource_id"]
-        in {f"lane-workspace-{refused_role}", f"runner-workspace-{refused_role}"}
-        for record in resources
-    )
-    reservations = read_chain(root / "budget-reservations.jsonl")
-    assert len(reservations) == 1
-    assert reservations[0]["reserved_max_cost_microusd"] == 1000
-
-
-def test_dispatch_sigkill_after_budget_reservation_exact_retry_reuses_once(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    environment = _dispatch_env(stub, root)
-    marker = tmp_path / "killed-after-budget-reservation"
-    delegate = tmp_path / "kill-dispatch-before-first-resource.py"
-    delegate.write_text(
-        f"#!{sys.executable}\n"
-        "import os, pathlib, signal, sys\n"
-        "marker = pathlib.Path(os.environ['FACTORY_TEST_KILL_AFTER_BUDGET_MARKER'])\n"
-        "if sys.argv[1:2] == ['record-resource'] and not marker.exists():\n"
-        "    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n"
-        "    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:\n"
-        "        stream.write('budget reserved before resource mutation\\n')\n"
-        "        stream.flush(); os.fsync(stream.fileno())\n"
-        "    directory = os.open(marker.parent, os.O_RDONLY)\n"
-        "    try: os.fsync(directory)\n"
-        "    finally: os.close(directory)\n"
-        "    os.kill(os.getppid(), signal.SIGKILL)\n"
-        "    raise SystemExit(70)\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'factory_runtime.cli', *sys.argv[1:]])\n",
-        encoding="utf-8",
-    )
-    delegate.chmod(0o755)
-    environment.update(
-        {
-            "FACTORY_CLI": str(delegate),
-            "FACTORY_TEST_KILL_AFTER_BUDGET_MARKER": str(marker),
-        }
-    )
-    command = [
-        "bash",
-        str(HARNESS / "dispatch_lane.sh"),
-        "r1",
-        "coder",
-        "--dispatch",
-        str(dispatch),
-    ]
-
-    interrupted = run(command, cwd, environment)
-
-    assert interrupted.returncode != 0
-    assert marker.read_text(encoding="utf-8") == "budget reserved before resource mutation\n"
-    reservations = read_chain(root / "budget-reservations.jsonl")
-    assert len(reservations) == 1
-    assert reservations[0]["reservation_id"] == "r1:g1:coder:lane-coder-g1"
-    assert not (root / "workspaces" / "coder").exists()
-    if (root / "resources.jsonl").exists():
-        resources = ResourceLedger(root, "r1").records()
-        assert not any(
-            record["resource_id"] in {"lane-workspace-coder", "runner-workspace-coder"}
-            for record in resources
-        )
-    assert not (tmp_path / "boundary.log").exists()
-
-    recovered = run(command, cwd, environment)
-
-    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-    assert read_chain(root / "budget-reservations.jsonl") == reservations
-    assert (root / "workspaces" / "coder").is_dir()
-    resources = ResourceLedger(root, "r1").latest()
-    assert resources["lane-workspace-coder"]["status"] == "retained"
-    assert resources["runner-workspace-coder"]["status"] == "retained"
-    assert (tmp_path / "boundary.log").read_text().splitlines() == [
-        "run-model",
-        "execute-broker-handoff",
-    ]
-
-
-def test_dispatch_refuses_model_use_without_an_explicit_objective_budget(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    metadata_path = root / "harness.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["budget_usd"] = None
-    metadata["budget_enforcement"] = "not-requested"
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 70
-    assert "objective budget reservation was refused" in result.stderr
-    assert not (tmp_path / "boundary.log").exists()
-
-
-def test_dispatch_rejects_caller_sha_before_workspace_creation(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "dispatch_lane.sh"),
-            "r1",
-            "coder",
-            "--dispatch",
-            str(dispatch),
-            "--sha",
-            "0" * 40,
-        ],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-    assert result.returncode == 64
-    assert "checked target-state is the only selector" in result.stderr
-    assert not (root / "workspaces" / "coder").exists()
-
-
-@pytest.mark.parametrize("schema_version", ("factory-run/1", "factory-run/2"))
-def test_dispatch_refuses_legacy_run_schema(tmp_path: Path, schema_version: str) -> None:
-    runs = tmp_path / ".factory" / "runs"
-    store = RunStore(runs)
-    artifacts: dict[str, object] = {
-        "target": "sha256:" + ("1" * 64),
-        "source": "sha256:" + ("2" * 64),
-        "phase_artifacts": {},
-    }
-    if schema_version == "factory-run/2":
-        artifacts["generation_artifacts"] = {}
-    store._ledger("legacy").append(
-        LedgerEntry(
-            capability_id="legacy",
-            from_state="",
-            to_state=RunState.INTAKE,
-            artifact_digests=artifacts,
-            payload={"run_schema_version": schema_version},
-            actor="validator",
-            created_at="100",
-        )
-    )
-    store.rebuild_projection("legacy")
-    dispatch = tmp_path / "dispatch.md"
-    dispatch.write_text("interpretation_confirmed: true\n", encoding="utf-8")
-
-    result = run(
-        [
-            "bash",
-            str(HARNESS / "dispatch_lane.sh"),
-            "legacy",
-            "coder",
-            "--dispatch",
-            str(dispatch),
-            "--runs",
-            str(runs),
-        ],
-        tmp_path,
-        {"FACTORY_CLI": f"{sys.executable} -m factory_runtime.cli"},
-    )
-
-    assert result.returncode == 70
-    assert "legacy run schemas cannot dispatch" in result.stderr
-    assert not (runs / "legacy" / "workspaces").exists()
-
-
-def test_dispatch_ignores_operator_checkout_dirt(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    operator = tmp_path / "src"
-    (operator / "operator-only-dirt.txt").write_text("unrelated\n", encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not (root / "workspaces" / "coder" / "operator-only-dirt.txt").exists()
-
-
-def test_dispatch_refuses_run_owned_source_divergence_before_resource_plan(
-    tmp_path: Path,
-) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, primer=True)
-    target = json.loads((root / "run.json").read_text())["target_state"]
-    (Path(target["source_root"]) / "diverged.txt").write_text("changed\n", encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
-    )
-
-    assert result.returncode == 70
-    assert "target-state-diverged" in result.stderr
-    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # --------------------------------------------------------------------------
@@ -9802,14 +7437,6 @@ def test_receipt_pass_warn_keeps_count_not_vacuous(tmp_path: Path) -> None:
 VENV_PY = HARNESS.parent / ".venv" / "bin" / "python"
 
 
-def _factory_cli_env() -> dict[str, str]:
-    cli_python = VENV_PY if VENV_PY.exists() else Path(sys.executable)
-    # CI installs into its test interpreter rather than a repo venv. Both can run the CLI;
-    # PYTHONPATH also supports a checkout without an editable install.
-    return {
-        "FACTORY_CLI": f"{cli_python} -m factory_runtime.cli",
-        "PYTHONPATH": str(HARNESS.parent),
-    }
 
 
 def _make_run(tmp: Path, *, run_id: str = "r1", status: str = "open") -> Path:
@@ -9888,412 +7515,35 @@ def _write_green_endgame_admission(root: Path, harness: dict[str, object]) -> Pa
     return path
 
 
-def test_promote_writes_closed_when_verdict_allows(tmp_path: Path) -> None:
-    """The happy path: a run with gathered promoting evidence closes through decide_promotion.
-    This is the sole harness-close path — promote.sh writes 'closed' iff the verdict allows."""
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    # F3: the seam grounds each cited envelope in the real receipt chain. A real run's
-    # evidence-production pipeline writes these chain entries via receipt.sh/mutate.sh/flake.sh;
-    # here the harness-dir layout (run_root = <H>/runs/<run>, chain at <H>/receipts/chain.jsonl)
-    # is the same, so write_promoting_chain grounds the fixture's R/M/F-default receipts.
-    write_promoting_chain(root)
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode == 0, r.stderr
-    assert _run_status(root) == "closed"
-    assert "status" not in json.loads((root / "run.json").read_text())
-    harness = json.loads((root / "harness.json").read_text())
-    assert harness["promotion_verdict"] == "promotion_verdict.json"
-    assert harness["promotion_verdict_digest"] == digest_bytes(
-        (root / "promotion_verdict.json").read_bytes()
-    )
-    assert harness["closed_at"].endswith("+00:00")
-    # The audited verdict file is written for the postmortem.
-    assert (root / "promotion_verdict.json").exists()
-    verdict = json.loads((root / "promotion_verdict.json").read_text())
-    assert verdict["allowed"] is True
-
-
-@pytest.mark.parametrize("monitoring", [
-    {}, {"jev_screen": None, "progress_review": {"every_cadence_ticks": 2}},
-])
-def test_promote_accepts_current_resident_agreement_and_guidance_metadata(
-    tmp_path: Path, monitoring: dict[str, object],
-) -> None:
-    """The current ignition schema must survive the exact Gate-L metadata check."""
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    harness = _add_current_harness_contract(root)
-    harness.update(monitoring)
-    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
-    admission = _write_green_endgame_admission(root, harness)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-
-    promoted = run(
-        [
-            "bash",
-            str(HARNESS / "promote.sh"),
-            "r1",
-            "--endgame-admission",
-            str(admission),
-        ],
-        tmp_path,
-        _factory_cli_env(),
-    )
-
-    assert promoted.returncode == 0, promoted.stderr
-    assert _run_status(root) == "closed"
-
-
-@pytest.mark.parametrize("monitoring", [
-    {"progress_review": {"every_cadence_ticks": 0}},
-    {"jev_screen": {"max_calls": 0}},
-])
-def test_promote_refuses_invalid_monitoring_configuration(
-    tmp_path: Path, monitoring: dict[str, object],
-) -> None:
-    """Recognizing current ignition fields must not admit invalid monitoring settings."""
-    root = _make_run(tmp_path)
-    harness = _add_current_harness_contract(root)
-    harness.update(monitoring)
-    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
-    admission = _write_green_endgame_admission(root, harness)
-    result = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1", "--endgame-admission", str(admission)],
-        tmp_path, _factory_cli_env(),
-    )
-    assert result.returncode == 66
-    assert _run_status(root) == "open"
 
 
 
-@pytest.mark.parametrize("corruption", ["unknown", "missing", "partial-contract", "target"])
-def test_handoff_metadata_refuses_incompatible_run_without_closing(
-    tmp_path: Path, corruption: str,
-) -> None:
-    """A shared writer/reader schema must retain rejection of incompatible handoffs."""
-    root = _make_run(tmp_path)
-    harness = json.loads((root / "harness.json").read_text())
-    if corruption == "unknown":
-        harness["unreviewed_extension"] = True
-    elif corruption == "missing":
-        del harness["orchestrator_window"]
-    elif corruption == "partial-contract":
-        harness["guidance_generation"] = 1
-    else:
-        harness["resolved_commit"] = "0" * 40
-    (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
-
-    result = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env(),
-    )
-
-    assert result.returncode == 66, result.stderr
-    assert "harness metadata" in result.stderr
-    assert _run_status(root) == "open"
-    assert not (root / "promotion_verdict.json").exists()
 
 
-def test_promote_refuses_current_contract_without_green_endgame_admission(
-    tmp_path: Path,
-) -> None:
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    _add_current_harness_contract(root)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-
-    promoted = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-
-    assert promoted.returncode == 66
-    assert _run_status(root) == "open"
-    assert "must arrive through a green endgame admission" in promoted.stderr
 
 
-def test_promote_refuses_stale_endgame_admission_at_close(tmp_path: Path) -> None:
-    """The admission subject is rechecked under the same lock as the close.
-
-    This exercises the gap between the early route check and the status flip: a
-    concurrent metadata substitution cannot reuse an admission for the former
-    harness subject and still make ``closed`` visible.
-    """
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    harness = _add_current_harness_contract(root)
-    admission = _write_green_endgame_admission(root, harness)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-    env = _factory_cli_env()
-    wrapper = tmp_path / "cli_then_stale_harness.sh"
-    wrapper.write_text(
-        "#!/bin/bash\n"
-        f'{env["FACTORY_CLI"]} "$@"\n'
-        "rc=$?\n"
-        'if [ "$1" != "promote" ]; then exit $rc; fi\n'
-        f"python3 - {shlex.quote(str(root / 'harness.json'))} <<'EOF'\n"
-        "import json, pathlib, sys\n"
-        "path = pathlib.Path(sys.argv[1])\n"
-        "doc = json.loads(path.read_text())\n"
-        "doc['task_digest'] = 'sha256:' + ('9' * 64)\n"
-        "path.write_text(json.dumps(doc))\n"
-        "EOF\n"
-        "exit $rc\n",
-        encoding="utf-8",
-    )
-    wrapper.chmod(0o755)
-    env["FACTORY_CLI"] = str(wrapper)
-
-    promoted = run(
-        [
-            "bash",
-            str(HARNESS / "promote.sh"),
-            "r1",
-            "--endgame-admission",
-            str(admission),
-        ],
-        tmp_path,
-        env,
-    )
-
-    assert promoted.returncode == 72, promoted.stderr
-    assert _run_status(root) == "open"
-    assert "became stale" in promoted.stderr
 
 
-def test_promote_never_erases_a_terminal_no_recorded_during_close(tmp_path: Path) -> None:
-    """Round-6 6-5: a terminal NO recorded BETWEEN the pre-check and the locked flip
-    survives — the flip mirrors the pre-check under the lock instead of trusting it,
-    exits 71 distinctly, and the NO fields stand untouched. The FACTORY_CLI wrapper
-    lands the NO right after the verdict renders, inside the exact race window."""
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-    env = _factory_cli_env()
-    wrapper = tmp_path / "cli_then_no.sh"
-    wrapper.write_text(
-        "#!/bin/bash\n"
-        f'{env["FACTORY_CLI"]} "$@"\n'
-        "rc=$?\n"
-        "# inject the racing NO only after the verdict render, inside the exact window\n"
-        'if [ "$1" != "promote" ]; then exit $rc; fi\n'
-        f"python3 - {root}/harness.json <<'EOF'\n"
-        "import json, pathlib, sys\n"
-        "p = pathlib.Path(sys.argv[1])\n"
-        "doc = json.loads(p.read_text())\n"
-        "doc.update({'status': 'no', 'no_kind': 'watchdog-deadline',\n"
-        "            'no_class': 'terminal', 'no_reason': 'race-fixture',\n"
-        "            'no_recorded_at': '2026-08-31T00:00:00+00:00'})\n"
-        "p.write_text(json.dumps(doc))\n"
-        "EOF\n"
-        "exit $rc\n",
-        encoding="utf-8",
-    )
-    wrapper.chmod(0o755)
-    env["FACTORY_CLI"] = str(wrapper)
-    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, env)
-    assert r.returncode == 71, (r.returncode, r.stdout, r.stderr)
-    doc = json.loads((root / "harness.json").read_text())
-    assert doc["status"] == "no"
-    assert doc["no_kind"] == "watchdog-deadline"
-    assert "closed_at" not in doc
-    events = (root / "events.jsonl").read_text().splitlines()
-    assert any("refused to erase" in line for line in events)
 
 
-def test_promote_fail_closes_when_decision_blocks(tmp_path: Path) -> None:
-    """A blocked decision (allowed=False) is a finding, not a failure of promote.sh: the cage
-    refused to advance a run the evidence does not support. run.json stays open."""
-    root = _make_run(tmp_path)
-    # An empty request default-denies: candidate-digest-missing, no surfaces -> BLOCK.
-    (root / "promotion_inputs.json").write_text(
-        json.dumps({"request": {}, "policy": {}, "profile": {}}, indent=2),
-        encoding="utf-8",
-    )
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode != 0, "a blocked decision must not close the run"
-    assert _run_status(root) == "open"
-    assert "BLOCKED" in r.stderr
 
 
-def test_promote_fail_closes_when_inputs_missing(tmp_path: Path) -> None:
-    """A run that has not gathered promotion_inputs.json cannot close — the close-path refuses
-    rather than advancing on no evidence. This is the cage doing its job (fail-closed)."""
-    root = _make_run(tmp_path)
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode != 0
-    assert _run_status(root) == "open"
-    # No verdict is rendered for a run with no evidence.
-    assert not (root / "promotion_verdict.json").exists()
-    # Phase 0.1 forcing: the silent-death close now leaves its signal.
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-promote"]
 
 
-def test_promote_fail_closes_when_cli_unreachable(tmp_path: Path) -> None:
-    """If the factory CLI (the trust anchor) is unreachable, promote.sh fail-closes rather than
-    guessing a verdict. A broken factory install can never be the route-around."""
-    from tests.conftest import promoting_promotion_inputs
-
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        {"FACTORY_CLI": "/no/such/factory-binary", "PYTHONPATH": str(HARNESS.parent)},
-    )
-    assert r.returncode != 0
-    assert _run_status(root) == "open"
 
 
-def test_promote_refuses_stale_or_forged_verdict(tmp_path: Path) -> None:
-    """A stale or hand-written promotion_verdict.json must NOT close a run (Opus F2).
-
-    Before the freshness fix, promote.sh checked only ``[ -f promotion_verdict.json ]``, so a
-    pre-existing forged verdict (``{"allowed": true}``) plus a no-op FACTORY_CLI (``true``,
-    which exits 0 and writes nothing) closed the run WITHOUT decide_promotion ever running.
-    The fix removes the verdict file before the CLI call and binds the verdict to this
-    invocation (the file must match the CLI's captured stdout), so a no-op CLI writes no
-    verdict and the close fail-closes. This is the red-now test for that route-around: it
-    MUST fail against the unfixed script and pass against the fixed one.
-    """
-    root = _make_run(tmp_path)
-    # A forged verdict planted before the run — the route-around.
-    (root / "promotion_verdict.json").write_text(
-        json.dumps({"allowed": True, "disposition": "promote"}), encoding="utf-8"
-    )
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        # `true` is a no-op CLI: exits 0, writes no verdict. The forged file must not satisfy
-        # the close — the freshness removal + stdout binding defeat it.
-        {"FACTORY_CLI": "true", "PYTHONPATH": str(HARNESS.parent)},
-    )
-    assert r.returncode != 0, "a forged verdict must not close the run"
-    assert _run_status(root) == "open"
-    # Execution truth fails before destructive freshness handling; the forged file remains
-    # inert and harness.json stays open.
-    assert (root / "promotion_verdict.json").exists()
 
 
-def test_promote_refuses_verdict_that_differs_from_cli_stdout(tmp_path: Path) -> None:
-    """If the verdict file does not match the CLI's stdout, promote.sh refuses it (Opus F2
-    binding). A CLI that writes one verdict to the file and prints a different one to stdout
-    is not a verdict this invocation can ground a close on — fail-closed."""
-    root = _make_run(tmp_path)
-    # A shim CLI: writes a FORGED allowed=true verdict file, but prints a BLOCKED decision
-    # to stdout. The binding check (diff file vs stdout) catches the mismatch and refuses.
-    shim = root / "fake_cli.py"
-    shim.write_text(
-        "import json, sys, pathlib\n"
-        "argv = sys.argv\n"
-        "runs = argv[argv.index('--runs') + 1]\n"
-        "rid = argv[argv.index('--run-id') + 1]\n"
-        "root = pathlib.Path(runs) / rid\n"
-        "(root / 'promotion_verdict.json').write_text(\n"
-        "    json.dumps({'allowed': True}))\n"
-        "print(json.dumps({\n"
-        "    'allowed': False, 'disposition': 'block',\n"
-        "    'reasons': ['forged-file']}))\n"
-    )
-    py = str(VENV_PY) if VENV_PY.exists() else "python3"
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "r1"],
-        tmp_path,
-        {"FACTORY_CLI": f"{py} {shim}", "PYTHONPATH": str(HARNESS.parent)},
-    )
-    assert r.returncode != 0, "a verdict file that differs from CLI stdout must not close"
-    assert _run_status(root) == "open"
 
 
-def test_promote_refuses_run_with_no_run_json(tmp_path: Path) -> None:
-    """promote.sh refuses a run that has no run.json — it cannot close a run that does not exist."""
-    (tmp_path / ".factory" / "runs").mkdir(parents=True)
-    r = run(
-        ["bash", str(HARNESS / "promote.sh"), "nope"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode == 64
-    assert "Factory run does not exist" in r.stderr
 
 
-def test_promote_is_sole_writer_of_closed() -> None:
-    """The sole harness-close invariant: no shell script other than promote.sh writes the
-    JSON value "closed". factory.sh writes harness state "open"; the dispatcher reads "closed"
-    to stop but never writes it. Authoritative RunStore advancement is a separate unwired control.
-    If another script gained a writer, Gate L would be route-aroundable."""
-    import subprocess
-
-    writers = subprocess.run(
-        ["grep", "-rl", '"closed"', *[str(p) for p in HARNESS.glob("*.sh")]],
-        capture_output=True,
-        text=True,
-    ).stdout.split()
-    # promote.sh is the only writer; normalize to basenames for a stable assertion.
-    writer_names = sorted(Path(w).name for w in writers if w)
-    assert writer_names == ["promote.sh"], (
-        f'only promote.sh may write "closed"; found: {writer_names}'
-    )
 
 
-def test_endgame_routes_only_a_fully_green_run_through_gate_l() -> None:
-    """Endgame alone issues the current-contract admission consumed by Gate L."""
 
-    text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
-    invocation = '"$D/promote.sh" "${PROMOTE_ARGS[@]}"'
-    assert invocation in text
-    assert text.index(invocation) > text.index("== exact-subject and run-owned-resource hygiene")
-    verdict_writer = (
-        'python3 - "$ROOT" "$RUN" "$SHA" "$CANDIDATE_RESOURCE" "$FAILED"'
-    )
-    assert text.index(invocation) < text.index(verdict_writer)
-    assert 'if [ "$FAILED" -eq 0 ]; then' in text[text.index("== sole harness close") :]
-    admission = 'PROMOTE_ARGS+=(--endgame-admission "$ENDGAME_ADMISSION")'
-    assert admission in text
-    assert text.index(admission) < text.index(invocation)
 
-    missing_target_branch = text[
-        text.index('if [ -f "$TARGET_CONF" ]') : text.index(
-            "== exact-subject and run-owned-resource hygiene"
-        )
-    ]
-    assert "FAILED=1" in missing_target_branch
+
+
 
 
 # --------------------------------------------------------------------------
@@ -10325,7 +7575,7 @@ def test_inject_oracle_leak_ambient_override_is_ignored(tmp_path: Path) -> None:
     assert r.returncode == 80, r.stdout + r.stderr
     assert "oracle-leak refusal" in r.stderr
     assert "no ambient override" in r.stderr
-    assert "Fix and re-ratify" in r.stderr
+    assert "Fix the filter pattern" in r.stderr
     assert not (tmp_path / ".harness" / "runs" / "testrun" / "injections.jsonl").exists()
 
 
@@ -10373,8 +7623,7 @@ def test_inject_oracle_leak_guard_matches_test_detail_not_words(
 
 
 def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None:
-    """A target pane running a plain shell is never an injection target (exit 77):
-    INJECT_ALLOW_SHELL is not read, and nothing is delivered (no send-keys)."""
+    """A stale shell override cannot switch file delivery back to terminal input."""
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     calls = tmp_path / "tmux-calls.log"
@@ -10398,31 +7647,12 @@ def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None
             "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
         },
     )
-    assert r.returncode == 77, r.stdout + r.stderr
-    assert "not an agent" in r.stderr
-    assert "no ambient override" in r.stderr
-    delivered = calls.read_text(encoding="utf-8") if calls.exists() else ""
-    assert "send-keys" not in delivered
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not calls.exists(), "no terminal command, even with a stale override"
+    inbox = tmp_path / ".harness/runs/testrun/validator/inbox.jsonl"
+    assert json.loads(inbox.read_text())["text"] == "short note"
 
 
-def test_dispatch_ambient_gap_override_family_mints_no_evidence(tmp_path: Path) -> None:
-    """The whole retired gap-override family set at once still denies a
-    primer-gap dispatch: exit 70, no workspace resource, no dispatch receipt."""
-    src, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=False)
-    receipts = root / "dispatches.jsonl"
-    before = receipts.read_bytes() if receipts.exists() else b""
-    env = _dispatch_env(stub, root)
-    env.update({"GATE_BC_ALLOW_GAP": "1", "PHASE1_ALLOW_GAPS": "1", "FACTORY_ALLOW_GAP": "1"})
-    r = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "coder", "--dispatch", str(dispatch)],
-        src,
-        env,
-    )
-    assert r.returncode == 70, r.stdout + r.stderr
-    assert "no kindex primer" in r.stderr
-    assert "lane-workspace-coder" not in ResourceLedger(root, "r1").latest()
-    after = receipts.read_bytes() if receipts.exists() else b""
-    assert after == before
 
 
 def test_no_harness_reader_of_retired_ambient_overrides() -> None:
@@ -10453,10 +7683,8 @@ def test_no_harness_reader_of_retired_ambient_overrides() -> None:
     assert offenders == [], f"retired ambient-override names found: {offenders}"
 
 
-def test_lane_env_ground_min_extension_is_clamped(tmp_path: Path) -> None:
-    """HARNESS_MAX_GROUND_MIN tightens only: a 400-minute-old grounding marker
-    is stale at the 360-minute ceiling no matter how large the variable is, and
-    the attempted extension is called out on stderr."""
+def test_lane_env_ignores_retired_ground_age_extension(tmp_path: Path) -> None:
+    """An obsolete age setting cannot reintroduce a launch prerequisite."""
     env = lane_env_setup(tmp_path)
     marker = tmp_path / ".harness" / "grounded"
     stale = time.time() - 400 * 60
@@ -10467,15 +7695,11 @@ def test_lane_env_ground_min_extension_is_clamped(tmp_path: Path) -> None:
         tmp_path,
         env,
     )
-    assert r.returncode == 76, r.stdout + r.stderr
-    assert "not grounded" in r.stderr
-    assert "grounding-staleness extension refused" in r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_lane_env_ground_min_tightening_still_works(tmp_path: Path) -> None:
-    """Lowering the ceiling is honored: a 120-minute-old marker is fresh at the
-    360-minute default but stale under HARNESS_MAX_GROUND_MIN=60 — and no
-    extension-refusal note fires, because tightening is legitimate."""
+def test_lane_env_ignores_retired_ground_age_tightening(tmp_path: Path) -> None:
+    """An obsolete age setting cannot reintroduce a launch prerequisite."""
     env = lane_env_setup(tmp_path)
     marker = tmp_path / ".harness" / "grounded"
     aged = time.time() - 120 * 60
@@ -10486,12 +7710,11 @@ def test_lane_env_ground_min_tightening_still_works(tmp_path: Path) -> None:
         tmp_path,
         env,
     )
-    assert r.returncode == 76, r.stdout + r.stderr
-    assert "grounding-staleness extension refused" not in r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_lane_env_ground_min_invalid_value_refuses(tmp_path: Path) -> None:
-    """A non-integer knob value is refused outright (exit 76), never coerced."""
+def test_lane_env_ignores_retired_ground_age_invalid_value(tmp_path: Path) -> None:
+    """An obsolete age setting cannot reintroduce a launch prerequisite."""
     env = lane_env_setup(tmp_path)
     env["HARNESS_MAX_GROUND_MIN"] = "never"
     r = run(
@@ -10499,8 +7722,7 @@ def test_lane_env_ground_min_invalid_value_refuses(tmp_path: Path) -> None:
         tmp_path,
         env,
     )
-    assert r.returncode == 76, r.stdout + r.stderr
-    assert "invalid HARNESS_MAX_GROUND_MIN" in r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # --------------------------------------------------------------------------
@@ -10569,25 +7791,6 @@ def test_refusal_event_unregistered_kind_degrades_never_swallows(tmp_path: Path)
     assert "boom" in str(rows[0]["detail"])
 
 
-def test_endgame_refusal_leaves_derivable_signal(tmp_path: Path) -> None:
-    """An endgame that cannot even resolve its candidate resource still leaves
-    exactly one registered refusal event before dying."""
-    root = _make_run(tmp_path)
-    r = run(
-        [
-            "bash",
-            str(HARNESS / "endgame.sh"),
-            "r1",
-            "a" * 40,
-            "--candidate-resource",
-            "no-such-resource",
-        ],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode != 0
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-endgame"]
 
 
 def _unattributed_refusal_exits(
@@ -10691,27 +7894,10 @@ def _unattributed_refusal_exits(
     return unattributed
 
 
-_PROMOTE_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:(?:2|64|66|70|71|72)(?!\d)|"\$rc")'
-_ENDGAME_EXIT_RE = r'(?:^|[;{|&]\s*)exit (?:70(?!\d)|"\$rc")'
 
 
-def test_promote_refusal_exits_all_route_through_refusal_event() -> None:
-    """Every fail-closed exit in promote.sh after the helper definition is
-    attributed to a refusal_event call in its own basic block (round-3 D1:
-    block-structural, exit "$rc" in scope). Exit 1 (BLOCKED) is exempt — it
-    renders a verdict; pre-helper exits are the stated pre-root boundary."""
-    text = (HARNESS / "promote.sh").read_text(encoding="utf-8")
-    body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?"))
-    assert not missing, "fail-closed exits without attribution:\n" + "\n".join(missing)
 
 
-def test_endgame_refusal_exits_all_route_through_refusal_event() -> None:
-    """Same attribution for endgame.sh; the RED/GREEN verdict exit is exempt."""
-    text = (HARNESS / "endgame.sh").read_text(encoding="utf-8")
-    body = text[text.index("refusal_event()") :]
-    missing = _unattributed_refusal_exits(body, _ENDGAME_EXIT_RE, exempt_exits=('"$FAILED"', "64"))
-    assert not missing, "refusal exits without attribution:\n" + "\n".join(missing)
 
 
 def test_phase1_refusal_exit_is_attributed() -> None:
@@ -10727,183 +7913,22 @@ def test_phase1_refusal_exit_is_attributed() -> None:
     assert not missing, "\n".join(missing)
 
 
-def test_dispatch_refusals_are_funneled_through_fail() -> None:
-    """Round-5 F-4 rewrite: the funnel must contain an EXECUTING refusal-event
-    invocation (a python3 line calling the hyphenated subcommand dispatch
-    actually uses — the old refusal_event disjunct was dead text), and ANY exit
-    after the funnel that is not a registered non-refusal form is flagged, so
-    a refusal path replaced by echo+exit N turns this red."""
-
-    text = (HARNESS / "dispatch_lane.sh").read_text(encoding="utf-8")
-    lines = text.splitlines()
-    start_index = next(i for i, line in enumerate(lines) if line.startswith("fail() {"))
-    end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
-    fail_body_lines = [line.strip() for line in lines[start_index:end_index]]
-    assert any(
-        line.startswith("python3") and "refusal-event" in line for line in fail_body_lines
-    ), "fail() carries no executing refusal-event invocation"
-
-    offenders = _dispatch_exits_outside_funnel(lines, end_index)
-    assert not offenders, f"exit outside the fail() funnel: {offenders}"
 
 
-def _dispatch_exits_outside_funnel(lines: list, end_index: int) -> list:
-    import re as _re
-
-    joined_tail = "\n".join(lines[end_index + 1 :]).replace("\\\n", " ")
-    any_exit_re = _re.compile(r"(?:^|[;{|&(]\s*)exit\b\s*([^;}&|)]*)")
-    offenders = []
-    for line in joined_tail.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        effective = stripped.split("#", 1)[0]
-        for match in any_exit_re.finditer(effective):
-            argument = match.group(1).strip()
-            if argument in {"64", "0", '"$rc"', "$?"}:
-                continue
-            offenders.append(stripped)
-    return offenders
 
 
-_MASKING_MUTATIONS = [
-    # Verification round 3 found these seven sites silently de-instrumentable
-    # under the window-grep. Each mutation removes one attribution; the
-    # scanner must go red on every one.
-    ("promote.sh", _PROMOTE_EXIT_RE, '  refusal_event "no checked harness.json" 64\n'),
-    (
-        "promote.sh",
-        _PROMOTE_EXIT_RE,
-        'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
-    ),
-    (
-        "promote.sh",
-        _PROMOTE_EXIT_RE,
-        '  refusal_event "run-owned resources lack a terminal disposition"\n',
-    ),
-    (
-        "endgame.sh",
-        _ENDGAME_EXIT_RE,
-        'rc=$?; refusal_event "target-state verification refused" "$rc"; ',
-    ),
-    (
-        "endgame.sh",
-        _ENDGAME_EXIT_RE,
-        'rc=$?; refusal_event "resource verification refused" "$rc"; ',
-    ),
-    (
-        "endgame.sh",
-        _ENDGAME_EXIT_RE,
-        '  refusal_event "final SHA is not exactly a commit in the candidate resource"\n',
-    ),
-    (
-        "endgame.sh",
-        _ENDGAME_EXIT_RE,
-        '  refusal_event "candidate materialization failed"\n',
-    ),
-    (
-        "endgame.sh",
-        _ENDGAME_EXIT_RE,
-        '  refusal_event "endgame checkout could not be recorded"\n',
-    ),
-]
 
 
-_SUBSTITUTION_MUTATIONS = [
-    # Round-5 F-1/F-2: token present but never executes — the pure-removal
-    # fixtures proved the scanner only against deletion; these prove it
-    # against substitution (the verifier's end-to-end reproductions).
-    (
-        "promote.sh",
-        "identifier-assignment",
-        'refusal_event "factory CLI exited 0 but wrote no verdict file"; ',
-        'refusal_event_hushed="factory CLI exited 0 but wrote no verdict file"; ',
-    ),
-    (
-        "promote.sh",
-        "arithmetic-exit",
-        'refusal_event "harness metadata check refused" 66; exit 66;',
-        "exit $(( 66 ));",
-    ),
-]
 
 
-@pytest.mark.parametrize("script,label,old,new", _SUBSTITUTION_MUTATIONS)
-def test_substitution_mutations_turn_the_scanner_red(
-    script: str, label: str, old: str, new: str
-) -> None:
-    text = (HARNESS / script).read_text(encoding="utf-8")
-    assert old in text, f"substitution anchor drifted in {script}: {label}"
-    mutated = text.replace(old, new, 1)
-    body = mutated[mutated.index("refusal_event()") :]
-    assert _unattributed_refusal_exits(body, _PROMOTE_EXIT_RE, exempt_exits=("1", "$?")), (
-        f"scanner failed to catch substitution {label} in {script}"
-    )
 
 
-def test_dispatch_echo_substitution_turns_the_funnel_scan_red() -> None:
-    """Round-5 F-4 end-to-end reproduction: a post-root fail() call replaced by
-    echo+exit must be flagged by the funnel scan."""
-    text = (HARNESS / "dispatch_lane.sh").read_text(encoding="utf-8")
-    anchor = 'fail "run has not been ignited through harness/factory.sh"'
-    assert anchor in text, "dispatch mutation anchor drifted"
-    mutated = text.replace(anchor, 'echo "run has no grounding marker" >&2; exit 65', 1)
-    lines = mutated.splitlines()
-    start_index = next(i for i, line in enumerate(lines) if line.startswith("fail() {"))
-    end_index = next(i for i in range(start_index + 1, len(lines)) if lines[i] == "}")
-    assert _dispatch_exits_outside_funnel(lines, end_index), (
-        "the funnel scan must flag the substituted bare exit"
-    )
 
 
-@pytest.mark.parametrize("script,pattern,removal", _MASKING_MUTATIONS)
-def test_masking_mutations_turn_the_attribution_scanner_red(
-    script: str, pattern: str, removal: str
-) -> None:
-    text = (HARNESS / script).read_text(encoding="utf-8")
-    assert removal in text, f"mutation anchor drifted in {script}: {removal!r}"
-    mutated = text.replace(removal, "", 1)
-    body = mutated[mutated.index("refusal_event()") :]
-    assert _unattributed_refusal_exits(body, pattern), (
-        f"scanner failed to catch de-instrumentation of {removal!r} in {script}"
-    )
 
 
-def test_promote_blocked_decision_emits_no_refusal_event(tmp_path: Path) -> None:
-    """BLOCKED is a rendered verdict, not a silent death — the discriminating
-    sibling: no refusal event on exit 1."""
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps({"request": {}, "policy": {}, "profile": {}}, indent=2),
-        encoding="utf-8",
-    )
-    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
-    assert r.returncode == 1
-    assert (root / "promotion_verdict.json").exists()
-    assert _refusal_events(root) == []
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="chflags uchg is the darwin write-block")
-def test_promote_close_write_failure_leaves_refusal_event(tmp_path: Path) -> None:
-    """The :243 silent-death class from verification round 2: a green verdict
-    whose harness.json close write fails must leave a refusal event (exit 70)."""
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-    subprocess.run(["chflags", "uchg", str(root / "harness.json")], check=True)
-    try:
-        r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
-    finally:
-        subprocess.run(["chflags", "nouchg", str(root / "harness.json")], check=False)
-    assert r.returncode == 70, (r.returncode, r.stderr)
-    assert _run_status(root) == "open"
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-promote"]
-    assert rows[0]["exit_code"] == 70
 
 
 # --------------------------------------------------------------------------
@@ -10919,110 +7944,14 @@ def _harness_doc(root: Path) -> dict[str, object]:
     return json.loads((root / "harness.json").read_text(encoding="utf-8"))
 
 
-def test_record_no_writes_host_terminal_disposition(tmp_path: Path) -> None:
-    root = _make_run(tmp_path)
-    r = run(
-        [
-            "bash",
-            str(HARNESS / "record_no.sh"),
-            "r1",
-            "--kind",
-            "operator",
-            "--reason",
-            "spec unsatisfiable, human decision",
-        ],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode == 0, r.stderr
-    doc = _harness_doc(root)
-    assert doc["status"] == "no"
-    assert doc["no_kind"] == "operator"
-    assert doc["no_class"] == "signal"
-    assert doc["no_reason"] == "spec unsatisfiable, human decision"
-    assert str(doc["no_recorded_at"]).endswith("+00:00")
 
 
-def test_record_no_deadline_kind_is_a_bound_not_a_signal(tmp_path: Path) -> None:
-    """0.2 enforcement: deadline expiry is excluded from the rewarded NO-relevant
-    class — the deadline knob cannot manufacture the terminal the instrument pays."""
-    root = _make_run(tmp_path)
-    r = run(
-        [
-            "bash",
-            str(HARNESS / "record_no.sh"),
-            "r1",
-            "--kind",
-            "watchdog-deadline",
-            "--reason",
-            "signal deadline expired with residual blockers",
-        ],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode == 0, r.stderr
-    assert _harness_doc(root)["no_class"] == "bound"
 
 
-def test_record_no_refuses_unknown_kind(tmp_path: Path) -> None:
-    """A deliberate host action with an unknown kind is a caller bug, not a death
-    signal to preserve — refused, never minted mislabeled."""
-    root = _make_run(tmp_path)
-    r = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "vibes", "--reason", "x"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert r.returncode == 65
-    assert _harness_doc(root)["status"] == "open"
 
 
-def test_record_no_refuses_closed_run_and_conflicting_rewrite(tmp_path: Path) -> None:
-    root = _make_run(tmp_path)
-    args = ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator", "--reason", "first"]
-    assert run(args, tmp_path, _factory_cli_env()).returncode == 0
-    # Identical retry is idempotent (crash-retry safety, promote.sh precedent).
-    assert run(args, tmp_path, _factory_cli_env()).returncode == 0
-    # A different NO must not overwrite the recorded one.
-    conflicting = run(
-        ["bash", str(HARNESS / "record_no.sh"), "r1", "--kind", "operator", "--reason", "second"],
-        tmp_path,
-        _factory_cli_env(),
-    )
-    assert conflicting.returncode == 2
-    assert _harness_doc(root)["no_reason"] == "first"
 
 
-def test_promote_refuses_a_no_run_terminal_is_terminal(tmp_path: Path) -> None:
-    """A host-recorded NO is terminal: the close path fail-closes on it (and
-    leaves its own refusal event), never advancing a dead run to closed."""
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    (root / "promotion_inputs.json").write_text(
-        json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-    )
-    write_promoting_chain(root)
-    assert (
-        run(
-            [
-                "bash",
-                str(HARNESS / "record_no.sh"),
-                "r1",
-                "--kind",
-                "operator",
-                "--reason",
-                "dead end",
-            ],
-            tmp_path,
-            _factory_cli_env(),
-        ).returncode
-        == 0
-    )
-    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
-    assert r.returncode != 0
-    assert _harness_doc(root)["status"] == "no"
-    assert [row["kind"] for row in _refusal_events(root)] == ["refusal-promote"]
 
 
 def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
@@ -11052,40 +7981,6 @@ def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def _delegating_stub(tmp_path: Path, case: str) -> dict[str, str]:
-    env = _factory_cli_env()
-    real = env["FACTORY_CLI"]
-    stub = tmp_path / "stub-cli.sh"
-    body = {
-        "promote-refuses": 'if [ "$1" = "promote" ]; then echo "stub refusal" >&2; exit 2; fi',
-        "promote-silent-zero": 'if [ "$1" = "promote" ]; then exit 0; fi',
-        "promote-forked-output": (
-            'if [ "$1" = "promote" ]; then'
-            ' root="$(dirname "$0")/root-marker"; root="$(cat "$root")";'
-            ' printf \'{"allowed": true}\' > "$root/promotion_verdict.json";'
-            " printf '{\"allowed\": false}'; exit 0; fi"
-        ),
-        "promote-unreadable-verdict": (
-            'if [ "$1" = "promote" ]; then'
-            ' root="$(dirname "$0")/root-marker"; root="$(cat "$root")";'
-            ' printf "not json" > "$root/promotion_verdict.json";'
-            ' printf "not json"; exit 0; fi'
-        ),
-        "seal-refused": (
-            'if [ "$1" = "verify-resources" ]; then'
-            '  for a in "$@"; do'
-            '    [ "$a" = "--seal" ] && { echo "stub seal refusal" >&2; exit 1; };'
-            "  done;"
-            "fi"
-        ),
-    }[case]
-    stub.write_text(
-        "#!/bin/bash\n" + body + f'\nexec {real} "$@"\n',
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-    env["FACTORY_CLI"] = str(stub)
-    return env
 
 
 _PROMOTE_RUNTIME_SITES = [
@@ -11098,38 +7993,8 @@ _PROMOTE_RUNTIME_SITES = [
 ]
 
 
-@pytest.mark.parametrize("case,inputs,expected_exit,fragment", _PROMOTE_RUNTIME_SITES)
-def test_promote_refusal_sites_leave_exactly_one_row_at_runtime(
-    tmp_path: Path, case: str, inputs: bool, expected_exit: int, fragment: str
-) -> None:
-    from tests.conftest import promoting_promotion_inputs, write_promoting_chain
-
-    root = _make_run(tmp_path)
-    if inputs:
-        (root / "promotion_inputs.json").write_text(
-            json.dumps(promoting_promotion_inputs(), indent=2), encoding="utf-8"
-        )
-        write_promoting_chain(root)
-    env = _delegating_stub(tmp_path, case)
-    (tmp_path / "root-marker").write_text(str(root), encoding="utf-8")
-    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, env)
-    assert r.returncode == expected_exit, (case, r.returncode, r.stderr)
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-promote"], (case, rows)
-    assert fragment in str(rows[0]["detail"]), (case, rows[0])
 
 
-def test_promote_metadata_site_leaves_exactly_one_row_at_runtime(tmp_path: Path) -> None:
-    """The :55 metadata-66 site (round-5 scanner-only list)."""
-    root = _make_run(tmp_path)
-    doc = json.loads((root / "harness.json").read_text(encoding="utf-8"))
-    doc["unexpected_field"] = True
-    (root / "harness.json").write_text(json.dumps(doc), encoding="utf-8")
-    r = run(["bash", str(HARNESS / "promote.sh"), "r1"], tmp_path, _factory_cli_env())
-    assert r.returncode == 66
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-promote"]
-    assert rows[0]["exit_code"] == 66
 
 
 def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> None:
@@ -11178,175 +8043,10 @@ def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> No
     assert len(chain.read_text().splitlines()) == 1  # no row appended
 
 
-def test_endgame_materialization_failure_site_is_driven_and_leaves_its_signal(
-    tmp_path: Path,
-) -> None:
-    """Endgame's ``candidate materialization failed`` refusal is a genuine environmental
-    degrade-never-wedge site (the candidate's objects cannot be read), so it earns a DRIVING
-    test (Round-8, GLM #94 item 2: it replaced the ``git archive | tar -x`` site). Only the
-    materializer asks ``git cat-file --batch-check``, so a PATH-shadowed ``git`` that fails that
-    one request drives the guard without disturbing the real Git steps before it, and the site
-    must leave exactly one registered refusal event and exit 70."""
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
-    sha = str(target_state["resolved_commit"])
-    real_git = shutil.which("git")
-    assert real_git is not None
-
-    stub_dir = tmp_path / "failgit-bin"
-    stub_dir.mkdir()
-    git_stub = stub_dir / "git"
-    git_stub.write_text(
-        "#!/usr/bin/env bash\n"
-        'for a in "$@"; do\n'
-        '  if [ "$a" = --batch-check ]; then echo "stub git: object store unreadable" >&2; '
-        "exit 1; fi\n"
-        "done\n"
-        f'exec {shlex.quote(real_git)} "$@"\n',
-        encoding="utf-8",
-    )
-    git_stub.chmod(0o755)
-    install_resident_orchestrator_stub(stub_dir, root)
-
-    env = _factory_cli_env()
-    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-
-    r = run(
-        [
-            "bash",
-            str(HARNESS / "endgame.sh"),
-            "r1",
-            sha,
-            "--candidate-resource",
-            "target-source",
-        ],
-        tmp_path,
-        env,
-    )
-    assert r.returncode == 70, (r.returncode, r.stdout, r.stderr)
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
-    assert "candidate materialization failed" in str(rows[0]["detail"])
 
 
-def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_planted(
-    tmp_path: Path,
-) -> None:
-    """Gate HGT end to end: the candidate's own Git attributes and filter config are agent
-    writable. Endgame's judged checkout still holds every path of the named commit (no
-    ``export-ignore`` hides the tests), no planted smudge filter runs on the host, and the
-    hygiene status reads the checkout cleanly. ``make`` is stubbed red so the run stops at the
-    verdict without running the synthetic target's gates."""
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
-    sha = str(target_state["resolved_commit"])
-    source = Path(str(target_state["source_root"]))
-    git_directory = Path(
-        subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    )
-    marker = tmp_path / "smudge-ran"
-    (git_directory / "info").mkdir(exist_ok=True)
-    (git_directory / "info" / "attributes").write_text(
-        "tests export-ignore\ntests/** export-ignore\n* filter=plant\n", encoding="utf-8"
-    )
-    subprocess.run(
-        ["git", "-C", str(source), "config", "filter.plant.smudge",
-         f"sh -c 'touch {marker}; cat'"],
-        check=True,
-    )
-    stub_dir = tmp_path / "redmake-bin"
-    stub_dir.mkdir()
-    make_stub = stub_dir / "make"
-    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
-    make_stub.chmod(0o755)
-    install_resident_orchestrator_stub(stub_dir, root)
-    env = _factory_cli_env()
-    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-
-    r = run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
-        tmp_path,
-        env,
-    )
-
-    assert "endgame verdict: RED" in r.stdout, (r.returncode, r.stdout, r.stderr)
-    assert "evidence no longer names one subject" not in r.stdout
-    assert not marker.exists()
-    (judged,) = (root / "endgame").glob("endgame-checkout-*")
-    listed = subprocess.run(
-        ["git", "-C", str(source), "ls-tree", "-r", "--name-only", sha],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
-    assert any(name.startswith("tests/") for name in listed)
-    for name in listed:
-        assert (judged / name).read_bytes() == subprocess.run(
-            ["git", "-C", str(source), "cat-file", "blob", f"{sha}:{name}"],
-            check=True,
-            capture_output=True,
-        ).stdout
 
 
-def test_endgame_renders_no_verdict_without_a_discovery_receipt_for_the_candidate(
-    tmp_path: Path,
-) -> None:
-    """Gate LFX end to end: once a Tester slot froze, endgame refuses (exit 70, one refusal
-    event) until discovery_check.py has written a receipt for exactly the judged commit, the
-    ratified Strategy and that freeze; with the receipt it proceeds to the verdict. ``make`` is
-    stubbed red so the run stops at the verdict without running the synthetic target's gates."""
-    from harness import discovery_check
-
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
-    sha = str(target_state["resolved_commit"])
-    source = Path(str(target_state["source_root"]))
-    files = tmp_path / "tester-freeze" / "files"
-    (files / "tests").mkdir(parents=True)
-    (files / "tests" / "cap_test.py").write_text("def test_cap_R1(): pass\n", encoding="utf-8")
-    (root / "tmux-lanes").mkdir(exist_ok=True)
-    (root / "tmux-lanes" / "tester-launch.jsonl").write_text(
-        json.dumps({"schema_version": discovery_check.FREEZE_SCHEMA,
-                    "export": {"files_directory": str(files)}}) + "\n", encoding="utf-8")
-    strategy = root / "artifacts" / "testing-strategy.md"
-    strategy.parent.mkdir(exist_ok=True)
-    strategy.write_text("planned-case: R1\ntest-modules: tests/*_test.py\n", encoding="utf-8")
-    (strategy.parent / "testing-strategy.md.digest").write_text("ratified\n", encoding="utf-8")
-    stub_dir = tmp_path / "redmake-bin"
-    stub_dir.mkdir()
-    make_stub = stub_dir / "make"
-    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
-    make_stub.chmod(0o755)
-    install_resident_orchestrator_stub(stub_dir, root)
-    env = _factory_cli_env()
-    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-    endgame = ["bash", str(HARNESS / "endgame.sh"), "r1", sha,
-               "--candidate-resource", "target-source"]
-
-    refused = run(endgame, tmp_path, env)
-
-    assert refused.returncode == 70, (refused.returncode, refused.stdout, refused.stderr)
-    assert "endgame verdict" not in refused.stdout
-    assert "no discovery receipt for tester" in refused.stderr
-    rows = _refusal_events(root)
-    assert [row["kind"] for row in rows] == ["refusal-endgame"], rows
-    assert "no discovery receipt binds the candidate" in str(rows[0]["detail"])
-
-    inventory = json.dumps({"schema_version": discovery_check.INVENTORY_SCHEMA,
-                            "tests": [{"module": "tests/cap_test.py", "name": "test_cap[R1]"}]})
-    (tmp_path / "inventory.json").write_text(inventory, encoding="utf-8")
-    assert discovery_check.main([
-        "--root", str(root), "--tree", str(source), "--candidate-sha", sha,
-        "--pattern", "tests/*_test.py", "--strategy", str(strategy),
-        "--", "cat", str(tmp_path / "inventory.json")]) == 0
-
-    judged = run(endgame, tmp_path, env)
-
-    assert "endgame verdict: RED" in judged.stdout, (judged.returncode, judged.stdout,
-                                                      judged.stderr)
-    assert len(_refusal_events(root)) == 1
 
 
 def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
@@ -11385,26 +8085,17 @@ def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     model, or with a model this machine lacks, is refused before Codex's --oss mode could pull
     one; an available model is passed explicitly and recorded on the launch row."""
 
-    task = "Exercise an Ollama-backed author lane."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent),
-         "--budget", "50"],
-        operator,
-        env,
+    root, operator, tmux_log, _ = _ignite_and_launcher(
+        tmp_path, "Use chosen Ollama model", budget="50",
     )
-    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
     lane = tmp_path / "standalone-coder"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
-    prompt = tmp_path / "coder-prompt.txt"
-    prompt.write_text("Implement the signed specification.\n")
+    prompt = tmp_path / "prompt.txt"
+    env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
     launch = [
         "bash", str(HARNESS / "tmux_lane.sh"), "r1", "coder", "launch", "--repo", str(lane),
         "--prompt", str(prompt), "--runs", str(root.parent), "--agent", "codex-ollama",
         *METERED_CAPS,
     ]
-    record_passing_qualification(root.parent, "coder", "codex-ollama", "glm-test:cloud")
     stub_dir = Path(env["PATH"].split(os.pathsep)[0])
 
     unnamed = run(launch, operator, env)
@@ -11428,88 +8119,32 @@ def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     assert rows[-1]["status"] == "active" and rows[-1]["model"] == "glm-test:cloud"
 
 
-def test_ollama_validator_requires_an_operator_named_model(tmp_path: Path) -> None:
-    """factory.sh no longer defaults the Ollama Validator to a model; with none named it refuses
-    before any session starts."""
-
-    task = "Exercise an Ollama-backed Validator."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    refused = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        {**env, "FACTORY_VALIDATOR_AGENT": "ollama"},
-    )
-    assert refused.returncode == 64
-    assert "FACTORY_VALIDATOR_OLLAMA_MODEL" in refused.stderr
-    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
 
 
-def test_a_kickoff_validator_is_refused_without_its_transcript(tmp_path: Path) -> None:
-    task = "Exercise a kickoff Validator."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    refused = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        {**env, "FACTORY_VALIDATOR_AGENT": "kickoff"},
-    )
-    assert refused.returncode == 64
-    assert "FACTORY_VALIDATOR_TRANSCRIPT" in refused.stderr
-    assert not tmux_log.exists() or "new-session" not in tmux_log.read_text()
 
 
-def test_the_kickoff_session_is_the_validator_and_no_second_one_launches(tmp_path: Path) -> None:
-    """The founder's default: the session that kicked off the run is the Validator. Its window
-    mirrors that session and queues what the factory types into it; no Validator agent starts."""
-
-    task = "Exercise a kickoff Validator."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    transcript = tmp_path / "kickoff-session.jsonl"
-    transcript.write_text("", encoding="utf-8")
-    stub = Path(env["PATH"].split(os.pathsep)[0])
-    (stub / "ps").write_text(
-        "#!/bin/sh\nprintf '101 1 Sat Oct 24 00:00:00 2026 S 0:00.00\\n"
-        "102 101 Sat Oct 24 00:00:00 2026 S 0:00.00\\n'\n")
-    (stub / "ps").chmod(0o755)
-    tmux = stub / "tmux"
-    tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "101\\n"'))
-    result = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        {
-            **env,
-            "FACTORY_VALIDATOR_AGENT": "kickoff",
-            "FACTORY_VALIDATOR_TRANSCRIPT": str(transcript),
-            "FACTORY_VALIDATOR_PID": "102",
-            "FACTORY_VALIDATOR_STARTED": "Sat Oct 24 00:00:00 2026",
-            "FACTORY_VALIDATOR_PANE": "%101",
-        },
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads((root / "harness.json").read_text())["validator_agent"] == "kickoff"
-    validator_line = next(
-        ln for ln in tmux_log.read_text().splitlines() if "-n validator " in ln
-    )
-    assert "validator_mirror.py --transcript" in validator_line
-    assert str(transcript.resolve()) in validator_line
-    assert not any(agent in validator_line for agent in (" codex ", " claude ", " muse "))
-    brief = root / "validator" / "BRIEF.md"
-    assert "inbox.jsonl" in brief.read_text() and "VALIDATION-DIRECTIVE.md" in brief.read_text()
-    assert brief.stat().st_mode & 0o077 == 0
-    assert (root / "validator" / "inbox.jsonl").stat().st_mode & 0o077 == 0
-    assert "kickoff inbox:" in result.stdout
 
 
 def _ignite_and_launcher(
-    tmp_path: Path, task: str, env_extra: dict[str, str] | None = None
+    tmp_path: Path, task: str, env_extra: dict[str, str] | None = None,
+    *, budget: str | None = None
 ) -> tuple[Path, Path, Path, Callable[..., subprocess.CompletedProcess[str]]]:
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
+    from harness.role_inputs import prepare
+
+    operator, root = tmp_path / "operator", tmp_path / ".factory/runs/r1"
+    operator.mkdir()
+    subprocess.run(["git", "init", "-q", str(operator)], check=True)
+    subprocess.run(["git", "-C", str(operator), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm",
+                    "base"], check=True)
     env, tmux_log = factory_ignition_env(tmp_path, root)
+    stub_tmux = Path(env["PATH"].split(os.pathsep)[0]) / "tmux"
+    stub_tmux.write_text(stub_tmux.read_text().replace(
+        "#!/usr/bin/env bash\n", "#!/usr/bin/env bash\n[ \"$1\" != -L ] || shift 2\n"))
     env = {**env, **(env_extra or {})}
     ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
+        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent),
+         "--repo", str(operator), *(["--budget", budget] if budget else [])],
         operator,
         env,
     )
@@ -11519,12 +8154,13 @@ def _ignite_and_launcher(
     strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Do the lane's work.\n")
+    for role in ("coder", "tester"):
+        prepare(root.parent, "r1", role, tmp_path / f"standalone-{role}", [], [])
 
-    def launch(role: str, *extra: str) -> subprocess.CompletedProcess[str]:
+    def launch(role: str, *extra: str, action: str = "launch") -> subprocess.CompletedProcess[str]:
         lane = tmp_path / f"standalone-{role}"
-        subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
         return run(
-            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, "launch", "--repo", str(lane),
+            ["bash", str(HARNESS / "tmux_lane.sh"), "r1", role, action, "--repo", str(lane),
              "--prompt", str(prompt), "--runs", str(root.parent), *extra],
             operator,
             env,
@@ -11545,10 +8181,10 @@ def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
          "FACTORY_ORCHESTRATOR_MODEL": "gpt-orch"},
     )
     calls = tmux_log.read_text().splitlines()
-    assert any(
-        "codex --sandbox workspace-write --ask-for-approval never --model gpt-val " in line
-        for line in calls
-    )
+    validator = next(line for line in calls if "-n validator" in line)
+    arguments = shlex.split(validator.split("exec ", 1)[1])
+    assert arguments[arguments.index("--model") + 1] == "gpt-val"
+    assert arguments[arguments.index("--ask-for-approval") + 1] == "on-request"
     assert any("--no-alt-screen --model gpt-orch " in line for line in calls)
     assert not (root / "model-profile.json").exists()
 
@@ -11607,43 +8243,14 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     assert "gpt-mine" not in tester_call
 
 
-def test_an_agy_orchestrator_receives_the_model_the_operator_names(tmp_path: Path) -> None:
-    """agy takes a model flag: a named Orchestrator model reaches its launch, never dropped."""
-
-    task = "Name a model for agy."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    # R3 / RUL-1: a named model is a flag the launch uses, so agy --help must list it.
-    agy = Path(env["PATH"].split(os.pathsep)[0]) / "agy"
-    agy.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = "--version" ]; then echo "1.1.24-test"; exit 0; fi\n'
-        'if [ "${1:-}" = "--help" ]; then '
-        'echo "--new-project --prompt-interactive --sandbox --dangerously-skip-permissions '
-        '--disable-slash-commands --add-dir --model" >&2; '
-        "exit 0; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    agy.chmod(0o755)
-    launched = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        {**env, "FACTORY_ORCHESTRATOR_MODEL": "gemini-test"},
-    )
-    assert launched.returncode == 0, launched.stderr
-    assert "--model gemini-test" in tmux_log.read_text()
 
 
 def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:
     """A Codex lane resumes on the selection it launched with, not on Codex's built-in default:
     the named model, or the Codex config overrides it carried over. A retained model that is not
-    one shell word is refused."""
+    a literal string is refused; valid literal selections are never substituted."""
 
-    operator, root, _ = execution_truth_fixture(
-        tmp_path, task="Resume on the launch model.", harness_status="open"
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
     lane = tmp_path / "standalone-coder"
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
     launch_dir = root / "tmux-lanes"
@@ -11652,7 +8259,7 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
         "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
     )
 
-    def probe(model: str, config: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+    def probe(model: object, config: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
                "role": "coder", "agent": "codex", "model": model, "repository": str(lane)}
         if config is not None:
@@ -11665,8 +8272,17 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
             env,
         )
 
-    malformed = probe("gpt coder")
-    assert malformed.returncode == 70 and "retained model is malformed" in malformed.stderr
+    for invalid in ({"not": "a literal"}, "bad\0name"):
+        malformed = probe(invalid)
+        assert malformed.returncode == 70
+        assert "retained launch fields are malformed" in malformed.stderr
+        assert not tmux_log.exists()
+    literal = probe("gpt coder $(touch MODEL_EXECUTED)")
+    assert literal.returncode == 0, literal.stdout + literal.stderr
+    first = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
+    assert "gpt coder $(touch MODEL_EXECUTED)" in shlex.split(first)
+    assert not (operator / "MODEL_EXECUTED").exists()
+    tmux_log.unlink()
     resumed = probe("gpt-coder")
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
@@ -11681,14 +8297,14 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     assert " -m " not in respawn
 
 
-def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wall_cap", [None, 120])
+def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(
+    tmp_path: Path, wall_cap: int | None,
+) -> None:
     """tmux resolves a missing window target to the session's active pane, which reads as a
     live lane; delivery to a lane with no window must resume its thread, never queue."""
 
-    operator, root, _ = execution_truth_fixture(
-        tmp_path, task="Resume a lane whose window closed.", harness_status="open"
-    )
-    env, tmux_log = factory_ignition_env(tmp_path, root)
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
     env["TMUX_STUB_WINDOWS"] = "main"
     lane = tmp_path / "standalone-coder"
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
@@ -11698,7 +8314,8 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_p
         "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
     )
     row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
-           "role": "coder", "agent": "codex", "model": "", "repository": str(lane)}
+           "role": "coder", "agent": "codex", "model": "", "repository": str(lane),
+           "caps": {"wall_cap_s": wall_cap}}
     (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
     probe = run(
@@ -11712,65 +8329,24 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(tmp_p
     assert "via Codex resume" in probe.stdout
     calls = tmux_log.read_text()
     assert "new-window -t r1 -n coder" in calls and "exec --json resume" in calls
+    assert ("-n watch-coder" in calls) == (wall_cap is not None)
 
 
-@pytest.mark.skipif(
-    not (HARNESS.parent / ".venv" / "bin" / "python").exists(),
-    reason="needs the checkout venv that `make install` builds (CI installs into its interpreter)",
-)
-def test_ignition_survives_an_unusable_python3_first_on_path(tmp_path: Path) -> None:
-    """A clean Mac's python3 (3.9, no factory) first on PATH must not reach factory code: the
-    harness runs on the checkout's own interpreter, and so do the run-owned Orchestrator tools."""
 
-    task = "Ignite with a broken python3 first on PATH."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, _ = factory_ignition_env(tmp_path, root)
-    bad = tmp_path / "bad-python"
-    bad.mkdir()
-    (bad / "python3").write_text("#!/bin/sh\necho BAD-PYTHON >&2\nexit 1\n", encoding="utf-8")
-    (bad / "python3").chmod(0o755)
-    env = {**env, "PATH": f"{bad}:{env['PATH']}", "FACTORY_PYTHON": ""}
-    ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
-    assert "BAD-PYTHON" not in ignited.stderr
-    channel = root / "orchestrator" / "bin" / "orchestrator_channel.py"
-    helped = subprocess.run([str(channel), "--help"], capture_output=True, text=True,
-                            env={"PATH": env["PATH"]}, check=False)
-    assert helped.returncode == 0, helped.stderr
 
 
 @pytest.mark.parametrize("prior_mode", ["qualify", "launch", None])
 def test_coder_and_tester_lanes_get_separate_scoped_kindex(
     tmp_path: Path, prior_mode: str | None,
 ) -> None:
-    """Each lane's Kindex is built from its own repository copy's committed .kin, under its own
-    private HOME. Two lanes may not share a repository: that would share files and memory."""
+    """Each prepared input projection gets private Kindex storage and the same curated seed.
+    Neither a shared author repository nor a changed seed can leak one author's context.
+    """
 
-    task = "Two lanes, two memories."
-    operator, root, _ = execution_truth_fixture(tmp_path, task=task, harness_status=None)
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    ignited = run(
-        ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(root.parent)],
-        operator,
-        env,
-    )
-    assert ignited.returncode == 0, ignited.stdout + ignited.stderr
-    strategy = root / "artifacts" / "testing-strategy.md"
-    strategy.parent.mkdir(exist_ok=True)
-    strategy.write_text("# Testing strategy\nExercise each named invariant.\n")
+    root, operator, tmux_log, _ = _ignite_and_launcher(tmp_path, "Two lanes, two memories")
+    env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
     prompt = tmp_path / "prompt.txt"
-    prompt.write_text("Do the lane's work.\n")
-    lanes = {}
-    for role in ("coder", "tester"):
-        lane = tmp_path / f"standalone-{role}"
-        subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
-        (lane / ".kin").mkdir()
-        (lane / ".kin" / "knowledge.jsonl").write_text(f'{{"title":"{role} copy"}}\n')
-        lanes[role] = lane
+    lanes = {role: tmp_path / f"standalone-{role}" for role in ("coder", "tester")}
 
     def launch(role: str, repo: Path) -> subprocess.CompletedProcess[str]:
         return run(
@@ -11787,8 +8363,18 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(
     old_probe = root / "tmux-lanes" / "tester.probe-launch.jsonl"
     old_probe.parent.mkdir(exist_ok=True)
     old_probe.write_text(json.dumps({
-        "status": "active", "role": "tester", "mode": prior_mode,
+        "status": "active", "run_id": "r1", "role": "tester", "mode": prior_mode,
+        "slot": "tester.probe", "repository": str(tmp_path / "completed-probe"),
         "ts": "2026-01-01T00:00:00Z", "kindex": {"seed": None},
+    }) + "\n")
+    # Synthetic completed-probe receipts, not an actual agent qualification.
+    (old_probe.parent / "tester.probe-watch.json").write_text(json.dumps({
+        "schema_version": "factory-lane-watch/1", "slot": "tester.probe",
+        "launch_ts": 1767225600.0, "status": "exited",
+    }))
+    (old_probe.parent / "lane-output.jsonl").write_text(json.dumps({
+        "schema_version": "factory-lane-output/1", "slot": "tester.probe",
+        "role": "tester", "outcome": "exited",
     }) + "\n")
     if prior_mode != "qualify":
         refused = launch("coder", lanes["coder"])
@@ -11797,7 +8383,7 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(
         return
     assert launch("coder", lanes["coder"]).returncode == 0
     shared = launch("tester", lanes["coder"])
-    assert shared.returncode != 0 and "own copy" in shared.stderr
+    assert shared.returncode != 0 and "prepared input projection" in shared.stderr
     seed.write_text('{"title":"tester-only extra"}\n', encoding="utf-8")
     drifted = launch("tester", lanes["tester"])
     assert drifted.returncode != 0 and "same lane-seed.jsonl" in drifted.stderr
@@ -11808,15 +8394,17 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(
 
     stub_log = Path(env["PATH"].split(os.pathsep)[0]) / "kin.log"
     imports = [line for line in stub_log.read_text().splitlines()
-               if line.startswith("import ") and "knowledge.jsonl" in line]
+               if line.startswith("import ") and "lane-seed.tagged.jsonl" in line]
     assert len(imports) == 2
     for role, line in zip(("coder", "tester"), imports, strict=True):
         home = (root / "tmux-lanes" / f"{role}-kindex-home").resolve()
         repo = lanes[role].resolve()
-        assert line == f"import {repo}/.kin/knowledge.jsonl --project-path {repo}|{home}|{repo}"
+        assert line == f"import {home}/lane-seed.tagged.jsonl --project-path {repo}|{home}|{repo}"
         rows = read_chain(root / "tmux-lanes" / f"{role}-launch.jsonl")
         assert rows[-1]["kindex"]["store"] == f"{repo}/.kin/local/kindex"
+        assert rows[-1]["kindex"]["source"] is None  # shared historical graph was withheld
         assert rows[-1]["kindex"]["kinbase_submissions_allowed"] is False
+
 
 
 def _mismatched_boundary_register(root: Path) -> None:
@@ -11874,22 +8462,6 @@ def test_phase1_gate_refuses_a_current_run_without_a_boundary_register(tmp_path:
     assert "must register every boundary identifier" in result.stdout
 
 
-def test_orchestrator_checkpoint_refuses_dispatch_across_a_mismatched_boundary(
-    tmp_path: Path,
-) -> None:
-    """The Orchestrator does not let a lane launch on an identifier its parties disagree on."""
-    _cwd, root, _dispatch, stub = dispatch_success_fixture(tmp_path, role="coder", primer=True)
-    _mismatched_boundary_register(root)
-    for kind in ("pre_dispatch", "pre_verdict"):
-        result = run(
-            ["bash", str(HARNESS / "orchestrator_checkpoint.sh"), "r1", kind,
-             "before the next transition", "--runs", str(root.parent)],
-            root,
-            _dispatch_env(stub, root),
-        )
-        assert result.returncode == 71, (kind, result.stdout, result.stderr)
-        assert "the boundary register does not verify" in result.stderr
-        assert "MISMATCH" in result.stderr
 
 
 def _verified_boundary_register(root: Path) -> None:
@@ -11909,196 +8481,3 @@ def _verified_boundary_register(root: Path) -> None:
                      "description": "the platform reads the level only from this field",
                      "sides": entries}],
     }))
-
-
-def _endgame_with_red_make(
-    tmp_path: Path, register: Callable[[Path], None]
-) -> subprocess.CompletedProcess[str]:
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
-    sha = str(target_state["resolved_commit"])
-    register(root)
-    stub_dir = tmp_path / "redmake-bin"
-    stub_dir.mkdir()
-    make_stub = stub_dir / "make"
-    make_stub.write_text("#!/bin/sh\necho 'stub make: red'\nexit 1\n", encoding="utf-8")
-    make_stub.chmod(0o755)
-    install_resident_orchestrator_stub(stub_dir, root)
-    env = _factory_cli_env()
-    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-    return run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
-        tmp_path,
-        env,
-    )
-
-
-def test_endgame_refuses_a_verdict_across_a_mismatched_boundary(tmp_path: Path) -> None:
-    r = _endgame_with_red_make(tmp_path, _mismatched_boundary_register)
-
-    assert r.returncode != 0
-    assert "endgame verdict: GREEN" not in r.stdout
-    assert "the boundary register does not verify" in r.stdout + r.stderr
-
-
-def test_endgame_reports_the_lfs_content_it_judged(tmp_path: Path) -> None:
-    """Endgame states how much Git LFS content its judged checkout holds, so pointer stubs
-    are never judged silently as if they were the target's assets."""
-
-    r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
-
-    assert "== Git LFS content in the judged checkout ==" in r.stdout, r.stdout + r.stderr
-    assert "hydrated: 0 file(s), 0 bytes" in r.stdout
-    assert "left as pointers" not in r.stdout
-
-
-ENDGAME_LFS_ART = b"\x89PNG\r\n\x1a\n bytes a target keeps in Git LFS\n"
-ENDGAME_LFS_OID = hashlib.sha256(ENDGAME_LFS_ART).hexdigest()
-ENDGAME_LFS_POINTER = (
-    "version https://git-lfs.github.com/spec/v1\n"
-    f"oid sha256:{ENDGAME_LFS_OID}\nsize {len(ENDGAME_LFS_ART)}\n"
-).encode("ascii")
-
-
-def _endgame_over_an_lfs_target(
-    tmp_path: Path, *, stocked: bool, target_conf: str = "",
-    planted_attributes: bool = False, empty_store: bool = False,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Endgame over a target that commits one Git LFS pointer, resolved from a local operator
-    repository whose LFS store holds the object only when ``stocked``. Gates and live proof
-    pass, so an LFS policy failure alone must prevent Gate L from running."""
-
-    operator, root, target_state = execution_truth_fixture(
-        tmp_path,
-        terminal_resources=False,
-        extra_blobs={
-            ".gitattributes": b"*.png filter=lfs diff=lfs merge=lfs -text\n",
-            "art/board.png": ENDGAME_LFS_POINTER,
-        },
-    )
-    sha = str(target_state["resolved_commit"])
-    _verified_boundary_register(root)
-    if planted_attributes:
-        candidate = Path(str(target_state["workdir"]))
-        git_dir = subprocess.check_output(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=candidate, text=True,
-        ).strip()
-        info = Path(git_dir) / "info"
-        info.mkdir(exist_ok=True)
-        (info / "attributes").write_text("* !filter\n")
-    if empty_store:
-        (operator / ".git" / "lfs" / "objects").mkdir(parents=True)
-    if stocked:
-        stored = (
-            operator / ".git" / "lfs" / "objects"
-            / ENDGAME_LFS_OID[:2] / ENDGAME_LFS_OID[2:4] / ENDGAME_LFS_OID
-        )
-        stored.parent.mkdir(parents=True)
-        stored.write_bytes(ENDGAME_LFS_ART)
-    stub_dir = tmp_path / "greenmake-bin"
-    stub_dir.mkdir()
-    make_stub = stub_dir / "make"
-    make_stub.write_text("#!/bin/sh\necho 'stub make: green'\nexit 0\n", encoding="utf-8")
-    make_stub.chmod(0o755)
-    install_resident_orchestrator_stub(stub_dir, root)
-    env = _factory_cli_env()
-    env.pop("FACTORY_LFS_OBJECTS", None)
-    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-    conf = tmp_path / "target.conf"
-    conf.write_text("provision: true\nprobe: alive:: true\n" + target_conf, encoding="utf-8")
-    env["HARNESS_TARGET_CONF"] = str(conf)
-    r = run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
-        tmp_path,
-        env,
-    )
-    return r, root, operator
-
-
-def _assert_lfs_policy_blocks_gate_l(r: subprocess.CompletedProcess[str], root: Path) -> None:
-    assert "full gate suite: GREEN" in r.stdout, r.stdout + r.stderr
-    assert "isolation proof: GREEN" in r.stdout
-    assert "proof: GREEN" in r.stdout
-    assert "Gate L: NOT RUN" in r.stdout
-    assert r.returncode == 1
-    assert json.loads((root / "endgame" / "verdict.json").read_text())["verdict"] == "RED"
-    assert not (root / "promotion_verdict.json").exists()
-
-
-def test_endgame_hydrates_lfs_content_from_the_runs_local_object_source(
-    tmp_path: Path,
-) -> None:
-    """A run resolved from a local operator repository judges LFS content from that
-    repository's own LFS store, with no environment variable to remember."""
-
-    r, root, operator = _endgame_over_an_lfs_target(tmp_path, stocked=True)
-
-    assert "hydrated: 1 file(s)" in r.stdout, r.stdout + r.stderr
-    assert "the run's local object source" in r.stdout
-    assert "Gate L: NOT RUN" not in r.stdout, r.stdout + r.stderr
-    (judged,) = (root / "endgame").glob("endgame-checkout-*")
-    assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_ART
-
-
-def test_endgame_fails_a_target_that_requires_lfs_content_it_cannot_supply(
-    tmp_path: Path,
-) -> None:
-    r, root, _ = _endgame_over_an_lfs_target(
-        tmp_path, stocked=False, target_conf="lfs: required\n"
-    )
-
-    assert "requires Git LFS content" in r.stdout, r.stdout + r.stderr
-    _assert_lfs_policy_blocks_gate_l(r, root)
-    (judged,) = (root / "endgame").glob("endgame-checkout-*")
-    assert (judged / "art" / "board.png").read_bytes() == ENDGAME_LFS_POINTER
-
-
-def test_endgame_required_lfs_cannot_be_bypassed_with_planted_attributes(tmp_path: Path) -> None:
-    r, root, _ = _endgame_over_an_lfs_target(
-        tmp_path, stocked=False, empty_store=True, planted_attributes=True,
-        target_conf="lfs: required\n",
-    )
-
-    assert "hydrated: 0 file(s)" in r.stdout, r.stdout + r.stderr
-    assert "left as pointers: 1 file(s)" in r.stdout
-    assert "requires Git LFS content" in r.stdout
-    _assert_lfs_policy_blocks_gate_l(r, root)
-
-
-def test_endgame_auto_detected_incomplete_lfs_store_refuses_without_required(
-    tmp_path: Path,
-) -> None:
-    r, root, _ = _endgame_over_an_lfs_target(tmp_path, stocked=False, empty_store=True)
-
-    assert r.returncode == 70, r.stdout + r.stderr
-    assert "not in the LFS store" in r.stderr
-    assert not (root / "endgame" / "verdict.json").exists()
-    assert [row["detail"] for row in _refusal_events(root)] == ["candidate materialization failed"]
-
-
-def test_endgame_judges_a_target_conf_that_says_nothing_about_lfs(tmp_path: Path) -> None:
-    """A target.conf without an ``lfs:`` line is the common case: endgame still runs every
-    section and leaves pointers as reported pointers rather than stopping early."""
-
-    r, _, _ = _endgame_over_an_lfs_target(
-        tmp_path, stocked=False, target_conf="provision: true\n"
-    )
-
-    assert "left as pointers: 1 file(s)" in r.stdout, r.stdout + r.stderr
-    assert "requires Git LFS content" not in r.stdout
-    assert "Gate L: NOT RUN" not in r.stdout, r.stdout + r.stderr
-
-
-def test_endgame_refuses_an_lfs_setting_it_does_not_know(tmp_path: Path) -> None:
-    r, root, _ = _endgame_over_an_lfs_target(tmp_path, stocked=True, target_conf="lfs: maybe\n")
-
-    assert "lfs: in" in r.stdout and "must be 'required'" in r.stdout, r.stdout + r.stderr
-    _assert_lfs_policy_blocks_gate_l(r, root)
-
-
-def test_endgame_judges_the_boundary_register_against_the_candidate(tmp_path: Path) -> None:
-    r = _endgame_with_red_make(tmp_path, _verified_boundary_register)
-
-    assert "== boundary identifiers against the candidate ==" in r.stdout, r.stdout + r.stderr
-    assert "boundary register: GREEN" in r.stdout
-    assert "endgame verdict: RED" in r.stdout

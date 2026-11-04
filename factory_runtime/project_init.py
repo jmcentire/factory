@@ -76,7 +76,7 @@ class ProjectKeys:
     def worker_env(self, role: str, *, tessera_bin: str | None = None) -> dict[str, str]:
         """The environment one worker needs: the shared trust root and its own key only."""
 
-        if role not in self.key_paths:
+        if role == "human" or role not in self.key_paths:
             raise ProjectInitError(f"unknown worker role: {role}")
         env = {
             "FACTORY_GENESIS": str(self.genesis_path),

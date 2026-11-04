@@ -166,7 +166,7 @@ def _collect_nodeids(nodeids_file: Path | None) -> set[str]:
 # tests import or mutate ANOTHER row's registered impl. Gate subjects are
 # object-level artifacts, never another gate's output. The one meta-set below
 # (the purity/doctrine/wiring/acceptance/registry guards) is CLOSED BY
-# DECLARATION and grows only by human signature; Gate I — the registry gate,
+# DECLARATION and changes under the user's actual direction; Gate I — the registry gate,
 # the sole gate-over-gates — is the single exemption and is terminal.
 # ---------------------------------------------------------------------------
 

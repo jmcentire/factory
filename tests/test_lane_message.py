@@ -9,8 +9,7 @@ from pathlib import Path
 from harness.lane_dialogue import record_question
 from tests.test_harness_scripts import (
     HARNESS,
-    execution_truth_fixture,
-    factory_ignition_env,
+    ordinary_message_fixture,
     read_chain,
     run,
 )
@@ -23,8 +22,7 @@ def lane_fixture(
 ) -> tuple[Path, Path, dict[str, str], Path]:
     """A launched Codex lane with a retained thread; tmux reports the lane pane as given."""
 
-    operator, root, _ = execution_truth_fixture(tmp_path, harness_status="open")
-    env, tmux_log = factory_ignition_env(tmp_path, root)
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
     tmux = tmp_path / "factory-bin" / "tmux"
     tmux.write_text(
         tmux.read_text(encoding="utf-8").replace(
@@ -356,13 +354,17 @@ def test_legacy_unverified_pause_cannot_resume(tmp_path: Path) -> None:
     assert 'respawn-pane' not in after[len(before):]
 
 
-def test_kickoff_control_binding_is_required_for_continuation(tmp_path: Path) -> None:
+def test_kickoff_validator_continues_author_without_legacy_supervisor(tmp_path: Path) -> None:
     operator, root, env, tmux_log = lane_fixture(tmp_path)
     metadata = json.loads((root / 'harness.json').read_text())
     metadata['validator_agent'] = 'kickoff'
     (root / 'harness.json').write_text(json.dumps(metadata))
     result = run(['bash', str(HARNESS / 'tmux_lane_message.sh'), 'r1', 'validator',
                   'tester', 'status', '--runs', str(root.parent)], operator, env)
-    assert result.returncode == 70
-    assert 'identity/control is unavailable' in result.stderr
-    assert not tmux_log.exists() or 'respawn' not in tmux_log.read_text()
+    assert result.returncode == 0, result.stderr
+    journal = read_chain(root / "dialogue/journal.jsonl")
+    assert journal[-1]["record_type"] == "message-delivered"
+    assert journal[-1]["thread_id"] == THREAD
+    assert "respawn-pane" in tmux_log.read_text()
+    assert "watch-tester" not in tmux_log.read_text()
+    assert not (root / "orchestrator/seat-control.json").exists()

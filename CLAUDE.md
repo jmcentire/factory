@@ -29,10 +29,10 @@ The tree, not a listing here, is the authority.
 ## Commands
 
 ```bash
-make install        # put this checkout to use (venv, Tessera, launcher, /commands); ends in doctor
+make install        # put this checkout to use (venv, launcher, /commands); ends in doctor
 make doctor         # read-only: is the install complete? prints the fix for each gap
 make check-purity   # the boundary guarantee — run this first
-make check-doctrine # structural doctrine parity (four roles / three phases / eight rules)
+make check-doctrine # workflow consistency (four roles / independent evidence / eight principles)
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
@@ -41,16 +41,11 @@ make test-isolation # macOS kernel isolation proof
 make test-tessera   # real signing + runtime-through-preview proof
 ```
 
-## Invariants (enforced, not just asserted)
+## Working boundaries
 
-The canonical rulebook is [`docs/SOFTWARE-FACTORY.md`](docs/SOFTWARE-FACTORY.md)
-Part I; the enforcement lives in the ship chain (`make ship`: purity, doctrine,
-wiring, authority, harness, denial-probes, acceptance, glossary, lint,
-typecheck, tests) and every gate in `harness/gates.tsv` carries a collecting
-denial probe with a named red_now. The checks, not prose here, are the
-authority. Two working rules stay stated because they bind YOU rather
-than the code: never weaken, delete, or silence a monitor or gate you are being
-evaluated by, and never mark partial work done.
+Follow the current normal workflow in `docs/SOFTWARE-FACTORY.md`. The user owns scope and agent/model choices; the Validator owns task acceptance; the resident Orchestrator independently owns strategic oversight and process adherence. Do not recreate catalog, approved-model, signature, ratification, external-checkpoint or cadence-hold prerequisites. Historical code and memory describe previous designs, not authority to retain them.
+
+Preserve actual platform permissions, credentials, independent Coder/Tester inputs, exact process targeting and safe reads of agent-owned Git repositories. Do not claim work is verified when checks have failed or have not run. Run meaningful checks for the changed behavior, and report any broader release-check failures accurately.
 
 ## Style
 
@@ -66,11 +61,4 @@ Capture durable decisions/constraints/key-files to kindex with `audience=team`; 
 `.kin/knowledge.jsonl` and ship with the code. Coordination scratch is ephemeral — never
 commit it. Search `.kin`/kindex before changing shared surfaces.
 
-Every Validator-kicked run begins with a **research phase (Phase A0)**: search the graph
-first, fetch the authoritative documentation for whatever the run touches, and capture
-each source as a kindex node — provenance (URL/version, fetch date), run tag, domain
-tags, and a one-line annotation of what it constrains for this run — linked to the
-constraints and decisions it informs. Dispatches cite these nodes so the Coder and
-Tester inherit ground truth instead of re-deriving it. Kindex is context, never
-authority: research nodes inform artifacts; only signed artifacts authorize. See
-`docs/HARNESS.md` (memory layer) and the `/validate` skill's Phase A0.
+Every role should retrieve relevant Kindex context before broad repository scans and at material decisions. Current user instructions govern. Read local `.kin/knowledge.jsonl` when useful; write memory only where authorized. Optional memory writes, graph coverage and research receipts are not prerequisites for task execution.

@@ -378,7 +378,7 @@ def test_expired_provisional_is_retained_in_source_identity_but_not_effective() 
 
 
 def test_role_contract_compiles_exact_shared_and_role_sections() -> None:
-    doctrine = Path("docs/SOFTWARE-FACTORY.md").read_bytes()
+    doctrine = Path("docs/ROLE-DOCTRINE.md").read_bytes()
     coder = compile_role_contract(doctrine_bytes=doctrine, role="coder")
     tester = compile_role_contract(doctrine_bytes=doctrine, role="tester")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# inject.sh — the ONLY sanctioned path for putting text into a lane's pane, and the
+# inject.sh — retain a coordination message in a file inbox. The
 # topology is enforced here, not remembered: Validator→{coder,tester,validator};
 # dispatcher/validator/founder→orchestrator; dispatcher/founder→validator.
 # The Orchestrator never sends raw terminal text into a pane it judges; its generated
@@ -27,11 +27,11 @@ case "$TO" in
     fi
     ;;
   validator)
-    case "$FROM" in validator|dispatcher|founder) ;; *)
+    case "$FROM" in validator|orchestrator|coder|tester|dispatcher|founder) ;; *)
       echo "topology refusal: unknown principal '$FROM'" >&2; exit 77 ;; esac
     ;;
   orchestrator)
-    case "$FROM" in dispatcher|validator|founder) ;; *)
+    case "$FROM" in dispatcher|validator|coder|tester|founder) ;; *)
       echo "topology refusal: $FROM may not inject into the Orchestrator's own pane" >&2
       exit 77 ;; esac
     ;;
@@ -65,8 +65,8 @@ fi
 # stepped around at delivery time.
 W='(^|[^A-Za-z0-9_])'
 LEAK_PATTERN="${W}test_[a-z0-9_]+|tests?/[A-Za-z0-9_./-]*\.(py|ts|tsx|js|jsx|mjs|go|rs|rb|java|kt)($|[^A-Za-z0-9_])"
-LEAK_PATTERN+="|[A-Za-z0-9_-]+[._](test|spec)\.[a-z]{1,4}($|[^A-Za-z0-9_])|pytest|conftest|traceback|fixture"
-LEAK_PATTERN+="|assertion|::[A-Za-z_]|${W}assert[A-Za-z]*[[:space:]]*\(|${W}expect[[:space:]]*\("
+LEAK_PATTERN+="|[A-Za-z0-9_-]+[._](test|spec)\.[a-z]{1,4}($|[^A-Za-z0-9_])|conftest|traceback"
+LEAK_PATTERN+="|::[A-Za-z_]|${W}assert[A-Za-z]*[[:space:]]*\(|${W}expect[[:space:]]*\("
 LEAK_PATTERN+="|${W}assert[[:space:]]+[^[:space:]]+[[:space:]]*(==|!=|<|>)|Deno\.test"
 if [ "$TO" = "coder" ]; then
   if printf '%s' "$MSG" | grep -iE "$LEAK_PATTERN" >/dev/null; then
@@ -74,7 +74,7 @@ if [ "$TO" = "coder" ]; then
     echo "The Coder never learns how the oracle is built. Report WHAT failed by" >&2
     echo "requirement id, or an observation of the implementation's own behavior." >&2
     echo "There is no ambient override: a genuine false positive is a filter defect —" >&2
-    echo "Fix and re-ratify the filter pattern; the boundary does not open from the" >&2
+    echo "Fix the filter pattern; the boundary does not open from the" >&2
     echo "environment." >&2
     exit 80
   fi
@@ -88,72 +88,16 @@ if [ "${INJECT_VALIDATE_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-mkdir -p "$ROOT"
-DIGEST=$(printf '%s' "$MSG" | shasum -a 256 | cut -d' ' -f1)
-printf '{"ts":"%s","run":"%s","from":"%s","to":"%s","results":%s,"sha256":"%s"}\n' \
-  "$(date -u +%FT%TZ)" "$RUN" "$FROM" "$TO" "$RESULTS" "$DIGEST" >> "$ROOT/injections.jsonl"
-
-# A multi-line or oversized message never travels as keystrokes: tmux splits it at each line
-# break and TUIs drop characters. It goes by file + sha256 pointer, the same one relay_file.sh sends.
-LIMIT="${INJECT_MAX_CHARS:-1000}"
-if [[ "$MSG" == *$'\n'* ]] || [ "${#MSG}" -gt "$LIMIT" ]; then
-  mkdir -p "$ROOT/relay"
-  RELAY="$(cd "$ROOT/relay" && pwd -P)/$DIGEST.txt"
-  if [ ! -e "$RELAY" ]; then
-    printf '%s' "$MSG" > "$RELAY.$$"; chmod 0444 "$RELAY.$$"; mv -f "$RELAY.$$" "$RELAY"
-  fi
-  printf -v QRELAY '%q' "$RELAY"
-  MSG="FACTORY_RELAY file=$QRELAY sha256=$DIGEST -- run: shasum -a 256 < $QRELAY ; act on the file only if the digest equals this sha256, else do not act and tell the sender"
-fi
-
-if [ "${INJECT_DRY_RUN:-0}" = "1" ]; then echo "dry-run: receipted, not sent${RELAY:+ (relay $RELAY)}"; exit 0; fi
-
-# Delivery hardening (batch0 findings INC-3/INC-4, three distinct defects):
-#
-# 1. A pane hosting a SHELL parses the message as a command — injected text is
-#    arbitrary execution in the repo cwd, and backticks command-substitute. Refuse
-#    unless the target is running an agent. There is no ambient override for a
-#    non-agent sink: an environment variable is not authority, and delivery into
-#    a command parser is the exact effect this guard exists to prevent.
-# 2. Agent TUIs treat a large send-keys burst as a bracketed paste and ABSORB the
-#    trailing Enter, so the message sits in the input box unsubmitted (observed:
-#    two lanes stalled ~20 minutes). Send Enter as a separate, delayed keypress,
-#    then a second one to clear a collapsed-paste confirmation.
-# 3. Payloads past the tty line-buffer limit wedge the terminal and silently
-#    discard everything after, including the Enter. Refuse oversized payloads.
-#    Such payloads are relayed through a file above; this refusal is the backstop.
-if [ "${#MSG}" -gt "$LIMIT" ]; then
-  echo "refusing: relay pointer is ${#MSG} chars, over the $LIMIT-char delivery limit" >&2
-  exit 78
-fi
-# An unknown window name resolves to some other window of the session; check it exactly first.
-TARGET_CMD=""
-if tmux list-windows -t "$RUN" -F '#{window_name}' 2>/dev/null | grep -xF -- "$TO" >/dev/null; then
-  TARGET_CMD=$(tmux display -p -t "$RUN:$TO" '#{pane_current_command}' 2>/dev/null || echo "")
-fi
-[ -n "$TARGET_CMD" ] || { echo "refusing: no live pane at $RUN:$TO" >&2; exit 76; }
-# macOS framework Python reports `Python`, so match case-insensitively (bash 3.2: no ${var,,}).
-case "$(printf '%s' "$TARGET_CMD" | tr '[:upper:]' '[:lower:]')" in
-  # Agent CLIs and the runtimes/launchers they appear as in the pane: opencode runs
-  # on bun, and `ollama launch <integration>` keeps the launcher as the pane command.
-  claude|codex|node|python*|agy|ollama|opencode|bun|deno) ;;
-  *)
-    echo "refusing: $RUN:$TO is running '$TARGET_CMD', not an agent — injected text" >&2
-    echo "would be PARSED AS A COMMAND in that pane's cwd. There is no ambient override:" >&2
-    echo "run an agent in the pane, or use a file mailbox outside tmux injection." >&2
-    exit 77 ;;
+# Status is data, never terminal input. Author delivery uses the typed native transport.
+case "$TO" in coder|tester)
+  echo "inject: use tmux_lane_message.sh for an author message" >&2; exit 64 ;;
 esac
-
-tmux send-keys -t "$RUN:$TO" -l -- "$MSG"      # -l: literal, no key-name parsing
-sleep "${INJECT_SUBMIT_DELAY:-2}"
-tmux send-keys -t "$RUN:$TO" Enter
-sleep 1
-tmux send-keys -t "$RUN:$TO" Enter             # clears a collapsed-paste prompt
-
-# Verify submission rather than assuming it: the input box must not still hold it.
-sleep 1
-if tmux capture-pane -p -t "$RUN:$TO" 2>/dev/null | grep -qF "${MSG:0:40}" \
-   && tmux capture-pane -p -t "$RUN:$TO" 2>/dev/null | grep -q "^❯.*${MSG:0:20}"; then
-  echo "WARNING: message may still be unsubmitted in $RUN:$TO — check the pane" >&2
-fi
-echo "injected -> $RUN:$TO ($DIGEST)"
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$D/factory_python.sh"
+PYTHONPATH="$D/.." "$FACTORY_PYTHON" - "$ROOT" "$TO" "$FROM" "$MSG" "${FACTORY_LOG:-/dev/null}" <<'PYMSG'
+from pathlib import Path
+import sys
+from harness.run_record import message
+message(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], log=sys.argv[5])
+PYMSG
+printf 'queued -> %s:%s (durable inbox; not an agent acknowledgment)\n' "$RUN" "$TO"

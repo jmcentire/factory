@@ -31,6 +31,9 @@ def test_exact_session_presence_and_absence() -> None:
             return result.returncode == 0
 
         command("-f", "/dev/null", "new-session", "-d", "-s", "run-other", "sleep 60")
+        owner = subprocess.check_output(
+            [tmux, "-S", socket, "display-message", "-p", "#{pid}"], text=True,
+        ).strip()
         try:
             assert present("run-other")
             assert not present("run")  # A prefix must not select the other session.
@@ -41,4 +44,10 @@ def test_exact_session_presence_and_absence() -> None:
             assert not present("run")
             assert present("run-other")  # Checking/closing run leaves its neighbor alone.
         finally:
-            command("kill-server")
+            probe = subprocess.run(
+                [tmux, "-S", socket, "display-message", "-p", "#{pid}"],
+                capture_output=True, text=True,
+            )
+            if probe.returncode == 0:
+                assert probe.stdout.strip() == owner, "private test server ownership changed"
+                command("kill-server")

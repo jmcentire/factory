@@ -110,14 +110,13 @@
       "required": [
         "construction_modes",
         "max_attempts",
-        "pattern_catalog_digest",
         "signal"
       ],
       "properties": {
         "pattern_catalog_digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Externally authorized address of the pre-qualified construction catalog."
+          "description": "Optional content address when explicitly using the historical pattern-generation engine; ordinary tasks do not use a catalog."
         },
         "max_attempts": {
           "type": "integer",

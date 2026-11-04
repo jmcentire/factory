@@ -351,7 +351,7 @@ def test_canonical_launch_and_resume_retain_author_broker(prepared, tmp_path, mo
     root,operator,tmux_log,launch=_ignite_and_launcher(setup,'Keep per-author custody.')
     path,_,config,_=prepared()
     repository=setup/'standalone-coder'
-    repository.mkdir()
+    repository.mkdir(exist_ok=True)
     config['repository']=str(repository)
     config['policy']['root']=str(root)
     guard_path=pathlib.Path(config['policy']['contract'])

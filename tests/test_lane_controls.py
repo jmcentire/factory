@@ -24,10 +24,7 @@ from harness import lane_agent, lane_watchdog, testing_standard
 from tests.test_harness_scripts import (
     HARNESS,
     METERED_CAPS,
-    _dispatch_env,
     _ollama_stub,
-    dispatch_success_fixture,
-    execution_truth_fixture,
     factory_ignition_env,
     read_chain,
     record_passing_qualification,
@@ -77,31 +74,51 @@ def _cursor_stub(directory: Path, *, signed_in: bool) -> None:
 class Lanes:
     """One ignited run and a launcher for its lanes."""
 
-    def __init__(self, tmp_path: Path, *, budget: str | None = None) -> None:
+    def __init__(self, tmp_path: Path, *, budget: str | None = None,
+                 inputs: dict[str, bytes] | None = None) -> None:
         task = "Exercise the lane launch controls."
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp_path
-        self.operator, self.root, _ = execution_truth_fixture(
-            tmp_path, task=task, harness_status=None
-        )
+        self.operator = tmp_path / "operator"
+        self.operator.mkdir()
+        self.inputs = inputs or {}
+        for name, content in self.inputs.items():
+            path = self.operator / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        subprocess.run(["git", "init", "-q", str(self.operator)], check=True)
+        subprocess.run(["git", "-C", str(self.operator), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.operator), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit",
+                        "--allow-empty", "-qm", "base"], check=True)
+        self.root = tmp_path / "runs" / "r1"
         env, self.tmux_log = factory_ignition_env(tmp_path, self.root)
-        strategy = self.root / "artifacts" / "testing-strategy.md"
-        strategy.parent.mkdir(exist_ok=True)
-        strategy.write_text("# Testing strategy\nExercise the real seam.\n")
         self.env = env
         self.stub = Path(env["PATH"].split(os.pathsep)[0])
-        ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(self.root.parent)]
+        tmux = self.stub / "tmux"
+        tmux.write_text(tmux.read_text().replace(
+            "#!/usr/bin/env bash\n", "#!/usr/bin/env bash\n[ \"$1\" != -L ] || shift 2\n"))
+        ignite = ["bash", str(HARNESS / "factory.sh"), "r1", task, "--runs", str(self.root.parent),
+                  "--repo", str(self.operator)]
         if budget is not None:
             ignite += ["--budget", budget]
         ignited = run(ignite, self.operator, env)
         assert ignited.returncode == 0, ignited.stdout + ignited.stderr
+        strategy = self.root / "artifacts" / "testing-strategy.md"
+        strategy.parent.mkdir(exist_ok=True)
+        strategy.write_text("# Testing strategy\nExercise the real seam.\n")
         self.prompt = tmp_path / "brief.txt"
         self.prompt.write_text("Write the three tests the brief names.\n", encoding="utf-8")
 
     def clone(self, name: str) -> Path:
         lane = self.tmp / f"clone-{name}"
         if not lane.exists():
-            subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+            from harness.role_inputs import prepare
+            if name in {"coder", "tester"}:
+                includes = list(self.inputs) if name == "tester" else []
+                prepare(self.root.parent, "r1", name, lane, includes, [])
+            else:
+                subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
         return lane
 
     def lane(self, role: str, *extra: str, action: str = "launch", repo: Path | None = None,
@@ -150,8 +167,7 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
         ["kindex"]
     turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
     assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
-    [watcher] = lanes.windows("watch-coder")
-    assert "lane_watchdog.py lane --root" in watcher and "--slot coder" in watcher
+    assert lanes.windows("watch-coder") == []
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["status"] == "active" and row["agent"] == "cursor-agent"
     assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
@@ -159,9 +175,9 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert row["auth_preflight"] == "cursor-agent-status"
     watch = dict(row["watch"])
     assert Path(watch.pop("runs_dir")).name == "runs"
-    # A cursor-agent session is resumable, so a Coder gets the Validator's review pauses.
+    # A plan lane does not get automatic review pauses.
     assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
-                     "wrap_s": 0, "review_every_s": 1080, "review_wait_s": 900}
+                     "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
 
     # Until the harness has streamed its session there is nothing to resume: launch a round.
     message = run(
@@ -192,7 +208,7 @@ def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor
 ) -> None:
     family = lane_agent.model_family
     assert family("muse", "") == "meta" and family("codex", "") == "openai"
-    assert family("codex", "gpt-6.1-sol") == "openai" and family("agy", "") == "google"
+    assert family("codex", "gpt-6.1-sol") == "openai" and family("agy", "") == ""
     assert family("cursor-agent", "grok-4.7-xhigh") == "xai"
     assert family("claude-ollama", "glm-5.3:cloud") == "zhipu"
     assert family("claude", "claude-opus-5-5") == "anthropic"
@@ -213,28 +229,25 @@ def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor
     assert lane_agent.lane_family("codex", "", tmp_path) == ""
 
 
-def test_the_tester_does_not_start_on_the_coders_model_family(tmp_path: Path) -> None:
-    """SOFTWARE-FACTORY.md "Across the lanes" (E1, I19): the Coder and the Tester run different
-    model families; a same-family or unknown-family Tester is refused before anything starts."""
-
+@pytest.mark.parametrize(("agent", "model", "family", "tier"), [
+    ("codex", "", "openai", "same-family"),
+    ("cursor-agent", "", None, "unknown-family"),
+    ("cursor-agent", "grok-4.7-xhigh", "xai", "cross-family"),
+])
+def test_selected_tester_model_starts_without_factory_approval(
+    tmp_path: Path, agent: str, model: str, family: str | None, tier: str,
+) -> None:
+    """Separate roles remain independent; provider recognition is descriptive, not authority."""
     lanes = Lanes(tmp_path)
     lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
     assert lanes.lane("coder").returncode == 0
-    same = lanes.lane("tester")
-    assert same.returncode == 70 and "different, known model families" in same.stderr
-    assert "openai" in same.stderr and not lanes.windows("tester")
     _cursor_stub(lanes.stub, signed_in=True)
-    unknown = lanes.lane("tester", "--agent", "cursor-agent")
-    assert unknown.returncode == 70 and "unknown model family" in unknown.stderr
-
-    crossed = lanes.lane("tester", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh")
-    assert crossed.returncode == 0, crossed.stdout + crossed.stderr
+    result = lanes.lane("tester", "--agent", agent, "--model", model)
+    assert result.returncode == 0, result.stdout + result.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
     assert row["status"] == "active"
-    assert row["independence"] == {"family": "xai", "other_role": "coder", "other_slot": "coder",
-                                   "other_family": "openai", "tier": "cross-family"}
-    seats = json.loads((lanes.root / "tmux-lanes" / "lane-seats.json").read_text())
-    assert seats["tester"]["status"] == "active" and seats["tester"]["family"] == "xai"
+    assert row["independence"] == {"family": family, "other_role": "coder",
+        "other_slot": "coder", "other_family": "openai", "tier": tier}
 
 
 def test_a_codex_lane_is_judged_by_the_model_its_config_runs(tmp_path: Path) -> None:
@@ -253,19 +266,20 @@ def test_a_codex_lane_is_judged_by_the_model_its_config_runs(tmp_path: Path) -> 
     assert lanes.lane("tester", "--agent", "cursor-agent", "--model",
                       "claude-sonnet-5").returncode == 0
     routed = lanes.lane("coder", env={"CODEX_HOME": str(home)})
-    assert routed.returncode == 70 and "anthropic" in routed.stderr
-    assert not lanes.windows("coder")
+    assert routed.returncode == 0, routed.stdout + routed.stderr
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["independence"]["family"] == "anthropic"
+    assert row["independence"]["tier"] == "same-family"
 
 
-def test_the_first_lane_needs_a_known_family_and_records_its_tier(tmp_path: Path) -> None:
+def test_the_first_lane_accepts_an_unknown_family_and_records_it(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     lanes.env.pop("FACTORY_LANE_INDEPENDENCE_GAP")
     _cursor_stub(lanes.stub, signed_in=True)
     unknown = lanes.lane("coder", "--agent", "cursor-agent")
-    assert unknown.returncode == 70 and "unknown model family" in unknown.stderr
-    assert lanes.lane("coder").returncode == 0
+    assert unknown.returncode == 0, unknown.stdout + unknown.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
-    assert row["independence"] == {"family": "openai", "tier": "no-peer"}
+    assert row["independence"] == {"family": None, "tier": "unknown-family"}
 
 
 def test_a_qualification_probe_takes_no_seat_and_masks_nothing(tmp_path: Path) -> None:
@@ -281,7 +295,7 @@ def test_a_qualification_probe_takes_no_seat_and_masks_nothing(tmp_path: Path) -
     seats = json.loads((lanes.root / "tmux-lanes" / "lane-seats.json").read_text())
     assert seats["tester"]["family"] == "openai"
     same = lanes.lane("coder")
-    assert same.returncode == 70 and "openai" in same.stderr
+    assert same.returncode == 0, same.stdout + same.stderr
 
 
 def test_one_seated_launch_at_a_time_and_a_dead_one_falls_back(tmp_path: Path) -> None:
@@ -300,13 +314,12 @@ def test_one_seated_launch_at_a_time_and_a_dead_one_falls_back(tmp_path: Path) -
     lane_agent.confirm_seat(root, role="tester", slot="tester")
     dead = subprocess.Popen(["true"])
     dead.wait()
-    # A replacement Tester on xAI that never got going: the OpenAI seat it would have replaced
-    # still stands, so an OpenAI Coder is refused.
+    # A failed replacement must not overwrite the identity of the original Tester.
     claim(root, role="tester", slot="tester.r2", agent_name="cursor-agent",
           model="grok-4.7-xhigh", codex_home=None, gap="", pid=dead.pid)
-    with pytest.raises(SystemExit, match="openai"):
-        claim(root, role="coder", slot="coder", agent_name="codex", model="", codex_home=None,
-              gap="", pid=os.getpid())
+    recorded = claim(root, role="coder", slot="coder", agent_name="codex", model="",
+                     codex_home=None, gap="", pid=os.getpid())
+    assert recorded["other_slot"] == "tester" and recorded["other_family"] == "openai"
 
 
 def test_a_reused_pid_does_not_revive_an_abandoned_launch(tmp_path: Path) -> None:
@@ -320,9 +333,9 @@ def test_a_reused_pid_does_not_revive_an_abandoned_launch(tmp_path: Path) -> Non
                        "family": "xai", "status": "pending", "pid": os.getpid(),
                        "pid_start": "Thu Jan  1 00:00:00 1970", "previous": seats["tester"]}
     (root / "lane-seats.json").write_text(json.dumps(seats))
-    with pytest.raises(SystemExit, match="openai"):
-        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
-                              codex_home=None, gap="", pid=os.getpid())
+    recorded = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex",
+                                     model="", codex_home=None, gap="", pid=os.getpid())
+    assert recorded["other_slot"] == "tester" and recorded["other_family"] == "openai"
 
 
 def test_a_run_launched_before_the_seat_file_keeps_its_seats(tmp_path: Path) -> None:
@@ -341,12 +354,9 @@ def test_a_run_launched_before_the_seat_file_keeps_its_seats(tmp_path: Path) -> 
     (root / "tester-launch.jsonl").write_text(json.dumps(rows[0]) + "\n")
     (root / "tester.sol-1-launch.jsonl").write_text(json.dumps(rows[1]) + "\n")
     (root / "tester-b-launch.jsonl").write_text(json.dumps(rows[2]) + "\n")
-    with pytest.raises(SystemExit, match="openai"):
-        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
-                              codex_home=None, gap="", pid=os.getpid())
-    record = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="muse", model="",
+    record = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="codex", model="",
                                    codex_home=None, gap="", pid=os.getpid())
-    assert record["tier"] == "cross-family" and record["other_slot"] == "tester.sol-1"
+    assert record["tier"] == "same-family" and record["other_slot"] == "tester.sol-1"
 
 
 def test_a_seeded_seat_never_guesses_its_family(tmp_path: Path) -> None:
@@ -358,16 +368,16 @@ def test_a_seeded_seat_never_guesses_its_family(tmp_path: Path) -> None:
     tui = {"status": "active", "mode": "launch", "role": "tester", "slot": "tester",
            "agent": "codex-interactive", "model": "", "ts": "2026-10-22T01:00:00+00:00"}
     (root / "tester-launch.jsonl").write_text(json.dumps(tui) + "\n")
-    with pytest.raises(SystemExit, match="unknown model family"):
-        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
-                              codex_home=None, gap="", pid=os.getpid())
+    record = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
+                                   codex_home=None, gap="", pid=os.getpid())
+    assert record["tier"] == "unknown-family" and record["other_family"] is None
     (root / "lane-seats.json").unlink(missing_ok=True)
     tie = [dict(tui, agent="muse", slot="tester.a", ts="2026-10-22T02:00:00+00:00"),
            dict(tui, agent="agy", slot="tester.b", ts="2026-10-22T02:00:00+00:00")]
     (root / "tester-launch.jsonl").write_text("".join(json.dumps(r) + "\n" for r in tie))
-    with pytest.raises(SystemExit, match="unknown model family"):
-        lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
-                              codex_home=None, gap="", pid=os.getpid())
+    record = lane_agent.claim_seat(root, role="coder", slot="coder", agent_name="claude", model="",
+                                   codex_home=None, gap="", pid=os.getpid())
+    assert record["tier"] == "unknown-family" and record["other_family"] is None
 
 
 def test_only_the_pending_launch_confirms_its_seat(tmp_path: Path) -> None:
@@ -381,9 +391,8 @@ def test_only_the_pending_launch_confirms_its_seat(tmp_path: Path) -> None:
         lane_agent.confirm_seat(root, role="coder", slot="coder")
 
 
-def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) -> None:
-    """Where no other family is configured the doctrine proceeds and records the gap; the
-    operator's reason travels in the launch record."""
+def test_a_same_family_lane_starts_without_waiver_paperwork(tmp_path: Path) -> None:
+    """An obsolete waiver variable neither grants authority nor changes model selection."""
 
     lanes = Lanes(tmp_path)
     assert lanes.lane("coder").returncode == 0
@@ -391,7 +400,7 @@ def test_a_same_family_lane_starts_only_with_its_gap_recorded(tmp_path: Path) ->
     assert gapped.returncode == 0, gapped.stdout + gapped.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
     assert row["independence"]["tier"] == "same-family"
-    assert row["independence"]["independence_gap"] == "only Codex configured"
+    assert "independence_gap" not in row["independence"]
 
 
 def test_an_unknown_peer_is_an_unknown_family_tier_whichever_lane_starts_second(
@@ -529,7 +538,7 @@ def test_an_auth_check_that_waits_for_input_is_a_login_screen() -> None:
 # -- 3. spend caps for metered agents -------------------------------------------------------
 
 
-def test_a_metered_agent_refuses_to_launch_without_a_cap_budget_and_qualification(
+def test_metered_launch_requires_cap_and_budget_but_not_model_qualification(
     tmp_path: Path,
 ) -> None:
     lanes = Lanes(tmp_path / "unbudgeted")
@@ -549,10 +558,6 @@ def test_a_metered_agent_refuses_to_launch_without_a_cap_budget_and_qualificatio
 
     lanes = Lanes(tmp_path / "budgeted", budget="50")
     _ollama_stub(lanes.stub, available=True)
-    unqualified = lanes.lane("coder", *ollama, *METERED_CAPS)
-    assert unqualified.returncode == 77 and "UNQUALIFIED" in unqualified.stderr
-    assert "tmux_lane.sh r1 coder qualify" in unqualified.stderr
-    record_passing_qualification(lanes.root.parent, "coder", "codex-ollama", "glm-test:cloud")
     launched = lanes.lane("coder", *ollama, *METERED_CAPS, "--wall-cap-minutes", "120")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
@@ -624,7 +629,7 @@ def test_status_counts_lane_commits_without_running_host_git(tmp_path: Path) -> 
     assert not marker.exists()
     status = (HARNESS / "status.sh").read_text(encoding="utf-8")
     assert 'git -C "$workspace"' not in status
-    assert '"$D/lane_watchdog.py" commits --repository "$workspace"' in status
+    assert '"$D/run_record.py" status' in status
 
 
 class Watched:
@@ -1347,13 +1352,13 @@ def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
     assert "capped at 60 minutes of active time" in prompt
     assert "lane_watchdog.py remaining --root" in prompt
     assert "About 5 minutes before the cap you receive FACTORY_WRAP_UP" in prompt
-    assert "Every 18 minutes of work the watchdog pauses this lane" in prompt
+    assert "the watchdog pauses this lane" not in prompt
     assert "FACTORY_TESTING_STANDARD" not in prompt
     assert "FACTORY_CODER_DOCTRINE" not in prompt
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert "coder_doctrine" not in row
     assert row["testing_standard"] is None
-    assert row["watch"]["wrap_s"] == 300 and row["watch"]["review_every_s"] == 1080
+    assert row["watch"]["wrap_s"] == 300 and row["watch"]["review_every_s"] == 0
     assert row["watch"]["runs_dir"] == str(lanes.root.parent)
     # What the watcher needs to deliver the wrap-up itself, owner-only.
     delivery = lanes.root / "tmux-lanes" / "coder-delivery.env"
@@ -1399,22 +1404,20 @@ def test_a_tester_launch_is_refused_when_the_standard_cannot_be_injected(
         testing_standard.build(home)
 
 
-def test_a_qualified_tester_dispatch_opens_with_the_testing_standard(tmp_path: Path) -> None:
-    cwd, root, dispatch, stub = dispatch_success_fixture(tmp_path, role="tester", primer=True)
+def test_historical_dispatch_is_not_implicitly_restarted_as_a_normal_run(tmp_path: Path) -> None:
+    root = tmp_path / "historical-run"
+    root.mkdir()
+    original = '{"schema_version":"factory-harness/2","status":"open"}'
+    (root / "harness.json").write_text(original)
     result = run(
-        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "tester", "--dispatch", str(dispatch)],
-        cwd,
-        _dispatch_env(stub, root),
+        ["bash", str(HARNESS / "dispatch_lane.sh"), "r1", "tester"],
+        tmp_path,
+        {"HARNESS_RUN_ROOT": str(root)},
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    task = (root / "runner-tasks" / "tester.md").read_text(encoding="utf-8")
-    standard = REPO / "docs" / "standards" / "TESTING.md"
-    assert f"<<<FACTORY_TESTING_STANDARD testing-standard digest={_sha(standard)}>>>" in task
-    headings = ("## FENCE", "## MANDATORY FIRST READING — TESTING STANDARD",
-                "## FROZEN DISPATCH")
-    assert [task.index(h) for h in headings] == sorted(task.index(h) for h in headings)
-    # The run's Markdown strategy view still reaches the qualified lane only through run-model.
-    assert "testing-strategy digest=" not in task
+    assert result.returncode == 64
+    assert "signed dispatch is retired" in result.stderr
+    assert (root / "harness.json").read_text() == original
+    assert not (root / "runner-tasks" / "tester.md").exists()
 
 
 # -- the lane process wrapper ---------------------------------------------------------------
@@ -1437,13 +1440,15 @@ def test_the_lane_wrapper_tees_output_and_records_the_exit(
 
 
 @pytest.mark.parametrize("action", ["launch", "qualify"])
-def test_tester_without_run_strategy_is_refused_before_start(tmp_path: Path, action: str) -> None:
+def test_tester_can_receive_strategy_in_brief_without_a_fixed_file(
+    tmp_path: Path, action: str,
+) -> None:
     lanes = Lanes(tmp_path)
     (lanes.root / "artifacts" / "testing-strategy.md").unlink()
     result = lanes.lane("tester", action=action)
-    assert result.returncode == 70 and "testing strategy" in result.stderr
-    assert lanes.windows("tester") == []
-    assert not list((lanes.root / "tmux-lanes").glob("*-launch.jsonl"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    prompt = next((lanes.root / "tmux-lanes").glob("tester*-prompt.txt")).read_text()
+    assert "testing-standard" in prompt
 
 
 @pytest.mark.parametrize("source_kind", ["empty", "whitespace", "directory", "fifo", "utf8"])
@@ -1582,13 +1587,14 @@ def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: 
     refused = lanes.lane("tester")
     assert refused.returncode == 70 and "tools/site-route.yaml (absent)" in refused.stderr
     assert lanes.windows("tester") == []
-    (lanes.clone("tester") / "tools").mkdir()
-    (lanes.clone("tester") / "tools" / "site-route.yaml").write_bytes(upstream)
-    launched = lanes.lane("tester")
+    prepared = Lanes(tmp_path / "complete", inputs={"tools/site-route.yaml": upstream})
+    prepared_strategy = prepared.root / "artifacts/testing-strategy.md"
+    prepared_strategy.write_text(strategy.read_text())
+    launched = prepared.lane("tester")
     assert launched.returncode == 0, launched.stdout + launched.stderr
 
 
-def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_path: Path) -> None:
+def test_freezing_incomplete_tests_preserves_evidence_without_acceptance(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path / "run")
     strategy = lanes.root / "artifacts" / "testing-strategy.md"
     strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n"
@@ -1601,13 +1607,15 @@ def test_a_tester_with_a_critical_planned_case_unwritten_does_not_freeze(tmp_pat
         return run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
                     "--runs", str(lanes.root.parent)], lanes.operator, lanes.env)
 
-    refused = freeze()
-    assert refused.returncode == 70 and "R16.11-a" in refused.stderr
+    incomplete = freeze()
+    assert incomplete.returncode == 0, incomplete.stdout + incomplete.stderr
+    assert not list((lanes.root / "validation").glob("*/result.json"))
     (clone / "cap_test.ts").write_text('Deno.test("R16.11-a: request cap", () => {});\n')
     frozen = freeze()
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     row = read_chain(lanes.root / "tmux-lanes" / "tester-launch.jsonl")[-1]
-    assert row["traceability_gaps"] == {"Critical": [], "Standard": [], "Cosmetic": []}
+    assert row["schema_version"] == "factory-tmux-lane-freeze/1"
+    assert row.get("traceability_gaps") is None  # a snapshot is not a coverage verdict
 
 
 def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -> None:
@@ -1665,15 +1673,15 @@ def test_supersession_refuses_live_unknown_and_pending_old_round(tmp_path):
                                        tmux=watched.watch.tmux, processes=lambda: {})
 
 
-def test_kickoff_without_actual_process_binding_cannot_admit_an_author(tmp_path):
+def test_existing_validator_does_not_need_supervisor_custody_to_launch_author(tmp_path):
     lanes = Lanes(tmp_path)
     metadata = json.loads((lanes.root / 'harness.json').read_text())
     metadata['validator_agent'] = 'kickoff'
     (lanes.root / 'harness.json').write_text(json.dumps(metadata))
     result = lanes.lane('coder')
-    assert result.returncode == 70
-    assert 'executing Validator identity/control is unavailable' in result.stderr
-    assert not lanes.windows('coder')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert lanes.windows('coder')
+    assert not (lanes.root / 'orchestrator/seat-control.json').exists()
 
 
 def test_replaced_window_cannot_certify_old_lane_exit(tmp_path):

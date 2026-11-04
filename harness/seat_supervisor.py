@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
-"""The seats work only while the Orchestrator is judging them.
+"""Explicit process controls for historical sessions; normal tasks do not start this daemon.
 
-A small deterministic process beside the run. It enforces no rule itself; the rules are the
-Orchestrator's judgment (and its System One screen). It enforces two things code can:
+Correct, stop and resume act on exact retained process identities. A correction is queued
+in the Validator inbox, never typed into a terminal. Missing or changed process identity
+remains a real control failure; an assessment backlog is only an observation.
 
-1. No judgment, no work. When activity has gone unassessed for longer than the lease (the
-   Orchestrator is absent, stalled, or blind), every working seat (the Validator, the Coder, the
-   Tester) is paused with SIGSTOP, and the founder's dash gets one critical item. When the
-   Orchestrator catches up, the seats resume with SIGCONT. Pausing keeps each long-lived
-   session and its context; nothing restarts.
-2. The Orchestrator's hand on the brake. `control` lets the Orchestrator correct a seat (the
-   correction is delivered into the seat's live session), stop a seat that is breaking a rule
-   (paused until the Orchestrator resumes it), or resume it. Every control row names the rule,
-   the evidence and the correction; a stop without a correction is refused, because stopping
-   corrects nothing.
-
-When the session that kicked off the run is the Validator (harness.json validator_agent
-"kickoff"), its window is validator_mirror.py: what is typed there reaches the Validator's inbox.
-The mirror is not the controlled process. A kickoff requires an explicit PID/start/pane binding
-to the executing Validator. Missing or changed identity keeps author lanes held and produces
-an unacknowledged control result, never a claim that the Validator stopped.
-
-The supervisor also beats Herald's heartbeat, so if it dies, Herald raises the stale alert.
+Existing legacy lag holds require an explicit resume, which clears that obsolete reason
+without clearing identity faults. This module does not restart any preserved run on import.
 """
 
 from __future__ import annotations
@@ -426,37 +411,18 @@ class Seats:
         return dict(prior)
 
     def deliver(self, seat: str, text: str) -> dict[str, Any]:
-        # Into the Validator's terminal directly. A headless lane reads no terminal, so its
-        # correction goes to the Validator, which owns delivery into lane sessions.
-        target, body = seat, text
-        if not seat.startswith("validator"):
-            target, body = (
-                "validator",
-                f"{text} Deliver this correction into {seat}'s own session now.",
-            )
-        if kickoff_validator(self.root):
-            # A macOS canonical tty can discard the newline on a long correction. Writing
-            # the existing kickoff inbox directly avoids that transport, and preserves the
-            # notice while the executing Validator is stopped. Queued is not read/applied.
-            self.external()
-            folder = self.root / "validator"
-            if folder.is_symlink() or not folder.is_dir():
-                raise SupervisorError("Validator inbox directory is unavailable or aliased")
-            path = folder / "inbox.jsonl"
-            digest = hashlib.sha256(body.encode()).hexdigest()
-            _append(path, {"at": _iso(_now()), "text": body, "source": "seat-supervisor",
-                           "message_digest": digest})
-            return {"state": "durable-queued", "inbox": str(path),
-                    "message_digest": digest, "agent_acknowledged": False}
-        subprocess.run(
-            ["tmux", "send-keys", "-t", f"{self.session}:{target}", "-l", body],
-            check=True,
-            timeout=10,
-        )
-        subprocess.run(
-            ["tmux", "send-keys", "-t", f"{self.session}:{target}", "Enter"], check=True, timeout=10
-        )
-        return {"state": "terminal-submitted", "agent_acknowledged": False}
+        # Historical callers also use the file transport. A pane can become a shell
+        # between an identity check and send-keys; no liveness check closes that race.
+        from run_record import message
+        body = text if seat == "validator" else f"{text} Recipient: {seat}."
+        try:
+            message(self.root, "validator", "seat-supervisor", body,
+                    log=os.environ.get("FACTORY_LOG", os.devnull))
+        except (OSError, ValueError) as error:
+            raise SupervisorError(str(error)) from error
+        return {"state": "durable-queued", "inbox": str(self.root / "validator/inbox.jsonl"),
+                "message_digest": hashlib.sha256(body.encode()).hexdigest(),
+                "agent_acknowledged": False}
 
 
 def kickoff_validator(root: pathlib.Path) -> bool:
@@ -722,7 +688,7 @@ def control(
         if f"stop:{rule}" not in reasons:
             reasons.append(f"stop:{rule}")
     elif action == "resume":
-        state[seat] = [r for r in reasons if not r.startswith("stop:")]
+        state[seat] = [r for r in reasons if not r.startswith("stop:") and r != DOWN]
         if not state[seat]:
             state[seat] = ["resume-pending"]
     if kickoff_validator(root):
@@ -741,8 +707,7 @@ def control(
     if fault:
         row["identity_error"] = fault
     if action in ("correct", "stop"):
-        # Typed into the seat's own terminal. A stopped seat holds it in its input until the
-        # Orchestrator resumes it, so the correction is the first thing it reads.
+        # Corrections persist independently of whether the recipient process is running.
         try:
             row["delivery"] = seats.deliver(
                 seat, f"FACTORY_CORRECTION from the Orchestrator. Rule: {rule}. "
@@ -775,14 +740,12 @@ def tick(
     now: Callable[[], datetime.datetime] = _now,
     notify: Callable[..., object] = escalate.escalate,
 ) -> dict[str, Any]:
-    "One pass: pause every seat when judgment lags past the lease; resume when it is current."
+    "Observe backlog and reconcile explicit controls; elapsed review time grants no authority."
     through, oldest = journal.oldest_unassessed()
     lagging = oldest is not None and now() - oldest > ttl
     panes, fault = _targets(root, seats)
     state = load_state(root)
     kickoff = kickoff_validator(root)
-    was_down = any(DOWN in reasons for reasons in state.values())
-    was_held = any(state.values())
     _identity_hold(state, panes, fault)
     held = kickoff and _validator_stopped(state)
     for seat in panes:
@@ -794,54 +757,9 @@ def tick(
                 reasons.remove(HELD)
                 if not reasons:
                     reasons.append("resume-pending")
-        if lagging and DOWN not in reasons:
-            reasons.append(DOWN)
-        elif not lagging and DOWN in reasons:
-            reasons.remove(DOWN)
-            if not reasons:
-                reasons.append("resume-pending")
     acknowledgements = _apply(root, seats, state, panes)
     if fault:
         _event(root, "validator-identity-unavailable", fault)
-    if lagging and not was_down:
-        age = int((now() - oldest).total_seconds() // 60) if oldest else 0
-        detail = (
-            f"Activity after cursor {through} has gone unassessed for {age} min. "
-            f"Pause requested; unacknowledged seats: "
-            f"{[name for name, value in acknowledgements.items() if not value['acknowledged']]}. "
-            f"Check the Orchestrator and process receipts."
-        )
-        _event(root, "seats-paused-orchestrator-lagging", detail)
-        if kickoff and "validator" in panes:
-            try:
-                seats.deliver("validator", f"FACTORY_NOTICE from the seat supervisor. {detail}")
-            except (OSError, subprocess.SubprocessError, SupervisorError) as error:
-                _event(root, "validator-notice-failed", str(error), wake=False)
-        try:
-            notify(
-                root,
-                level="critical",
-                key=DOWN,
-                summary="Factory pause requested: the Orchestrator is not judging",
-                detail=detail,
-            )
-        except escalate.EscalationError as error:
-            _event(root, "escalation-failed", f"critical {DOWN}: {error}")
-    elif was_held and not lagging:
-        resolved = not any(state.values()) and not fault
-        _event(
-            root,
-            ("seats-resumed-orchestrator-current" if resolved
-             else "seats-resume-pending-orchestrator-current"),
-            f"assessed through cursor {through}; remaining holds: "
-            f"{sorted(name for name, reasons in state.items() if reasons)}",
-            wake=False,
-        )
-        try:
-            if resolved:
-                escalate.resolve(root, key=DOWN)
-        except escalate.EscalationError:
-            pass
     return {
         "through": through,
         "lagging": lagging,

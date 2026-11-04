@@ -305,7 +305,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                 set(row) != expected
                 or identifier not in planned
                 or identifier in delivered
-                or row.get("transport") not in {"queue", "resume"}
+                or row.get("transport") not in {"queue", "resume", "persistent"}
                 or not isinstance(row.get("thread_id"), str)
                 or not _THREAD.fullmatch(str(row["thread_id"]))
             ):
@@ -457,6 +457,23 @@ def correct_tool_echo(root: pathlib.Path, question_id: str, source: str,
         return row
 
 
+def _question_baseline(root: pathlib.Path, lane: str) -> int:
+    """An old probe's identical question must not absorb a new productive question."""
+    baseline = 0
+    for path in (root / "tmux-lanes").glob(f"{lane}*-launch.jsonl"):
+        slot = path.name.removesuffix("-launch.jsonl")
+        if slot != lane and not slot.startswith(lane + "."):
+            continue
+        for row in _read(path):
+            if row.get("status") != "active":
+                continue
+            value = row.get("dialogue_baseline", 0)
+            if type(value) is not int or value < 0:
+                raise LaneDialogueError("invalid launch dialogue baseline")
+            baseline = max(baseline, value)
+    return baseline
+
+
 def record_question(root: pathlib.Path, lane: str, question: str) -> tuple[dict[str, Any], bool]:
     if not _is_lane(lane):
         raise LaneDialogueError("question lane must be coder or tester[-instance]")
@@ -465,10 +482,12 @@ def record_question(root: pathlib.Path, lane: str, question: str) -> tuple[dict[
         path = directory / "journal.jsonl"
         rows = _read(path)
         _validate(rows)
+        baseline = _question_baseline(pathlib.Path(root), lane)
         answered = _answered_question_ids(rows) | _corrected_question_ids(rows)
         for row in reversed(rows):
             if (
                 row.get("record_type") == "question"
+                and row["sequence"] > baseline
                 and row.get("lane") == lane
                 and row.get("text") == question
                 and row.get("question_id") not in answered
@@ -685,7 +704,7 @@ def main() -> int:
     delivered.add_argument("--root", type=pathlib.Path, required=True)
     delivered.add_argument("--message-id", required=True)
     delivered.add_argument("--thread-id", required=True)
-    delivered.add_argument("--transport", choices=("queue", "resume"), required=True)
+    delivered.add_argument("--transport", choices=("queue", "resume", "persistent"), required=True)
     pending = commands.add_parser("pending")
     pending.add_argument("--root", type=pathlib.Path, required=True)
     pending.add_argument("--lane", type=_lane_argument)

@@ -1,75 +1,13 @@
-"""The Validator procedure states, before Phase A, what dispatch needs from the target."""
+"""Optional discovery must not turn an uncollected or unnamed case into coverage.
 
-from pathlib import Path
+Historical Phase-A/ledger/signing/cache prerequisites are retired. Their surviving
+input and runtime constraints are tested in test_role_inputs, test_normal_workflow,
+test_lane_controls and test_strategy_plan, rather than asserting old prompt headings.
+"""
 
-PROCEDURE_ROOT = Path(__file__).resolve().parents[1]
-PROCEDURE = (PROCEDURE_ROOT / "prompts" / "validate.md").read_text(encoding="utf-8")
-
-
-def test_projection_config_requirement_is_stated_before_phase_a() -> None:
-    phase_a = PROCEDURE.index("## Phase A \u2014 The frame")
-    prerequisites = PROCEDURE.index("## Dispatch prerequisites")
-    assert prerequisites < phase_a
-    section = PROCEDURE[prerequisites:phase_a]
-    assert ".factory/projection.conf" in section and "pinned commit" in section
+from harness import strategy_plan
 
 
-def test_ledger_rows_get_a_verdict_each_and_a_citable_restatement_rule() -> None:
-    flat = " ".join(PROCEDURE.split())
-    assert "Decide every row yourself, by id, against its verbatim source" in flat
-    assert "Never treat a blanket accept as ratification" in flat
-    assert "A row with no citation is never a restatement." in flat
-
-
-RULING = (
-    "founder ruling, 2026-10-14, verbatim: \"We had discussed a mode of 'operatorless' running "
-    'which should use the shortcut. Otherwise, standard mode should follow the doctrine."'
-)
-
-
-def test_the_validator_decides_every_ledger_row_and_never_sends_rows_to_the_founder() -> None:
-    """P-0001 (founder, 2026-10-18), after herald-dash-r2's 82-row ledger: the Validator decides
-    every row against its source at every engagement; the procedure and the canonical doctrine
-    say the same thing, and the superseded per-row founder verdict is gone from both."""
-
-    flat = " ".join(PROCEDURE.split())
-    doctrine = " ".join(
-        (PROCEDURE_ROOT / "docs" / "SOFTWARE-FACTORY.md").read_text(encoding="utf-8").split()
-    )
-    assert ("never send the ledger to the founder for per-row verdicts") in flat
-    assert "the human accepts or refutes every row by id" not in flat
-    assert "a CHANGES-MEANING row is re-decided against the source" in flat
-    assert "never sent to the founder row by row" in doctrine
-    assert "That holds under `interactive` and `scheduled` engagement for every row" not in doctrine
-    assert RULING.replace("founder ruling, 2026-10-14, verbatim: ", "") in doctrine
-
-
-def test_declared_dependencies_are_cached_read_only_before_dispatch() -> None:
-    phase_b = PROCEDURE[PROCEDURE.index("## Phase B"):PROCEDURE.index("## Cadence")]
-    cache = phase_b.index("Cache the declared dependencies")
-    assert phase_b.index("Sign the run tool policy") < cache < phase_b.index("Dispatch the Coder")
-    assert "read-only" in phase_b[cache:phase_b.index("Dispatch the Coder")]
-
-
-def test_procedure_names_projection_for_both_lanes_and_the_offline_check() -> None:
-    assert "refuses projection for **both** lanes" in PROCEDURE
-    assert "deno run --cached-only" in PROCEDURE
-    # Deno 2.7 rejects --cached-only on check (dogfood #57).
-    assert "deno check --cached-only" not in PROCEDURE
-
-
-def test_both_roles_put_a_planned_case_id_where_discovery_reads_it() -> None:
-    """Discovery reads only the collected test's name, so neither role may offer the test's
-    code as a place for the case id (review of #73: an id in code passed the freeze, then
-    failed Phase C)."""
-
-    from harness import strategy_plan
-
-    tester = " ".join((PROCEDURE_ROOT / "prompts" / "test.md").read_text(encoding="utf-8").split())
-    validator = " ".join(PROCEDURE.split())
-    assert "in the test name of the test that realizes it" in tester
-    assert "name or its code" not in tester
-    assert "test_cap[R7.1]" in tester and "test_cap[R7.1]" in validator
-    assert "Put each case id in the name of the test that covers it" in validator
+def test_optional_named_case_discovery_does_not_credit_an_unnamed_case() -> None:
     assert strategy_plan.untested({"R7.1": "Critical"}, ["test_cap"])["Critical"] == ["R7.1"]
     assert strategy_plan.untested({"R7.1": "Critical"}, ["test_cap[R7.1]"])["Critical"] == []

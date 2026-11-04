@@ -265,7 +265,7 @@ def _dispatch(
     directive_ledger = b""
     directive_provisional = b""
     role_doctrine = (
-        Path(__file__).resolve().parents[1] / "docs" / "SOFTWARE-FACTORY.md"
+        Path(__file__).resolve().parents[1] / "docs" / "ROLE-DOCTRINE.md"
     ).read_bytes()
     effective_directives = derive_effective_directive_contract(
         ledger_bytes=directive_ledger,

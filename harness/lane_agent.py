@@ -140,7 +140,7 @@ MODEL_FAMILIES = (
     ("kimi", "moonshot"), ("llama", "meta"), ("muse", "meta"),
 )
 AGENT_FAMILIES = {
-    "codex": "openai", "codex-interactive": "openai", "claude": "anthropic", "agy": "google",
+    "codex": "openai", "codex-interactive": "openai", "claude": "anthropic",
     "muse": "meta",
 }
 SEATS = "lane-seats.json"
@@ -164,6 +164,31 @@ def lane_family(agent_name: str, model: str, codex_home: pathlib.Path | None) ->
     custom = any(o.startswith("model_provider=") and o != 'model_provider="openai"'
                  for o in overrides)
     return model_family(agent_name, configured, custom_provider=custom)
+
+
+def validate_agy_model(model: object) -> str:
+    """Validate one literal native model selection, from either settings or argv."""
+    if not isinstance(model, str) or (model and (
+        model != model.strip() or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/() -]*", model)
+    )):
+        raise ValueError("Agy model is not a valid model name")
+    return model
+
+
+def agy_model_selection(operator_home: pathlib.Path) -> str:
+    """Snapshot Agy's selected model, never infer a vendor from its client name.
+
+    The launcher passes this exact selection to both the seat claim and native argv,
+    so a later settings edit cannot silently change the admitted model on resume.
+    Missing selection remains unknown; malformed configuration is not a default.
+    """
+    path = operator_home / ".gemini" / "antigravity-cli" / "settings.json"
+    if not path.exists():
+        return ""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("Agy settings must be an object")
+    return validate_agy_model(value.get("model", ""))
 
 
 def _started(pid: object) -> str:
@@ -259,10 +284,12 @@ def _locked_seats(root: pathlib.Path):
 
 def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, model: str,
                codex_home: pathlib.Path | None, gap: str, pid: int) -> dict[str, object]:
-    """Check this lane's family against the other seat and take this role's seat, atomically.
+    """Record the operator's selection and take this role's seat, atomically.
     One seated launch runs at a time: while either seat is pending in a live launch, every other
-    claim is refused, so no lane is admitted against a launch that may still fail. Raises
-    SystemExit when the pair would share a family, or a family is unknown, with no gap."""
+    claim is refused, so no lane is admitted against a launch that may still fail. Model-family
+    metadata describes the selection; it never approves it or overrides the operator. Separate
+    repositories, prompts and sessions provide the Coder/Tester boundary.
+    """
     family = lane_family(agent_name, model, codex_home)
     other = SEATED_ROLES[role]
     with _locked_seats(root) as seats:
@@ -276,6 +303,10 @@ def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, mod
             seats[name] = _settled(seats.get(name))
         peer = seats.get(other)
         theirs = (peer or {}).get("family") or ""
+        # Older records guessed Google for unnamed Agy even when its selected model
+        # was OpenAI/Anthropic. Current operator settings cannot prove that old choice.
+        if peer and peer.get("agent") == "agy" and not peer.get("model"):
+            theirs = ""
         record: dict[str, object] = {"family": family or None}
         if peer is None:
             tier = "no-peer" if family else "unknown-family"
@@ -285,18 +316,7 @@ def claim_seat(root: pathlib.Path, *, role: str, slot: str, agent_name: str, mod
             tier = ("unknown-family" if not (family and theirs)
                     else "cross-family" if family != theirs else "same-family")
         record["tier"] = tier
-        if tier in ("same-family", "unknown-family"):
-            if not gap:
-                mine = family or "an unknown model family"
-                raise SystemExit(
-                    f"tmux-lane: the {role} lane would run {mine}"
-                    + (f" and the {other} lane runs {theirs or 'an unknown model family'}"
-                       if peer is not None else "")
-                    + "; the Coder and the Tester run different, known model families. Launch "
-                    "with --agent/--model from another family, or, only when no other family is "
-                    "configured, set FACTORY_LANE_INDEPENDENCE_GAP to the reason so the gap is "
-                    "recorded"
-                )
+        if gap:
             record["independence_gap"] = gap
         seats[role] = {"slot": slot, "agent": agent_name, "model": model,
                        "family": family or None, "status": "pending", "pid": pid,
@@ -665,6 +685,8 @@ def run_lane(
     plan_only: bool = False,
     boundary_record: object = None,
     boundary_role: str = "",
+    persistent: bool = False,
+    run_root: pathlib.Path | None = None,
 ) -> int:
     """Run one lane process to its end and record that end.
 
@@ -690,7 +712,10 @@ def run_lane(
         if chosen is None:
             raise ValueError("plan-only lane requires a registered session agent")
         chosen.admitted_env("plan")  # Reject harnesses without a subscription route.
-    if prompt is not None:
+    if persistent and (session_agent not in {"claude", "agy"} or terminal
+                       or run_root is None or session_file is None or prompt is None):
+        raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
+    if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
     if env_file is not None:
@@ -775,18 +800,29 @@ def run_lane(
             rc = process.wait()
         else:
             process = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                argv, stdin=subprocess.PIPE if persistent else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 env=child_env,
             )
             record_worker("running")
             assert process.stdout is not None
-            for raw in process.stdout:
+            def emit(raw: bytes) -> None:
                 sys.stdout.buffer.write(raw)
                 sys.stdout.buffer.flush()
                 _append(log, raw)
                 _watch(raw)
-            rc = process.wait()
-    except OSError as error:
+            if persistent:
+                import persistent_lane
+
+                assert run_root is not None and session_file is not None and prompt is not None
+                rc = persistent_lane.run(process, root=run_root, slot=slot, agent=session_agent,
+                                         prompt=argv_prompt(prompt, pathlib.Path.cwd()),
+                                         session_file=session_file, emit=emit)
+            else:
+                for raw in process.stdout:
+                    emit(raw)
+                rc = process.wait()
+    except (OSError, ValueError, RuntimeError) as error:
         if process is not None and process.poll() is None:
             # Receipt failure must not leave an untracked model running. This is terminal
             # cleanup of our own Popen child, not the supervisor's resumable pause operation.
@@ -923,6 +959,10 @@ def main(argv: list[str] | None = None) -> int:
     seat.add_argument("--pid", type=int, default=0)
     selection = commands.add_parser("codex-model")
     selection.add_argument("--codex-home", type=pathlib.Path, required=True)
+    agy_selection = commands.add_parser("agy-model")
+    agy_source = agy_selection.add_mutually_exclusive_group(required=True)
+    agy_source.add_argument("--operator-home", type=pathlib.Path)
+    agy_source.add_argument("--model")
     check = commands.add_parser("preflight")
     check.add_argument("--agent", required=True)
     check.add_argument("--timeout", type=float, default=20.0)
@@ -942,6 +982,8 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--session-agent", default="")
     runner.add_argument("--session-file", type=pathlib.Path)
     runner.add_argument("--plan-only", action="store_true")
+    runner.add_argument("--persistent", action="store_true")
+    runner.add_argument("--run-root", type=pathlib.Path)
     runner.add_argument("--boundary-record", type=json.loads, default=None)
     runner.add_argument("--boundary-role", choices=("coder", "tester"), default="")
     runner.add_argument("lane_command", nargs=argparse.REMAINDER)
@@ -975,6 +1017,10 @@ def main(argv: list[str] | None = None) -> int:
             model, overrides = codex_model_selection(arguments.codex_home)
             _nul(model, *overrides)
             return 0
+        if arguments.command == "agy-model":
+            _nul(agy_model_selection(arguments.operator_home) if arguments.operator_home is not None
+                 else validate_agy_model(arguments.model))
+            return 0
         if arguments.command == "environment":
             cache_env, runtime_dirs = arguments.cache_env, arguments.runtime_dir
             if arguments.record:
@@ -1004,6 +1050,8 @@ def main(argv: list[str] | None = None) -> int:
             plan_only=arguments.plan_only,
             boundary_record=arguments.boundary_record,
             boundary_role=arguments.boundary_role,
+            persistent=arguments.persistent,
+            run_root=arguments.run_root,
         )
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)

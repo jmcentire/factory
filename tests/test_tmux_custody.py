@@ -42,6 +42,7 @@ class Fixture:
         self.workers = {}
         self.panes = {}
         self.events = []
+        self.server = None
         self.script = root/'counter.py'
         self.script.write_text(
             'import pathlib,sys,time\np=pathlib.Path(sys.argv[1])\n'
@@ -65,6 +66,10 @@ class Fixture:
                 ('validator', 'external') else ['new-window', '-d', '-t', '=fixture'])
         out = self.tmux(*args, '-n', window, '-P', '-F', '#{pane_pid} #{pane_id}',
                         'exec '+shlex.join(command)).stdout.split()
+        server = self.tmux('display-message', '-p', '#{pid}').stdout.strip()
+        if self.server is not None:
+            assert server == self.server, 'private test server ownership changed'
+        self.server = server
         pid, pane = int(out[0]), out[1]
         table = w.process_snapshot()
         assert table is not None and pid in table
@@ -81,7 +86,6 @@ class Fixture:
             identity = root_identity
         self.workers[name] = identity
         wait_for(lambda: self.count(name) is not None)
-        server = self.tmux('display-message', '-p', '#{pid}').stdout.strip()
         self.monkeypatch.setenv('TMUX', f'{self.socket},{server},0')
         addressed = subprocess.check_output(['tmux', 'display-message', '-p', '#{socket_path}'],
                                            text=True).strip()
@@ -128,7 +132,10 @@ class Fixture:
                         '--correction', 'wait for explicit fixture resume', codes=(0, 75))
 
     def cleanup(self):
-        self.tmux('kill-server', check=False)
+        probe = self.tmux('display-message', '-p', '#{pid}', check=False)
+        if probe.returncode == 0:
+            assert self.server == probe.stdout.strip(), 'private test server ownership changed'
+            self.tmux('kill-server')
         # Only recorded identities from this fixture, revalidated immediately before signal.
         for identity in self.identities:
             w.signal_identity(identity, signal.SIGKILL)
@@ -166,7 +173,7 @@ def test_real_tmux_root_auto_resume_is_reproduced_and_binding_refused(fixture):
     assert 'pane-root' in result.stderr
 
 
-def test_real_tmux_child_stop_resume_and_lag_have_sustained_no_progress(fixture):
+def test_real_tmux_explicit_stop_is_stable_but_review_lag_does_not_stop_work(fixture):
     fixture.setup_roles()
     fixture.cli('check-validator')
     stop = json.loads(fixture.control('stop').stdout)
@@ -186,15 +193,11 @@ def test_real_tmux_child_stop_resume_and_lag_have_sustained_no_progress(fixture)
     old = (datetime.datetime.now(datetime.UTC)-datetime.timedelta(seconds=5)).isoformat()
     (fixture.root/'orchestrator/activity.jsonl').write_text(
         json.dumps({'cursor': 1, 'ts': old})+'\n')
-    wait_for(lambda: set(fixture.tick()['paused']) == {'validator', 'coder', 'tester'})
     before = fixture.count('external')
+    assert not fixture.tick()['holds']
     time.sleep(.3)
-    assert fixture.count('external') == before
-    # Synthetic input to deterministic supervision, not a claimed genuine AG assessment.
-    (fixture.root/'orchestrator/reports.jsonl').write_text(
-        json.dumps({'assessment': {'through_cursor': 1}})+'\n')
-    wait_for(lambda: not fixture.tick()['holds'])
-    wait_for(lambda: fixture.count('external') > before)
+    assert not fixture.tick()['holds']
+    assert fixture.count('external') > before
 
 
 def test_real_tmux_failed_signal_retains_hold_without_blind_retry(fixture, monkeypatch):

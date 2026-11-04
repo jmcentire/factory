@@ -160,9 +160,17 @@ def _load_replay_store(arguments: argparse.Namespace) -> RunStore:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="factory",
-        description="Run the authorized, evidence-producing Software Factory state machine.",
+        description="Run normal Factory tasks or explicit historical runtime commands.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    ordinary = commands.add_parser("run", help="start a task with assigned native agents")
+    ordinary.add_argument("run")
+    ordinary.add_argument("task")
+    ordinary.add_argument("--repo", required=True)
+    ordinary.add_argument("--runs", default=".factory/runs")
+    ordinary.add_argument("--log")
+    ordinary.add_argument("--budget", type=float)
+
 
     validate = commands.add_parser(
         "validate-document",
@@ -3030,6 +3038,17 @@ def main(argv: list[str] | None = None) -> int:
     arguments: argparse.Namespace | None = None
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.command == "run":
+            import subprocess
+            script = Path(__file__).resolve().parents[1] / "harness/factory.sh"
+            command = ["bash", str(script), arguments.run, arguments.task,
+                       "--repo", arguments.repo, "--runs", arguments.runs]
+            for key in ("log", "budget"):
+                value = getattr(arguments, key)
+                if value is not None:
+                    command.extend([f"--{key}", str(value)])
+            return subprocess.run(command, check=False,
+                                  env={**os.environ, "FACTORY_PYTHON": sys.executable}).returncode
         _execute(arguments)
     except StateAdmissionError as exc:
         if arguments is not None and not exc.receipt_attempted:

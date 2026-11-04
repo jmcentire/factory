@@ -135,7 +135,7 @@ def test_current_judgment_leaves_every_seat_working(tmp_path: Path) -> None:
     assert result["lagging"] is False and seats.signals == [] and notified == []
 
 
-def test_unassessed_activity_past_the_lease_pauses_every_seat_and_alerts_once(
+def test_unassessed_activity_is_observed_without_signals_or_alerts(
     tmp_path: Path,
 ) -> None:
     root, seats, notified = (
@@ -149,20 +149,13 @@ def test_unassessed_activity_past_the_lease_pauses_every_seat_and_alerts_once(
         tick(root, seats, journal, T0 + datetime.timedelta(minutes=10), notified)["lagging"]
         is False
     )
-    tick(root, seats, journal, T0 + datetime.timedelta(minutes=16), notified)
-    assert sorted(seats.signals) == [
-        (10, signal.SIGSTOP),
-        (20, signal.SIGSTOP),
-        (30, signal.SIGSTOP),
-    ]
-    assert [n["level"] for n in notified] == ["critical"] and notified[0]["key"] == supervisor.DOWN
+    result = tick(root, seats, journal, T0 + datetime.timedelta(minutes=16), notified)
+    assert result["lagging"] and not result["holds"]
     tick(root, seats, journal, T0 + datetime.timedelta(minutes=20), notified)
-    assert len(seats.signals) == 3 and len(notified) == 1, (
-        "a paused run is not paused or alerted twice"
-    )
+    assert seats.signals == [] and notified == []
 
 
-def test_the_orchestrator_catching_up_resumes_the_seats(
+def test_the_orchestrator_catching_up_does_not_change_process_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(escalate, "resolve", lambda *a, **k: None)
@@ -173,7 +166,7 @@ def test_the_orchestrator_catching_up_resumes_the_seats(
     assessed(root, 1)
     seats.signals.clear()
     tick(root, seats, journal, T0 + datetime.timedelta(minutes=31), notified)
-    assert sorted(seats.signals) == [(10, signal.SIGCONT), (20, signal.SIGCONT)]
+    assert seats.signals == []
     assert supervisor.load_state(root) == {}
 
 
@@ -181,7 +174,7 @@ def test_the_orchestrator_is_never_a_paused_seat(tmp_path: Path) -> None:
     root, seats, notified = run_root(tmp_path), FakeSeats({"coder": 20}), []
     activity(root, 1, T0)
     tick(root, seats, supervisor.Journal(root), T0 + datetime.timedelta(hours=1), notified)
-    assert seats.signals == [(20, signal.SIGSTOP)]
+    assert seats.signals == []
 
 
 def test_stop_without_a_correction_is_refused(tmp_path: Path) -> None:
@@ -225,14 +218,18 @@ def test_stop_pauses_the_seat_and_queues_the_correction_until_resume(tmp_path: P
     assert [r["action"] for r in rows] == ["stop", "resume"]
 
 
-def test_resume_does_not_override_a_lagging_orchestrator(tmp_path: Path) -> None:
+def test_explicit_resume_clears_a_retired_lag_hold_even_with_unread_activity(
+    tmp_path: Path,
+) -> None:
     root, seats, notified = run_root(tmp_path), FakeSeats({"validator": 10}), []
     activity(root, 1, T0)
+    supervisor.save_state(root, {"validator": [supervisor.DOWN]})
     tick(root, seats, supervisor.Journal(root), T0 + datetime.timedelta(hours=1), notified)
     supervisor.control(
         root, seats, seat="validator", action="resume", rule="", evidence="", correction=""
     )
-    assert seats.signals == [(10, signal.SIGSTOP)], "a seat resumed while judgment is still missing"
+    assert seats.signals == [(10, signal.SIGSTOP), (10, signal.SIGCONT)]
+    assert not supervisor.load_state(root)
 
 
 def test_correct_delivers_without_pausing(tmp_path: Path) -> None:
@@ -276,8 +273,9 @@ def test_correction_inbox_alias_is_refused_without_changing_target(tmp_path, mon
     seats = supervisor.Seats("fixture")
     seats.configure(root)
     monkeypatch.setattr(seats, "external", lambda: {"pid": 11, "started": "fixture"})
-    with pytest.raises(OSError):
+    with pytest.raises(supervisor.SupervisorError) as refused:
         seats.deliver("validator", "FACTORY_CORRECTION synthetic")
+    assert isinstance(refused.value.__cause__, OSError)
     assert target.read_text() == "unchanged"
 
 
@@ -358,16 +356,14 @@ def test_a_lane_launched_while_the_kickoff_validator_is_stopped_is_held(tmp_path
     assert seats.signals == [(30, signal.SIGSTOP)]
 
 
-def test_a_lagging_orchestrator_pauses_lanes_and_tells_the_kickoff_validator(
+def test_a_lagging_orchestrator_does_not_pause_or_inject_into_the_kickoff_validator(
     tmp_path: Path,
 ) -> None:
     root, notified = kickoff_root(tmp_path), []
     seats = FakeSeats({"validator": 10, "coder": 20})
     activity(root, 1, T0)
     tick(root, seats, supervisor.Journal(root), T0 + datetime.timedelta(minutes=20), notified)
-    assert sorted(seats.signals) == [(11, signal.SIGSTOP), (20, signal.SIGSTOP)]
-    assert seats.delivered and seats.delivered[0][0] == "validator"
-    assert "unassessed" in seats.delivered[0][1]
+    assert seats.signals == [] and seats.delivered == [] and notified == []
 
 
 def test_signal_is_pending_until_state_ack_and_survives_restart(tmp_path, monkeypatch):

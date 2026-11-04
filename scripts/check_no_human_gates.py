@@ -34,6 +34,7 @@ Stdlib only. Exit code 0 = green.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import sys
 from dataclasses import dataclass
@@ -60,29 +61,36 @@ _WHO = r"(?:a |the )?(?:human|founder|operator|user)s?"
 PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     (re.compile(pattern, re.IGNORECASE), message)
     for pattern, message in (
-        (r"\bonly " + _WHO + r"\b(?! said| says| asked| stated)",
-         "an 'only the human can' gate"),
-        (r"\buntil " + _WHO + r" (?:clears|acts|rules|answers|decides|approves|looks|signs)",
-         "a step that waits until the human acts"),
-        (r"\b(?:human|founder|operator)s? (?:clears|must clear|clearance)\b",
-         "a human clearance"),
-        (r"\b(?:human|founder|operator)[- ](?:approval|sign-?off|signature on|ratification)\b",
-         "a human approval, sign-off or ratification as a precondition"),
-        (r"\b(?:requires?|needs?) " + _WHO + r" (?:approval|sign-?off|ratification|decision|"
-         r"ruling|signature|to (?:approve|confirm|ratify|sign|decide|rule|say so))\b",
-         "a step that requires the human"),
-        (r"\bask(?:s|ed|ing)? " + _WHO + r" (?:for|before|to approve|to confirm|whether|which)\b",
-         "a step that asks the human"),
-        (r"\bwait(?:s|ed|ing)? (?:on|for) " + _WHO + r"\b",
-         "a step that waits on the human"),
-        (r"\bpag(?:e|es|ed|ing) " + _WHO + r"\b",
-         "paging the human"),
-        (r"\b(?:escalat|rout)\w* to " + _WHO + r"\b",
-         "escalating or routing to the human"),
-        (r"\bgoes (?:back )?to " + _WHO + r"\b",
-         "handing an item to the human"),
-        (r"\b(?:the )?(?:human|founder) (?:decides|must decide|must answer|must rule|rules on)\b",
-         "the human deciding what the run knows how to decide"),
+        (r"\bonly " + _WHO + r"\b(?! said| says| asked| stated)", "an 'only the human can' gate"),
+        (
+            r"\buntil " + _WHO + r" (?:clears|acts|rules|answers|decides|approves|looks|signs)",
+            "a step that waits until the human acts",
+        ),
+        (r"\b(?:human|founder|operator)s? (?:clears|must clear|clearance)\b", "a human clearance"),
+        (
+            r"\b(?:human|founder|operator)[- ](?:approval|sign-?off|signature on|ratification)\b",
+            "a human approval, sign-off or ratification as a precondition",
+        ),
+        (
+            r"\b(?:requires?|needs?) " + _WHO + r" (?:approval|sign-?off|ratification|decision|"
+            r"ruling|signature|to (?:approve|confirm|ratify|sign|decide|rule|say so))\b",
+            "a step that requires the human",
+        ),
+        (
+            r"\bask(?:s|ed|ing)? "
+            + _WHO
+            + r" (?:for|before|to approve|to confirm|whether|which)\b",
+            "a step that asks the human",
+        ),
+        (r"\bwait(?:s|ed|ing)? (?:on|for) " + _WHO + r"\b", "a step that waits on the human"),
+        (r"\bpag(?:e|es|ed|ing) " + _WHO + r"\b", "paging the human"),
+        (r"\b(?:escalat|rout)\w* to " + _WHO + r"\b", "escalating or routing to the human"),
+        (r"\bgoes (?:back )?to " + _WHO + r"\b", "handing an item to the human"),
+        (
+            r"\b(?:the )?(?:human|founder) "
+            r"(?:decides|must decide|must answer|must rule|rules on)\b",
+            "the human deciding what the run knows how to decide",
+        ),
         (r"\bstop and ask\b", "stop-and-ask"),
         (r"\b(?:just )?type ['\"]?go\b", "asking the founder to type go"),
         (r"\bapprove to continue\b", "approve-to-continue"),
@@ -122,8 +130,9 @@ def _scanned_files(root: Path) -> list[Path]:
 
 #: A phrase stated as what never happens ("nothing waits on the founder") is the rule, not a
 #: gate. The negation must sit in the same clause, shortly before the phrase.
-NEGATED = re.compile(r"\b(?:never|nothing|no|not|nobody|without|none)\b[^.;:!?]{0,96}$",
-                     re.IGNORECASE)
+NEGATED = re.compile(
+    r"\b(?:never|nothing|no|not|nobody|without|none)\b[^.;:!?]{0,96}$", re.IGNORECASE
+)
 
 
 def _gates(line: str) -> str | None:
@@ -145,37 +154,64 @@ def scan_text(relative: str, text: str) -> list[Finding]:
     return findings
 
 
-def scan(root: Path = REPO_ROOT) -> list[Finding]:
+def scan(root: Path = REPO_ROOT, *, exclude: tuple[str, ...] = ()) -> list[Finding]:
     findings: list[Finding] = []
     for path in _scanned_files(root):
+        relative = path.relative_to(root).as_posix()
+        if any(fnmatch.fnmatchcase(relative, pattern) for pattern in exclude):
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        findings.extend(scan_text(path.relative_to(root).as_posix(), text))
+        findings.extend(scan_text(relative, text))
     return findings
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--root", default=str(REPO_ROOT))
+    parser.add_argument(
+        "--mode",
+        choices=("error", "warn", "off"),
+        default="error",
+        help="user-selected enforcement level; default: error",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATH_GLOB",
+        help="exclude a repository-relative path pattern (repeatable)",
+    )
+    parser.add_argument(
+        "--max-findings",
+        type=int,
+        default=10,
+        help="maximum details printed; 0 prints only the summary",
+    )
     arguments = parser.parse_args(argv)
-    findings = scan(Path(arguments.root))
+    if arguments.max_findings < 0:
+        parser.error("--max-findings must be nonnegative")
+    if arguments.mode == "off":
+        print("no-human-gates: DISABLED by explicit configuration; no scan performed")
+        return 0
+    if arguments.exclude:
+        print(f"no-human-gates: excluded paths: {', '.join(arguments.exclude)}")
+    findings = scan(Path(arguments.root), exclude=tuple(arguments.exclude))
     if not findings:
         print("no-human-gates: clean")
         return 0
-    for finding in findings:
+    for finding in findings[: arguments.max_findings]:
         print(finding.render(), file=sys.stderr)
     print(
-        f"no-human-gates: {len(findings)} false gate(s). P-0001 (founder, 2026-10-18): the run "
-        "involves the founder only at a genuine impasse, when no role knows what needs doing. "
-        "\"If you ever need me to 'just type go' or 'approve' <---- FUCK YOU. If you're doing "
-        "what I asked you to do, then fucking do it. I ALREADY FUCKING ASKED YOU TO DO IT.\" "
-        "Rewrite each as decide, record, proceed; a line that must keep the phrase carries "
-        "'gate-exempt: <reason>'.",
+        f"no-human-gates: {arguments.mode.upper()} — {len(findings)} possible unnecessary "
+        f"human gate(s); showing {min(len(findings), arguments.max_findings)}. "
+        "Check the user's actual request. Correct false prerequisites or tune --mode, "
+        "--exclude, or a local 'gate-exempt: <reason>'.",
         file=sys.stderr,
     )
-    return 1
+    return 1 if arguments.mode == "error" else 0
 
 
 if __name__ == "__main__":

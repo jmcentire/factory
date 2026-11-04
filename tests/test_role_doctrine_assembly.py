@@ -31,21 +31,20 @@ def test_demote_and_promote_are_exact_inverses() -> None:
     assert promote(demote(text)) == text
 
 
-def test_real_prompt_files_have_internal_level_two_headings() -> None:
-    """The precondition that makes naive assembly wrong must actually hold."""
-
-    validate_text = (PROMPTS / "validate.md").read_text(encoding="utf-8")
-    assert validate_text.count("\n## ") >= 5, (
-        "if this ever drops to zero, the demotion step is no longer load-bearing "
-        "and this whole module's rationale should be re-examined"
-    )
+@pytest.mark.parametrize("body", ["# Role\n\nPlain instructions.\n",
+                                  "# Role\n\n## First\nOne.\n### Nested\nTwo.\n## Last\nThree.\n"])
+def test_assembly_preserves_flat_and_nested_prompts(tmp_path, body: str) -> None:
+    """Prompt length/heading count is not a contract; preserving every byte is."""
+    for name in (*_SOURCES.values(), "diff-intent-gate.md"):
+        (tmp_path / name).write_text(body)
+    prove_round_trip(assemble(tmp_path), tmp_path)
 
 
 def test_naive_verbatim_assembly_truncates_and_fails_round_trip() -> None:
-    """Pin the defect: pasting validate.md raw breaks the round-trip proof."""
+    """Pin truncation with a nested source even when current prompts are flat."""
 
     gate_src = (PROMPTS / "diff-intent-gate.md").read_text(encoding="utf-8")
-    validate_src = (PROMPTS / "validate.md").read_text(encoding="utf-8")
+    validate_src = "# Validator\n\nBefore.\n\n## Necessary behavior\nDo not lose this.\n"
     naive = (
         "## Shared foundation\n\n" + gate_src.rstrip("\n") + "\n\n"
         "## Directive — Validator\n\n" + validate_src.rstrip("\n") + "\n\n"
@@ -55,10 +54,9 @@ def test_naive_verbatim_assembly_truncates_and_fails_round_trip() -> None:
     contract = compile_role_contract(doctrine_bytes=naive.encode("utf-8"), role="validator")
     marker = "## Directive — Validator\n\n"
     role_tail = contract["instructions"].split(marker, 1)[1]
-    # The naive assembly truncates at validate.md's own first internal heading —
-    # far short of the real file (which is tens of thousands of characters).
-    assert len(role_tail) < 2000
-    assert len(role_tail) < len(validate_src) / 5
+    assert "Before." in role_tail
+    assert "Do not lose this." not in role_tail
+    assert role_tail.strip() != validate_src.strip()
 
 
 def test_real_assembler_proves_its_own_round_trip() -> None:

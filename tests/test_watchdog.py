@@ -587,8 +587,6 @@ def test_real_cli_pass_count_ignores_dispatch_receipt_lines(tmp_path: Path) -> N
     import sys
 
     repo = HARNESS.parent
-    venv_python = repo / ".venv" / "bin" / "python"
-    interpreter = str(venv_python) if venv_python.exists() else sys.executable
 
     from factory_core.manifest import digest_obj
     from factory_runtime.state import RunStore
@@ -605,7 +603,7 @@ def test_real_cli_pass_count_ignores_dispatch_receipt_lines(tmp_path: Path) -> N
     )
     (runs / "r1" / "dispatches.jsonl").write_text("{}\n" * 50, encoding="utf-8")
     result = sp.run(
-        [interpreter, "-m", "factory_runtime.cli", "pass-count",
+        [sys.executable, "-m", "factory_runtime.cli", "pass-count",
          "--runs", str(runs), "--run-id", "r1"],
         capture_output=True, text=True, cwd=repo,
     )

@@ -1,353 +1,40 @@
 #!/usr/bin/env bash
-# Shared checked projection loader. This is sourced by harness entry points; it never selects a
-# repository, ref, SHA, or working directory from cwd, an operator checkout, or harness metadata.
-# shellcheck source=harness/factory_python.sh
+# Read local task inputs. No signatures, catalog, review cursor or external checkpoint.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-# Project keys minted by `factory init` (default .factory/keys). When FACTORY_KEYS_DIR names a
-# minted project, its genesis and root key are the trust anchors unless the operator set them
-# explicitly. Nobody signs anything by hand; see factory_runtime/project_init.py.
-if [ -n "${FACTORY_KEYS_DIR:-}" ] && [ -f "$FACTORY_KEYS_DIR/genesis.tessera.json" ]; then
-  : "${FACTORY_GENESIS:=$FACTORY_KEYS_DIR/genesis.tessera.json}"
-  if [ -z "${FACTORY_ROOT_PUBLIC_KEY:-}" ] && [ -f "$FACTORY_KEYS_DIR/root.pub" ]; then
-    FACTORY_ROOT_PUBLIC_KEY="$(tr -d '[:space:]' < "$FACTORY_KEYS_DIR/root.pub")"
-  fi
-  export FACTORY_GENESIS FACTORY_ROOT_PUBLIC_KEY
-fi
-
-# Print the environment for one worker: the shared trust anchors and that worker's own key.
-# Usage: eval "$(factory_worker_env tester)"
-factory_worker_env() {
-  local role="$1"
-  local dir="${FACTORY_KEYS_DIR:-.factory/keys}"
-  local identity
-  case "$role" in
-    validator|orchestrator|coder|tester) identity="agent:$role" ;;
-    *) echo "factory_worker_env: unknown worker role: $role" >&2; return 64 ;;
-  esac
-  [ -f "$dir/$role.key" ] || { echo "factory_worker_env: no key for $role in $dir; run factory init" >&2; return 66; }
-  printf 'export FACTORY_GENESIS=%q\n' "$dir/genesis.tessera.json"
-  printf 'export FACTORY_ROOT_PUBLIC_KEY=%q\n' "$(tr -d '[:space:]' < "$dir/root.pub")"
-  printf 'export FACTORY_SIGNER_IDENTITY=%q\n' "$identity"
-  printf 'export FACTORY_SIGNING_KEY=%q\n' "$dir/$role.key"
-}
-
-factory_verify_resume_anchor() {
-  local run="${1:?run id required}"
-  local runs="${2:?runs root required}"
-  local cli="${FACTORY_CLI:-factory}"
-  local checkpoint="${FACTORY_RESUME_CHECKPOINT:-}"
-  local checkpoint_digest="${FACTORY_RESUME_CHECKPOINT_DIGEST:-}"
-  local genesis="${FACTORY_GENESIS:-}"
-  local root_key="${FACTORY_ROOT_PUBLIC_KEY:-}"
-  local config_manifest="${FACTORY_RESUME_CONFIG_MANIFEST:-}"
-  local predecessors="${FACTORY_RESUME_ACCEPTED_PREDECESSORS:-}"
-  local tessera="${FACTORY_TESSERA_BIN:-tessera}"
-  # These assignments are intentionally global: later helpers consume the exact verified argv
-  # vectors.  Avoid `declare -g`, which macOS's system Bash 3.2 does not implement.
-  FACTORY_VERIFIED_RESUME_CONFIG_ARGS=()
-  FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS=()
-  FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS=()
-
-  [ -f "$checkpoint" ] && [ ! -L "$checkpoint" ] || {
-    echo "Factory resume checkpoint is not an externally supplied regular file" >&2
-    return 72
-  }
-  [[ "$checkpoint_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo "Factory resume checkpoint digest is absent or non-canonical" >&2
-    return 72
-  }
-  [ -f "$genesis" ] && [ ! -L "$genesis" ] || {
-    echo "Factory genesis is not an externally supplied regular file" >&2
-    return 72
-  }
-  [[ "$root_key" =~ ^[0-9a-f]{64}$ ]] || {
-    echo "Factory externally pinned root public key is absent or non-canonical" >&2
-    return 72
-  }
-  [ -f "$config_manifest" ] && [ ! -L "$config_manifest" ] || {
-    echo "Factory resume configuration manifest is absent or not regular" >&2
-    return 72
-  }
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; esac
-    [[ "$line" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}=/.+ ]] || {
-      echo "Invalid Factory resume configuration source: $line" >&2
-      return 72
-    }
-    FACTORY_VERIFIED_RESUME_CONFIG_ARGS+=(--config-source "$line")
-  done < "$config_manifest"
-  [ "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" -gt 0 ] || {
-    echo "Factory resume configuration manifest is empty" >&2
-    return 72
-  }
-  if [ -n "$predecessors" ]; then
-    [ -f "$predecessors" ] && [ ! -L "$predecessors" ] || {
-      echo "Factory resume predecessor set is not a regular file" >&2
-      return 72
-    }
-    while IFS= read -r digest || [ -n "$digest" ]; do
-      [ -z "$digest" ] && continue
-      [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-        echo "Invalid Factory resume predecessor digest: $digest" >&2
-        return 72
-      }
-      FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS+=(
-        --accepted-previous-checkpoint-digest "$digest"
-      )
-    done < "$predecessors"
-  fi
-
-  # The expected digest, checkpoint, root key, genesis, and configuration list all arrive from
-  # outside the mutable run root.  The runtime freezes those bytes before opening run state.
-  local verification
-  verification="$($cli verify-resume-checkpoint \
-    --runs "$runs" --run-id "$run" \
-    --checkpoint "$checkpoint" --checkpoint-digest "$checkpoint_digest" \
-    --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera" \
-    "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" \
-    "${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]+"${FACTORY_VERIFIED_RESUME_PREDECESSOR_ARGS[@]}"}" \
-  )" || return $?
-  local config_digest_rows
-  config_digest_rows="$(printf '%s' "$verification" | python3 -c '
-import json, re, sys
-value = json.load(sys.stdin)
-digests = value.get("configuration_digests")
-if not isinstance(digests, dict):
-    raise SystemExit("resume verification omitted configuration digests")
-identifier = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-digest = re.compile(r"^sha256:[0-9a-f]{64}$")
-for name in sorted(digests):
-    address = digests[name]
-    if not isinstance(name, str) or not identifier.fullmatch(name):
-        raise SystemExit("resume verification returned an invalid configuration name")
-    if not isinstance(address, str) or not digest.fullmatch(address):
-        raise SystemExit("resume verification returned an invalid configuration digest")
-    print(f"{name}={address}")
-')" || return $?
-  while IFS= read -r entry || [ -n "$entry" ]; do
-    [ -n "$entry" ] || continue
-    FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS+=(--config-digest "$entry")
-  done <<< "$config_digest_rows"
-  [ "${#FACTORY_VERIFIED_RESUME_CONFIG_DIGEST_ARGS[@]}" -eq \
-    "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" ] || {
-    echo "Factory resume verification configuration membership differs from its source vector" >&2
-    return 72
-  }
-  FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST="$checkpoint_digest"
-  export FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST
-}
-
-factory_verify_target_state() {
-  local run="${1:?run id required}"
-  local runs="${2:?runs root required}"
-  local cli="${FACTORY_CLI:-factory}"
-  $cli verify-target-state --runs "$runs" --run-id "$run" \
-    --genesis "${FACTORY_GENESIS:-}" \
-    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
-    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
-}
-
-factory_verify_execution_request() {
-  local run="${1:?run id required}"
-  local runs="${2:?runs root required}"
-  local task_file="${3:-}"
-  local cli="${FACTORY_CLI:-factory}"
-  local task_args=()
-  if [ -n "$task_file" ]; then
-    task_args=(--task-file "$task_file")
-  fi
-  $cli verify-execution-request --runs "$runs" --run-id "$run" \
-    "${task_args[@]+"${task_args[@]}"}" \
-    --genesis "${FACTORY_GENESIS:-}" \
-    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
-    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
-}
-
-factory_record_resource() {
-  local cli="${FACTORY_CLI:-factory}"
-  $cli record-resource "$@" \
-    --genesis "${FACTORY_GENESIS:-}" \
-    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
-    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
-}
-
-factory_disposition_resource() {
-  local cli="${FACTORY_CLI:-factory}"
-  $cli disposition-resource "$@" \
-    --genesis "${FACTORY_GENESIS:-}" \
-    --root-public-key "${FACTORY_ROOT_PUBLIC_KEY:-}" \
-    --tessera-bin "${FACTORY_TESSERA_BIN:-tessera}"
-}
-
-factory_config_source_path() {
-  local name="${1:?configuration source name required}"
-  local index entry source_name source_path="" matches=0
-  # Resolve only from the exact argv vector already presented to and accepted by
-  # verify-resume-checkpoint. Re-reading the mutable manifest here would create a path-selection
-  # TOCTOU even though the later runtime digest check would eventually refuse the substituted bytes.
-  for ((index = 0; index < ${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}; index += 2)); do
-    [ "${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$index]}" = "--config-source" ] || return 72
-    [ "$((index + 1))" -lt "${#FACTORY_VERIFIED_RESUME_CONFIG_ARGS[@]}" ] || return 72
-    entry="${FACTORY_VERIFIED_RESUME_CONFIG_ARGS[$((index + 1))]}"
-    source_name="${entry%%=*}"
-    if [ "$source_name" = "$name" ]; then
-      source_path="${entry#*=}"
-      matches=$((matches + 1))
-    fi
-  done
-  [ "$matches" -eq 1 ] && [[ "$source_path" = /* ]] || {
-    echo "configuration source '$name' is missing, duplicated, or not absolute" >&2
-    return 72
-  }
-  printf '%s\n' "$source_path"
-}
-
 factory_load_context() {
-  local run="${1:?run id required}"
-  local runs_in="${2:?runs root required}"
-  local cli="${FACTORY_CLI:-factory}"
-  local runs root status
-  local genesis="${FACTORY_GENESIS:-}"
-  local root_key="${FACTORY_ROOT_PUBLIC_KEY:-}"
-  local tessera="${FACTORY_TESSERA_BIN:-tessera}"
-
-  [[ "$run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
-    echo "Invalid Factory run id: $run" >&2
-    return 64
+  local run="${1:?run required}" runs="${2:?runs directory required}"
+  local d values_file
+  d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  values_file="$(mktemp "${TMPDIR:-/tmp}/factory-context.XXXXXX")" || return
+  PYTHONPATH="$d/.." "$FACTORY_PYTHON" "$d/run_record.py" context --run "$run" --runs "$runs" > "$values_file" || {
+    rm -f "$values_file"; return 70;
   }
-  [ -d "$runs_in" ] || { echo "Factory runs root does not exist: $runs_in" >&2; return 64; }
-  runs="$(cd "$runs_in" && pwd -P)"
-  root="$runs/$run"
-  [ -d "$root" ] || { echo "Factory run does not exist: $root" >&2; return 64; }
-  factory_verify_resume_anchor "$run" "$runs" || return $?
-  # The resume gate has already verified these externally supplied anchors.  Pass the exact same
-  # tuple into replay so a PREVIEW-or-later ledger is authenticated rather than becoming
-  # unreadable (or being reopened structurally) at the shell boundary.
-  status="$($cli status --runs "$runs" --run-id "$run" \
-    --genesis "$genesis" --root-public-key "$root_key" --tessera-bin "$tessera")" || return $?
-
-  local context_values
-  context_values="$(
-    printf '%s' "$status" | python3 -c '
-import json, pathlib, sys
-expected_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-doc = json.load(sys.stdin)
-if doc.get("schema_version") != "factory-run/5":
-    raise SystemExit("legacy run schemas cannot dispatch")
-allowed = {
-    "intake", "product-specification-ratified", "architecture-ratified",
-    "operational-maturity-ratified", "building", "validating", "preview",
-    "human-approved", "ci", "promoted", "specification-defect", "blocked",
-}
-state = doc.get("state")
-if state not in allowed:
-    raise SystemExit(f"run is not execution-authorized: {state!r}")
-target = doc.get("target_state")
-if not isinstance(target, dict):
-    raise SystemExit("run projection has no target_state")
-control = pathlib.Path(str(target.get("control_root", ""))).resolve(strict=True)
-if control != expected_root:
-    raise SystemExit(f"target-state control_root mismatch: {control} != {expected_root}")
-fields = (
-    str(doc.get("state", "")), str(doc.get("target_state_digest", "")),
-    str(target.get("source_root", "")), str(target.get("workdir", "")),
-    str(target.get("object_store", "")), str(target.get("resolved_commit", "")),
-    str(target.get("resolved_tree", "")), str(target.get("checkout_id", "")),
-    str(doc.get("target_digest", "")), str(doc.get("source_digest", "")),
-    str(doc.get("generation", "")),
-)
-if any("\n" in value or "\r" in value for value in fields):
-    raise SystemExit("run context fields may not contain newlines")
-print("\n".join(fields))
-' "$root"
-  )" || return $?
-  local values=()
-  while IFS= read -r value; do
-    values[${#values[@]}]="$value"
-  done <<< "$context_values"
-  [ "${#values[@]}" -eq 11 ] || {
-    echo "Factory projection could not produce a complete execution context" >&2
-    return 70
-  }
-  factory_verify_target_state "$run" "$runs" >/dev/null || return $?
-  # Stage-E request bytes are retained separately from the lifecycle ledger, so re-derive their
-  # digest against the unique intake entry on every harness read. Once ignition metadata exists,
-  # TASK.md must also be the exact signed verbatim request; no consumer may trust the neighboring
-  # file path by convention alone.
-  if [ -e "$root/harness.json" ] || [ -L "$root/harness.json" ]; then
-    [ -f "$root/TASK.md" ] && [ ! -L "$root/TASK.md" ] || {
-      echo "Factory task artifact is missing or a symlink: $root/TASK.md" >&2
-      return 70
-    }
-    factory_verify_execution_request "$run" "$runs" "$root/TASK.md" \
-      >/dev/null || return $?
-  else
-    factory_verify_execution_request "$run" "$runs" >/dev/null || return $?
-  fi
-
-  FACTORY_RUNS_ROOT="$runs"
-  FACTORY_CONTROL_ROOT="$root"
-  FACTORY_HARNESS_ROOT="$(dirname "$runs")"
-  FACTORY_HARNESS_META="$root/harness.json"
-  FACTORY_RUN_STATE="${values[0]}"
-  FACTORY_TARGET_STATE_DIGEST="${values[1]}"
-  FACTORY_SOURCE_ROOT="${values[2]}"
-  FACTORY_WORKDIR="${values[3]}"
-  FACTORY_OBJECT_STORE="${values[4]}"
-  FACTORY_BASE_COMMIT="${values[5]}"
-  FACTORY_BASE_TREE="${values[6]}"
-  FACTORY_CHECKOUT_ID="${values[7]}"
-  FACTORY_TARGET_MANIFEST_DIGEST="${values[8]}"
-  FACTORY_SOURCE_DIGEST="${values[9]}"
-  FACTORY_GENERATION="${values[10]}"
-  export FACTORY_RUNS_ROOT FACTORY_CONTROL_ROOT FACTORY_HARNESS_ROOT
-  export FACTORY_HARNESS_META FACTORY_RUN_STATE
-  export FACTORY_TARGET_STATE_DIGEST FACTORY_SOURCE_ROOT FACTORY_WORKDIR
-  export FACTORY_OBJECT_STORE FACTORY_BASE_COMMIT FACTORY_BASE_TREE
-  export FACTORY_CHECKOUT_ID FACTORY_TARGET_MANIFEST_DIGEST
-  export FACTORY_SOURCE_DIGEST
-  export FACTORY_GENERATION
+  { IFS= read -r -d '' FACTORY_CONTROL_ROOT && IFS= read -r -d '' FACTORY_WORKDIR &&
+    IFS= read -r -d '' FACTORY_BASE_COMMIT && IFS= read -r -d '' FACTORY_BASE_TREE &&
+    IFS= read -r -d '' FACTORY_SOURCE_DIGEST && IFS= read -r -d '' FACTORY_TMUX_SOCKET &&
+    IFS= read -r -d '' FACTORY_LOG; } < "$values_file" || { rm -f "$values_file"; return 70; }
+  rm -f "$values_file"
+  FACTORY_RUNS_ROOT="$(dirname "$FACTORY_CONTROL_ROOT")"
+  FACTORY_RUNS_DIR="$FACTORY_RUNS_ROOT"
+  FACTORY_HARNESS_ROOT="$(dirname "$FACTORY_RUNS_ROOT")"
+  FACTORY_HARNESS_META="$FACTORY_CONTROL_ROOT/harness.json"
+  FACTORY_SOURCE_ROOT="$FACTORY_WORKDIR"
+  # A generation is a budget ledger label, not a phase approval.
+  FACTORY_GENERATION=0
+  export FACTORY_CONTROL_ROOT FACTORY_WORKDIR FACTORY_BASE_COMMIT FACTORY_BASE_TREE
+  export FACTORY_SOURCE_DIGEST FACTORY_TMUX_SOCKET FACTORY_LOG FACTORY_RUNS_ROOT
+  export FACTORY_RUNS_DIR FACTORY_HARNESS_ROOT FACTORY_HARNESS_META FACTORY_SOURCE_ROOT FACTORY_GENERATION
 }
 
-# `env` arguments for an interactive seat (validator, dispatcher, orchestrator): the run's roots plus the
-# externally supplied resume anchors, which a later ground or dispatch from the seat re-verifies.
-# A tmux window inherits the tmux server's environment, which a second run on the same server
-# finds left over from the first, so the per-run context that factory_load_context re-derives is
-# unset rather than inherited. Needs a loaded context.
+# Every shell operation is addressed to this run's private server, including teardown.
+tmux() { command tmux -L "${FACTORY_TMUX_SOCKET:?load the run before using tmux}" "$@"; }
+
 factory_seat_env() {
   local var
-  # env stops parsing options at the first NAME=VALUE, so every -u comes first.
-  for var in FACTORY_RUNS_ROOT FACTORY_CONTROL_ROOT FACTORY_HARNESS_META FACTORY_RUN_STATE \
-    FACTORY_TARGET_STATE_DIGEST FACTORY_SOURCE_ROOT FACTORY_WORKDIR FACTORY_OBJECT_STORE \
-    FACTORY_BASE_COMMIT FACTORY_BASE_TREE FACTORY_CHECKOUT_ID FACTORY_TARGET_MANIFEST_DIGEST \
-    FACTORY_SOURCE_DIGEST FACTORY_GENERATION FACTORY_VERIFIED_RESUME_CHECKPOINT_DIGEST; do
-    printf -- '-u %s ' "$var"
-  done
-  for var in FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_RESUME_CHECKPOINT \
-    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST; do
-    [ -n "${!var:-}" ] || printf -- '-u %s ' "$var"
-  done
-  printf 'FACTORY_RUNS_DIR=%q FACTORY_HARNESS_ROOT=%q HARNESS_RUN_ROOT=%q' \
-    "$FACTORY_RUNS_ROOT" "$FACTORY_HARNESS_ROOT" "$FACTORY_CONTROL_ROOT"
-  # Claude Code's prompt suggestions draw a predicted next message ("approved, go ahead") in
-  # the seat's input line. The dispatcher's pane captures cannot tell it from typed text, and
-  # the Orchestrator once classified one as operator input, so seats run with them off.
-  printf ' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false'
-  # The trust anchors and tools a ground or dispatch from the seat needs, named explicitly so a
-  # seat started under `env -i` (the Orchestrator) carries the same authority as the others.
-  # FACTORY_KEYS_DIR is left out: the Orchestrator signs nothing, and ground needs only the
-  # genesis and root key named here.
-  for var in FACTORY_RESUME_ACCEPTED_PREDECESSORS FACTORY_RESUME_CHECKPOINT \
-    FACTORY_RESUME_CHECKPOINT_DIGEST FACTORY_RESUME_CONFIG_MANIFEST FACTORY_GENESIS \
-    FACTORY_ROOT_PUBLIC_KEY FACTORY_TESSERA_BIN FACTORY_CLI FACTORY_PYTHON FACTORY_HOME; do
+  for var in FACTORY_RUNS_DIR FACTORY_HARNESS_ROOT FACTORY_CONTROL_ROOT FACTORY_TMUX_SOCKET \
+    FACTORY_LOG FACTORY_PYTHON FACTORY_HOME; do
     [ -z "${!var:-}" ] || printf ' %s=%q' "$var" "${!var}"
   done
-  # directive.py reads DIRECTIVE_LEDGER and otherwise falls back to a cwd-relative path, which a
-  # seat's working tree never holds. Pass the checkpoint-verified ledger source, never an ambient
-  # value, so a seat grounds against the same directive bytes the run was admitted with.
-  local ledger
-  if ledger="$(factory_config_source_path factory-directive-ledger 2>/dev/null)"; then
-    printf ' DIRECTIVE_LEDGER=%q' "$ledger"
-  fi
+  printf ' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false'
 }

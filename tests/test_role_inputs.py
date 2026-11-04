@@ -1,0 +1,111 @@
+"""Input independence is about reachable bytes, not two different directory names."""
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from harness import role_inputs, run_record
+
+
+@pytest.fixture
+def inputs(tmp_path):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    contents = {"src/app.py": "IMPLEMENTATION_SECRET", "tests/test_app.py": "ORACLE_SECRET",
+                "api/spec.txt": "PUBLIC_BEHAVIOR", ".kin/knowledge.jsonl": "PRIVATE_MEMORY"}
+    for name, value in contents.items():
+        path = repo / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(value)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "source"], check=True)
+    runs = tmp_path / "runs"
+    root = run_record.create(runs, "task", repo, b"Implement public behavior")
+    return repo, runs, root
+
+
+def test_filtered_files_and_history_preserve_dirty_source(tmp_path, inputs):
+    source, runs, _ = inputs
+    (source / "src/app.py").write_text("user's unrelated dirty work")
+    coder, tester = tmp_path / "coder", tmp_path / "tester"
+    role_inputs.prepare(runs, "task", "coder", coder, [], ["tests"])
+    role_inputs.prepare(runs, "task", "tester", tester, ["api"], [])
+    assert (coder / "src/app.py").read_text() == "IMPLEMENTATION_SECRET"
+    assert not (coder / "tests").exists()
+    assert not (tester / "src").exists()
+    assert (tester / "api/spec.txt").read_text() == "PUBLIC_BEHAVIOR"
+    for repo, hidden in ((coder, "ORACLE_SECRET"), (tester, "IMPLEMENTATION_SECRET")):
+        assert not (repo / ".kin").exists()
+        history = subprocess.run(["git", "-C", str(repo), "log", "--all", "-p"],
+                                 capture_output=True, text=True, check=True).stdout
+        assert hidden not in history
+        assert not (repo / ".git/objects/info/alternates").exists()
+    assert (source / "src/app.py").read_text() == "user's unrelated dirty work"
+    role_inputs.verify(runs, "task", "tester", tester)
+    (tester / "leaked.py").write_text("implementation")
+    with pytest.raises(ValueError, match="unrecorded changes"):
+        role_inputs.verify(runs, "task", "tester", tester)
+
+
+def test_empty_tester_tree_needs_only_behavioral_brief(tmp_path, inputs):
+    _, runs, _ = inputs
+    dest = tmp_path / "tester"
+    result = role_inputs.prepare(runs, "task", "tester", dest, [], [])
+    assert result["files"] == []
+    role_inputs.verify(runs, "task", "tester", dest)
+
+
+def test_git_ignored_content_cannot_hide_contaminated_inputs(tmp_path, inputs):
+    _, runs, _ = inputs
+    dest = tmp_path / "tester"
+    role_inputs.prepare(runs, "task", "tester", dest, [], [])
+    (dest / ".git/info/exclude").write_text("private-source\n")
+    (dest / "private-source").write_text("implementation")
+    with pytest.raises(ValueError, match="unrecorded changes"):
+        role_inputs.verify(runs, "task", "tester", dest)
+
+
+@pytest.mark.parametrize("path", ["../src", "/src", ".", "api/../src", ".git", "api//spec.txt"])
+def test_invalid_selection_does_not_create_author_tree(tmp_path, inputs, path):
+    _, runs, _ = inputs
+    dest = tmp_path / "tester"
+    with pytest.raises(ValueError):
+        role_inputs.prepare(runs, "task", "tester", dest, [path], [])
+    assert not dest.exists()
+
+
+def test_public_symlink_cannot_expose_withheld_source(tmp_path, inputs):
+    source, runs, root = inputs
+    (source / "api/leak").symlink_to("../src/app.py")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "link"], check=True)
+    # A new task pins the new commit; retained task inputs are not edited.
+    run_record.create(runs, "linked", source, b"Implement behavior")
+    with pytest.raises(ValueError, match="withheld input"):
+        role_inputs.prepare(runs, "linked", "tester", tmp_path / "tester", ["api"], [])
+
+
+def test_unknown_or_missing_selection_is_not_silently_empty(tmp_path, inputs):
+    _, runs, _ = inputs
+    with pytest.raises(ValueError, match="absent"):
+        role_inputs.prepare(runs, "task", "tester", tmp_path / "tester", ["apis"], [])
+
+
+def test_launcher_refuses_full_clone_before_contacting_agent(tmp_path, inputs):
+    source, runs, _ = inputs
+    brief = tmp_path / "brief"
+    brief.write_text("Implement behavior")
+    tool = Path(__file__).resolve().parents[1] / "harness/tmux_lane.sh"
+    env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "LANG") if key in os.environ}
+    env["FACTORY_PYTHON"] = sys.executable
+    result = subprocess.run(["bash", str(tool), "task", "tester", "launch", "--runs", str(runs),
+                             "--repo", str(source), "--prompt", str(brief)], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "prepared role projection" in result.stderr

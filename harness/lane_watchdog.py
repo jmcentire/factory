@@ -268,9 +268,9 @@ def _append_row(path: pathlib.Path, row: Mapping[str, object]) -> None:
 
 
 def _tmux(*arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["tmux", *arguments], capture_output=True, text=True, check=False, timeout=15
-    )
+    socket = os.environ.get("FACTORY_TMUX_SOCKET")
+    command = ["tmux", *(["-L", socket] if socket else []), *arguments]
+    return subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
 
 
 def process_snapshot() -> dict[int, dict[str, Any]] | None:

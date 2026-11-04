@@ -1,19 +1,14 @@
 #!/usr/bin/env bash
-# Append a strategic checkpoint, notify the resident Orchestrator, and wait for
-# a schema-checked assessment that covers it. The checkpoint transport makes no
-# semantic judgment; the Orchestrator alone returns block or no-op.
+# A checkpoint is a durable notification, never permission to continue work.
 set -euo pipefail
-# shellcheck source=harness/factory_python.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
-
-RUN="${1:?usage: orchestrator_checkpoint.sh <run> <kind> <detail> [--runs <path>]}"
-KIND="${2:?kind}"
-DETAIL="${3:?detail}"
-shift 3
-RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
+D="$(cd "$(dirname "$0")" && pwd -P)"
+source "$D/factory_python.sh"
+[ "$#" -ge 3 ] || { echo "usage: orchestrator_checkpoint.sh RUN KIND DETAIL [--runs PATH]" >&2; exit 64; }
+RUN="$1"; KIND="$2"; DETAIL="$3"; shift 3
+RUNS="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --runs) RUNS_ARG="$2"; shift 2 ;;
+    --runs) [ "$#" -ge 2 ] || exit 64; RUNS="$2"; shift 2 ;;
     *) echo "orchestrator-checkpoint: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -21,90 +16,17 @@ case "$KIND" in
   pre_dispatch|pre_verdict|phase_transition|user_imperative|pre_commit|pre_first_write) ;;
   *) echo "orchestrator-checkpoint: unsupported kind: $KIND" >&2; exit 64 ;;
 esac
-
-D="$(cd "$(dirname "$0")" && pwd -P)"
-# shellcheck source=harness/run_context.sh
-source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG"
-ROOT="$FACTORY_CONTROL_ROOT"
-
-MODE=$(python3 - "$FACTORY_HARNESS_META" <<'PY'
-import json, sys
+python3 - "$D" "$RUNS" "$RUN" "$KIND" "$DETAIL" <<'PYCODE'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from run_record import load, message
 try:
-    doc = json.load(open(sys.argv[1], encoding="utf-8"))
-except (OSError, ValueError):
-    print("invalid")
-else:
-    print(doc.get("orchestrator_mode", "missing"))
-PY
-)
-if [ "$MODE" != "resident-monitoring" ]; then
-  [ "$MODE" != "invalid" ] || {
-    echo "orchestrator-checkpoint: harness metadata is unreadable" >&2
-    exit 70
-  }
-  # Every run has a resident Orchestrator; a checkpoint without one is refused,
-  # never passed (founder ruling 2026-09-21).
-  echo "orchestrator-checkpoint: run has no resident Orchestrator (mode=$MODE); refused" >&2
-  exit 70
-fi
-
-# The Orchestrator does not let work cross a boundary on an assumed identifier.
-# Before dispatch and before a verdict, the run's boundary register must verify
-# against the base checkout: every literal present in its records, every party
-# agreeing, every isolation boundary free of the subject. A failure refuses the
-# checkpoint outright; the Validator re-derives the register, it is not waved on.
-case "$KIND" in
-  pre_dispatch|pre_verdict)
-    if ! BOUNDARY=$(python3 "$D/boundary_register.py" verify --root "$ROOT" \
-      ${FACTORY_WORKDIR:+--workdir "$FACTORY_WORKDIR"} 2>&1); then
-      printf '%s\n' "$BOUNDARY" | head -40 >&2
-      echo "orchestrator-checkpoint: $KIND refused: the boundary register does not verify" >&2
-      exit 71
-    fi
-    ;;
-esac
-
-CURSOR=$(python3 "$D/orchestrator_channel.py" append --root "$ROOT" \
-  --kind "$KIND" --source validator --detail "$DETAIL") || exit $?
-MESSAGE="# FACTORY_CHECKPOINT cursor=$CURSOR kind=$KIND. Consume EVERY unassessed record through this cursor from orchestrator/activity.jsonl. Follow orchestrator/ROLE.md's complete monitoring loop, update orchestrator/OUTSTANDING-WORK.md, write assessment/3 (assessment/5 with a progress_review when harness.json sets progress_review: a checkpoint is a slice boundary and owes the code-and-progress review), and submit it with orchestrator/bin/orchestrator_channel.py. Decide block or no-op; never grant or close."
-if ! INJECT_FROM=validator HARNESS_RUN_ROOT="$ROOT" INJECT_SUBMIT_DELAY=0.1 \
-  "$D/inject.sh" "$RUN" orchestrator "$MESSAGE" >/dev/null; then
-  echo "orchestrator-checkpoint: resident Orchestrator notification failed" >&2
-  exit 70
-fi
-
-TIMEOUT="${FACTORY_ORCHESTRATOR_CHECKPOINT_TIMEOUT:-300}"
-[[ "$TIMEOUT" =~ ^[0-9]+$ ]] && [ "$TIMEOUT" -gt 0 ] || {
-  echo "orchestrator-checkpoint: timeout must be a positive integer" >&2
-  exit 64
-}
-DEADLINE=$((SECONDS + TIMEOUT))
-while [ "$SECONDS" -lt "$DEADLINE" ]; do
-  # Founder ruling 2026-09-22: a checkpoint passes once the Orchestrator has assessed
-  # the checkpoint itself (and everything before it). Activity that arrives after it,
-  # such as lanes still wrapping up or reporting done, does not hold the checkpoint
-  # hostage. Lane "done" claims are provisional; the verdict re-evaluates success
-  # criteria at final delivery.
-  if python3 "$D/orchestrator_channel.py" require-through --root "$ROOT" \
-    --cursor "$CURSOR" >/dev/null 2>&1; then
-      # Deliver the Orchestrator's plan and reminders into the Validator's own tool
-      # output. This is how the state-keeper reaches the Validator without typing
-      # into its pane (Gate F); stderr keeps the caller's stdout contract intact.
-      LEDGER="$ROOT/orchestrator/OUTSTANDING-WORK.md"
-      if [ -f "$LEDGER" ] && [ ! -L "$LEDGER" ]; then
-        {
-          echo "=== ORCHESTRATOR — outstanding work and reminders (orchestrator/OUTSTANDING-WORK.md) ==="
-          head -c 8192 "$LEDGER"
-          echo
-          echo "=== end of Orchestrator reminders ==="
-        } >&2
-      else
-        echo "orchestrator-checkpoint: the Orchestrator has not written OUTSTANDING-WORK.md" >&2
-      fi
-      exit 0
-  fi
-  sleep 1
-done
-echo "orchestrator-checkpoint: no current assessment through cursor $CURSOR within ${TIMEOUT}s" >&2
-exit 70
+    root, doc = load(Path(sys.argv[2]), sys.argv[3])
+    message(root, "orchestrator", "validator",
+            f"Checkpoint: {sys.argv[4]}\n{sys.argv[5]}", log=doc["log"])
+except (OSError, ValueError) as error:
+    print(f"orchestrator-checkpoint: {error}", file=sys.stderr)
+    raise SystemExit(70)
+print("Checkpoint queued in the Orchestrator inbox; not an acknowledgment or approval.")
+PYCODE

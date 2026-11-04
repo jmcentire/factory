@@ -68,16 +68,6 @@ while [ "$#" -gt 0 ]; do
     *) echo "lane-message: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-if [ "$KIND" = "idle" ]; then
-  # The signal a supervisor waits on before delivering: idle means a delivery now resumes the lane.
-  case "$(lane_pane_state)" in
-    missing) echo "lane-message: $RUN:$SLOT idle (window gone)"; exit 0 ;;
-    1) echo "lane-message: $RUN:$SLOT idle (pane dead)"; exit 0 ;;
-    0) echo "lane-message: $RUN:$SLOT busy (a turn is running)"; exit 75 ;;
-    *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
-  esac
-fi
-
 D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
@@ -92,16 +82,67 @@ LANE_LOG="$TMUX_ROOT/$SLOT-lane.log"
 LANE_EXITS="$TMUX_ROOT/$SLOT-exits.jsonl"
 # A registry lane's launch shape (harness/agents.py turn-record): how to resume its session.
 TURN_RECORD="$TMUX_ROOT/$SLOT-turn.json"
+"$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" --role "$LANE" \
+  --lane "$WINDOW" --action message --slot "$SLOT" || exit 70
+PERSISTENT=$("$FACTORY_PYTHON" - "$LAUNCHES" "$TURN_RECORD" <<'PY'
+import json, pathlib, sys
+path, turn = map(pathlib.Path, sys.argv[1:])
+if path.is_symlink():
+    raise SystemExit("lane-message: symlinked launch record")
+rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+active = [row for row in rows if row.get("status") == "active"]
+if len(active) != 1 or type(active[0].get("persistent", False)) is not bool:
+    raise SystemExit("lane-message: retained launch transport is missing or malformed")
+persistent = active[0].get("persistent", False)
+if persistent:
+    if turn.is_symlink() or not turn.is_file():
+        raise SystemExit("lane-message: missing persistent turn record")
+    record = json.loads(turn.read_text())
+    if (record.get("schema_version") != "factory-lane-turn/1"
+            or record.get("agent") != active[0].get("agent")
+            or record.get("agent") not in {"claude", "agy"}
+            or record.get("persistent") is not True):
+        raise SystemExit("lane-message: launch and turn transports disagree")
+elif turn.is_file() and not turn.is_symlink():
+    if json.loads(turn.read_text()).get("persistent", False) is not False:
+        raise SystemExit("lane-message: launch and turn transports disagree")
+print("1" if persistent else "0")
+PY
+) || exit 70
 
-# Answer exceptions to an Orchestrator report do not release an actual process-control hold.
-"$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || {
-  echo "lane-message: executing Validator identity/control is unavailable; refusing continuation" >&2
-  exit 70
-}
+if [ "$KIND" = "idle" ]; then
+  if [ "$PERSISTENT" = 1 ]; then
+    "$FACTORY_PYTHON" - "$D" "$ROOT" "$SLOT" <<'PY' || exit $?
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from persistent_lane import unheld
+try:
+    unheld(pathlib.Path(sys.argv[2]), sys.argv[3])
+except ValueError as error:
+    print(f"lane-message: {error}", file=sys.stderr)
+    raise SystemExit(75)
+PY
+    NATIVE_STATE=$("$FACTORY_PYTHON" "$D/persistent_lane.py" status --root "$ROOT" --slot "$SLOT") || exit $?
+    "$FACTORY_PYTHON" - "$NATIVE_STATE" "$RUN:$SLOT" <<'PY'
+import json, sys
+state = json.loads(sys.argv[1])
+idle = state.get("phase") == "idle" and state.get("process_state") == "running"
+print(f"lane-message: {sys.argv[2]} {'idle' if idle else 'busy or held'} (native persistent lane)")
+raise SystemExit(0 if idle else 75)
+PY
+    exit $?
+  fi
+  case "$(lane_pane_state)" in
+    missing) echo "lane-message: $RUN:$SLOT idle (window gone)"; exit 0 ;;
+    1) echo "lane-message: $RUN:$SLOT idle (pane dead)"; exit 0 ;;
+    0) echo "lane-message: $RUN:$SLOT busy (a turn is running)"; exit 75 ;;
+    *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
+  esac
+fi
 
 # A pending stop is durable across deliveries. Refuse before any queue/resume/respawn effect;
 # the watcher starting after a model has resumed is too late to enforce this hold.
-"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" <<'PY' || exit 70
+"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" "$PERSISTENT" "$KIND" <<'PY' || exit 70
 import json, os, pathlib, stat, sys
 path = pathlib.Path(sys.argv[1])
 try:
@@ -123,6 +164,12 @@ except (OSError, ValueError) as error:
 if state.get("status") == "stopping":
     raise SystemExit("lane-message: requested stop is unverified; refusing delivery")
 if state.get("status") in {"paused", "wrapping"}:
+    if sys.argv[5] == "1":
+        if state.get("status") == "paused" and sys.argv[6] == "review":
+            # No effect here: content guards and persistent_review.prepare below must
+            # validate this exact pause, verdict and stopped tree before any release.
+            raise SystemExit(0)
+        raise SystemExit("lane-message: persistent lane remains held; explicit supervisor release required")
     sys.path.insert(0, sys.argv[2])
     from lane_watchdog import LaneWatch
     watch = LaneWatch(root=pathlib.Path(sys.argv[3]), slot=sys.argv[4])
@@ -156,6 +203,10 @@ values = (active[0].get("repository"), active[0].get("agent"), active[0].get("mo
           json.dumps(active[0].get("lane_env") or dict(cache_env=dict(), runtime_dirs=[])),
           "off" if active[0].get("sandbox") == "off" else "on",
           json.dumps(active[0].get("kernel_boundary")))
+wall_cap = (active[0].get("caps") or {}).get("wall_cap_s")
+if wall_cap is not None and (type(wall_cap) is not int or wall_cap <= 0):
+    raise SystemExit("lane-message: retained wall cap is malformed")
+values += (str(wall_cap) if wall_cap is not None else "",)
 # The Codex config overrides that selected the lane model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -187,6 +238,9 @@ IFS= read -r -d '' LANE_SANDBOX <&3 || {
 }
 IFS= read -r -d '' BOUNDARY_RECORD <&3 || {
   echo "lane-message: retained boundary is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' WALL_CAP_S <&3 || {
+  echo "lane-message: retained wall cap is missing or malformed" >&2; exit 70;
 }
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
@@ -427,6 +481,29 @@ else:
         stream.write(raw); stream.flush(); os.fsync(stream.fileno())
 PY
 
+if [ "$PERSISTENT" = 1 ]; then
+  # The retained native process owns stdin. Never queue terminal text or replace its process;
+  # the driver verifies process/session identity and returns success only for a native ack.
+  DEFER_ARGS=()
+  DELIVERY_RC=75
+  for ATTEMPT in 1 2 3 4 5; do
+    if "$FACTORY_PYTHON" "$D/persistent_lane.py" deliver --root "$ROOT" --slot "$SLOT" \
+      --message-id "$MESSAGE_ID" --thread "$THREAD_ID" ${DEFER_ARGS[@]+"${DEFER_ARGS[@]}"}; then
+      DELIVERY_RC=0
+      break
+    else
+      DELIVERY_RC=$?
+    fi
+    [ "$DELIVERY_RC" = 75 ] || exit "$DELIVERY_RC"
+    [ "$ATTEMPT" = 5 ] || sleep 0.2
+  done
+  [ "$DELIVERY_RC" = 0 ] || exit "$DELIVERY_RC"
+  "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
+    --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport persistent >/dev/null
+  echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $AGENT persistent"
+  exit 0
+fi
+
 SAFE_HOME="${HOME:?lane-message: HOME is required for Codex authentication}"
 SAFE_USER="${USER:-$(id -un)}"
 SAFE_PATH="${PATH:?lane-message: PATH is required}"
@@ -437,15 +514,12 @@ SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 # Resume on the model the lane launched with: the Codex config overrides that selected it when
 # the launch carried over the operator's Codex config, else the model the operator named. The
-# model is spliced into an argument list, so it must be one word of the charset tmux_lane.sh admits.
+# Model choices stay literal shell arguments, including display names with spaces.
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
-  LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
-elif [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
-  case "$MODEL" in
-    *[!A-Za-z0-9._:/-]*) echo "lane-message: retained model is malformed" >&2; exit 70 ;;
-  esac
-  LOCAL_ARGS="-m $MODEL"
+  printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
+elif [ "$AGENT" = codex ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+  printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
 # A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
 if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) true ;; *) false ;; esac; then
@@ -575,8 +649,13 @@ PY
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0
   [ ! -f "$LANE_LOG" ] || LOG_OFFSET=$(wc -c < "$LANE_LOG" | tr -d ' ')
+  WATCH_ENV_PREFIX="$ENV_PREFIX"
+  if [ -n "${TMUX:-}" ]; then
+    printf -v WATCH_TMUX ' TMUX=%q' "$TMUX"
+    WATCH_ENV_PREFIX+="$WATCH_TMUX"
+  fi
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q --new-life --log-offset %q' \
-    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT" "$LOG_OFFSET"
+    "$WATCH_ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT" "$LOG_OFFSET"
   # A resumed turn can change the tree after a review freeze, so the journal records the reopen
   # before the turn starts: discovery_check.latest_freeze then refuses until the lane is frozen
   # again, instead of passing the mid-run review snapshot as the candidate. Recorded first, so a
@@ -612,14 +691,17 @@ PY
   else
     tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
   fi
-  # Every running lane has a watcher: replace the finished one with a fresh life of it.
-  WATCH_WID=$(window_id "watch-$WINDOW")
-  [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
-  tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
-    WID=$(window_id "$WINDOW"); [ -z "$WID" ] || tmux send-keys -t "$WID" C-c >/dev/null 2>&1 || true
-    echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
-    exit 70
-  }
+  # Match first launch: only an explicitly capped lane needs the spend/qualification watcher.
+  # Ordinary plan-funded work must not gain automatic pauses merely by receiving a message.
+  if [ -n "$WALL_CAP_S" ]; then
+    WATCH_WID=$(window_id "watch-$WINDOW")
+    [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
+    tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
+      WID=$(window_id "$WINDOW"); [ -z "$WID" ] || tmux send-keys -t "$WID" C-c >/dev/null 2>&1 || true
+      echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
+      exit 70
+    }
+  fi
   TRANSPORT="resume"
 else
   echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2
@@ -629,10 +711,6 @@ fi
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
-if [ "$SENDER" = validator ]; then
-  "$FACTORY_PYTHON" "$D/orchestrator_channel.py" append --root "$ROOT" \
-    --kind phase_transition --source "$SENDER" \
-    --detail "$SENDER delivered $MESSAGE_KIND $MESSAGE_ID to $SLOT via $TRANSPORT" >/dev/null
-fi
+
 case "$AGENT" in codex|codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"

@@ -1,50 +1,35 @@
 #!/usr/bin/env bash
-# Launch an operator-owned author lane in tmux, qualify a model for one, or freeze a lane's
-# plain tree. The agent owns its standalone .git directory. This mode is
-# coordination/unqualified: promotion still requires the qualified Factory path.
-#
-# This script is the only lane launcher (prompts/validate.md Phase B item 7). Every launch:
-#   - runs the agent and model the operator names (--agent, --model); the factory names none, so
-#     with no --model a codex lane runs the model the operator's own Codex config selects and any
-#     other agent runs its CLI's own default, and the launch record says which it was;
-#   - preflights the agent's sign-in non-interactively and refuses, with the exact fix, an agent
-#     that would sit on a login screen (harness/lane_agent.py);
-#   - refuses a metered agent without a per-round spend cap and a declared rate, reserves the
-#     cap in the run's objective-budget ledger (harness/lane_budget.py), and refuses a metered
-#     agent/model that has not passed a qualification probe;
-#   - puts the founder's testing standard into every Tester prompt (harness/testing_standard.py);
-#   - tells the lane its wall-clock cap and how to read what is left of it, and, for a resumable
-#     Codex lane, has the watcher send a wrap-up notice --wrap-up-minutes before the cap and pause a
-#     Coder for the Validator's progress review every --review-every-minutes of work;
-#   - starts a watcher window beside the lane (harness/lane_watchdog.py lane) that stops a stalled or
-#     capped lane and wakes the operator when the lane finishes. A lane with no watcher is not
-#     launched.
+# Launch a resident author with the assigned model and independent input tree.
+# Authentication, native session identity, input separation and explicit spend caps are
+# real boundaries. Model approval, signatures and review-backlog holds are not prerequisites.
 set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze> [options]
+USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-probe> [options]
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
+                  [--persistent (Claude or Antigravity native stream input)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
                   [--wall-cap-minutes <min, metered lanes and qualify only>]
                   [--round <tag> --replace-session <why the session cannot resume>]
                   [--read-allowance-minutes <min, default 15>] [--stall-window-minutes <min, default 20>]
                   [--wrap-up-minutes <min, default 5; 0 = none>]
-                  [--review-every-minutes <min, Coder launches default 18; 0 = none>]
+                  [--review-every-minutes <min, default off; 0 = none>]
                   [--cache-env <NAME=read-only dir>]... [--runtime-dir <read-only dir>]...
                   [--boundary-contract <host JSON> --boundary-digest <sha256>]
                   [--signet-contract <host JSON> --signet-digest <sha256>]
   qualify only    [--first-commit-minutes <min, default 15>] [--min-commits <n, default 1>]
   freeze          [--instance <name>] [--round <tag>]
+  retire-probe    --round <probe tag> --reason <why evidence cannot be recovered>
   all             [--runs <runs dir>]'
 RUN="${1:?$USAGE}"
 ROLE="${2:?$USAGE}"
 ACTION="${3:?$USAGE}"
 shift 3
 case "$ROLE" in coder|tester) ;; *) echo "role must be coder|tester" >&2; exit 64 ;; esac
-case "$ACTION" in launch|qualify|freeze) ;; *) echo "action must be launch|qualify|freeze" >&2; exit 64 ;; esac
+case "$ACTION" in launch|qualify|freeze|retire-probe) ;; *) echo "invalid lane action" >&2; exit 64 ;; esac
 
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
 REPOSITORY=""
@@ -52,9 +37,12 @@ PROMPT_SOURCE=""
 AGENT_ARG=""
 MODEL_ARG=""
 EFFORT=""
+PERSISTENT=0
+PERSISTENT_ARGS=()
 INSTANCE=""
 ROUND=""
 REPLACE_REASON=""
+RETIRE_REASON=""
 METERED_ARG=0
 SPEND_CAP=""
 RATE=""
@@ -80,9 +68,11 @@ while [ "$#" -gt 0 ]; do
     --agent) AGENT_ARG="$2"; shift 2 ;;
     --model) MODEL_ARG="$2"; shift 2 ;;
     --effort) EFFORT="$2"; shift 2 ;;
+    --persistent) PERSISTENT=1; PERSISTENT_ARGS=(--persistent); shift ;;
     --instance) INSTANCE="$2"; shift 2 ;;
     --round) ROUND="$2"; shift 2 ;;
     --replace-session) REPLACE_REASON="$2"; shift 2 ;;
+    --reason) RETIRE_REASON="$2"; shift 2 ;;
     --metered) METERED_ARG=1; shift ;;
     --spend-cap-usd) SPEND_CAP="$2"; shift 2 ;;
     --usd-per-hour) RATE="$2"; shift 2 ;;
@@ -126,10 +116,23 @@ for FAMILY in BOUNDARY SIGNET AUTHOR_CUSTODY; do
     export "FACTORY_REQUIRE_${FAMILY}=1"
   fi
 done
-AGENT="${AGENT_ARG:-codex}"
+CHOICE_ARGS=()
+[ -z "$AGENT_ARG" ] || CHOICE_ARGS+=(--agent "$AGENT_ARG")
+[ -z "$MODEL_ARG" ] || CHOICE_ARGS+=(--model "$MODEL_ARG")
+[ -z "$EFFORT" ] || CHOICE_ARGS+=(--effort "$EFFORT")
+exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "$ROLE" ${CHOICE_ARGS[@]+"${CHOICE_ARGS[@]}"})
+{ IFS= read -r -d '' AGENT <&4 && IFS= read -r -d '' MODEL_ARG <&4 &&
+  IFS= read -r -d '' EFFORT <&4; } || exit 64
+exec 4<&-
+case "$ACTION:$AGENT" in launch:claude|launch:agy) PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;; esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
   *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent" >&2; exit 64 ;;
 esac
+if [ "$PERSISTENT" = 1 ]; then
+  case "$ACTION:$AGENT" in launch:claude|launch:agy) ;;
+    *) echo "tmux-lane: --persistent requires launch with --agent claude or agy" >&2; exit 64 ;;
+  esac
+fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
   *) echo "tmux-lane: --effort must be minimal|low|medium|high|xhigh|max" >&2; exit 64 ;;
 esac
@@ -179,15 +182,10 @@ refuse() {
   exit "$code"
 }
 
-if [ "$ACTION" != freeze ]; then
-  "$FACTORY_PYTHON" "$D/seat_supervisor.py" check-validator --root "$ROOT" --session "$RUN" || \
-    refuse 70 "executing Validator identity/control is unavailable; refusing author admission"
-fi
-
 # The operator names the lane's agent (--agent, default codex) and, optionally, its model
 # (--model). The factory names no model. MODEL_SOURCE records where the model came from:
 # "operator" when named, "codex-config" when a codex lane carries over the model the operator's
-# own Codex config selects (resolved below, once CODEX_HOME is known), and "agent" when the
+# own Codex config selects, "agy-config" for Agy's selected model, and "agent" when the
 # agent's CLI chooses for itself. codex-ollama alone needs a named model: Ollama must already
 # have it, and Codex's --oss mode would otherwise pick and pull one.
 MODEL="$MODEL_ARG"
@@ -205,13 +203,11 @@ if [ "$ACTION" != "freeze" ] && [ "$AGENT" = "codex-ollama" ]; then
   MODEL_SOURCE=operator
 fi
 if [ "$ACTION" != "freeze" ]; then
-  case "$MODEL" in
-    *[!A-Za-z0-9._:/-]*) echo "tmux-lane: model is not one word of [A-Za-z0-9._:/-]: $MODEL" >&2; exit 64 ;;
-  esac
   exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" describe --agent "$AGENT")
   { IFS= read -r -d '' AGENT_EXECUTABLE <&4 && IFS= read -r -d '' PROMPT_VIA <&4 &&
     IFS= read -r -d '' AGENT_TTY <&4 && IFS= read -r -d '' AGENT_METERED <&4; } || exit 70
   exec 4<&-
+  [ "$PERSISTENT" != 1 ] || PROMPT_VIA=stdin
   METERED=false
   if [ "$AGENT_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
     METERED=true
@@ -271,6 +267,10 @@ if [ "$ACTION" != "freeze" ]; then
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
     "send new work into its session: harness/tmux_lane_message.sh $RUN validator $LANE review|answer ..."
 
+  "$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" --role "$ROLE" \
+    --lane "$LANE" --action "$ACTION" --repository "$REPOSITORY" || \
+    refuse 70 "qualification/productive admission evidence is not ready"
+
   # Founder, 2026-10-20: the factory is long-lived agents with special roles. A run has one Coder
   # and one Tester, each one session for the whole run; new work arrives as a message into that
   # session. No second instance, no fresh round over a session that can still resume, and no
@@ -278,10 +278,39 @@ if [ "$ACTION" != "freeze" ]; then
   if [ "$ACTION" = launch ]; then
     [ -z "$INSTANCE" ] || refuse 64 "a run has one $ROLE; --instance $INSTANCE would make a second" \
       "send the work into the $ROLE's session with harness/tmux_lane_message.sh; a model trial runs one factory per model"
-    PRIOR_SESSION=""
-    for THREAD in "$TMUX_ROOT/$ROLE-thread-id" "$TMUX_ROOT/$ROLE".*-thread-id; do
-      [ -s "$THREAD" ] && [ ! -L "$THREAD" ] && PRIOR_SESSION="$THREAD"
-    done
+    PRIOR_SESSION=$("$FACTORY_PYTHON" - "$TMUX_ROOT" "$RUN" "$ROLE" <<'PY'
+import json, pathlib, sys
+
+root, run, role = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+prior = ""
+for thread in sorted(root.glob(f"{role}*-thread-id")):
+    slot = thread.name.removesuffix("-thread-id")
+    if slot != role and not slot.startswith(role + "."):
+        continue
+    if thread.is_symlink():
+        raise SystemExit("tmux-lane: symlinked retained session")
+    if not thread.is_file() or not thread.stat().st_size:
+        continue
+    journal = root / f"{slot}-launch.jsonl"
+    try:
+        if journal.is_symlink():
+            raise ValueError("symlinked launch journal")
+        rows = [json.loads(line) for line in journal.read_text().splitlines() if line.strip()]
+        active = [row for row in rows if row.get("status") == "active"]
+        probe = (slot.startswith(role + ".") and len(active) == 1
+                 and active[0].get("mode") == "qualify"
+                 and active[0].get("run_id") == run and active[0].get("role") == role
+                 and active[0].get("slot") == slot)
+    except (OSError, ValueError, AttributeError):
+        probe = False  # Ambiguous or legacy records never exempt a productive session.
+    if not probe:
+        prior = str(thread)
+print(prior)
+PY
+    ) || refuse 70 "retained session classification is unavailable"
+    # Qualification is a bounded probe, not the productive seat (as in claim_seat).
+    # Keep its journal and provider session intact. The live-window and verified-stop
+    # checks below still prevent launching over a running or unresolved probe.
     if [ -n "$PRIOR_SESSION" ]; then
       [ -n "$REPLACE_REASON" ] || refuse 64 \
         "the $ROLE already has a session ($(basename "$PRIOR_SESSION" -thread-id)); new work goes into it, not a new round" \
@@ -376,7 +405,7 @@ if wrap_s and int(wall_cap) < 3 * wrap_s:
     wrap_s = 0
 review_s = minutes_or_off(
     review, "--review-every-minutes",
-    18 * 60 if resumable and role == "coder" and action == "launch" else 0,
+    0,
 )
 if (wrap_s or review_s) and not resumable:
     raise SystemExit("--wrap-up-minutes and --review-every-minutes need a resumable lane")
@@ -408,6 +437,12 @@ PY
       "give each lane and each parallel instance its own clone (git clone <source> <dir>), never a git worktree: the Codex sandbox blocks writes to the parent repository's git directory"
   REPOSITORY=$(printf '%s' "$REPOSITORY_RECEIPT" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.load(sys.stdin)["root"])')
+  if [ "$ACTION" = launch ]; then
+    PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
+      --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" >/dev/null || \
+      refuse 70 "author inputs are not the prepared role projection" \
+        "use role_inputs.py prepare: Coder gets source minus tests; Tester gets selected public interfaces and specification, never a full clone"
+  fi
   "$FACTORY_PYTHON" - "$ROOT" "$REPOSITORY" <<'PY'
 import os, pathlib, sys
 
@@ -494,19 +529,21 @@ PY
     exec 4<&-
     [ "${#MODEL_CONFIG[@]}" -eq 0 ] || MODEL_SOURCE=codex-config
   fi
+  if [ "$AGENT" = agy ] && [ -z "$MODEL" ]; then
+    exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" agy-model --operator-home "$SAFE_HOME")
+    IFS= read -r -d '' MODEL <&4 || refuse 70 "Agy's configured model could not be resolved" \
+      "restore a valid Agy model selection, or name the selected model with --model"
+    exec 4<&-
+    [ -z "$MODEL" ] || MODEL_SOURCE=agy-config
+  fi
   [ -n "$MODEL_SOURCE" ] || MODEL_SOURCE=agent
 
-  # Different families across the lanes: the Coder and the Tester do not run the same model family
-  # (SOFTWARE-FACTORY.md "Across the lanes"; DOCTRINE-KERNEL E1, I19). Checked here, once the model
-  # the lane will run is fully resolved, and atomically with taking the role's seat in the run's
-  # seat file, so two launches at once see each other. A lane whose family matches the other
-  # seat's, or is unknown, does not start unless the operator records why no other family is
-  # configured (FACTORY_LANE_INDEPENDENCE_GAP). A qualification probe takes no seat.
+  # Record model-family metadata without granting or withholding admission.
   INDEPENDENCE=""
   if [ "$ACTION" = launch ]; then
     INDEPENDENCE=$("$FACTORY_PYTHON" "$D/lane_agent.py" seat claim --root "$TMUX_ROOT" \
       --role "$ROLE" --slot "$SLOT" --agent "$AGENT" --model "$MODEL" \
-      --codex-home "$SAFE_CODEX_HOME" --gap "${FACTORY_LANE_INDEPENDENCE_GAP:-}" --pid $$) || exit 70
+      --codex-home "$SAFE_CODEX_HOME" --pid $$) || exit 70
   fi
 
   # The dependency cache and runtime the lane's own commands use (dogfood #31/#61): set in the
@@ -542,22 +579,7 @@ PY
     refuse 77 "AUTH: $AGENT cannot start non-interactively: $REASON" "$REMEDIATION"
   fi
 
-  # A metered model takes a lane only after it passed a qualification probe for this role.
   QUALIFICATIONS="$FACTORY_RUNS_ROOT/lane-qualifications.jsonl"
-  if [ "$ACTION" = launch ] && [ "$METERED" = true ]; then
-    "$FACTORY_PYTHON" - "$QUALIFICATIONS" "$ROLE" "$AGENT" "$MODEL" <<'PY' || \
-      refuse 77 "UNQUALIFIED: $AGENT:$MODEL has no passing $ROLE qualification probe" \
-        "harness/tmux_lane.sh $RUN $ROLE qualify --repo <a clone> --prompt <a 3-5 item brief> --agent $AGENT${MODEL:+ --model $MODEL} --spend-cap-usd <usd> --usd-per-hour <usd>"
-import json, pathlib, sys
-
-path, role, agent, model = pathlib.Path(sys.argv[1]), *sys.argv[2:]
-rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()] if path.is_file() and not path.is_symlink() else []
-passed = [row for row in rows if (row.get("role"), row.get("agent"), row.get("model"),
-          row.get("verdict")) == (role, agent, model, "pass")]
-raise SystemExit(0 if passed else 1)
-PY
-  fi
 
   # The agent's CLI contract, before anything is written.
   case "$AGENT" in
@@ -594,26 +616,31 @@ PY
       # A registry harness (harness/agents.py): the registry builds its headless turn.
       AGENT_VERSION=$("$AGENT_EXECUTABLE" --version 2>/dev/null | head -1) || \
         refuse 70 "$AGENT CLI is not runnable"
-      CLI_CONTRACT="agent-registry-headless-v1" ;;
+      CLI_CONTRACT="agent-registry-headless-v1"
+      [ "$PERSISTENT" != 1 ] || CLI_CONTRACT="agent-registry-persistent-stream-v1" ;;
   esac
 
-  # Every Tester prompt opens with the founder's testing standard, the Tester doctrine and the
-  # run's testing strategy, as bytes with digests. Without them the Tester does not start.
+  # Keep the testing standard. A concise strategy may be in the brief rather than a fixed file.
   STANDARD_RECEIPT='null'
   STANDARD_BLOCK=""
   if [ "$ROLE" = tester ]; then
     STANDARD_BLOCK="$TMUX_ROOT/$SLOT-testing-standard.md"
-    STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
+    STRATEGY_ARGS=()
+    if [ -e "$ROOT/artifacts/testing-strategy.md" ] || [ -L "$ROOT/artifacts/testing-strategy.md" ]; then
+      STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
+    fi
     STANDARD_RECEIPT=$("$FACTORY_PYTHON" "$D/testing_standard.py" block \
       --factory-home "$REPO_ROOT" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
       refuse 70 "TESTING STANDARD: $STANDARD_RECEIPT" \
-        "restore docs/standards/TESTING.md and prompts/test.md in $REPO_ROOT, and make the run's artifacts/testing-strategy.md a regular file"
+        "restore docs/standards/TESTING.md and prompts/test.md in $REPO_ROOT"
     # Every oracle input the Strategy cites is in the Tester's tree as its pinned bytes
     # (dogfood #36, #65): found mid-build it costs a round, reformatted it silently governs.
-    ORACLE_INPUTS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" oracle-inputs \
+    if [ "${#STRATEGY_ARGS[@]}" -gt 0 ]; then
+      ORACLE_INPUTS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" oracle-inputs \
       --strategy "$ROOT/artifacts/testing-strategy.md" --repo "$REPOSITORY" 2>&1) || \
       refuse 70 "ORACLE INPUTS: ${ORACLE_INPUTS#strategy-plan: }" \
         "project each cited input into the Tester's tree from its pinned upstream commit (git show <pin>:<path>), byte for byte, and keep formatters off it"
+    fi
   fi
 
   TASK_COPY="$TMUX_ROOT/$SLOT-task.txt"
@@ -677,7 +704,7 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
 - You are a real author agent, not a prompt printer. Work the task and use tools.
 - This standalone repository, including its .git directory, is yours. Make useful
   checkpoint commits; do not ask the host to commit for you.
-- Commit early and often: a watchdog stops a lane that makes no commit within its window.
+- Commit useful coherent changes. Silence or time since a commit does not prove failure.
 - Before each checkpoint, inspect your own status/diff, run the relevant checks,
   and commit only the work assigned to this lane.
 - Do not read or infer the other author lane's work.
@@ -690,8 +717,8 @@ protocol = f"""FACTORY TMUX LANE PROTOCOL (role={role}, slot={slot})
   QUESTION, or DONE and one concise factual sentence. Continue if unblocked.
 - When the assigned work is committed, end with one line of the form
   __LANE_DONE__ {slot} commits=<the number of commits you made>
-- A turn ending is not the run ending. The Validator alone judges and Gate L alone
-  closes the run.
+- A turn ending is not the run ending. Preserve this conversation until the Validator
+  has judged the result and completed the task.
 """
 if wall:
     protocol += (
@@ -710,7 +737,7 @@ if wall:
 if int(review) and resumable == "1":
     protocol += (
         f"- Every {int(review) // 60} minutes of work the watchdog pauses this lane and the Validator\n"
-        "  reviews it against the ratified specification; a FACTORY_REVIEW then resumes this\n"
+        "  reviews it against the task specification; a FACTORY_REVIEW then resumes this\n"
         "  same session. Weigh it against the specification's own words and keep what already\n"
         "  works.\n"
     )
@@ -763,8 +790,8 @@ PY
   # turn in .git/factory-brief/ and passes a pointer with its sha256.
   PROMPT_BYTES=$(wc -c < "$PROMPT" | tr -d ' ')
 
-  # A metered round's cap is reserved against the run's objective budget, in the same ledger as
-  # dispatch_lane.sh's runner ceilings. A run ignited without --budget cannot start one.
+  # A metered round's cap is reserved against the run's objective budget.
+  # A run created without --budget cannot start a metered round.
   BUDGET_RESERVATION=""
   if [ -n "$CAP_MICROUSD" ]; then
     BUDGET_RESERVATION=$("$FACTORY_PYTHON" "$D/lane_budget.py" reserve \
@@ -839,7 +866,9 @@ PY
       refuse 77 "author custody requires its Signet hook binding"
     AUTHOR_HOOK_ARGS=(--author-config "$FACTORY_AUTHOR_CUSTODY_CONFIG" --author-digest "$FACTORY_AUTHOR_CUSTODY_DIGEST")
   fi
-  PLANNED=$(LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
+    --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
+  PLANNED=$(LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -874,9 +903,11 @@ print(json.dumps({
     "instance": instance or None,
     "round": round_tag or None,
     "mode": action,
+    "dialogue_baseline": int(os.environ["LANE_DIALOGUE_BASELINE"]),
     "agent": agent,
+    **({"persistent": True} if os.environ["LANE_PERSISTENT"] == "1" else {}),
     # What the lane actually ran, for provenance: the model, where it came from (operator,
-    # codex-config or agent), and the config overrides that selected it, which a resume reuses.
+    # codex-config, agy-config or agent), and config overrides, which a resume reuses.
     "model": model,
     "model_source": model_source,
     "model_config": model_config,
@@ -963,9 +994,9 @@ PY
     SIGNET_ARGS=""
   fi
   if [ "$AGENT" = "codex-ollama" ]; then
-    LOCAL_ARGS="--oss --local-provider ollama -m $MODEL"
+    printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
   elif [ "$MODEL_SOURCE" = operator ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
-    LOCAL_ARGS="-m $MODEL"
+    printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
   fi
   for OVERRIDE in ${MODEL_CONFIG[@]+"${MODEL_CONFIG[@]}"}; do
     printf -v QUOTED -- '-c %q' "$OVERRIDE"
@@ -992,10 +1023,16 @@ PY
     "$FACTORY_RUNS_ROOT" "$ROOT"
   # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
+  printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
+  ENV_PREFIX+="$SOCKET_ENV"
   # Every lane process runs under lane_agent.py run: it tees output to the lane log and records
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
     "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS"
+  if [ "$PERSISTENT" = 1 ]; then
+    printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
+    WRAP+="$PERSISTENT_WRAP"
+  fi
   # Codex's trusted event/session driver stays outside the model boundary. Other clients
   # are direct children of lane_agent, which retains their process/exit evidence on the host.
   case "$AGENT" in codex|codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
@@ -1035,12 +1072,13 @@ PY
       TURN=()
       while IFS= read -r -d '' PART; do TURN+=("$PART"); done < <(
         "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$MODEL" \
-          --effort "$EFFORT" --cwd "$REPOSITORY" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"})
+          --effort "$EFFORT" --cwd "$REPOSITORY" ${PERSISTENT_ARGS[@]+"${PERSISTENT_ARGS[@]}"} \
+          ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"})
       [ "${#TURN[@]}" -ge 2 ] || refuse 70 "the agent registry built no turn for $AGENT"
       # What a lane message needs to resume this session the same way (tmux_lane_message.sh).
       "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
         --agent "$AGENT" --model "$MODEL" --effort "$EFFORT" --billing "$BILLING" \
-        --env-file "$CREDENTIALS" --setup "$SETUP_OUT" || \
+        --env-file "$CREDENTIALS" --setup "$SETUP_OUT" ${PERSISTENT_ARGS[@]+"${PERSISTENT_ARGS[@]}"} || \
         refuse 70 "the lane's turn record could not be written"
       QUOTED_TURN=""
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
@@ -1054,8 +1092,15 @@ PY
       "$FACTORY_PYTHON" "$D/author_custody.py" "$FACTORY_AUTHOR_CUSTODY_CONFIG" \
       "$FACTORY_AUTHOR_CUSTODY_DIGEST" "$LANE_CMD"
   fi
+  # Keep host-side observation on the launcher's tmux server. Do not pass this
+  # control address through the author's deliberately scrubbed environment.
+  WATCH_ENV_PREFIX="$ENV_PREFIX"
+  if [ -n "${TMUX:-}" ]; then
+    printf -v WATCH_TMUX ' TMUX=%q' "$TMUX"
+    WATCH_ENV_PREFIX+="$WATCH_TMUX"
+  fi
   printf -v WATCH_CMD '%s %q %q lane --root %q --slot %q' \
-    "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
+    "$WATCH_ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
 
   mark() {
     "$FACTORY_PYTHON" - "$PLANNED" "$1" <<'PY'
@@ -1096,7 +1141,7 @@ PY
   fi
   # A window option: a finished lane's window stays, dead, so its last output can be read.
   tmux set-option -w -t "$RUN:$LANE" remain-on-exit on >/dev/null 2>&1 || true
-  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
+  if [ -n "$WALL_CAP_S" ] && ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"
@@ -1114,7 +1159,7 @@ PY
     fi
   fi
   append_event "$(mark active)"
-  echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT; watcher in $RUN:watch-$LANE"
+  echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT"
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
   echo "tmux-lane: wakes land in $TMUX_ROOT/wake.jsonl and $ROOT/events.jsonl"
   echo "tmux-lane: the entire repository is now agent-owned; do not run host Git there"
@@ -1140,12 +1185,16 @@ if len(active) != 1 or active[0].get("run_id") != run or active[0].get("role") !
 mode = active[0].get("mode")
 if mode not in ("qualify", "launch"):
     raise SystemExit("tmux-lane: retained launch mode is missing or invalid")
-print(mode)
+print(mode + (":persistent" if active[0].get("persistent") else ""))
 print(active[0]["repository"])
 PY
 ) || exit $?
 LAUNCH_MODE=${FREEZE_LAUNCH%%$'\n'*}
 REPOSITORY=${FREEZE_LAUNCH#*$'\n'}
+if [[ "$LAUNCH_MODE" = *:persistent ]]; then
+  echo "tmux-lane: validate a resident author's committed SHA with endgame.sh; do not freeze its live working tree" >&2
+  exit 64
+fi
 "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
   --lane "$LANE" >/dev/null || {
   echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
@@ -1164,26 +1213,8 @@ fi
 
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
-  --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}" \
-  --control-root "$ROOT" --target-manifest-digest "$FACTORY_TARGET_MANIFEST_DIGEST") || exit $?
-# A productive Tester freezes only when its modules mention every Critical planned case
-# of the Strategy (dogfood #73, traceability only).
-# Qualification exports retain their mode; a capped probe is not product acceptance evidence.
-# This is selected by the retained launch receipt, never a round name or a freeze-time flag.
-# Refused, the lane stays open to write them. That the cases are
-# runnable collected tests is checked on the integrated tree by discovery_check.py --strategy,
-# whose receipt endgame.sh requires before any verdict.
+  --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
 PLAN_GAPS=null
-if [ "$ROLE" = tester ] && [ "$LAUNCH_MODE" = launch ]; then
-  TESTER_FILES=$(printf '%s' "$EXPORT" | "$FACTORY_PYTHON" -c \
-    'import json,sys; print(json.load(sys.stdin)["files_directory"])')
-  PLAN_GAPS=$("$FACTORY_PYTHON" "$D/strategy_plan.py" traceability \
-    --strategy "$ROOT/artifacts/testing-strategy.md" --files "$TESTER_FILES" 2>"$TMUX_ROOT/$SLOT-plan.err") || \
-    refuse 70 "PLAN: $(sed 's/^strategy-plan: //' "$TMUX_ROOT/$SLOT-plan.err")" \
-      "send the gaps back to the Tester and freeze again when they are written"
-  PLAN_GAPS=$(printf '%s' "$PLAN_GAPS" | "$FACTORY_PYTHON" -c \
-    'import json,sys; print(json.dumps(json.load(sys.stdin)["traceability_gaps"]))')
-fi
 FROZEN=$("$FACTORY_PYTHON" - "$RUN" "$ROLE" "$EXPORT" "$SLOT" "$PLAN_GAPS" "$LAUNCH_MODE" <<'PY'
 import datetime, json, sys
 run, role, export, slot, traceability_gaps, mode = sys.argv[1:]

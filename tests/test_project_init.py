@@ -182,26 +182,14 @@ def test_each_worker_gets_only_its_own_key(tmp_path: Path) -> None:
     assert env["FACTORY_SIGNER_IDENTITY"] == "agent:tester"
     assert all("human.key" not in value for value in env.values())
 
-    shell = subprocess.run(
-        [
-            "bash",
-            "-c",
-            f'source "{REPO}/harness/run_context.sh"; factory_worker_env coder',
-        ],
-        env={**os.environ, "FACTORY_KEYS_DIR": str(project.keys_dir)},
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert f"FACTORY_SIGNING_KEY={project.key_paths['coder']}" in shell.stdout
-    assert "human.key" not in shell.stdout
-    refused = subprocess.run(
-        ["bash", "-c", f'source "{REPO}/harness/run_context.sh"; factory_worker_env human'],
-        env={**os.environ, "FACTORY_KEYS_DIR": str(project.keys_dir)},
-        capture_output=True,
-        text=True,
-    )
-    assert refused.returncode != 0
+    for role in ("validator", "orchestrator", "coder", "tester"):
+        worker = project.worker_env(role)
+        assert worker["FACTORY_SIGNING_KEY"] == str(project.key_paths[role])
+        assert worker["FACTORY_SIGNER_IDENTITY"] == f"agent:{role}"
+        assert all("human.key" not in value for value in worker.values())
+    for role in ("human", "unknown"):
+        with pytest.raises(ProjectInitError):
+            project.worker_env(role)
 
 
 def test_cli_init_and_record_statement(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -117,3 +117,38 @@ def test_an_undecodable_file_is_a_finding_not_a_crash(tmp_path: Path) -> None:
     findings = GUARD.run([pkg])
     assert findings, "an unreadable module must produce a finding"
     assert any(f.kind == "unreadable" for f in findings)
+
+
+def test_specific_user_override_does_not_hide_another_symbol(tmp_path, capsys):
+    pkg = _package(tmp_path, "candidate_pkg", "value = TesseraSeal\nother = check_authority\n")
+    assert GUARD.main(["--root", str(pkg), "--allow-symbol", "TesseraSeal"]) == 1
+    result = capsys.readouterr()
+    assert "USER OVERRIDE" in result.err and "check_authority" in result.err
+    assert (
+        GUARD.main(
+            [
+                "--root",
+                str(pkg),
+                "--allow-symbol",
+                "TesseraSeal",
+                "--allow-symbol",
+                "check_authority",
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    result = capsys.readouterr()
+    assert "2 explicit override" in result.out and "GREEN" not in result.out
+    assert "have not been validated" in result.out
+
+
+def test_module_override_is_explicit_and_does_not_override_parse_failure(tmp_path, capsys):
+    pkg = _package(tmp_path, "candidate_pkg", "import signet_sdk\n")
+    assert GUARD.main(["--root", str(pkg)]) == 1
+    capsys.readouterr()
+    assert GUARD.main(["--root", str(pkg), "--allow-module", "signet_sdk"]) == 0
+    assert "USER OVERRIDE" in capsys.readouterr().err
+    (pkg / "broken.py").write_text("def invalid syntax\n")
+    assert GUARD.main(["--root", str(pkg), "--allow-module", "signet_sdk"]) == 1
+    assert "[parse]" in capsys.readouterr().err

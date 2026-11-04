@@ -82,6 +82,30 @@ PACKAGES = ("factory_core", "factory_runtime")
 ENTRYPOINT_DIRS = ("scripts", "harness")
 CLI_ENTRYPOINT = ("factory_runtime", "cli.py")
 
+# Explain existing findings; this does not add a new admission rule or infer event semantics.
+FINDING_DETAILS = {
+    "zero-caller-export": (
+        "a public symbol has no caller reachable from an entrypoint",
+        "wire its intended caller, including its error/event path, or remove unused code",
+    ),
+    "unreachable-module": (
+        "no entrypoint import path reaches the module",
+        "connect the intended entrypoint or remove the unused module",
+    ),
+    "unresolved-reference": (
+        "dynamic dispatch prevents static resolution",
+        "make the reference explicit or inspect and document the actual runtime binding",
+    ),
+    "parse-failure": (
+        "the scanner could not parse a source file",
+        "repair the source or encoding; this is an incomplete check, not proof of dead code",
+    ),
+    "baseline-added-with-finding": (
+        "the same change adds a finding and its baseline suppression",
+        "fix the wiring or separate and explain any pre-existing baseline case",
+    ),
+}
+
 
 class WiringError(Exception):
     """A usage or environment error: the audit cannot run, so it must not report green."""
@@ -583,6 +607,12 @@ def main(argv: list[str] | None = None) -> int:
     emitted = sorted(line for line in findings if line not in baseline)
     for line in emitted:
         print(line)
+        kind, _, subject = line.partition(":")
+        trigger, correction = FINDING_DETAILS.get(
+            kind, ("an unclassified wiring finding was reported", "inspect the finding")
+        )
+        print(f"check_wiring: ERROR {subject}; trigger: {trigger}; action: {correction}.",
+              file=sys.stderr)
     suppressed = len(findings) - len(emitted)
     if emitted:
         print(

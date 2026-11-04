@@ -423,15 +423,11 @@ def test_the_cli_hydrates_from_the_lfs_store_it_is_given(tmp_path: Path) -> None
     assert (destination / "art.png").read_bytes() == ART
 
 
-def test_endgame_reads_the_candidate_only_through_host_git() -> None:
-    """Endgame's candidate may be a lane repository; no host Git may run there directly."""
-
-    text = (ROOT / "harness" / "endgame.sh").read_text(encoding="utf-8")
-
-    assert 'git -C "$CANDIDATE"' not in text
-    assert 'git -C "$FRESH"' not in text
-    assert '"$D/host_git.py" resolve --repository "$CANDIDATE"' in text
-    assert 'MATERIALIZE_ARGS=(--repository "$CANDIDATE"' in text
-    assert '"$D/host_git.py" materialize "${MATERIALIZE_ARGS[@]}"' in text
-    assert '--lfs-objects "$LFS_STORE"' in text
-    assert "A status that could not be read is not a clean status." in text
+def test_endgame_delegates_to_safe_candidate_materialization() -> None:
+    """The command entrypoint uses the safe object reader; hostile config is tested above
+    and through the end-to-end candidate behavior in test_normal_workflow.py."""
+    shell = (ROOT / "harness" / "endgame.sh").read_text()
+    implementation = (ROOT / "harness" / "validate_candidate.py").read_text()
+    assert "validate_candidate.py" in shell and "git -C" not in shell
+    assert "from factory_runtime.host_git import materialize_commit" in implementation
+    assert "materialize_commit(" in implementation

@@ -20,8 +20,6 @@ from harness.validator_boundary import (
 from tests.test_harness_scripts import (
     HARNESS,
     _ignite_and_launcher,
-    execution_truth_fixture,
-    factory_ignition_env,
     run,
 )
 
@@ -169,11 +167,11 @@ def test_private_runtime_cannot_alias_another_directory(tmp_path):
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS boundary admission")
 def test_resume_uses_retained_binding_and_refuses_drift_before_respawn(tmp_path):
-    operator, root, _ = execution_truth_fixture(
-        tmp_path, task="Resume under original boundary.", harness_status="open")
-    env, tmux_log = factory_ignition_env(tmp_path, root)
-    lane = tmp_path / "standalone-coder"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
+    from tests.test_lane_controls import Lanes
+
+    fixture = Lanes(tmp_path)
+    operator, root, env, tmux_log = fixture.operator, fixture.root, fixture.env, fixture.tmux_log
+    lane = fixture.clone("coder")
     record = binding(tmp_path)
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
