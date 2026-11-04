@@ -309,3 +309,10 @@ The dependency arrow points **consumer → factory, never the reverse** (see `PR
 
 The optional [Jev runtime screen](docs/practices/jev-runtime.md) adds bounded, retained semantic
 observations to the resident Orchestrator. Select it explicitly per run; it grants no authority.
+
+## Prepare an existing repository target
+
+`factory prepare-target` prepares local manifest/catalog data with an actually executed
+complete-tree mechanism qualification. It does not contact the target, authorize a run, or
+qualify a model. See [Target preparation](docs/TARGET-PREPARATION.md) for invocation, evidence,
+size limits, exact reruns, retained target build/test argv, and the remaining Stage R/E and runner requirements.

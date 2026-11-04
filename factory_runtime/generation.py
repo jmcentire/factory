@@ -218,6 +218,12 @@ class GenerationPreparer:
         plan_raw, plan_bytes = _read_object(build_plan_path, label="build plan")
         _validate_object("pattern-catalog", catalog_raw)
         _validate_object("build-plan", plan_raw)
+        from factory_runtime.target_preparation import verify_builtin_catalog
+
+        try:
+            verify_builtin_catalog(catalog_raw)
+        except ValueError as exc:
+            raise GenerationError(str(exc)) from exc
         catalog = PatternCatalog.from_dict(catalog_raw)
         plan = BuildPlan.from_dict(plan_raw)
         artifacts = _phase_artifacts(
@@ -491,6 +497,12 @@ def verify_prepared_generation(
             raise GenerationError(f"consumed frozen {label} bytes do not match their address")
     _validate_object("pattern-catalog", catalog_raw)
     _validate_object("build-plan", plan_raw)
+    from factory_runtime.target_preparation import verify_builtin_catalog
+
+    try:
+        verify_builtin_catalog(catalog_raw)
+    except ValueError as exc:
+        raise GenerationError(str(exc)) from exc
     catalog = PatternCatalog.from_dict(catalog_raw)
     plan = BuildPlan.from_dict(plan_raw)
     if catalog.content_digest != generation["pattern-catalog"]:

@@ -150,7 +150,7 @@ oracle_path = pathlib.Path(oracle)
 for label, item in (("run contracts", source), ("oracle contract", oracle_path)):
     if item.is_symlink() or not item.exists():
         raise SystemExit(f"refusing: {label} {item} is missing or a symlink")
-row = re.compile(r"^\|\s*`contracts/([^`/]+)`\s*\|\s*`(sha256:[0-9a-f]{64})`\s*\|")
+row = re.compile(r"^\|\s*\x60contracts/([^\x60/]+)\x60\s*\|\s*\x60(sha256:[0-9a-f]{64})\x60\s*\|")
 declared = {}
 for line in oracle_path.read_text(encoding="utf-8").splitlines():
     match = row.match(line.strip())

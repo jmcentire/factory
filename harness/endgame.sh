@@ -245,20 +245,50 @@ if python3 "$D/boundary_register.py" verify --root "$ROOT" --workdir "$FACTORY_W
 else
   say "   boundary register: RED"; FAILED=1
 fi
-gate() {
-  local name="$1"; shift
-  say "== $name =="
-  if ( cd "$FRESH" && \
-       HARNESS_DIR="$FACTORY_HARNESS_ROOT" HARNESS_RUN_ROOT="$ROOT" \
-       HARNESS_BASE_SHA="" "$D/receipt.sh" "$@" ); then
-    say "   $name: GREEN"
-  else
-    say "   $name: RED"; FAILED=1
-  fi
-}
 
-gate "full gate suite" make ship
-gate "isolation proof" make test-isolation
+# Target argv comes only from the retained Stage-R bytes. A target's own make targets
+# cannot stand in for Factory's host isolation proof, nor can host proof qualify a run's lanes.
+TARGET_SUBPATH="${FACTORY_WORKDIR#"$FACTORY_SOURCE_ROOT"}"
+TARGET_SUBPATH="${TARGET_SUBPATH#/}"
+VERIFICATION_PLAN="$ROOT/endgame/verification-$RESOURCE_ID.json"
+TARGET_VERIFY_ARGS=(
+  --run-root "$ROOT" --expected-manifest-digest "$FACTORY_TARGET_MANIFEST_DIGEST"
+  --expected-target-state-digest "$FACTORY_TARGET_STATE_DIGEST"
+  --candidate-root "$FRESH" --candidate-sha "$SHA" --subpath "$TARGET_SUBPATH"
+  --plan-path "$VERIFICATION_PLAN"
+)
+verify_target() {
+  /usr/bin/env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP \
+    "$FACTORY_PYTHON" -I "$D/target_verification.py" "${TARGET_VERIFY_ARGS[@]}" "$@"
+}
+ISOLATION_VERIFIED=0
+# Capture all target/host inputs first, then exercise host isolation before target code
+# gets an execution turn. Retained source checks also detect later observed drift.
+if verify_target --plan-only && verify_target --check-only; then
+  say "== isolation proof =="
+  if verify_target --host-isolation; then
+    say "   isolation proof: GREEN"
+    if verify_target --check-only; then
+      ISOLATION_VERIFIED=1
+    else
+      refusal_event "host isolation verification source identity changed" 70
+      FAILED=1
+    fi
+  else
+    say "   isolation proof: RED"; FAILED=1
+  fi
+else
+  refusal_event "target/host verification plan or retained command admission refused" 70
+  say "   target/host verification plan: RED"; FAILED=1
+fi
+say "== full gate suite =="
+if [ "$ISOLATION_VERIFIED" -eq 1 ] && \
+   HARNESS_DIR="$FACTORY_HARNESS_ROOT" HARNESS_RUN_ROOT="$ROOT" HARNESS_BASE_SHA="" \
+     verify_target; then
+  say "   full gate suite: GREEN"
+else
+  say "   full gate suite: RED"; FAILED=1
+fi
 
 say "== live proof against the declared exact-target environment =="
 if [ -f "$TARGET_CONF" ] && [ ! -L "$TARGET_CONF" ]; then
@@ -282,6 +312,14 @@ if ! FRESH_STATUS=$(fresh_git status --porcelain --untracked-files=all); then
   FAILED=1
 elif [ -n "$FRESH_STATUS" ]; then
   say "   endgame checkout changed while judging; evidence no longer names one subject"
+  FAILED=1
+fi
+
+# Gate commands ran target/host code; re-derive their retained authority and source identity
+# before any admission can describe those observations as the same immutable subject.
+if ! verify_target --check-only; then
+  refusal_event "target/host verification subject changed before admission" 70
+  say "   target/host verification subject changed: RED"
   FAILED=1
 fi
 
