@@ -77,6 +77,9 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"Do you trust the (?:files|contents) (?:in|of) this (?:folder|directory)|"
         r"Yes, I trust this folder|allow Codex to work in this folder"
     ),
+    # The disclaimer a fresh Claude Code shows once for --permission-mode bypassPermissions, the
+    # mode factory.sh itself launches the Claude Validator in.
+    "bypass_permissions": re.compile(r"running in Bypass Permissions mode"),
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     # Anchored on each provider's own dialog line, never on words ordinary output also uses
     # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
@@ -90,12 +93,15 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
     ),
 }
-#: The keys that accept a dialog's default (highlighted) answer, which for every dialog above is
-#: the one that lets the seat continue. A usage limit has no answer: it is recorded and waited out.
+#: The keys that accept a dialog's highlighted answer. A usage limit has no answer: it is recorded
+#: and waited out. Claude Code 2.1.318 highlights "No, exit" on its trust and bypass dialogs, so a
+#: highlighted "No, exit" is first moved down to the option that continues (EXIT_HIGHLIGHTED).
 SEAT_DIALOG_KEYS: dict[str, tuple[str, ...]] = {
     "permission_prompt": ("Enter",),
     "folder_trust": ("Enter",),
+    "bypass_permissions": ("Enter",),
 }
+EXIT_HIGHLIGHTED = re.compile(r"^\s*[\u276f\u203a]\s*(?:\d+\.\s*)?No, exit\b")
 #: A dialog already recorded as unanswerable; it is not recorded again until it clears.
 _RECORDED = 99
 HEALTHY_IDLE = "idle-awaiting-handoff"
@@ -563,6 +569,8 @@ class Dispatcher:
             if attempts == _RECORDED:
                 continue
             keys = SEAT_DIALOG_KEYS.get(kind)
+            if keys and any(EXIT_HIGHLIGHTED.match(line) for line in lines):
+                keys = ("Down", *keys)
             detail = f"{window} showed this for {current - first:.0f}s: {hit[:200]}"
             if keys and attempts < 2:
                 self.answered[key] = attempts + 1

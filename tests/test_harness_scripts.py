@@ -982,6 +982,10 @@ def test_inject_pane_command_allowlist_is_case_insensitive(tmp_path: Path) -> No
     r, calls = inject_live(tmp_path, "Python", "hello")
     assert r.returncode == 0, r.stderr
     assert " -l -- hello" in calls.read_text(encoding="utf-8")
+    for name in ("2.1.318", ".claude-wrapped"):  # native installer, Nix wrapper
+        (tmp_path / name).mkdir()
+        agent, _ = inject_live(tmp_path / name, name, "hello")
+        assert agent.returncode == 0, agent.stderr
     (tmp_path / "sh").mkdir()
     refused, _ = inject_live(tmp_path / "sh", "bash", "hello")
     assert refused.returncode == 77 and "not an agent" in refused.stderr
@@ -5959,30 +5963,38 @@ def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
 
 
 @pytest.mark.parametrize(
-    ("window", "dialog", "kind"),
+    ("window", "dialog", "kind", "keys"),
     [
         ("validator", "Bash command\n  TaskStop monitor-1\nDo you want to proceed?\n❯ 1. Yes\n"
                       "  2. No, and tell Claude what to do differently (esc)\n",
-         "permission_prompt"),
+         "permission_prompt", ("Enter",)),
         ("orchestrator", "Would you like to run the following command?\n  $ rm -f x\n"
                          "› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n",
-         "permission_prompt"),
+         "permission_prompt", ("Enter",)),
         ("validator", "Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit\n",
-         "folder_trust"),
+         "folder_trust", ("Enter",)),
         ("coder", "Do you trust the contents of this directory?\n"
                   "› 1. Yes, allow Codex to work in this folder\n",
-         "folder_trust"),
+         "folder_trust", ("Enter",)),
+        # Claude Code 2.1.318 highlights "No, exit" on both of these (read from its pane).
+        ("validator", " Quick safety check: Is this a project you created or one you trust?\n"
+                      " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n",
+         "folder_trust", ("Down", "Enter")),
+        ("validator", " WARNING: Claude Code running in Bypass Permissions mode\n"
+                      " ❯ 1. No, exit\n   2. Yes, I accept\n",
+         "bypass_permissions", ("Down", "Enter")),
     ],
 )
 def test_the_harness_answers_a_seats_permission_or_trust_dialog(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str, kind: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str, kind: str,
+    keys: tuple[str, ...],
 ) -> None:
     """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched; the
     founder had to accept every seat's folder-trust prompt by hand. The harness accepts the
     dialog's default and records it."""
     _, d, root, answers = dialog_dispatcher(tmp_path, monkeypatch)
     d.check_seat_attention(window, "earlier output\n" + dialog)  # type: ignore[attr-defined]
-    assert answers == [(window, ("Enter",))]
+    assert answers == [(window, keys)]
     (event,) = dialog_events(root)
     assert event["kind"] == "seat_dialog_answered"
     assert str(event["detail"]).startswith(f"{kind}: {window} showed this")

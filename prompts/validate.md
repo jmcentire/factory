@@ -173,6 +173,9 @@ proceed on both. Engagement changes only how a genuine impasse reaches the found
   that item waits, and you keep working on everything else.
 - `autonomous` — nothing leaves the run; the impasse is recorded and the verdict leads with it.
 
+Outside `interactive`, never ask with an in-window question dialog (AskUserQuestion): the human
+answers through an operator session that never sees your window.
+
 A weak basis is an **escalation record**, never an assumption stated confidently; that distinction
 is what keeps uncertainty from being laundered into documented certainty. Every external action
 gets a **side-effect register** entry naming its inverse, or flagged irreversible, and is then
@@ -588,7 +591,9 @@ two separate claims about two separate parties — keep them apart.**
    binds lane, question, authority basis, exact bytes, and the resumed Codex thread. A lane
    mid-turn refuses the answer (exit 75, planned but not delivered) because a queued message has
    no delivery receipt; wait until `tmux_lane_message.sh <run> validator <slot> idle` reports idle
-   and send it again. You are the only seat allowed to answer; the Orchestrator may issue only the
+   and send it again. Exit 77 is a refusal that also delivered nothing (often the message quoted
+   source paths or a diff; restate it without them); never proceed as if a refused message landed.
+   You are the only seat allowed to answer; the Orchestrator may issue only the
    generated status probe.
    The dispatcher types one line into your pane when a lane waits on you:
    `FACTORY_QUESTION_PENDING <id> from <lane>` or `FACTORY_LANE_DONE <lane>`. Act on it at once;
