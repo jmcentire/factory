@@ -179,13 +179,26 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
                      "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
 
-    # Until the harness has streamed its session there is nothing to resume: launch a round.
+    # Until the harness streams its session there is nothing to resume. Do not claim delivery
+    # or prescribe replacement of a conversation that may still be starting.
     message = run(
         ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
          "--runs", str(lanes.root.parent)],
         lanes.operator, lanes.env,
     )
-    assert message.returncode == 70 and "new --round" in message.stderr
+    assert message.returncode == 70 and "no retained session" in message.stderr
+
+
+def test_cursor_explicit_no_sandbox_is_retained_for_resume(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path)
+    _cursor_stub(lanes.stub, signed_in=True)
+    launched = lanes.lane("coder", "--agent", "cursor-agent", "--model", "grok-4.7-xhigh",
+                          env={"FACTORY_LANE_SANDBOX": "off"})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [command] = lanes.windows("coder")
+    assert "--sandbox disabled" in command
+    turn = json.loads((lanes.root / "tmux-lanes/coder-turn.json").read_text())
+    assert turn["extra"][-2:] == ["--sandbox", "disabled"]
 
 
 def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path) -> None:
@@ -470,6 +483,34 @@ def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> No
     assert "-- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never" in call
     assert "never exec" not in call and "codex_lane_session" not in call
     assert "--disable apps" in call
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_interactive_codex_preserves_assigned_effort(tmp_path: Path, explicit: bool) -> None:
+    lanes = Lanes(tmp_path)
+    _codex_stub(lanes.stub, signed_in=True)
+    args = ["--agent", "codex-interactive", "--model", "assigned-astra"]
+    if explicit:
+        args += ["--effort", "xhigh"]
+    launched = lanes.lane("coder", *args,
+                          env={"FACTORY_CODER_EFFORT": "high", "TERM": "dumb"})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [call] = lanes.windows("coder")
+    assert f"-c model_reasoning_effort={'xhigh' if explicit else 'high'}" in call
+    assert "assigned-astra" in call
+    assert "TERM=xterm-256color" in call
+
+
+@pytest.mark.parametrize("agent", ["codex", "codex-interactive"])
+def test_interactive_codex_sandbox_off_replaces_approval_flag(tmp_path: Path, agent: str) -> None:
+    lanes = Lanes(tmp_path)
+    _codex_stub(lanes.stub, signed_in=True)
+    launched = lanes.lane("coder", "--agent", agent,
+                          env={"FACTORY_LANE_SANDBOX": "off"})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [call] = lanes.windows("coder")
+    assert "--dangerously-bypass-approvals-and-sandbox" in call
+    assert "--ask-for-approval" not in call
 
 
 def test_codex_exec_stays_the_default_author_lane(tmp_path: Path) -> None:

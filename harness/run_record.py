@@ -16,7 +16,9 @@ import os
 import re
 import stat
 import sys
+from io import BufferedReader
 from pathlib import Path
+from typing import cast
 
 SCHEMA = "factory-harness/3"
 
@@ -212,15 +214,20 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
 
 def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path) -> list[str]:
     """CLI adapters describe syntax, never an approved-model list."""
+    sandbox = os.environ.get("FACTORY_LANE_SANDBOX", "on")
+    if sandbox not in {"on", "off"}:
+        raise ValueError("FACTORY_LANE_SANDBOX must be on or off")
+    unrestricted = sandbox == "off"
     model_args = ["--model", model] if model else []
     if agent == "codex":
         effort_args = ["-c", f'model_reasoning_effort="{effort}"'] if effort else []
+        permission_args = (
+            ["--dangerously-bypass-approvals-and-sandbox"] if unrestricted
+            else ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+        )
         return [
             "codex",
-            "--sandbox",
-            "workspace-write",
-            "--ask-for-approval",
-            "on-request",
+            *permission_args,
             "--add-dir",
             str(root),
             "--no-alt-screen",
@@ -230,12 +237,16 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
         ]
     if agent in {"claude", "agy"}:
         effort_args = ["--effort", effort] if effort else []
-        head = [agent, "--add-dir", str(root), *model_args, *effort_args]
+        head = [agent, "--add-dir", str(root),
+                *(["--dangerously-skip-permissions"] if unrestricted else []),
+                *model_args, *effort_args]
         return [*head, *(["--prompt-interactive"] if agent == "agy" else []), prompt]
     if agent == "muse":
-        return ["muse", *model_args, *(["--reasoning-effort", effort] if effort else []), prompt]
+        return ["muse", *(["--yolo"] if unrestricted else []), *model_args,
+                *(["--reasoning-effort", effort] if effort else []), prompt]
     if agent == "cursor-agent":
-        return ["agent", *model_args, prompt]
+        return ["agent", *(["--yolo", "--sandbox", "disabled", "--trust"]
+                           if unrestricted else []), *model_args, prompt]
     if agent == "prime-agent":
         return [
             "prime-agent",
@@ -261,6 +272,25 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
     raise ValueError(
         f"no resident CLI adapter for {agent}; add its invocation syntax, not a model approval"
     )
+
+
+def capture_output(root: Path, role: str) -> None:
+    """Retain tmux's output stream; this endpoint never writes to the terminal."""
+    path = root / f"{role}-lane.log"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW
+                 | os.O_NONBLOCK, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("terminal output log must be a regular file")
+        while data := cast(BufferedReader, sys.stdin.buffer).read1(65536):
+            offset = 0
+            while offset < len(data):
+                count = os.write(fd, data[offset:])
+                if count <= 0:
+                    raise OSError("terminal log append made no progress")
+                offset += count
+    finally:
+        os.close(fd)
 
 
 def start(runs: Path, run: str) -> None:
@@ -351,12 +381,15 @@ def start(runs: Path, run: str) -> None:
         for key in adapter.api_env:
             env.pop(key, None)
         env.update(
+            TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"}
+                  else "xterm-256color"),
             FACTORY_HOME=str(home),
             PYTHONPATH=str(home),
             FACTORY_PYTHON=sys.executable,
             FACTORY_RUNS_DIR=str(root.parent),
             FACTORY_CONTROL_ROOT=str(root),
             FACTORY_TMUX_SOCKET=doc["tmux_socket"],
+            FACTORY_LANE_SANDBOX=os.environ.get("FACTORY_LANE_SANDBOX", "on"),
             FACTORY_LOG=doc["log"],
             CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION="false",
         )
@@ -381,7 +414,14 @@ def start(runs: Path, run: str) -> None:
             "--",
             *argv,
         ]
-        commands.append((role, "exec " + shlex.join(command)))
+        capture = shlex.join([
+            sys.executable, str(tools / "run_record.py"), "capture",
+            "--runs", str(root.parent), "--run", run, "--to", role,
+        ])
+        # Install the output pipe from inside this pane before starting the CLI,
+        # so even the first model output reaches resident oversight. No input pipe.
+        pipe = shlex.join([*tmux, "pipe-pane", "-O", "-t", f"={run}:{role}", capture])
+        commands.append((role, pipe + " && exec " + shlex.join(command)))
     created = False
     try:
         for role, shell_command in commands:
@@ -413,7 +453,8 @@ def start(runs: Path, run: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["create", "start", "context", "status", "message"])
+    parser.add_argument("action", choices=["create", "start", "context", "status", "message",
+                                           "capture"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--repo", type=Path)
@@ -421,6 +462,7 @@ def main() -> int:
     parser.add_argument("--budget", type=float)
     parser.add_argument("--log", default=os.environ.get("FACTORY_LOG", os.devnull))
     parser.add_argument("--to", choices=["validator", "orchestrator"])
+    parser.add_argument("--slot", help="author slot for terminal output capture")
     parser.add_argument("--from", dest="sender", default="host")
     parser.add_argument("--message-file", type=Path)
     args = parser.parse_args()
@@ -444,7 +486,19 @@ def main() -> int:
             context(args.runs, args.run)
         else:
             root, doc = load(args.runs, args.run)
-            if args.action == "message":
+            if args.action == "capture":
+                if args.slot is not None:
+                    if args.to or not re.fullmatch(
+                        r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?"
+                        r"(?:\.[A-Za-z0-9][A-Za-z0-9_-]{0,39})?", args.slot
+                    ):
+                        parser.error("capture requires one valid author slot or coordinator")
+                    capture_output(root / "tmux-lanes", args.slot)
+                else:
+                    if args.to is None:
+                        parser.error("capture requires --to or --slot")
+                    capture_output(root, args.to)
+            elif args.action == "message":
                 if args.to is None or args.message_file is None:
                     parser.error("message requires --to and --message-file")
                 message(root, args.to, args.sender, args.message_file.read_text(), log=doc["log"])

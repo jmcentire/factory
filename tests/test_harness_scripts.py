@@ -2325,6 +2325,7 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
     assert ".git" in tmux_call and "write" in tmux_call
     bypass = "--dangerously-bypass-approvals-and-sandbox" in tmux_call
     assert bypass == (sandbox == "off")
+    assert ("--ask-for-approval" in tmux_call) == (sandbox == "on")
     # The resumed turn can change the tree, so the launch journal now ends in a reopen row and
     # an earlier freeze no longer reads as the lane's frozen candidate.
     launches = [json.loads(line) for line in

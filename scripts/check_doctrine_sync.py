@@ -228,8 +228,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ),
     (
         "platform-permissions",
-        "Actual platform permissions govern tool use; Factory cannot grant them or "
-        "click through their dialogs.",
+        "Actual platform permissions govern tool use; Factory cannot override an external denial.",
     ),
     (
         "critical-evidence",

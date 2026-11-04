@@ -137,7 +137,7 @@ case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
   *) echo "tmux-lane: --effort must be minimal|low|medium|high|xhigh|max" >&2; exit 64 ;;
 esac
 # cursor-agent names the effort in the model (grok-4.7-xhigh); codex-ollama's is the model's own.
-case "$AGENT" in cursor-agent|codex-ollama|codex-interactive)
+case "$AGENT" in cursor-agent|codex-ollama)
   [ -z "$EFFORT" ] || { echo "tmux-lane: $AGENT takes its effort from the model name or config, not --effort" >&2; exit 64; } ;;
 esac
 [ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z0-9][a-z0-9-]{0,15}$ ]] || {
@@ -511,6 +511,7 @@ PY
   SAFE_PATH="${PATH:?tmux-lane: PATH is required}"
   SAFE_TMPDIR="${TMPDIR:-/tmp}"
   SAFE_TERM="${TERM:-xterm-256color}"
+  [ "$SAFE_TERM" != dumb ] || SAFE_TERM=xterm-256color
   SAFE_SHELL="${SHELL:-/bin/bash}"
   SAFE_LANG="${LANG:-en_US.UTF-8}"
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
@@ -1004,8 +1005,10 @@ PY
   done
   [ -z "$SIGNET_ARGS" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }$SIGNET_ARGS"
   # A Codex lane's --effort travels as a config override, last so it wins; one closed-set word.
-  if [ "$AGENT" = codex ]; then
-    [ -z "$EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT"
+  case "$AGENT" in codex|codex-interactive)
+    [ -z "$EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$EFFORT" ;;
+  esac
+  if [ "$AGENT" = codex ] || [ "$AGENT" = codex-interactive ]; then
     : > "$TMUX_ROOT/$SLOT-lane-setup.nul"
     if [ -n "$SIGNET_ARGS" ]; then
       printf '%s\0' '-c' 'features.hooks=true' '-c' "$SIGNET_OVERRIDE" > \
@@ -1040,18 +1043,19 @@ PY
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
   [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
+  # Codex refuses --ask-for-approval together with the bypass flag (rc=2), so the TUI takes one or the other.
+  CODEX_POLICY_ARG="${CODEX_SANDBOX_ARG:---ask-for-approval never}"
   # Ignore-user-config does not disable Codex's built-in app connector surface. Authors must
   # use their explicitly scoped local Kindex server, not a same-named operator connector.
   case "$AGENT" in
     codex|codex-ollama)
-      [ -z "$CODEX_SANDBOX_ARG" ] || LOCAL_ARGS="$CODEX_SANDBOX_ARG${LOCAL_ARGS:+ $LOCAL_ARGS}"
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex --ask-for-approval never exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$LOCAL_ARGS" "$REPOSITORY" \
+        "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
-        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$LOCAL_ARGS" "$REPOSITORY" \
+      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config %s %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
+        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
       # A registry harness (harness/agents.py). Its private configuration (the lane's scoped
@@ -1067,6 +1071,11 @@ PY
         --home "$AGENT_HOME" --model "$MODEL" --kindex-record "$KINDEX" \
         --env-file "$CREDENTIALS" > "$SETUP_OUT" || \
         refuse 70 "the agent registry could not prepare $AGENT's lane home"
+      if [ "$AGENT" = cursor-agent ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+        # Retain the explicit choice with the turn, so later resumes do not fall back to
+        # the user's unrelated Cursor configuration.
+        printf '%s\0' '--sandbox' 'disabled' >> "$SETUP_OUT"
+      fi
       SETUP_ARGS=()
       while IFS= read -r -d '' PART; do SETUP_ARGS+=("--extra-arg=$PART"); done < "$SETUP_OUT"
       TURN=()
@@ -1091,6 +1100,15 @@ PY
     printf -v LANE_CMD '%q %q --config %q --digest %q --shell-command %q' \
       "$FACTORY_PYTHON" "$D/author_custody.py" "$FACTORY_AUTHOR_CUSTODY_CONFIG" \
       "$FACTORY_AUTHOR_CUSTODY_DIGEST" "$LANE_CMD"
+  fi
+  if [ "$AGENT_TTY" = terminal ]; then
+    # Output-only observation starts inside the pane before the native TUI. It never sends
+    # status prose as input, and remains attached to this pane rather than a window name.
+    printf -v CAPTURE_CMD '%q %q capture --runs %q --run %q --slot %q' \
+      "$FACTORY_PYTHON" "$D/run_record.py" "$FACTORY_RUNS_ROOT" "$RUN" "$SLOT"
+    printf -v CAPTURE_PIPE 'tmux -L %q pipe-pane -O -t %q %q' \
+      "$FACTORY_TMUX_SOCKET" "=$RUN:$LANE" "$CAPTURE_CMD"
+    LANE_CMD="$CAPTURE_PIPE && $LANE_CMD"
   fi
   # Keep host-side observation on the launcher's tmux server. Do not pass this
   # control address through the author's deliberately scrubbed environment.

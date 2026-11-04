@@ -54,9 +54,11 @@ VERDICT=""
 REVIEW_FILE=""
 MINUTES=""
 WAIT_IDLE=0
+NATIVE_SESSION_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
+    --native-session-file) NATIVE_SESSION_FILE="$2"; shift 2 ;;
     --question-id) QUESTION_ID="$2"; shift 2 ;;
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
     --basis) BASIS="$2"; shift 2 ;;
@@ -177,8 +179,26 @@ if state.get("status") in {"paused", "wrapping"}:
         raise SystemExit("lane-message: pause/wrap exit is unverified; refusing delivery")
 PY
 
+# Explicit native TUI -> exec handoff: only after the old process has exited. Never
+# inject text into the terminal or attach a second controller to a live conversation.
+if [ -n "$NATIVE_SESSION_FILE" ]; then
+  case "$(lane_pane_state)" in
+    1|missing) ;;
+    *) echo "lane-message: native TUI is still live; finish or stop its exact process before resume" >&2; exit 75 ;;
+  esac
+  "$FACTORY_PYTHON" - "$D" "$LAUNCHES" "$NATIVE_SESSION_FILE" "$THREAD_FILE" "$TURN_RECORD" <<'PYBIND' || exit 70
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from codex_lane_session import SessionError, bind_interactive_session
+try:
+    bind_interactive_session(*map(pathlib.Path, sys.argv[2:]))
+except (OSError, ValueError, SessionError) as error:
+    raise SystemExit(f"lane-message: {error}")
+PYBIND
+fi
+
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
-  echo "lane-message: no retained session for $RUN:$SLOT yet (a codex-interactive lane has none, and a registry lane has one once its harness starts streaming: launch a new --round instead)" >&2
+  echo "lane-message: no retained session for $RUN:$SLOT yet (for an exited Codex TUI, pass --native-session-file with its original rollout; never replace the conversation to deliver a correction)" >&2
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
@@ -270,7 +290,7 @@ if [ "$BOUNDARY_RECORD" != null ]; then
   printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
 fi
 case "$AGENT" in
-  codex|codex-ollama) ;;
+  codex|codex-ollama|codex-interactive) ;;
   cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
     [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
       echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
@@ -518,11 +538,11 @@ SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
-elif [ "$AGENT" = codex ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+elif case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
 # A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
-if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex) true ;; *) false ;; esac; then
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
@@ -559,7 +579,7 @@ if [ "$PANE_DEAD" = "0" ]; then
     echo "the retry reuses this planned message." >&2
     exit 75
   fi
-  case "$AGENT" in codex|codex-ollama) ;; *)
+  case "$AGENT" in codex|codex-ollama|codex-interactive) ;; *)
     echo "lane-message: $MESSAGE_ID planned but NOT delivered: a live $AGENT turn takes no queued message;" >&2
     echo "retry when '$0 $RUN $SENDER $SLOT idle' reports idle." >&2
     exit 75 ;;
@@ -594,15 +614,15 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   case "$AGENT" in
-    codex|codex-ollama)
+    codex|codex-ollama|codex-interactive)
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
-  RESUME_SANDBOX=""
-  [ "$LANE_SANDBOX" != off ] || RESUME_SANDBOX="--dangerously-bypass-approvals-and-sandbox "
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s --ask-for-approval never -C %q exec --json resume %s--ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
+  RESUME_POLICY="--ask-for-approval never"
+  [ "$LANE_SANDBOX" != off ] || RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s %s -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
-    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$REPOSITORY" \
-    "$RESUME_SANDBOX" 'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
+    "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$RESUME_POLICY" "$REPOSITORY" \
+    'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
       # launched with (its turn record); the wrapper keeps recording the session and billing.
@@ -668,7 +688,7 @@ import datetime, json, os, sys
 journal, run, role, slot, sender, kind, message_id, message, agent = sys.argv[1:]
 size = os.path.getsize(message)
 # Codex resumes read the turn from stdin; every registry harness takes it as one argv element.
-limit = None if agent in ("codex", "codex-ollama") else 131071
+limit = None if agent in ("codex", "codex-ollama", "codex-interactive") else 131071
 delivery = "stdin" if limit is None else ("file-pointer" if size > limit else "argv")
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
@@ -712,5 +732,5 @@ fi
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
 
-case "$AGENT" in codex|codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
+case "$AGENT" in codex|codex-ollama|codex-interactive) VIA=Codex ;; *) VIA="$AGENT" ;; esac
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"

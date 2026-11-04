@@ -70,7 +70,8 @@ def launch(tmp_path, monkeypatch):
 
     def invocation(calls, role):
         call = next(c for c in calls if "-n" in c and c[c.index("-n") + 1] == role)
-        words = shlex.split(call[-1])
+        words = shlex.split(call[-1].split(" && exec ", 1)[1])
+        words.insert(0, "exec")
         assert words[:3] == ["exec", "env", "-i"]
         environment = {}
         index = 3
@@ -159,6 +160,15 @@ def test_help_format_is_not_a_startup_prerequisite(launch):
     assert "--prompt-interactive" in execute(capture(), "orchestrator")["argv"]
 
 
+@pytest.mark.parametrize("terminal,expected", [
+    ("dumb", "xterm-256color"), ("", "xterm-256color"), ("tmux-256color", "tmux-256color"),
+])
+def test_native_coordinator_gets_a_usable_terminal(launch, monkeypatch, terminal, expected):
+    _, _, _, capture, _, execute = launch
+    monkeypatch.setenv("TERM", terminal)
+    assert execute(capture(), "validator")["env"]["TERM"] == expected
+
+
 @pytest.mark.parametrize("field,value", [
     ("MODEL", "gemini-user-choice"),
     ("MODEL", "private/model $(touch SHOULD_NOT_EXIST); spaces"),
@@ -207,7 +217,9 @@ def test_unsupported_native_flag_records_failure_without_model_substitution(laun
     )
     calls = capture()
     call, _, _ = invocation(calls, "orchestrator")
-    completed = subprocess.run(["/bin/bash", "-c", call[-1]], cwd=repository,
+    # Exercise the native wrapper directly; real tmux output plumbing has its own test.
+    wrapper = "exec " + call[-1].split(" && exec ", 1)[1]
+    completed = subprocess.run(["/bin/bash", "-c", wrapper], cwd=repository,
                                capture_output=True, text=True)
     assert completed.returncode == 64, completed.stderr
     assert "unsupported option --model" in completed.stderr
@@ -268,14 +280,42 @@ def test_kickoff_validator_gets_private_brief_without_duplicate_process(launch, 
     assert not (root / "validator-process.json").exists()
 
 
-@pytest.mark.parametrize("legacy_sandbox", ["on", "off"])
-def test_codex_startup_keeps_platform_permissions(launch, monkeypatch, legacy_sandbox):
+@pytest.mark.parametrize("sandbox", ["on", "off"])
+def test_codex_startup_preserves_user_selected_native_permission_mode(launch, monkeypatch, sandbox):
     _, _, _, capture, _, execute = launch
-    monkeypatch.setenv("FACTORY_LANE_SANDBOX", legacy_sandbox)
-    argv = execute(capture(), "validator")["argv"]
-    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
-    assert argv[argv.index("--ask-for-approval") + 1] == "on-request"
-    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+    monkeypatch.setenv("FACTORY_LANE_SANDBOX", sandbox)
+    result = execute(capture(), "validator")
+    argv = result["argv"]
+    assert result["env"]["FACTORY_LANE_SANDBOX"] == sandbox
+    if sandbox == "on":
+        assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+        assert argv[argv.index("--ask-for-approval") + 1] == "on-request"
+        assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+    else:
+        assert "--dangerously-bypass-approvals-and-sandbox" in argv
+        assert "--sandbox" not in argv and "--ask-for-approval" not in argv
+
+
+@pytest.mark.parametrize("agent,executable,flag", [
+    ("claude", "claude", "--dangerously-skip-permissions"),
+    ("agy", "agy", "--dangerously-skip-permissions"),
+    ("muse", "muse", "--yolo"),
+    ("cursor-agent", "agent", "--yolo"),
+])
+def test_native_permission_choice_reaches_other_coordinators(
+    launch, monkeypatch, agent, executable, flag,
+):
+    _, _, binary, capture, _, execute = launch
+    path = binary / executable
+    path.write_text((binary / "codex").read_text())
+    path.chmod(0o755)
+    monkeypatch.setenv("FACTORY_VALIDATOR_AGENT", agent)
+    monkeypatch.setenv("FACTORY_LANE_SANDBOX", "off")
+    result = execute(capture(), "validator")
+    assert flag in result["argv"]
+    assert result["env"]["FACTORY_LANE_SANDBOX"] == "off"
+    if agent == "cursor-agent":
+        assert result["argv"][result["argv"].index("--sandbox") + 1] == "disabled"
 
 
 def test_kickoff_retry_preserves_brief_and_queued_failure(launch, monkeypatch):
