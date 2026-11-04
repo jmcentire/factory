@@ -9,7 +9,7 @@ every historical instruction as another requirement.
 
 Everything here serves that one aim. A test is evidence that the software does what was promised. A suite that passes whatever the code does is ceremony, and ceremony is worse than nothing because it gets cited.
 
-This is the overview. It says what a good test is, which kind to write for which claim, and what code owes its tests. The Tester's procedure, ledgers and gates live in the Tester directive ([`prompts/test.md`](../../prompts/test.md)), and this document does not repeat them. Strategy rows, reviews and verdicts cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), H for [Whose Word Counts](AUTHORITY.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md). A *stated item* is a requirement with authority under H1–H8: what the human said, latest first, with any exception they made.
+This guide explains what makes a test useful, which kind supports each claim, and what code owes its tests. The Tester role and ordinary workflow live in [`prompts/test.md`](../../prompts/test.md). Keep evidence with the tests and the review; a separate ledger, hashed plan or ceremony is not required. Reviews can cite the rules below by ID. Where a rule leans on another document the ID is given: W for [How We Write Code](HOW-WE-WRITE-CODE.md), H for [Whose Word Counts](AUTHORITY.md), and I, E and S for the [doctrine kernel](../DOCTRINE-KERNEL.md). A *stated item* is a requirement with authority under H1–H8: what the human said, latest first, with any exception they made.
 
 ---
 
@@ -28,15 +28,15 @@ Laws, models and relations are requirements. Each is cited to a stated item like
 
 - *Direct.* A stated item gives the value.
 - *Derived.* The value is an exact, mechanical consequence of a stated rule: the arithmetic of a stated fee, the edge a stated range implies. Anyone applying the rule gets the same answer, so it needs no further approval. The derivation is written beside the test.
-- *Proposed.* A relation or law the items do not state, inferred because it seems true. It is a question to the human (`FACTORY_QUESTION`, T37), and the test counts as no evidence until the human states it.
+- *Inferred.* A relation or law not stated explicitly. Record the assumption and its basis, and ask the Validator to resolve a consequential ambiguity against the user's goal (H6–H9). Report evidence against that inferred contract honestly; never relabel an assumption as the user's words.
 
-If two careful readers could derive different values, the value is proposed, not derived. Raise it. Do not supply it yourself.
+If two careful readers could derive different values, the value is inferred, not derived. Resolve it through the Validator's source-free contract; involve the human only for a genuine impasse or a decision outside the granted scope.
 
 Independence comes from separate derivation, not from ignorance. The Coder and the Tester share the stated intent, the architecture, and the interface and schema contracts: what the system promises, where its boundaries are, what may vary and what must not. Neither sees the other's work or the other's reasoning. Each derives its own reading from the shared intent. When the two readings disagree, that is a finding about the specification. Neither lane resolves it by conforming to the other. The test of a good contract is whether two parties who cannot talk can build and test the same thing from it.
 
 **T2. Grade every test on three axes.** *Independence*: where did the expected answer come from? *Fidelity*: how much of the real system ran? *Sensitivity*: which wrong implementation turns this test red? A test is as strong as its weakest axis. A browser test asserting that the page loaded has fidelity and nothing else. A mocked test with a perfect oracle proves the mock.
 
-**T3. Tests hold intent still.** A test changes only when a later stated item changes what it asserts (I14, H3).[^unchanging] When a code change needs a test change and no stated item moved, one of two defects is present: the code broke a promise, or the test was pinning structure. If every change to the code arrives with a change to its tests, nothing is being tested. The author of a change believes the change is right, so an author who can edit the tests edits them until they agree.[^impossible] That is why the Coder cannot write to the tests, and why a change set that edits a test without citing the superseding item does not promote.
+**T3. Tests hold intent still.** Change a promised outcome only when its governing requirement changes (I14, H3).[^unchanging] A test can also be wrong: the Tester corrects a mistaken derivation, broken fixture or structural assertion from the contract, recording why. Passing the candidate is never the reason. If every change to the code arrives with a change to its expectations, nothing is being tested. The author of a change believes the change is right, so an author who can edit the independent oracle edits it until it agrees.[^impossible] The Coder therefore cannot write the Tester's independent tests; development tests remain useful, separately identified evidence.
 
 The rule binds by authority:
 
@@ -50,7 +50,7 @@ The rule binds by authority:
 
 Every test declares its authority. A test that declares none is normative.
 
-**T41. Freeze the expectations, then append only.** The Tester's plan (every invariant row, expected value and falsifier) is hashed and recorded before any candidate exists. The runtime's freeze of Coder and Tester outputs before review ([SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md), freeze before review) is the same rule applied later. After the freeze, findings may add tests, attacks and examples. They never move an expected value; only a later stated item does that (T3). Every test is labeled *pre-freeze*, written before any candidate existed, or *post-freeze*, with what it was added from. The Tester stays blind to the implementation throughout (I3): a post-freeze test comes from a failure outcome, a finding or a new item, never from reading the code. The label lets the verdict weigh a post-freeze test as what it is, a test written knowing that a candidate exists.
+**T41. Preserve independent expectations and their history.** Derive expectations from the contract without reading the Coder's implementation (I3). A candidate may already exist: independence comes from the source of the expectation, not which lane finished first. Findings can add tests and attacks; record their basis and retain earlier results. Correct expectations only for the reasons in T3, never to match observed implementation output. Review exact candidate and test commits so the result identifies what actually ran. No pre-candidate plan hash, pre/post-freeze labels, extra ledger or stopped author process is required. If timing or prior knowledge affects the strength of evidence, describe the actual circumstances rather than infer them from a label.
 
 **T4. Assert the promised outcome at the most stable boundary that shows it.** The persisted row, the event, the money moved, the response the caller acts on. Not call counts, private methods, log wording or the status envelope. Ask of every assertion: would a correct rewrite of the internals break it? If so, it tests structure.[^desiderata]
 
@@ -125,7 +125,7 @@ A failing generated case is recorded with its seed and kept as a permanent examp
 
 ## Fidelity
 
-**T14. Run the real thing.** In order of preference: the real component; the real component in-process or in a disposable container; a fake that passes the real component's contract suite; a stub that raises a fault around the real component; a mock. Every step down is entered in the mock ledger with what stands behind it.[^doubles]
+**T14. Run the real thing.** In order of preference: the real component; the real component in-process or in a disposable container; a fake that passes the real component's contract suite; a stub that raises a fault around the real component; a mock. Explain each substitution and what stands behind it alongside the test or its evidence; a separate mock ledger is unnecessary.[^doubles]
 
 **T15. A fake earns trust by passing the real thing's tests.** One contract suite runs against both. A fake with no such suite drifts, and tests against it pass on fiction.
 
@@ -268,11 +268,11 @@ It does not turn a failed product check into an optional check.
 
 ## Testing the tests
 
-**T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. Where a mutation check is selected under T44, prove it by breaking the code and watching that named test fail (Gate D). Reuse unchanged valid evidence; treat observed survivors as findings.[^mutation]
+**T31. Every test names what would turn it red.** The falsifier is a specific wrong behavior, stated in contract terms. Where a mutation check is selected under T44, prove it by breaking the code and watching that named test fail. Reuse unchanged valid evidence; treat observed survivors as findings.[^mutation]
 
 Mechanical mutants flip operators and drop statements. They rarely produce the defect an invariant exists to prevent. For a required sensitivity check under T44, use a semantic falsifier: a plausible implementation that violates it the way a real mistake would. Examples: a retry that mints a new idempotency key; a charge taken before the dates are confirmed; a tenant filter applied after the query instead of in it; an `Authorization` header written to the capture record; a permanent error retried; the last page of results silently dropped. The evidence must reject each one. Mutation score is not a target either. It measures sensitivity, and a suite can kill every mutant while asserting the wrong requirement.
 
-**T42. Declare a mutant before applying it.** Each mutant states, before it runs, which invariant it breaks and which named test must turn red. It touches implementation only, never a test, a fixture, a mask or an oracle. A mutant declared after its result was read, or one that reddens some other test, shows that the suite is alive, not that the named requirement is covered. Mutation evidence belongs to the Validator's lane (Gate D), never to the author of the tests ([SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md), mutation evidence belongs to the Validator).
+**T42. Declare a mutant before applying it.** Each mutant states, before it runs, which invariant it breaks and which named test must turn red. It touches implementation only, never a test, a fixture, a mask or an oracle. A mutant declared after its result was read, or one that reddens some other test, shows that the suite is alive, not that the named requirement is covered. The Validator independently evaluates mutation evidence; the Tester does not inspect the implementation to manufacture it.
 
 **T32. A repair is red first.** New tests fail on the unfixed code, at least one of them on the defect itself, and pass on everything unrelated. A regression test never seen to fail has not shown that it can.
 
@@ -319,13 +319,13 @@ Deleting a test that no longer adds evidence is healthy. Record why. The deletio
 | Finding | Route |
 |---|---|
 | The code violates a valid item | Coder fixes, from the Validator's finding: the item violated and the behavior observed |
-| The architecture cannot satisfy the item | Back through the architecture phase; the Coder holds |
+| The architecture cannot satisfy the item | Validator resolves the design conflict; continue unaffected work |
 | The stated item changed | Tester re-derives the test from the latest statement (H3) |
 | The test asserts structure, not a promise | Tester rewrites or removes it and records why |
 | The test is nondeterministic | Tester repairs it; if it cannot be made deterministic, testability defect |
-| The artifacts are silent or in conflict | Human, by the spec-defect path |
-| No oracle exists: no stated item, law, relation or confirmed baseline says what correct is | Unverifiable. A question to the human (`FACTORY_QUESTION`), naming the decision needed. Never a guessed assertion |
-| A green-now guard is red on unrelated behavior | Human (I15) |
+| The artifacts are silent or in conflict | Validator resolves and records the contract under H6–H9; ask the human only at a genuine impasse |
+| No oracle exists: no stated item, law, relation or confirmed baseline says what correct is | Report the gap and ask the Validator for the missing contract; do not derive expectations from the implementation |
+| A green-now guard is red on unrelated behavior | Validator investigates the regression against the governing intent; retain the failure evidence |
 
 The loop "run, edit the expectations, run again" is forbidden in every lane.
 
@@ -351,7 +351,7 @@ The loop "run, edit the expectations, run again" is forbidden in every lane.
 - each mask and its status;
 - the policies applied and the exceptions in force;
 - what was not run, and why;
-- which of its tests are pre-freeze and which post-freeze (T41);
+- the basis for tests added or corrected after findings (T41);
 - what remains uncertain.
 
 **T43. Watch the suite's health, with no single score.** Each signal is read on its own:
@@ -361,7 +361,7 @@ The loop "run, edit the expectations, run again" is forbidden in every lane.
 - the rate of changed code that matches no class (T24);
 - exception count and age, and whether each legacy list only shrinks (T28);
 - mask coverage: how much of each payload is excluded from exact comparison, and with which status (T29);
-- the post-freeze share of the evidence (T41);
+- expectations changed after observing results, and whether the contract supports each correction (T41);
 - surviving and undeclared mutants (T31, T42).
 
 Fold them into one number and the number becomes the target, as coverage (T7) and mutation score (T31) do.
@@ -378,7 +378,7 @@ Fold them into one number and the number becomes the target, as coverage (T7) an
 6. What is real, what is a double, and what stands behind each double (T14)?
 7. What is masked, and with which status (T29)?
 8. Does it pass alone, in parallel, in random order and without real time (T35)?
-9. Was it written before the freeze or after, and if after, from what (T41)?
+9. Was the expectation derived independently, and what finding prompted any later correction (T41)?
 
 A missing answer is a gap. List it. Do not ship it as coverage.
 
@@ -392,7 +392,7 @@ A missing answer is a gap. List it. Do not ship it as coverage.
 | Seams | Effect `Layer` | Constructor injection |
 | Time | Effect `TestClock` | An injected clock |
 | Classification | Requirement types through the compiler API; the import graph | `ast`; the import graph |
-| Sensitivity | The factory's `mutate.sh` (Gate D) | The same |
+| Sensitivity | A targeted semantic mutation selected under T44 | The same |
 
 ---
 

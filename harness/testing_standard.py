@@ -10,10 +10,8 @@ what the lane was given:
 
 - ``docs/standards/TESTING.md`` — How We Test (the T-rules);
 - ``prompts/test.md`` — the Tester role doctrine;
-- the run's ``testing-strategy.md``, when the caller passes one (``tmux_lane.sh`` passes the
-  run's, mandatorily; ``dispatch_lane.sh`` does not, because run-model injects the ratified
-  strategy from the state capsule. A mutable Markdown view must not condition a qualified
-  lane (Gate B).
+- the run's testing strategy, when the caller supplies one. The normal launcher accepts
+  an optional strategy; a separate plan, ratification or pre-candidate hash is not required.
 
 A source that is missing, empty, a symlink, not a regular file or not UTF-8 refuses the block,
 and the caller refuses the launch.
