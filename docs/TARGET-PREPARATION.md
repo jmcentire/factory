@@ -117,3 +117,19 @@ hygiene, and all other existing promotion requirements remain separate mandatory
 
 Target-specific live-proof configuration remains necessary. Brownfield partial-output review stays
 refused. A prepared manifest/catalog is not a run-ready claim.
+
+### Select the authoring route at ignition
+
+After the unchanged Stage R/E and checkpoint gates, `harness/factory.sh <run> <task-file>
+--author-lanes native-tmux` explicitly selects the documented native author path. It records
+`author_lane_mode = "native-tmux"` and `UNQUALIFIED_NATIVE_TMUX` launcher/isolation labels;
+`--author-lanes qualified` is the unchanged default and requires the qualified runner configuration.
+This choice cannot switch or relabel an existing run. See [HARNESS.md](HARNESS.md) for the complete
+mode contract and native lane controls.
+
+Native authors may deliver reviewed work-in-progress PRs before endgame when that is the requested
+outcome. State actual verification, independence and remaining blockers in the PR. This is PR
+delivery, not a completed or promoted Factory run: explicit native-tmux runs are nonpromotable,
+even with added evidence. Formal qualified work needs a fresh authorized qualified-mode run; every
+existing endgame/promotion requirement remains. No provider-auth, candidate-resource registration,
+complete-candidate construction or gate exception is supplied by selecting this mode.

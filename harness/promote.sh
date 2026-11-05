@@ -62,7 +62,7 @@ CURRENT_CONTRACT=$(python3 - "$ROOT/harness.json" "$RUN" "$FACTORY_TARGET_STATE_
 import json, os, stat, sys
 path, run, target_state, commit, checkout, harness_tools = sys.argv[1:]
 sys.path.insert(0, harness_tools)
-from handoff_metadata import MetadataError, validate_metadata
+from handoff_metadata import MetadataError, require_promotable_metadata, validate_metadata
 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
 try:
     if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -76,6 +76,7 @@ finally:
 try:
     current = validate_metadata(doc, run=run, target_state=target_state,
                                 commit=commit, checkout=checkout)
+    require_promotable_metadata(doc)
 except MetadataError as exc:
     raise SystemExit(f"promote: {exc}") from exc
 print("true" if current else "false")
@@ -267,8 +268,11 @@ fi
 #
 # Atomic write (Opus F5): tmpfile + os.replace so the dispatcher's poll never reads a
 # half-written harness.json. Exit 70 on write-failure so it is distinct from BLOCKED (1).
-python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" "$ENDGAME_ADMISSION" <<'PY' 2>>"$REJECTION"
+python3 - "$ROOT/harness.json" "$RUN" "$VERDICT_FILE" "$ENDGAME_ADMISSION" \
+  "$D" "$FACTORY_TARGET_STATE_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" <<'PY' 2>>"$REJECTION"
 import datetime, fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
+sys.path.insert(0, sys.argv[5])
+from handoff_metadata import MetadataError, require_promotable_metadata, validate_metadata
 
 run_path = pathlib.Path(sys.argv[1])
 # Round-3 carryover: promote's close and record_no's terminal write share one
@@ -302,6 +306,11 @@ def sync_parent(path: pathlib.Path) -> None:
         os.close(fd)
 
 doc = json.loads(read_regular(run_path))
+try:
+    require_promotable_metadata(doc)
+except MetadataError as exc:
+    print(f"promote: {exc}", file=sys.stderr)
+    sys.exit(72)
 if doc.get("status") == "closed":
     print(f"promote: {run} already closed — nothing to do (idempotent)")
     sys.exit(0)
@@ -323,7 +332,12 @@ if doc.get("status") != "open":
 # that check and the atomic close. Legacy runs remain valid only without an
 # admission, while every current-contract run must still match its retained
 # endgame subject exactly.
-current_contract = "agreement_contract_version" in doc
+try:
+    current_contract = validate_metadata(
+        doc, run=run, target_state=sys.argv[6], commit=sys.argv[7], checkout=sys.argv[8])
+except MetadataError as exc:
+    print(f"promote: metadata changed before close: {exc}", file=sys.stderr)
+    sys.exit(72)
 if current_contract != (admission_file is not None):
     print("promote: endgame admission applicability changed before close", file=sys.stderr)
     sys.exit(72)
