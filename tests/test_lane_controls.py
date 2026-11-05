@@ -14,8 +14,11 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -167,8 +170,12 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
         ["kindex"]
     turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
     assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
-    assert lanes.windows("watch-coder") == []
+    # Plan billing removes the spending cap, not progress and completion observation.
+    [observer] = lanes.windows("watch-coder")
+    assert "lane_watchdog.py" in observer and "--slot coder" in observer
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["caps"]["wall_cap_s"] is None
+    assert row["caps"]["enforcement"] == "none"
     assert row["status"] == "active" and row["agent"] == "cursor-agent"
     assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
     assert row["cli_contract"] == "cursor-agent-stream-resume-v1"
@@ -1666,8 +1673,70 @@ def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -
     launched = lanes.lane("coder")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     calls = lanes.tmux_log.read_text().splitlines()
-    assert any("set-option -w -t r1:coder remain-on-exit on" in call for call in calls), calls
+    # Window retention may be configured by the host or by the new pane before its worker
+    # runs. Requiring a later host-side call wrongly rejects the race-free startup path.
+    [launch] = lanes.windows("coder")
+    retention = [call for call in calls
+                 if "set-option -w -t r1:coder remain-on-exit on" in call]
+    retention += [launch] if "set-option -w " in launch and "remain-on-exit on" in launch else []
+    assert retention, calls
     assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)
+
+
+def test_a_finished_lane_retains_its_own_window_on_real_tmux(tmp_path: Path) -> None:
+    """An immediately exiting fake author remains inspectable; a neighboring window survives."""
+    tmux = shutil.which("tmux")
+    if tmux is None:
+        pytest.skip("real tmux is unavailable; deterministic retention contract runs separately")
+    lanes = Lanes(tmp_path)
+    socket = json.loads((lanes.root / "harness.json").read_text())["tmux_socket"]
+    # Keep the test helper's native-executable guard, and forward only this fixture's socket.
+    _stub(lanes.stub, "tmux", (
+        f'[ "$1" = -L ] && [ "$2" = {shlex.quote(socket)} ] || exit 97\n'
+        f'exec {shlex.quote(tmux)} "$@"\n'
+    ))
+    _codex_stub(lanes.stub, signed_in=True)
+    codex = lanes.stub / "codex"
+    body = codex.read_text()
+    prefix, _, _ = body.rpartition("exit 0\n")
+    thread_started = json.dumps({
+        "type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000001",
+    })
+    codex.write_text(prefix + f"printf '%s\\n' {shlex.quote(thread_started)}\nexit 0\n")
+    home = tmp_path / "private-home"
+    home.mkdir()
+    lanes.env.update({"HOME": str(home), "SHELL": "/bin/sh", "FACTORY_LANE_SANDBOX": "off"})
+    base = [tmux, "-L", socket]
+
+    def inspect(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([*base, *args], capture_output=True, text=True, check=False)
+
+    try:
+        started = subprocess.run(
+            [*base, "-f", "/dev/null", "new-session", "-d", "-s", "r1", "-n", "neighbor",
+             "sleep 120"],
+            env=lanes.env, capture_output=True, text=True, check=False,
+        )
+        assert started.returncode == 0, started.stdout + started.stderr
+        before = inspect("list-panes", "-t", "=r1:=neighbor", "-F", "#{pane_id}:#{pane_pid}")
+        assert before.returncode == 0, before.stderr
+        launched = lanes.lane("coder")
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        deadline = time.monotonic() + 10
+        while True:
+            state = inspect("list-panes", "-t", "=r1:=coder", "-F", "#{pane_dead}")
+            if state.returncode == 0 and state.stdout.strip() == "1":
+                break
+            assert time.monotonic() < deadline, state.stdout + state.stderr
+            time.sleep(0.02)
+        option = inspect("show-options", "-w", "-v", "-t", "=r1:=coder", "remain-on-exit")
+        assert option.returncode == 0 and option.stdout.strip() == "on", option.stderr
+        exits = read_chain(lanes.root / "tmux-lanes" / "coder-exits.jsonl")
+        assert exits[-1]["slot"] == "coder" and exits[-1]["rc"] == 0
+        after = inspect("list-panes", "-t", "=r1:=neighbor", "-F", "#{pane_id}:#{pane_pid}")
+        assert after.returncode == 0 and after.stdout == before.stdout
+    finally:
+        inspect("kill-server")
 
 
 @pytest.mark.parametrize('purpose', ['review', 'wrapup'])
