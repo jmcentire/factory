@@ -4563,12 +4563,11 @@ def test_dispatcher_never_kills_the_validator_over_a_stop_file(
     assert (root / "events.jsonl").read_text() == ""
 
 
-def test_dispatcher_answers_a_seat_dialog_instead_of_paging_the_human(
+def test_dispatcher_reports_a_seat_dialog_without_answering(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """herald-dash-r2's Validator sat on a hook permission prompt. The harness accepts the
-    dialog's default and records it; it never pages the founder."""
+    """A blocked seat is visible without a screen scraper accepting its permission."""
     mod = load_dispatcher()
     root = tmp_path / "run"
     root.mkdir()
@@ -4587,13 +4586,13 @@ def test_dispatcher_answers_a_seat_dialog_instead_of_paging_the_human(
 
     d.check_seat_attention("validator", pane)
     d.check_seat_attention("validator", pane)
-    d.check_seat_attention("validator", pane)  # survived two answers: recorded, not paged
+    d.check_seat_attention("validator", pane)  # same occurrence: do not repeat the notice
     d.check_seat_attention("validator", pane)
 
-    assert sent == [("validator", ("Enter",)), ("validator", ("Enter",))]
+    assert sent == []
     rows = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
     kinds = [row["kind"] for row in rows if row["kind"].startswith("seat_dialog")]
-    assert kinds == ["seat_dialog_answered", "seat_dialog_answered", "seat_dialog_unanswered"]
+    assert kinds == ["seat_dialog_unanswered"]
     assert not hasattr(d, "page_operator")
 
 
@@ -4648,7 +4647,7 @@ def test_dispatcher_blocks_when_the_resident_orchestrator_stops_assessing(
 def dialog_dispatcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[object, object, Path, list[tuple[str, tuple[str, ...]]]]:
-    """A resident-run dispatcher whose dialog answers are recorded instead of sent to tmux."""
+    """Record any attempted dialog answer: observing a prompt must never call it."""
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
     root.mkdir(parents=True)
@@ -4676,7 +4675,7 @@ def dialog_events(root: Path) -> list[dict[str, object]]:
 
 def test_the_dispatcher_pages_nobody() -> None:
     """P-0001 (founder, 2026-10-18): the run involves the founder only at a genuine impasse.
-    A seat's dialog is the harness's to answer, so the dispatcher has no paging path at all."""
+    A seat's dialog is reported to its owners; observation does not decide it."""
     load_dispatcher()
     source = (HARNESS / "dispatcher.py").read_text(encoding="utf-8")
     assert "send_to_question_channel" not in source
@@ -4754,19 +4753,23 @@ def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
         ("coder", "Do you trust the contents of this directory?\n"
                   "› 1. Yes, allow Codex to work in this folder\n",
          "folder_trust"),
+        ("validator", "Quick safety check: Is this a project you trust?\n"
+                      " ❯ No, exit\n Yes, I trust this folder\n",
+         "folder_trust"),
+        ("validator", "WARNING: Claude Code running in Bypass Permissions mode\n"
+                      " ❯ 1. No, exit\n 2. Yes, I accept\n",
+         "bypass_permissions"),
     ],
 )
-def test_the_harness_answers_a_seats_permission_or_trust_dialog(
+def test_the_harness_observes_permission_and_trust_without_answering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, dialog: str, kind: str
 ) -> None:
-    """#79: run e's Validator sat ~14 min on a hook's confirmation prompt nobody watched; the
-    founder had to accept every seat's folder-trust prompt by hand. The harness accepts the
-    dialog's default and records it."""
+    """Report real native dialogs regardless of the highlighted choice, never press keys."""
     _, d, root, answers = dialog_dispatcher(tmp_path, monkeypatch)
     d.check_seat_attention(window, "earlier output\n" + dialog)  # type: ignore[attr-defined]
-    assert answers == [(window, ("Enter",))]
+    assert answers == []
     (event,) = dialog_events(root)
-    assert event["kind"] == "seat_dialog_answered"
+    assert event["kind"] == "seat_dialog_unanswered"
     assert str(event["detail"]).startswith(f"{kind}: {window} showed this")
 
 

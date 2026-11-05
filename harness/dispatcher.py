@@ -60,9 +60,8 @@ TRIGGER_PATTERNS: dict[str, str] = {
     "spec_defect": r"spec-defect|specification defect",
     "contamination": r"contaminat",
 }
-# A seat sitting on a dialog is otherwise silent. Matched on the pane's last lines only. The
-# harness answers the dialogs it can (SEAT_DIALOG_KEYS) once they have stayed briefly
-# (attention_persist_s); nothing is paged to the human (founder, 2026-10-18, P-0001).
+# A seat sitting on a dialog is otherwise silent. Observe persistent prompts for the
+# run's owners; screen text is not authority to accept a permission or trust decision.
 SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
     # A host permission dialog: Claude Code's (a PreToolUse "ask" hook raises the same one) or
     # Codex's approval prompt. Nobody watches a seat's pane; run e's Validator sat 14 min on one.
@@ -77,6 +76,8 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"Do you trust the (?:files|contents) (?:in|of) this (?:folder|directory)|"
         r"Yes, I trust this folder|allow Codex to work in this folder"
     ),
+    # A fresh Claude Code may show this after the user selected bypass permissions.
+    "bypass_permissions": re.compile(r"running in Bypass Permissions mode"),
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     # Anchored on each provider's own dialog line, never on words ordinary output also uses
     # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
@@ -89,12 +90,6 @@ SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\bUsage limit reached \u00b7|"
         r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
     ),
-}
-#: The keys that accept a dialog's default (highlighted) answer, which for every dialog above is
-#: the one that lets the seat continue. A usage limit has no answer: it is recorded and waited out.
-SEAT_DIALOG_KEYS: dict[str, tuple[str, ...]] = {
-    "permission_prompt": ("Enter",),
-    "folder_trust": ("Enter",),
 }
 #: A dialog already recorded as unanswerable; it is not recorded again until it clears.
 _RECORDED = 99
@@ -534,15 +529,10 @@ class Dispatcher:
         return changed
 
     def check_seat_attention(self, window: str, tail: str) -> None:
-        """Answer a dialog a seat sits on; record what was answered, and what could not be.
+        """Report a persistent dialog once per occurrence without answering it.
 
-        A usage-limit dialog in run c's Validator stalled the whole run ~3h and nothing noticed;
-        run e's Validator sat 14 min on a permission prompt; herald-dash-r2's on a hook prompt.
-        The pane's last lines are matched, and a match is acted on once it has persisted for
-        attention_persist_s, so a dialog the seat clears itself is left alone. The harness
-        accepts the dialog's default, records it, and re-arms once the dialog is gone. A dialog
-        that survives two answers, or has none (a usage limit), is recorded once and wakes the
-        run's own roles; nothing is paged to the human.
+        The assigned roles resolve the actual blocker under the user's instructions.
+        A pane capture cannot establish permission, identity or which option is safe.
         """
         lines = tail.splitlines()
         while lines and not lines[-1].strip():
@@ -559,21 +549,9 @@ class Dispatcher:
             first = self.attention_since.setdefault(key, current)
             if current - first < self.attention_persist_s:
                 continue
-            attempts = self.answered.get(key, 0)
-            if attempts == _RECORDED:
+            if self.answered.get(key) == _RECORDED:
                 continue
-            keys = SEAT_DIALOG_KEYS.get(kind)
             detail = f"{window} showed this for {current - first:.0f}s: {hit[:200]}"
-            if keys and attempts < 2:
-                self.answered[key] = attempts + 1
-                self.attention_since[key] = current
-                sent = self.answer_dialog(window, keys)
-                self.event(
-                    "seat_dialog_answered" if sent else "seat_dialog_answer_failed",
-                    f"{kind}: {detail}"[:500],
-                    wake=False,
-                )
-                continue
             self.answered[key] = _RECORDED
             self.event(
                 "seat_dialog_unanswered", f"{kind}: {detail}"[:500], wake=window != "orchestrator"

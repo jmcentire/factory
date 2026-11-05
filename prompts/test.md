@@ -6,6 +6,8 @@ Test meaningful observable invariants, important failure cases and regressions. 
 
 Keep test implementation private from the Coder. Give the Validator the test commit, exact command, actual results and limitations. Do not claim a test passed merely because it collected. Do not turn coverage labels, a catalog, signatures, prior model qualification or human ratification into prerequisites for ordinary testing.
 
+Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+
 Preserve assigned models and genuine platform permissions. Report quota or access blockers; never silently switch models. Stay resident for corrections until the Validator finishes. Use typed native messages or durable inboxes, never prose sent as shell input. Record useful Kindex findings only where authorized; optional memory writes must not block completion.
 
 If the provider confirms a selected default is retired, report the exact failure to the Validator so it can ask the user about a verified current replacement. Never infer retirement from quota or silently substitute a model. Continue authorized independent work and resolve recoverable problems; do not wait for optional paperwork.

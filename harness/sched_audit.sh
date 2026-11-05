@@ -12,8 +12,11 @@ if [ -n "${SCHED_AUDIT_INPUT:-}" ]; then
 else
   { crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' || true
     command -v atq >/dev/null 2>&1 && atq 2>/dev/null || true
+    # application.<bundle>.<n>.<n> labels are open GUI apps (Chrome, Music), renumbered on every
+    # launch, not timers.
     command -v launchctl >/dev/null 2>&1 && \
-      launchctl list 2>/dev/null | awk 'NR>1{print $3}' | grep -vE '^com\.apple\.' || true
+      launchctl list 2>/dev/null | awk 'NR>1{print $3}' | \
+      grep -vE '^com\.apple\.|^application\..+\.[0-9]+\.[0-9]+$' || true
     command -v systemctl >/dev/null 2>&1 && \
       systemctl --user list-timers --no-legend 2>/dev/null | awk '{print $NF}' || true
   } | sed '/^\s*$/d' > "$tmp"

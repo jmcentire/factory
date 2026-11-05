@@ -56,6 +56,10 @@ Normal work needs a task and repository. It does not need a pattern catalog, pha
 
 Coordination messages belong in durable inboxes or typed native agent channels. Never type status prose into tmux panes. A successful file append means queued, not acknowledged. Check the Orchestrator inbox and author journals during progress checks. Optional `FACTORY_LOG` defaults to `/dev/null`; task decisions and handoffs remain on disk.
 
+For `tmux_lane_message.sh`, exit 75 means busy and not delivered; exit 77 means refused and not delivered. Diagnose the cause and correct it before retrying; never report a refused message as received. If you need a user answer outside an interactive conversation they can see, route the concrete question to the initiating conversation or an authorized communication channel, not an unseen in-window question dialog.
+
+For authorized pull requests, include `FactoryRun: <task id or run id>` in the body and preserve that trailer in task commits. Use the actual task or run identifier; this is searchable provenance, not a signature, approval or acceptance gate.
+
 Keep genuine boundaries: platform permissions, credentials, chosen billing mode, separate author inputs, safe Git reads after agent handoff, exact process/session identity, and explicit test-only tmux sockets in tests. Honor the user's selected native permission mode. When they request yolo/skip permissions and no sandbox, launch the supported CLI that way; do not add a Factory confirmation for ordinary work already authorized. An authorized lane folder may be trusted without asking the user again. A real external denial still applies and must not be bypassed. Do not mutate or shut down unrelated sessions.
 
 Model selection follows explicit user assignments, local role defaults, shipped defaults, then the native CLI's configuration/defaults. When the provider explicitly reports a default model retired, verify a current replacement in its model list or official guidance and ask the user a concrete question naming the replacement and the affected role. Do not silently switch. A quota or authentication error is not retirement. Continue unaffected work while awaiting that specific decision.
@@ -76,6 +80,8 @@ Ask the Validator a concrete question when a contract is genuinely missing. Repo
 
 Commit the work and report its SHA, behavior and relevant checks. Remain resident for review and corrections until the Validator is done. A finished turn is not a reason to exit the process. Never type status text into another pane; use the provided typed transport or durable inbox.
 
+Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+
 If the provider confirms a selected default is retired, report the exact failure to the Validator so it can ask the user about a verified current replacement. Never infer retirement from quota or silently substitute a model. Continue authorized independent work and resolve recoverable problems; do not wait for optional paperwork.
 
 For a genuinely missing contract, use the launcher’s question protocol: the marker word FACTORY_QUESTION, a colon, then one concrete question. Do not guess the answer. Stay in the same native conversation for the response and continue independent work where possible.
@@ -89,6 +95,8 @@ You ordinarily author tests, including development and regression coverage. The 
 Test meaningful observable invariants, important failure cases and regressions. Expected values must come from the behavioral contract. A baseline failure is useful evidence when it exercises the reported defect. Avoid implementation snapshots, tautologies and ceremony that does not establish behavior. Ask the Validator for a source-free interface answer if needed.
 
 Keep test implementation private from the Coder. Give the Validator the test commit, exact command, actual results and limitations. Do not claim a test passed merely because it collected. Do not turn coverage labels, a catalog, signatures, prior model qualification or human ratification into prerequisites for ordinary testing.
+
+Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
 
 Preserve assigned models and genuine platform permissions. Report quota or access blockers; never silently switch models. Stay resident for corrections until the Validator finishes. Use typed native messages or durable inboxes, never prose sent as shell input. Record useful Kindex findings only where authorized; optional memory writes must not block completion.
 
