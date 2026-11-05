@@ -416,3 +416,141 @@ def test_retired_startup_options_fail_explicitly_without_mutation(launch, option
     assert result.returncode == 64 and f"unknown argument: {option}" in result.stderr
     assert not (root.parent / "new-task").exists()
     assert not marker.exists()
+
+
+def _seats(monkeypatch, on_wait=lambda role: None):
+    """tmux whose windows open; on_wait plays the seat's part before its ready signal."""
+    calls = []
+
+    def tmux(argv, **kwargs):
+        assert argv[0] == "tmux", "startup must not probe or execute native agents"
+        calls.append(argv)
+        if "wait-for" in argv:
+            on_wait(argv[-1].split("-")[2])  # factory-ready-<role>-<nonce>
+        return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", tmux)
+    return calls
+
+
+def test_startup_waits_for_each_seat_to_register(launch, monkeypatch):
+    root, _, _, _, _, _ = launch
+    calls = _seats(monkeypatch)
+    run_record.start(root.parent, "task")
+    waits = [call for call in calls if "wait-for" in call]
+    assert [call[-1].split("-")[2] for call in waits] == ["validator", "orchestrator"]
+    for role in ("validator", "orchestrator"):
+        window = next(c for c in calls if "-n" in c and c[c.index("-n") + 1] == role)
+        channel = next(w[-1] for w in waits if w[-1].split("-")[2] == role)
+        assert shlex.join(["--ready-channel", channel]) in window[-1]
+
+
+def test_a_seat_that_stops_during_startup_fails_the_start_and_can_be_retried(
+    launch, monkeypatch, capsys,
+):
+    root, _, _, _, _, _ = launch
+    original = {name: (root / name).read_bytes() for name in ("harness.json", "TASK.md")}
+
+    def validator_stops(role):
+        # What the wrapper leaves when it cannot record the agent it started.
+        if role == "validator":
+            with open(root / "validator-lane.log", "a") as log:
+                log.write("\x1b[0mlane-agent: env started as pid 4242, but the lane failed: "
+                          "cannot publish worker process identity\n")
+            with open(root / "validator-exits.jsonl", "a") as exits:
+                exits.write('{"rc":127,"slot":"validator"}\n')
+
+    calls = _seats(monkeypatch, validator_stops)
+    with pytest.raises(ValueError, match="the validator stopped during startup; "
+                       "lane-agent: env started as pid 4242, but the lane failed"):
+        run_record.start(root.parent, "task")
+    _, record = run_record.load(root.parent, "task")
+    assert calls[-1] == ["tmux", "-L", record["tmux_socket"], "kill-session", "-t", "=task"]
+    assert "Factory task: tmux" not in capsys.readouterr().out
+    notice = json.loads((root / "validator/inbox.jsonl").read_text())
+    retry = shlex.join([sys.executable, str(Path(run_record.__file__).resolve()), "start",
+                        "--runs", str(root.parent), "--run", "task"])
+    assert notice["sender"] == "host" and notice["text"].endswith(f"retry with: {retry}")
+
+    # The retry the notice names starts the run on its retained inputs; the earlier exit row
+    # is history, not this start's failure.
+    calls = _seats(monkeypatch)
+    run_record.start(root.parent, "task")
+    assert "Factory task: tmux" in capsys.readouterr().out
+    assert not any("kill-session" in call for call in calls)
+    assert {name: (root / name).read_bytes() for name in original} == original
+
+
+def test_a_seat_that_never_registers_fails_the_start(launch, monkeypatch):
+    root, _, _, _, _, _ = launch
+    calls = []
+
+    def hung(argv, **kwargs):
+        calls.append(argv)
+        if "wait-for" in argv:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", hung)
+    with pytest.raises(ValueError, match="the validator did not register within 30 seconds"):
+        run_record.start(root.parent, "task")
+    assert any("kill-session" in call for call in calls)
+
+
+def test_a_sandboxed_start_warns_and_its_failure_says_to_leave_the_sandbox(
+    launch, monkeypatch, capsys,
+):
+    root, _, _, _, _, _ = launch
+    monkeypatch.setattr(run_record, "sandboxed", lambda: True)
+    _seats(monkeypatch)
+    run_record.start(root.parent, "task")
+    assert "inside a macOS sandbox" in capsys.readouterr().err
+
+    def stops(role):
+        with open(root / f"{role}-exits.jsonl", "a") as exits:
+            exits.write('{"rc":127}\n')
+
+    _seats(monkeypatch, stops)
+    with pytest.raises(ValueError, match="retry from a shell outside the macOS sandbox"):
+        run_record.start(root.parent, "task")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="a macOS sandbox")
+def test_a_macos_sandbox_is_detected():
+    if run_record.sandboxed():
+        pytest.skip("this runner is itself sandboxed")
+    probe = [sys.executable, "-c", "from harness import run_record; print(run_record.sandboxed())"]
+    env = {**os.environ, "PYTHONPATH": str(Path(run_record.__file__).parents[1])}
+    assert subprocess.run(probe, capture_output=True, text=True, env=env).stdout == "False\n"
+    confined = subprocess.run(["sandbox-exec", "-p", "(version 1)(allow default)", *probe],
+                              capture_output=True, text=True, env=env)
+    assert confined.stdout == "True\n", confined.stderr
+
+
+def test_seats_get_the_tmux_socket_directory(launch, monkeypatch):
+    # Without TMUX_TMPDIR a seat's ready signal, and every harness tmux call it makes, reaches
+    # the default socket directory instead of the run's server.
+    root, _, _, capture, invocation, _ = launch
+    monkeypatch.setenv("TMUX_TMPDIR", "/fixture/tmux-sockets")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        assert invocation(calls, role)[1]["TMUX_TMPDIR"] == "/fixture/tmux-sockets"
+
+
+def test_a_first_seat_that_closes_the_session_is_reported_by_name(launch, monkeypatch):
+    root, _, _, _, _, _ = launch
+
+    def tmux(argv, **kwargs):
+        if "new-window" in argv:
+            # The Validator's window was the session's only one: its exit closed the session.
+            with open(root / "validator-lane.log", "a") as log:
+                log.write("lane-agent: could not start codex: [Errno 2] No such file\n")
+            with open(root / "validator-exits.jsonl", "a") as exits:
+                exits.write('{"rc":127,"slot":"validator"}\n')
+            raise subprocess.CalledProcessError(1, argv)
+        return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", tmux)
+    with pytest.raises(ValueError, match="the validator stopped during startup; "
+                       "lane-agent: could not start codex"):
+        run_record.start(root.parent, "task")
