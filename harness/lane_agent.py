@@ -212,7 +212,8 @@ def _started(pid: object) -> str:
         # A macOS sandbox refuses to exec ps, which is setuid root, and a minimal image may
         # not have it. The kernel still answers.
         return _kernel_started(number)
-    return probe.stdout.strip() if probe.returncode == 0 else ""
+    text = probe.stdout.strip()
+    return text if probe.returncode == 0 and text != "-" else ""
 
 
 _DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -245,8 +246,8 @@ def _kernel_started(pid: int) -> str:
             seconds = boot + int(fields[19]) // os.sysconf("SC_CLK_TCK")
         except (OSError, ValueError, IndexError, StopIteration):
             return ""
-    if seconds is None:
-        return ""
+    if seconds is None or seconds <= 0:
+        return ""  # an exiting process can read as the epoch: that is no start time
     at = datetime.datetime.fromtimestamp(seconds, datetime.UTC)
     return (f"{_DAYS[at.weekday()]} {_MONTHS[at.month - 1]} {at.day:2d} "
             f"{at:%H:%M:%S} {at.year}")
@@ -660,22 +661,27 @@ def record_exit(exits: pathlib.Path, *, slot: str, rc: int, stopped: bool) -> di
     return row
 
 
-def _wake(channel: str) -> Callable[[], None]:
-    """Signal a tmux wait-for channel on the run's private server. tmux keeps a signal no one
-    waits for yet, so the launcher may start waiting after the lane signals."""
+class _Wake:
+    """Signal a tmux wait-for channel on the run's private server, once. tmux keeps a signal no
+    one waits for yet, so the launcher may start waiting after the lane signals."""
 
-    def signal_channel() -> None:
+    def __init__(self, channel: str) -> None:
+        self.channel = channel
+        self.sent = False
+
+    def __call__(self) -> None:
+        if self.sent:
+            return
+        self.sent = True
         socket = os.environ.get("FACTORY_TMUX_SOCKET")
         try:
             # Not the pane's terminal: a tmux client on one checks TERM, and refuses a terminal
             # type it has no entry for (xterm-ghostty) before it sends anything.
             subprocess.run(["tmux", *(["-L", socket] if socket else []), "wait-for", "-S",
-                            channel], stdin=subprocess.DEVNULL, capture_output=True, check=False,
-                           timeout=15)
+                            self.channel], stdin=subprocess.DEVNULL, capture_output=True,
+                           check=False, timeout=15)
         except (OSError, subprocess.SubprocessError):
             pass  # The launcher's wait times out and reports the seat unregistered.
-
-    return signal_channel
 
 
 def _record_session(path: pathlib.Path, session: str) -> None:
@@ -810,7 +816,15 @@ def run_lane(
             announced = True
             ready()
 
-    def record_worker(status: str) -> None:
+    def register() -> None:
+        # "Registered" means a receipt for a worker still running. One that already exited,
+        # receipt or not, is announced only after its exit is recorded, so the launcher reads
+        # the exit instead of a start.
+        assert process is not None
+        if record_worker("running") and process.poll() is None:
+            announce()
+
+    def record_worker(status: str) -> bool:
         # The tmux pane owns this wrapper; pause the child doing the work, never the pane root
         # (tmux automatically SIGCONTs that root). No command line or credential is retained.
         assert process is not None
@@ -823,7 +837,7 @@ def run_lane(
                    "worker": {"pid": process.pid, "started": worker_start}}
         if not wrapper_start or not worker_start:
             if process.poll() is not None:
-                return  # a completed short-lived command needs its exit receipt, not a pause
+                return False  # a completed short-lived command needs its exit receipt
             raise OSError("cannot publish worker process identity: no start time for pid "
                           f"{os.getpid() if not wrapper_start else process.pid}")
         fd, temporary = tempfile.mkstemp(prefix=".worker-", dir=path.parent)
@@ -841,6 +855,7 @@ def run_lane(
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+        return True
 
     def _watch(raw: bytes) -> None:
         nonlocal session_seen, refused_billing
@@ -869,8 +884,7 @@ def run_lane(
     try:
         if terminal:
             process = subprocess.Popen(argv, env=child_env)
-            record_worker("running")
-            announce()
+            register()
             rc = process.wait()
         else:
             process = subprocess.Popen(
@@ -878,8 +892,7 @@ def run_lane(
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 env=child_env,
             )
-            record_worker("running")
-            announce()
+            register()
             assert process.stdout is not None
             def emit(raw: bytes) -> None:
                 sys.stdout.buffer.write(raw)
@@ -1119,23 +1132,36 @@ def main(argv: list[str] | None = None) -> int:
                             billing=arguments.billing)
             print(how)
             return 0
-        return run_lane(
-            arguments.lane_command,
-            slot=arguments.slot,
-            log=arguments.log,
-            exits=arguments.exits,
-            prompt=arguments.prompt_arg,
-            terminal=arguments.terminal,
-            env_file=arguments.env_file,
-            session_agent=arguments.session_agent,
-            session_file=arguments.session_file,
-            plan_only=arguments.plan_only,
-            boundary_record=arguments.boundary_record,
-            boundary_role=arguments.boundary_role,
-            persistent=arguments.persistent,
-            run_root=arguments.run_root,
-            ready=(_wake(arguments.ready_channel) if arguments.ready_channel else None),
-        )
+        wake = _Wake(arguments.ready_channel) if arguments.ready_channel else None
+        try:
+            return run_lane(
+                arguments.lane_command,
+                slot=arguments.slot,
+                log=arguments.log,
+                exits=arguments.exits,
+                prompt=arguments.prompt_arg,
+                terminal=arguments.terminal,
+                env_file=arguments.env_file,
+                session_agent=arguments.session_agent,
+                session_file=arguments.session_file,
+                plan_only=arguments.plan_only,
+                boundary_record=arguments.boundary_record,
+                boundary_role=arguments.boundary_role,
+                persistent=arguments.persistent,
+                run_root=arguments.run_root,
+                ready=wake,
+            )
+        except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError) as error:
+            if wake is not None and not wake.sent:
+                # Refused before it ran. A launcher is waiting on this lane: record the refusal
+                # as its exit, so the launcher reports it now instead of timing out.
+                try:
+                    _append(arguments.log, f"lane-agent: {error}\n".encode())
+                    record_exit(arguments.exits, slot=arguments.slot, rc=70, stopped=False)
+                except OSError:
+                    pass
+                wake()
+            raise
     except PreflightRefused as refused:
         print(f"lane-agent: {refused}", file=sys.stderr)
         print(f"lane-agent: remediation: {refused.remediation}", file=sys.stderr)

@@ -525,3 +525,32 @@ def test_a_macos_sandbox_is_detected():
     confined = subprocess.run(["sandbox-exec", "-p", "(version 1)(allow default)", *probe],
                               capture_output=True, text=True, env=env)
     assert confined.stdout == "True\n", confined.stderr
+
+
+def test_seats_get_the_tmux_socket_directory(launch, monkeypatch):
+    # Without TMUX_TMPDIR a seat's ready signal, and every harness tmux call it makes, reaches
+    # the default socket directory instead of the run's server.
+    root, _, _, capture, invocation, _ = launch
+    monkeypatch.setenv("TMUX_TMPDIR", "/fixture/tmux-sockets")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        assert invocation(calls, role)[1]["TMUX_TMPDIR"] == "/fixture/tmux-sockets"
+
+
+def test_a_first_seat_that_closes_the_session_is_reported_by_name(launch, monkeypatch):
+    root, _, _, _, _, _ = launch
+
+    def tmux(argv, **kwargs):
+        if "new-window" in argv:
+            # The Validator's window was the session's only one: its exit closed the session.
+            with open(root / "validator-lane.log", "a") as log:
+                log.write("lane-agent: could not start codex: [Errno 2] No such file\n")
+            with open(root / "validator-exits.jsonl", "a") as exits:
+                exits.write('{"rc":127,"slot":"validator"}\n')
+            raise subprocess.CalledProcessError(1, argv)
+        return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", tmux)
+    with pytest.raises(ValueError, match="the validator stopped during startup; "
+                       "lane-agent: could not start codex"):
+        run_record.start(root.parent, "task")

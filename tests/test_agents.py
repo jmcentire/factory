@@ -415,7 +415,13 @@ def test_a_lane_reads_start_times_from_the_kernel_when_ps_cannot_run(tmp_path, m
     # startup (collection-bootstrap-20261105-r2); the kernel answers with the same text.
     gone = subprocess.Popen([sys.executable, '-c', 'pass'])
     gone.wait()
-    expected = lane_agent._started(os.getpid())
+    try:
+        expected = subprocess.run(['ps', '-o', 'lstart=', '-p', str(os.getpid())],
+                                  capture_output=True, text=True, check=True,
+                                  env={**os.environ, 'TZ': 'UTC', 'LC_ALL': 'C',
+                                       'LANG': 'C'}).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip('needs a runnable ps to compare the kernel against')
     real_run = lane_agent.subprocess.run
 
     def refuse_ps(argv, *args, **kwargs):
@@ -475,3 +481,64 @@ def test_ready_fires_once_after_the_receipt_or_after_the_exit(tmp_path, monkeypa
     assert lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(30)'],
                                **lane) == 127
     assert seen == [(False, True)]
+
+
+def test_an_agent_that_exits_before_it_registers_is_announced_after_its_exit(tmp_path,
+                                                                           monkeypatch):
+    # A CLI that is not signed in can exit before the wrapper reads its start time. Unreaped,
+    # it still has one, so a receipt alone would wake the launcher before the exit is recorded.
+    real_started = lane_agent._started
+
+    def exited_first(pid):
+        if pid != os.getpid():
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        return real_started(pid)
+
+    monkeypatch.setattr(lane_agent, '_started', exited_first)
+    seen = []
+    rc = lane_agent.run_lane(
+        [sys.executable, '-c', 'raise SystemExit(3)'], slot='validator', terminal=True,
+        log=tmp_path/'lane.log', exits=tmp_path/'exits.jsonl',
+        ready=lambda: seen.append((tmp_path/'exits.jsonl').exists()))
+    assert rc == 3 and seen == [True]
+
+
+def test_a_start_time_of_dash_or_the_epoch_is_no_start_time(monkeypatch):
+    monkeypatch.setattr(lane_agent.subprocess, 'run', lambda argv, **kwargs:
+                        subprocess.CompletedProcess(argv, 0, '-\n', ''))
+    assert lane_agent._started(os.getpid()) == ''
+    if sys.platform == 'darwin':
+        import ctypes
+        import ctypes.util
+
+        class Epoch:
+            def sysctl(self, mib, count, info, size, new, new_size):
+                ctypes.memset(info, 0, 8)
+                return 0
+
+        # find_library loads libraries itself on some versions, so it cannot see the fake.
+        monkeypatch.setattr(ctypes.util, 'find_library', lambda name: 'libc')
+        monkeypatch.setattr(ctypes, 'CDLL', lambda *args, **kwargs: Epoch())
+        assert lane_agent._kernel_started(os.getpid()) == ''
+
+
+def test_a_lane_refused_before_it_runs_records_its_exit_and_wakes_the_launcher(tmp_path,
+                                                                             monkeypatch):
+    signals = []
+    real_run = lane_agent.subprocess.run
+
+    def tmux(argv, *args, **kwargs):
+        if argv[0] == 'tmux':
+            signals.append(argv)
+            return subprocess.CompletedProcess(argv, 0, b'', b'')
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(lane_agent.subprocess, 'run', tmux)
+    monkeypatch.setenv('FACTORY_TMUX_SOCKET', 'factory-fixture')
+    rc = lane_agent.main(['run', '--slot', 'validator', '--log', str(tmp_path/'lane.log'),
+                          '--exits', str(tmp_path/'exits.jsonl'), '--ready-channel', 'ch', '--'])
+    assert rc == 70
+    assert 'lane-agent: lane command is empty' in (tmp_path/'lane.log').read_text()
+    row = json.loads((tmp_path/'exits.jsonl').read_text())
+    assert row['slot'] == 'validator' and row['rc'] == 70
+    assert signals == [['tmux', '-L', 'factory-fixture', 'wait-for', '-S', 'ch']]

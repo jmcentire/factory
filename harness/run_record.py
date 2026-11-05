@@ -420,7 +420,9 @@ def start(runs: Path, run: str) -> None:
                 raise ValueError(available.stderr.strip() or "Ollama model is unavailable")
         env = {
             key: os.environ[key]
-            for key in ("HOME", "USER", "PATH", "TMPDIR", "TERM", "SHELL", "LANG", "CODEX_HOME")
+            # TMUX_TMPDIR places the run's tmux socket; a seat without it reaches another server.
+            for key in ("HOME", "USER", "PATH", "TMPDIR", "TMUX_TMPDIR", "TERM", "SHELL", "LANG",
+                        "CODEX_HOME")
             if key in os.environ
         }
         # Reuse the adapter's credential declarations. Plan mode never inherits API keys.
@@ -476,6 +478,13 @@ def start(runs: Path, run: str) -> None:
         pipe += ' "$TMUX_PANE" ' + shlex.quote(capture)
         commands.append((role, channel, exits.stat().st_size if exits.exists() else 0,
                          pipe + " && exec " + shlex.join(command)))
+    def stopped(role: str, before: int) -> str:
+        exits = root / f"{role}-exits.jsonl"
+        if exits.exists() and exits.stat().st_size > before:
+            return (f"the {role} stopped during startup; "
+                    f"{last_lane_line(root / f'{role}-lane.log')}")
+        return ""
+
     created = False
     try:
         for role, _, _, shell_command in commands:
@@ -499,10 +508,8 @@ def start(runs: Path, run: str) -> None:
                     f"the {role} did not register within {SEAT_REGISTRATION_SECONDS} seconds; "
                     f"{last_lane_line(root / f'{role}-lane.log')}"
                 ) from None
-            exits = root / f"{role}-exits.jsonl"
-            if exits.exists() and exits.stat().st_size > before:
-                raise SeatStartFailed(f"the {role} stopped during startup; "
-                                      f"{last_lane_line(root / f'{role}-lane.log')}")
+            if seat := stopped(role, before):
+                raise SeatStartFailed(seat)
             if waited.returncode:
                 raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
         # No dispatcher typing prose, no supervisor that can stop work for review lag.
@@ -512,6 +519,12 @@ def start(runs: Path, run: str) -> None:
     except BaseException as error:
         if created:
             subprocess.run([*tmux, "kill-session", "-t", f"={run}"], capture_output=True)
+        if created and isinstance(error, subprocess.CalledProcessError):
+            # A first window whose seat already exited took the session with it, so the next
+            # window failed for want of one: report the seat, not tmux's exit status.
+            seat = next((s for role, _, before, _ in commands if (s := stopped(role, before))), "")
+            if seat:
+                error = SeatStartFailed(seat)
         if isinstance(error, (subprocess.CalledProcessError, SeatStartFailed)):
             cause = (f"with exit {error.returncode}"
                      if isinstance(error, subprocess.CalledProcessError) else f"because {error}")

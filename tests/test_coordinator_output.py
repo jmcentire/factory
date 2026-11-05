@@ -149,3 +149,47 @@ def test_a_seat_that_cannot_start_fails_a_real_start(tmp_path, monkeypatch):
         assert "retry with:" in json.loads((root / "validator/inbox.jsonl").read_text())["text"]
     finally:
         subprocess.run([*tmux, "kill-server"], capture_output=True)
+
+
+def test_a_real_start_registers_its_seats_under_a_custom_tmux_socket_directory(tmp_path,
+                                                                            monkeypatch):
+    import shutil
+    import tempfile
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c",
+                    "user.email=test@example.invalid", "commit", "--allow-empty",
+                    "-qm", "initial"], check=True)
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    stub = binary / "codex"
+    stub.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    stub.chmod(0o755)
+    # A short directory: a Unix socket path has to fit in 104 bytes on macOS.
+    sockets = tempfile.mkdtemp(prefix="fx-", dir="/tmp")
+    monkeypatch.setenv("TMUX_TMPDIR", sockets)
+    monkeypatch.setenv("PATH", str(binary) + ":/opt/homebrew/bin:/usr/bin:/bin")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("FACTORY_CONFIG", raising=False)
+    monkeypatch.setenv("FACTORY_SEAT_BILLING", "plan")
+    for role in ("VALIDATOR", "ORCHESTRATOR", "CODER", "TESTER"):
+        monkeypatch.setenv(f"FACTORY_{role}_AGENT", "codex")
+        monkeypatch.setenv(f"FACTORY_{role}_MODEL", "fixture")
+        monkeypatch.setenv(f"FACTORY_{role}_EFFORT", "")
+    runs = tmp_path / "runs"
+    root = run_record.create(runs, "sockets", repo, b"Disposable socket probe")
+    doc = json.loads((root / "harness.json").read_text())
+    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    try:
+        run_record.start(runs, "sockets")
+        socket = subprocess.check_output([*tmux, "display-message", "-p", "#{socket_path}"],
+                                         text=True).strip()
+        assert os.path.realpath(socket).startswith(os.path.realpath(sockets))
+        for role in ("validator", "orchestrator"):
+            receipt = json.loads((root / f"{role}-process.json").read_text())
+            assert receipt["status"] == "running"
+    finally:
+        subprocess.run([*tmux, "kill-server"], capture_output=True)
+        shutil.rmtree(sockets, ignore_errors=True)
