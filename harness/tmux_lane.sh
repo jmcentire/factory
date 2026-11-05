@@ -1106,10 +1106,16 @@ PY
     # status prose as input, and remains attached to this pane rather than a window name.
     printf -v CAPTURE_CMD '%q %q capture --runs %q --run %q --slot %q' \
       "$FACTORY_PYTHON" "$D/run_record.py" "$FACTORY_RUNS_ROOT" "$RUN" "$SLOT"
-    printf -v CAPTURE_PIPE 'tmux -L %q pipe-pane -O -t %q %q' \
-      "$FACTORY_TMUX_SOCKET" "=$RUN:$LANE" "$CAPTURE_CMD"
+    # Keep the exact pane target without a shell-sensitive =target.
+    printf -v CAPTURE_PIPE 'tmux -L %q pipe-pane -O -t "$TMUX_PANE" %q' \
+      "$FACTORY_TMUX_SOCKET" "$CAPTURE_CMD"
     LANE_CMD="$CAPTURE_PIPE && $LANE_CMD"
   fi
+  # Retain this pane before starting any author, including one that exits immediately.
+  # Setting the option after new-window races the author and can lose exit evidence.
+  printf -v RETAIN_PANE 'tmux -L %q set-option -w -t "$TMUX_PANE" remain-on-exit on' \
+    "$FACTORY_TMUX_SOCKET"
+  LANE_CMD="$RETAIN_PANE && $LANE_CMD"
   # Keep host-side observation on the launcher's tmux server. Do not pass this
   # control address through the author's deliberately scrubbed environment.
   WATCH_ENV_PREFIX="$ENV_PREFIX"
@@ -1157,9 +1163,8 @@ PY
     append_event "$(mark launch-failed)"
     refuse 70 "failed to launch $RUN:$LANE"
   fi
-  # A window option: a finished lane's window stays, dead, so its last output can be read.
-  tmux set-option -w -t "$RUN:$LANE" remain-on-exit on >/dev/null 2>&1 || true
-  if [ -n "$WALL_CAP_S" ] && ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
+  # Completion and stall observation are required even when a plan lane has no cap.
+  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"

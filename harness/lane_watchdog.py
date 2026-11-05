@@ -543,9 +543,14 @@ class LaneWatch:
         known = list(state.get("process_identities", []))
         if not known:
             shown = self.tmux("display-message", "-p", "-t", resolved, "#{pane_pid}")
-            if shown.returncode != 0 or not shown.stdout.strip().isdigit():
+            if shown.returncode != 0:
                 return False
-            root = snapshot.get(int(shown.stdout.strip()))
+            pane_pid = shown.stdout.strip()
+            if pane_pid and not pane_pid.isdigit():
+                return False
+            # tmux may clear pane_pid after an early exit. Only positive dead-pane
+            # evidence below can admit that absence; a live/unknown pane still refuses.
+            root = snapshot.get(int(pane_pid)) if pane_pid else None
             if root is not None:
                 identity = {"pid": root["pid"], "started": root["started"]}
                 state["pane_identity"] = identity
@@ -633,7 +638,9 @@ class LaneWatch:
             "life_started": current,
             "active_s_before": earlier,
             "lives": int(prior.get("lives", 0)) + 1,
-            "exits_baseline": len(self._exits(launch)),
+            # A first launch can finish before its watcher starts. Those exits belong
+            # to this life; only resumed/rearmed lives exclude earlier receipts.
+            "exits_baseline": len(self._exits(launch)) if new_life or prior else 0,
             "log_offset": (
                 int(log_offset)
                 if new_life and log_offset is not None

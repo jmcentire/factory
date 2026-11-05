@@ -420,7 +420,9 @@ def start(runs: Path, run: str) -> None:
         ])
         # Install the output pipe from inside this pane before starting the CLI,
         # so even the first model output reaches resident oversight. No input pipe.
-        pipe = shlex.join([*tmux, "pipe-pane", "-O", "-t", f"={run}:{role}", capture])
+        # Use this pane identity even in a detached window. A bare =target expands in zsh.
+        pipe = shlex.join([*tmux, "pipe-pane", "-O", "-t"])
+        pipe += ' "$TMUX_PANE" ' + shlex.quote(capture)
         commands.append((role, pipe + " && exec " + shlex.join(command)))
     created = False
     try:
