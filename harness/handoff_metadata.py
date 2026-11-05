@@ -12,9 +12,22 @@ from typing import Any
 from jev_screen import check_config
 from orchestrator_channel import progress_review_every
 
+AUTHOR_LANE_QUALIFICATIONS = {
+    "qualified": "QUALIFIED_PR2",
+    "native-tmux": "UNQUALIFIED_NATIVE_TMUX",
+}
+
 
 class MetadataError(ValueError):
     """The coordination handoff cannot be used for this run."""
+
+
+def require_promotable_metadata(doc: dict[str, Any]) -> None:
+    """Refuse closure of an explicitly unqualified native-authoring run."""
+    if (doc.get("author_lane_mode") == "native-tmux"
+            or AUTHOR_LANE_QUALIFICATIONS["native-tmux"] in (
+                doc.get("launcher_qualification"), doc.get("lane_isolation"))):
+        raise MetadataError("native-tmux authoring is unqualified and cannot close or promote")
 
 
 def validate_metadata(
@@ -59,7 +72,20 @@ def validate_metadata(
     # with the same authorities as the runtime; never discard them from the subject.
     check_config(doc.get("jev_screen"))
     progress_review_every(doc)
-    if frozenset(doc) - {"jev_screen", "progress_review"} not in allowed_shapes:
+    if "author_lane_mode" in doc:
+        if not contract_fields <= set(doc):
+            raise MetadataError("explicit author lane mode requires the current handoff contract")
+        mode = doc["author_lane_mode"]
+        if not isinstance(mode, str) or mode not in AUTHOR_LANE_QUALIFICATIONS:
+            raise MetadataError("harness author lane mode is invalid")
+        qualification = AUTHOR_LANE_QUALIFICATIONS[mode]
+        if (doc.get("launcher_qualification") != qualification
+                or doc.get("lane_isolation") != qualification):
+            raise MetadataError("harness author lane mode contradicts its qualification labels")
+    elif AUTHOR_LANE_QUALIFICATIONS["native-tmux"] in (
+            doc.get("launcher_qualification"), doc.get("lane_isolation")):
+        raise MetadataError("native qualification labels require an explicit author lane mode")
+    if frozenset(doc) - {"jev_screen", "progress_review", "author_lane_mode"} not in allowed_shapes:
         raise MetadataError("harness metadata has unknown or missing fields")
     if doc.get("status") not in {"open", "closed"}:
         raise MetadataError("harness status is invalid")

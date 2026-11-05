@@ -3,6 +3,27 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.9.0] - 2026-11-04
+
+### Added
+
+- `factory prepare-target` creates validated target data and a built-in complete-tree catalog
+  after executing deterministic host-mechanism qualification probes. The catalog retains actual
+  source bytes, tool identities, and qualification observations; unchanged reruns revalidate
+  without overwriting, while stale or foreign output refuses. Signed target/change authorization,
+  runner admission, independent acceptance, and unsupported brownfield behavior stay unchanged.
+
+### Fixed
+
+- Endgame executes literal build/test argv from the retained authorized target manifest in its
+  declared subtree, and runs genuine isolation proof from Factory sources before target code.
+  Retained source/configuration checks and refusal events prevent observed substitutions from
+  advancing; all existing promotion requirements remain mandatory.
+- Projection parsing works on macOS Bash 3.2 without changing the validation regex. Regenerated
+  role doctrine includes the current prompt updates, and an upstream test literal now meets lint.
+- Denial-probe discovery follows normal Python module registration so valid dataclass tests
+  collect; failed imports still contribute no probes.
+
 ## [0.8.26] - 2026-10-21
 
 ### Fixed

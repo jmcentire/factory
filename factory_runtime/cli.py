@@ -177,6 +177,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     digest.add_argument("--input", required=True)
 
+    prepare = commands.add_parser(
+        "prepare-target", help="prepare target data with executed complete-tree qualification",
+    )
+    prepare.add_argument("--target-id", required=True)
+    prepare.add_argument("--repository-url", required=True)
+    prepare.add_argument("--ref", required=True)
+    prepare.add_argument("--output-dir", required=True)
+    prepare.add_argument("--compliance-rules-path", required=True)
+    prepare.add_argument("--subpath", default="")
+    prepare.add_argument("--max-attempts", type=int, default=4)
+    prepare.add_argument("--max-files", type=int)
+    prepare.add_argument("--max-file-bytes", type=int)
+    prepare.add_argument("--max-total-bytes", type=int)
+
     inspect_target = commands.add_parser(
         "inspect-target",
         help="validate a target manifest and print its content/source addresses and build ABI",
@@ -1196,6 +1210,17 @@ def _execute_unleased(arguments: argparse.Namespace) -> None:
         return
     if arguments.command == "digest-json":
         _emit({"digest": digest_obj(_read_object(arguments.input))})
+        return
+    if arguments.command == "prepare-target":
+        from factory_runtime.target_preparation import prepare_target
+
+        _emit(prepare_target(
+            target_id=arguments.target_id, repository_url=arguments.repository_url,
+            ref=arguments.ref, output_dir=arguments.output_dir,
+            compliance_rules_path=arguments.compliance_rules_path, subpath=arguments.subpath,
+            max_attempts=arguments.max_attempts, max_files=arguments.max_files,
+            max_file_bytes=arguments.max_file_bytes, max_total_bytes=arguments.max_total_bytes,
+        ))
         return
     if arguments.command == "inspect-target":
         manifest_path = Path(arguments.manifest)

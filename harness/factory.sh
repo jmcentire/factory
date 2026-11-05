@@ -5,7 +5,7 @@ set -euo pipefail
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
-RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>] [--jev-screen-calls <1..1000>]}"
+RUN="${1:?usage: factory.sh <run> <verbatim-task-or-file> [--runs <path>] [--budget <usd>] [--audit-interval <min>] [--engagement interactive|scheduled|autonomous] [--question-channel <command>] [--jev-screen-calls <1..1000>] [--author-lanes qualified|native-tmux]}"
 TASK_IN="${2:?verbatim task text or file}"
 shift 2
 RUNS_ARG="${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}"
@@ -14,8 +14,21 @@ AUDIT_MIN="15"
 ENGAGEMENT="scheduled"
 QUESTION_CHANNEL=""
 JEV_CALLS=""
+AUTHOR_LANES="qualified"
+AUTHOR_LANES_SET=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --author-lanes)
+      if [ "$AUTHOR_LANES_SET" -ne 0 ] || [ "$#" -lt 2 ]; then
+        echo "factory: --author-lanes requires one qualified or native-tmux choice" >&2
+        exit 64
+      fi
+      case "$2" in qualified|native-tmux) AUTHOR_LANES="$2" ;;
+        *) echo "factory: --author-lanes must be qualified or native-tmux" >&2; exit 64 ;;
+      esac
+      AUTHOR_LANES_SET=1
+      shift 2
+      ;;
     --runs) RUNS_ARG="$2"; shift 2 ;;
     --budget) BUDGET="$2"; shift 2 ;;
     --audit-interval) AUDIT_MIN="$2"; shift 2 ;;
@@ -300,16 +313,17 @@ python3 - "$TASK_TMP" "$ROOT/TASK.md" "$FACTORY_HARNESS_META" "$RUN" \
   "$BUDGET" "$AUDIT_MIN" "$ENGAGEMENT" "$QUESTION_CHANNEL" "$TASK_DIGEST" "$FACTORY_TARGET_STATE_DIGEST" \
   "$FACTORY_TARGET_MANIFEST_DIGEST" "$FACTORY_BASE_COMMIT" "$FACTORY_CHECKOUT_ID" \
   "$VALIDATOR_AGENT" "$ORCHESTRATOR_AGENT" "$ORCHESTRATOR_VERSION" \
-  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" "$D" <<'PY'
+  "$ORCHESTRATOR_CLI_CONTRACT" "$FACTORY_GENERATION" "$GUIDANCE_ADMISSION" "$JEV_CONFIG" "$D" "$AUTHOR_LANES" <<'PY'
 import datetime, json, os, pathlib, sys, tempfile
 (
     task_source, task_dest, metadata_path, run, budget, audit, engagement, question_channel, task_digest,
     target_state_digest, manifest_digest, commit, checkout_id, validator_agent,
     orchestrator_agent, orchestrator_version, orchestrator_cli_contract,
-    generation_text, guidance_admission_raw, jev_config_raw, harness_tools,
+    generation_text, guidance_admission_raw, jev_config_raw, harness_tools, author_lanes,
 ) = sys.argv[1:]
 sys.path.insert(0, harness_tools)
-from handoff_metadata import MetadataError, validate_metadata
+from handoff_metadata import AUTHOR_LANE_QUALIFICATIONS, MetadataError, validate_metadata
+qualification = AUTHOR_LANE_QUALIFICATIONS[author_lanes]
 audit_value = int(audit)
 if audit_value < 1:
     raise SystemExit("factory: audit interval must be positive")
@@ -365,14 +379,18 @@ metadata = {
     "checkout_id": checkout_id,
     "budget_usd": budget_value,
     "budget_enforcement": (
-        "reserved-runner-ceilings" if budget_value is not None else "not-requested"
+        "not-requested" if budget_value is None else (
+            "reserved-runner-ceilings" if author_lanes == "qualified"
+            else "not-enforced-native-authoring"
+        )
     ),
     "audit_interval_min": audit_value,
     "engagement": engagement,
     "question_channel": question_channel or None,
     "promise_window_min": 10,
-    "launcher_qualification": "QUALIFIED_PR2",
-    "lane_isolation": "QUALIFIED_PR2",
+    "author_lane_mode": author_lanes,
+    "launcher_qualification": qualification,
+    "lane_isolation": qualification,
     "interactive_validator_boundary": "operator-owned-tmux",
     "validator_agent": validator_agent,
     # The Orchestrator's code-and-progress review (assessment/5) is owed every 2nd cadence tick
@@ -446,12 +464,20 @@ resource_event '{}' planned
 SEAT_ENV="$(factory_seat_env)"
 printf -v CTL_CMD 'exec env %s %q %q --run %q --root %q' \
   "$SEAT_ENV" "$FACTORY_PYTHON" "$D/dispatcher.py" "$RUN" "$ROOT"
-VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Derive sufficiently deep product, architecture, and testing/monitoring artifacts from the founder's words in TASK.md and decide what they leave open, recording each decision and its basis; the founder is involved only at a genuine impasse (no role in the run knows what needs doing), never asked to approve, confirm or ratify what they already asked for; launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker. This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
+AUTHOR_LANE_INSTRUCTIONS="launch model lanes only through the qualified harness/dispatch_lane.sh runner and typed broker."
+if [ "$AUTHOR_LANES" = native-tmux ]; then
+  AUTHOR_LANE_INSTRUCTIONS="launch native author lanes only through harness/tmux_lane.sh with the assigned clients and models, retaining their real sign-in preflight, qualification probes, session continuity, independent projections and review controls. This run selects native-tmux authoring: its lanes are UNQUALIFIED_NATIVE_TMUX, never QUALIFIED_PR2. When the requested outcome is reviewable PRs, publish the reviewed work-in-progress PRs before endgame with the actual independence rung, evidence and remaining blockers stated. Native-tmux runs cannot close or promote, even with added evidence; formal qualified work requires a fresh authorized run in qualified mode. PR delivery supplies no qualification and preserves every existing endgame and promotion requirement."
+fi
+VALIDATOR_PROMPT="Act as the Validator under $FACTORY_HOME/docs/VALIDATION-DIRECTIVE.md and the /validate contract ($FACTORY_HOME/prompts/validate.md); FACTORY_HOME=$FACTORY_HOME, and the harness is $D. The verbatim task is in $ROOT/TASK.md and is bound by the Stage-E execution receipt. Re-derive the checked run projection before acting. Derive sufficiently deep product, architecture, and testing/monitoring artifacts from the founder's words in TASK.md and decide what they leave open, recording each decision and its basis; the founder is involved only at a genuine impasse (no role in the run knows what needs doing), never asked to approve, confirm or ratify what they already asked for; $AUTHOR_LANE_INSTRUCTIONS This interactive Validator window is operator-owned coordination, not a qualified model lane or a billed runner receipt."
 VALIDATOR_PROMPT+=" If harness.json names selected run guidance, inspect its exact retained sources, classify and apply every obligation, obtain an independent classification/application review, and run phase_compiler.py so the generated regions enter only the proper ratified authorities. Treat routing as routing rather than compliance; collect exact-candidate evidence before verdict."
 VALIDATOR_PROMPT+=" Before drafting Phase A, snapshot the pinned target's own rule files with python3 $D/repo_rules.py snapshot and read them all; cite every touched rule by path and id in the Product Specification, quote those rules verbatim into both lane briefs (the lanes cannot see the freeze-excluded guidance files), decide any needed rule exception yourself and record the rule, the case and the basis, and state per touched rule in the PR body why the change complies."
 VALIDATOR_PROMPT+=" Every Coder lane on a resumable harness pauses every 18 minutes of work and wakes you with lane-review-due: freeze it, review the frozen tree against the ratified specification, and resume it within minutes with tmux_lane_message.sh review (requirement ids and observed behaviour, never the tests); review each Tester lane on the same cadence for oracle quality and coverage against the testing strategy, never against the code; at every slice boundary and at least every 60 minutes write an evidenced debrief to artifacts/debriefs/ (harness/validator_debrief.py check; overdue says when one is owed); send findings after a judge into the Coder's own thread the same way, and reproduce a Tester FAIL from the implementation's own outputs before you route it."
 ORCHESTRATOR_PROMPT="You are the resident strategic Orchestrator for Factory run $RUN. Read $ROOT/orchestrator/ROLE.md, $ROOT/TASK.md, and the retained run record before acting. Stay alive in this interactive session: never conclude that one turn ends your job. Use Kindex natively through its MCP tools at startup and on every material trajectory check to recover the user's ongoing goal, prior corrections, and relevant implications; the user's current inputs remain authority. The dispatcher will send FACTORY_ACTIVITY cursor ranges to this pane. Consume every journal row in each range, without selecting only anomaly-looking rows. Monitor the conversation for the user's ultimate goal, classify whether recent input overrides, refines, intensifies, or merely sits aside from that goal, decide whether the present direction advances it, project what happens if the action continues, and identify implications and side effects and whether they are desirable. Before decomposing, inventory explicit and ratified requirements separately from implicit assumptions and inherited code behavior; expose any one requirement or interaction that drives disproportionate complexity, state the simpler path and the counterfactual planning-mode/model-tier/boundary/dependency/chunk delta, and either cite why it is fixed or decide the simpler path, record the decision and its basis, and hand it to the Validator; the founder is involved only at a genuine impasse, when no role in the run knows what needs doing. Only then classify task complexity and latent ambiguity, select a direct/clarify/decompose/deep planning mode, break necessary work into concrete chunks, and recommend the least expensive qualified model tier capable of each chunk; reserve top-tier models for genuinely hard work and state why. Run the check-in loop in ROLE.md on every cadence row: check in on the Validator, Coder, and Tester and answer the every-tick check-in questions, and the boundary questions at every slice boundary, dispatch, verdict, and promote. Treat every cross-boundary identifier (principal, role, grant, table, metric or resource type, log field, token audience, env var, service or topic name) as unverified until $ROOT/artifacts/boundary-register.json records it on both sides: read $ROOT/orchestrator/BOUNDARIES.md, run $ROOT/orchestrator/bin/boundary_register.py verify --root $ROOT --workdir <the run's target workdir> whenever lanes touch a boundary, and block on any identifier a lane uses that the register lacks or names differently, or on access presumed without a record. Also audit Factory rule adherence and keep $ROOT/orchestrator/OUTSTANDING-WORK.md current as the plan, the task list, and the Validator's reminders; it is printed to the Validator at every checkpoint. Record every conclusion using $ROOT/orchestrator/bin/orchestrator_channel.py and the closed assessment shape in ROLE.md. You watch the Validator, Coder, and Tester consoles through every journal row, and you hold authority over all three, including the Validator. Your machine effects are block or no-op: a block gates the Validator's next transition until the Validator disposes of it, and nothing stops the run or waits on the founder. Block when the Validator ignores your adherence calls, picks up a pen, or acts as if it owns the run, and say exactly what it must fix. You can never grant or advance a transition. Raw pane injection remains forbidden, but you and the Validator may use $D/tmux_lane_message.sh status to poke a tmux Codex author through its typed session channel; only the Validator may bind and deliver a specification answer. Never call a run closed unless harness.json already says closed through Gate L. tmux is a coordination surface, not an isolation or evidence boundary."
 ORCHESTRATOR_PROMPT+=" Independently audit any selected run-guidance source, classification/application, generated authority routing, N/A basis, and exact-candidate evidence. The channel derives and binds your assessment to that state: routing-verified is not compliance, noncompliance blocks, dispatch requires routing, and verdict requires evidence-complete."
+if [ "$AUTHOR_LANES" = native-tmux ]; then
+  ORCHESTRATOR_PROMPT+=" Author lane mode is native-tmux with a resident dispatcher and checked Stage-R/E context. Monitor the documented harness/tmux_lane.sh author route; record UNQUALIFIED_NATIVE_TMUX and its actual independence limits. Reviewable PR delivery may precede endgame when requested, but this native-tmux run cannot close or promote, even with added evidence. Formal qualified work needs a fresh authorized qualified-mode run. Preserve every existing admission, evidence and promotion gate."
+fi
+
 # A model the operator named goes on the command line. Without one these stay empty and each
 # agent runs its own configured default.
 VALIDATOR_MODEL_ARGS=""
@@ -706,7 +732,12 @@ echo "  target state : $FACTORY_TARGET_STATE_DIGEST"
 echo "  control root : $ROOT"
 echo "  source root  : $FACTORY_SOURCE_ROOT"
 echo "  workdir      : $FACTORY_WORKDIR"
-echo "  model lanes  : QUALIFIED_PR2"
+echo "  author lanes : $AUTHOR_LANES"
+if [ "$AUTHOR_LANES" = native-tmux ]; then
+  echo "  model lanes  : UNQUALIFIED_NATIVE_TMUX (reviewable PR authoring; promotion gates unchanged)"
+else
+  echo "  model lanes  : QUALIFIED_PR2"
+fi
 echo "  sandbox      : ${FACTORY_LANE_SANDBOX:-on}"
 echo "  validator    : operator-owned coordination"
 echo "  validator ai : $VALIDATOR_AGENT${VALIDATOR_MODEL:+ ($VALIDATOR_MODEL)}"

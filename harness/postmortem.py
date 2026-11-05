@@ -112,6 +112,7 @@ def main() -> None:
     )
     w(f"- declared budget: {harness.get('budget_usd') or 'none declared'}; "
       f"enforcement={harness.get('budget_enforcement', 'UNQUALIFIED')}")
+    w(f"- author lane mode: {harness.get('author_lane_mode', 'undeclared (legacy)')}")
     w(f"- launcher/isolation: {harness.get('launcher_qualification', 'UNQUALIFIED')} / "
       f"{harness.get('lane_isolation', 'UNQUALIFIED')}")
     endgame = (

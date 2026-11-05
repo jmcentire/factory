@@ -309,3 +309,21 @@ The dependency arrow points **consumer → factory, never the reverse** (see `PR
 
 The optional [Jev runtime screen](docs/practices/jev-runtime.md) adds bounded, retained semantic
 observations to the resident Orchestrator. Select it explicitly per run; it grants no authority.
+
+## Prepare an existing repository target
+
+`factory prepare-target` prepares local manifest/catalog data with an actually executed
+complete-tree mechanism qualification. It does not contact the target, authorize a run, or
+qualify a model. See [Target preparation](docs/TARGET-PREPARATION.md) for invocation, evidence,
+size limits, exact reruns, retained target build/test argv, and the remaining Stage R/E and runner requirements.
+
+### Native authoring for reviewable PRs
+
+For an already authorized run, `harness/factory.sh <run> <task-file> --author-lanes native-tmux`
+selects the documented native authoring route and records its `UNQUALIFIED_NATIVE_TMUX` status.
+The default remains `--author-lanes qualified`. Native authoring can deliver reviewed work-in-progress
+PRs before endgame, with the actual independence rung and blockers disclosed; it supplies no
+qualification or promotion exception. Explicit native-tmux runs cannot close or promote, even with
+added evidence; formal qualified work needs a fresh authorized qualified-mode run. Existing gates
+remain mandatory. See
+[the harness mode contract](docs/HARNESS.md) and [target preparation](docs/TARGET-PREPARATION.md).

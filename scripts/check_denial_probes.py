@@ -143,7 +143,18 @@ def _collect_nodeids(nodeids_file: Path | None) -> set[str]:
             spec = importlib.util.spec_from_file_location(mod_name, mod_path)
             assert spec and spec.loader  # noqa: S101  (spec_from_file_location always returns one)
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            # Match normal import semantics: decorators and forward-annotation resolution
+            # look up the executing module in sys.modules before import has completed.
+            previous_module = sys.modules.get(mod_name)
+            sys.modules[mod_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except BaseException:
+                if previous_module is None:
+                    sys.modules.pop(mod_name, None)
+                else:
+                    sys.modules[mod_name] = previous_module
+                raise
         except Exception:
             # An unimportable module collects nothing — a probe pointing here is a dead pointer,
             # which the membership check below flags. Do not crash the check on one bad module.

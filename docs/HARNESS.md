@@ -703,7 +703,39 @@ dependency-free (bash + python3 + git):
   external-resume configuration vector already verified against its independently held digest,
   and freezes those bytes into the run before metadata names them;
   writes separate coordination metadata, records tmux intent, then opens persistent
-  `orchestrator`, interactive `validator`, and deterministic `ctl` windows. The resident Agy
+  `orchestrator`, interactive `validator`, and deterministic `ctl` windows.
+  `--author-lanes qualified|native-tmux` selects the authoring route before ignition; the default
+  remains `qualified`. Unknown, missing and repeated choices refuse. Every new ignition records
+  `author_lane_mode` in `harness.json`; existing run metadata or tmux sessions are never adopted
+  or rewritten to switch modes. Older metadata without the field keeps its existing contract
+  and is displayed as undeclared rather than inferred to have used a particular author route.
+  The optional field is validated with the same closed handoff contract: an unknown mode or
+  qualification/isolation label that contradicts it refuses. An explicit mode also requires the
+  current handoff contract; it cannot select a legacy shape to bypass current close requirements.
+  The new `UNQUALIFIED_NATIVE_TMUX` labels require an explicit native mode even when the mode field
+  is omitted; they cannot masquerade as an older absent-mode record.
+
+  `qualified` retains the `QUALIFIED_PR2` launcher/isolation labels and directs the Validator to
+  `dispatch_lane.sh` and its typed broker. These labels select the expected path; actual runner
+  canaries, session continuity, isolation and receipts remain separate required evidence.
+  `native-tmux` records `UNQUALIFIED_NATIVE_TMUX` for both labels and directs native authoring
+  through `tmux_lane.sh`, preserving its sign-in, qualification-probe, asymmetric projection,
+  single-session, watchdog and review controls. It still has checked Stage R/E context, a resident
+  Orchestrator and dispatcher; unqualified authoring does not imply missing run authority or
+  monitoring. An explicit budget remains visible but is labeled `not-enforced-native-authoring`,
+  never claimed as a reserved PR2 monetary ceiling. Native lane limits remain their own controls.
+
+  When the authorized outcome is reviewable PRs, native lanes may produce reviewed work-in-progress
+  PRs before endgame. The Validator still owns the phase authorities, actual target checks,
+  independent integration review, PR publication and honest verdict, including the actual
+  independence rung and every outstanding blocker. A PR does not qualify a lane, clear a gate,
+  close the run, authorize merge/deployment or substitute for formal promotion. All existing
+  qualified evidence, endgame and Gate-L requirements remain. An explicit native-tmux run is
+  nonpromotable even with added evidence: Gate L refuses it before promotion work and rechecks
+  under the close lock. A formal qualified continuation needs a fresh authorized run in qualified
+  mode, never an in-place mode change. This mode supplies no provider authentication or runtime adapter.
+
+  The resident Agy
   launch uses `--new-project --prompt-interactive`, never print mode; the explicit new-project
   launch prevents an unattended project-trust prompt from swallowing the initial brief. It does
   not pass `--disable-slash-commands`, so host-supported interactive controls such as `/loop`
@@ -879,7 +911,8 @@ dependency-free (bash + python3 + git):
 - `harness/tmux_lane.sh` + `lane_agent.py` + `lane_watchdog.py` + `lane_budget.py` +
   `testing_standard.py` + `codex_lane_session.py` + `lane_dialogue.py` +
   `tmux_lane_message.sh` + `factory_runtime/lane_repository.py` — unqualified authoring/dogfood
-  mode, and the only lane launcher (control 10 states its launch controls):
+  mode, selected at ignition with `--author-lanes native-tmux` (control 10 states its launch
+  controls; `dispatch_lane.sh` is the separate qualified launcher):
 
   ```
   harness/tmux_lane.sh <run> <coder|tester> launch --repo <own clone> --prompt <brief>

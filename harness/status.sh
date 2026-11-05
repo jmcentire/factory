@@ -50,6 +50,7 @@ state = {
     "invalid": "INVALID (unverified legacy abandonment marker)",
 }.get(abandonment, doc.get("status", "UNKNOWN"))
 print(f"  harness state : {state}")
+print(f"  author lanes  : {doc.get('author_lane_mode', 'undeclared (legacy)')}")
 print(f"  launcher      : {doc.get('launcher_qualification', 'UNQUALIFIED')}")
 print(f"  isolation     : {doc.get('lane_isolation', 'UNQUALIFIED')}")
 print(f"  budget        : {doc.get('budget_usd')} ({doc.get('budget_enforcement', 'UNQUALIFIED')})")

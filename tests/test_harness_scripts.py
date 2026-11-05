@@ -1666,6 +1666,31 @@ def execution_truth_fixture(
     return operator, root, target_state
 
 
+def endgame_truth_fixture(
+    tmp: Path, *, extra_blobs: dict[str, bytes] | None = None,
+) -> tuple[Path, Path, dict[str, object]]:
+    """Authorize the explicit make-based gate used by the endgame fixtures."""
+    manifest = (Path(__file__).parent / "fixtures/synthetic_target/target.toml").read_text()
+    manifest_path = tmp / "endgame-target.toml"
+    manifest_path.write_text(
+        manifest.replace('[build]\n', '[build]\ntest_command = ["make", "ship"]\n'),
+        encoding="utf-8",
+    )
+    result = execution_truth_fixture(
+        tmp, terminal_resources=False, extra_blobs=extra_blobs, target_manifest=manifest_path,
+    )
+    host = tmp / "trusted-factory"
+    shutil.copytree(
+        HARNESS.parent, host,
+        ignore=shutil.ignore_patterns(".git", ".venv", ".factory", ".harness", "__pycache__",
+                                     ".mypy_cache", ".ruff_cache", ".pytest_cache"),
+    )
+    # These materialization/boundary/LFS fixtures control the host proof result;
+    # the separate isolation integration suite proves the real kernel boundary.
+    (host / "Makefile").write_text("test-isolation:\n\t@true\n", encoding="utf-8")
+    return result
+
+
 def test_coder_projection_excludes_declared_paths_and_history(tmp_path: Path) -> None:
     src = projection_fixture(tmp_path)
     conf = src / ".factory" / "projection.conf"
@@ -5978,7 +6003,8 @@ def test_the_dispatcher_joins_wrapped_pane_rows_before_matching(
          "folder_trust", ("Enter",)),
         # Claude Code 2.1.318 highlights "No, exit" on both of these (read from its pane).
         ("validator", " Quick safety check: Is this a project you created or one you trust?\n"
-                      " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n",
+                      " ❯ No, exit\n   Yes, I trust this folder\n"
+                      " Enter to confirm · Esc to cancel\n",
          "folder_trust", ("Down", "Enter")),
         ("validator", " WARNING: Claude Code running in Bypass Permissions mode\n"
                       " ❯ 1. No, exit\n   2. Yes, I accept\n",
@@ -11199,7 +11225,7 @@ def test_endgame_materialization_failure_site_is_driven_and_leaves_its_signal(
     materializer asks ``git cat-file --batch-check``, so a PATH-shadowed ``git`` that fails that
     one request drives the guard without disturbing the real Git steps before it, and the site
     must leave exactly one registered refusal event and exit 70."""
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    operator, root, target_state = endgame_truth_fixture(tmp_path)
     sha = str(target_state["resolved_commit"])
     real_git = shutil.which("git")
     assert real_git is not None
@@ -11225,7 +11251,7 @@ def test_endgame_materialization_failure_site_is_driven_and_leaves_its_signal(
     r = run(
         [
             "bash",
-            str(HARNESS / "endgame.sh"),
+            str(tmp_path / "trusted-factory/harness/endgame.sh"),
             "r1",
             sha,
             "--candidate-resource",
@@ -11248,7 +11274,7 @@ def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_plant
     ``export-ignore`` hides the tests), no planted smudge filter runs on the host, and the
     hygiene status reads the checkout cleanly. ``make`` is stubbed red so the run stops at the
     verdict without running the synthetic target's gates."""
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    operator, root, target_state = endgame_truth_fixture(tmp_path)
     sha = str(target_state["resolved_commit"])
     source = Path(str(target_state["source_root"]))
     git_directory = Path(
@@ -11279,7 +11305,8 @@ def test_endgame_judges_the_named_commit_not_what_the_candidate_repository_plant
     env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
 
     r = run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        ["bash", str(tmp_path / "trusted-factory/harness/endgame.sh"), "r1", sha,
+         "--candidate-resource", "target-source"],
         tmp_path,
         env,
     )
@@ -11312,7 +11339,7 @@ def test_endgame_renders_no_verdict_without_a_discovery_receipt_for_the_candidat
     stubbed red so the run stops at the verdict without running the synthetic target's gates."""
     from harness import discovery_check
 
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    operator, root, target_state = endgame_truth_fixture(tmp_path)
     sha = str(target_state["resolved_commit"])
     source = Path(str(target_state["source_root"]))
     files = tmp_path / "tester-freeze" / "files"
@@ -11334,7 +11361,7 @@ def test_endgame_renders_no_verdict_without_a_discovery_receipt_for_the_candidat
     install_resident_orchestrator_stub(stub_dir, root)
     env = _factory_cli_env()
     env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
-    endgame = ["bash", str(HARNESS / "endgame.sh"), "r1", sha,
+    endgame = ["bash", str(tmp_path / "trusted-factory/harness/endgame.sh"), "r1", sha,
                "--candidate-resource", "target-source"]
 
     refused = run(endgame, tmp_path, env)
@@ -11926,7 +11953,7 @@ def _verified_boundary_register(root: Path) -> None:
 def _endgame_with_red_make(
     tmp_path: Path, register: Callable[[Path], None]
 ) -> subprocess.CompletedProcess[str]:
-    operator, root, target_state = execution_truth_fixture(tmp_path, terminal_resources=False)
+    operator, root, target_state = endgame_truth_fixture(tmp_path)
     sha = str(target_state["resolved_commit"])
     register(root)
     stub_dir = tmp_path / "redmake-bin"
@@ -11938,7 +11965,8 @@ def _endgame_with_red_make(
     env = _factory_cli_env()
     env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
     return run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        ["bash", str(tmp_path / "trusted-factory/harness/endgame.sh"), "r1", sha,
+         "--candidate-resource", "target-source"],
         tmp_path,
         env,
     )
@@ -11979,9 +12007,8 @@ def _endgame_over_an_lfs_target(
     repository whose LFS store holds the object only when ``stocked``. Gates and live proof
     pass, so an LFS policy failure alone must prevent Gate L from running."""
 
-    operator, root, target_state = execution_truth_fixture(
+    operator, root, target_state = endgame_truth_fixture(
         tmp_path,
-        terminal_resources=False,
         extra_blobs={
             ".gitattributes": b"*.png filter=lfs diff=lfs merge=lfs -text\n",
             "art/board.png": ENDGAME_LFS_POINTER,
@@ -12020,7 +12047,8 @@ def _endgame_over_an_lfs_target(
     conf.write_text("provision: true\nprobe: alive:: true\n" + target_conf, encoding="utf-8")
     env["HARNESS_TARGET_CONF"] = str(conf)
     r = run(
-        ["bash", str(HARNESS / "endgame.sh"), "r1", sha, "--candidate-resource", "target-source"],
+        ["bash", str(tmp_path / "trusted-factory/harness/endgame.sh"), "r1", sha,
+         "--candidate-resource", "target-source"],
         tmp_path,
         env,
     )
