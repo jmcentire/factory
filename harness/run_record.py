@@ -14,6 +14,8 @@ import json
 import math
 import os
 import re
+import secrets
+import shlex
 import stat
 import sys
 from io import BufferedReader
@@ -293,9 +295,46 @@ def capture_output(root: Path, role: str) -> None:
         os.close(fd)
 
 
+# A seat registers within a second or two; this bounds a seat that hangs before it can.
+SEAT_REGISTRATION_SECONDS = 30
+
+
+class SeatStartFailed(RuntimeError):
+    """A coordinator's window opened, but its seat stopped or never registered."""
+
+
+def sandboxed() -> bool:
+    """Whether a macOS sandbox confines this process. The first tmux client forks the run's
+    server, so the server and every seat inherit that sandbox: the seats cannot exec setuid
+    tools such as ps, and their writes outside the sandbox fail."""
+    if sys.platform != "darwin":
+        return False
+    import ctypes
+
+    try:
+        check = ctypes.CDLL("/usr/lib/libSystem.B.dylib").sandbox_check
+    except (OSError, AttributeError):
+        return False
+    check.restype = ctypes.c_int
+    check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    return check(os.getpid(), None, 0) != 0
+
+
+def last_lane_line(log: Path) -> str:
+    """The wrapper's last word on a seat, from the tail of its lane log."""
+    try:
+        with open(log, "rb") as stream:
+            stream.seek(max(0, os.fstat(stream.fileno()).st_size - 65536))
+            lines = stream.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    # Pane output shares the log and may leave a partial line ahead of the wrapper's.
+    said = [line[line.index("lane-agent:"):] for line in lines if "lane-agent:" in line]
+    return said[-1] if said else f"see {log}"
+
+
 def start(runs: Path, run: str) -> None:
     import importlib
-    import shlex
     import shutil
     import subprocess
 
@@ -305,9 +344,17 @@ def start(runs: Path, run: str) -> None:
                       else importlib.import_module("model_settings"))
 
     root, doc = load(runs, run)
+    # A warning, not a refusal: stub seats in tests run anywhere. Real agents in a sandbox fail
+    # when they save state outside it, so the operator hears it before they do.
+    confined = sandboxed()
+    if confined:
+        print("factory: warning: this shell is inside a macOS sandbox, which the run's tmux "
+              "server and every seat inherit; start runs from a shell outside it", file=sys.stderr)
     tools = Path(__file__).resolve().parent
     home = tools.parent
     tmux = ["tmux", "-L", doc["tmux_socket"]]
+    retry = shlex.join([sys.executable, str(tools / "run_record.py"), "start",
+                        "--runs", str(root.parent), "--run", run])
     if subprocess.run([*tmux, "has-session", "-t", f"={run}"], capture_output=True).returncode == 0:
         raise ValueError("run session already exists; existing sessions are never replaced")
     billing = os.environ.get("FACTORY_SEAT_BILLING", "plan")
@@ -397,6 +444,8 @@ def start(runs: Path, run: str) -> None:
         for assigned_role, settings in choices.items():
             for field, value in settings.items():
                 env[f"FACTORY_{assigned_role.upper()}_{field.upper()}"] = value
+        channel = f"factory-ready-{role}-{secrets.token_hex(8)}"
+        exits = root / f"{role}-exits.jsonl"
         command = [
             "env",
             "-i",
@@ -410,7 +459,9 @@ def start(runs: Path, run: str) -> None:
             "--log",
             str(root / f"{role}-lane.log"),
             "--exits",
-            str(root / f"{role}-exits.jsonl"),
+            str(exits),
+            "--ready-channel",
+            channel,
             "--",
             *argv,
         ]
@@ -423,10 +474,11 @@ def start(runs: Path, run: str) -> None:
         # Use this pane identity even in a detached window. A bare =target expands in zsh.
         pipe = shlex.join([*tmux, "pipe-pane", "-O", "-t"])
         pipe += ' "$TMUX_PANE" ' + shlex.quote(capture)
-        commands.append((role, pipe + " && exec " + shlex.join(command)))
+        commands.append((role, channel, exits.stat().st_size if exits.exists() else 0,
+                         pipe + " && exec " + shlex.join(command)))
     created = False
     try:
-        for role, shell_command in commands:
+        for role, _, _, shell_command in commands:
             args = (
                 ["new-session", "-d", "-s", run]
                 if not created
@@ -436,6 +488,23 @@ def start(runs: Path, run: str) -> None:
                 [*tmux, *args, "-n", role, "-c", doc["repository"], shell_command], check=True
             )
             created = True
+        # A window can outlive its seat: the wrapper stops an agent whose process it cannot
+        # record. Each seat signals once it registers or ends, and its exits journal says which.
+        for role, channel, before, _ in commands:
+            try:
+                waited = subprocess.run([*tmux, "wait-for", channel], capture_output=True,
+                                        text=True, timeout=SEAT_REGISTRATION_SECONDS)
+            except subprocess.TimeoutExpired:
+                raise SeatStartFailed(
+                    f"the {role} did not register within {SEAT_REGISTRATION_SECONDS} seconds; "
+                    f"{last_lane_line(root / f'{role}-lane.log')}"
+                ) from None
+            exits = root / f"{role}-exits.jsonl"
+            if exits.exists() and exits.stat().st_size > before:
+                raise SeatStartFailed(f"the {role} stopped during startup; "
+                                      f"{last_lane_line(root / f'{role}-lane.log')}")
+            if waited.returncode:
+                raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
         # No dispatcher typing prose, no supervisor that can stop work for review lag.
         print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
         if selected["validator"] == "kickoff":
@@ -443,10 +512,14 @@ def start(runs: Path, run: str) -> None:
     except BaseException as error:
         if created:
             subprocess.run([*tmux, "kill-session", "-t", f"={run}"], capture_output=True)
-        if isinstance(error, subprocess.CalledProcessError):
+        if isinstance(error, (subprocess.CalledProcessError, SeatStartFailed)):
+            cause = (f"with exit {error.returncode}"
+                     if isinstance(error, subprocess.CalledProcessError) else f"because {error}")
+            where = (" from a shell outside the macOS sandbox this one runs in, which the run's "
+                     "tmux server and every seat inherited," if confined else "")
             notice = (
-                f"Coordinator startup failed with exit {error.returncode}. "
-                "Task inputs are preserved; correct the launch error and retry start for this run."
+                f"Coordinator startup failed {cause}. The run's tmux session is closed and its "
+                f"task inputs are preserved; correct the cause, then retry{where} with: {retry}"
             )
             message(root, "validator", "host", notice, log=doc["log"])
             raise ValueError(notice) from None

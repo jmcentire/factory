@@ -408,3 +408,70 @@ def test_worker_identity_failure_terminates_only_the_owned_child(tmp_path, monke
                              slot='coder', log=tmp_path/'lane.log', exits=tmp_path/'exit.jsonl')
     assert rc == 127 and len(children) == 1 and children[0].poll() is not None
     assert 'cannot publish worker process identity' in (tmp_path/'lane.log').read_text()
+
+
+def test_a_lane_reads_start_times_from_the_kernel_when_ps_cannot_run(tmp_path, monkeypatch):
+    # A macOS sandbox refuses to exec ps, which is setuid root. That stopped a Validator at
+    # startup (collection-bootstrap-20261105-r2); the kernel answers with the same text.
+    gone = subprocess.Popen([sys.executable, '-c', 'pass'])
+    gone.wait()
+    expected = lane_agent._started(os.getpid())
+    real_run = lane_agent.subprocess.run
+
+    def refuse_ps(argv, *args, **kwargs):
+        if argv[0] == 'ps':
+            raise PermissionError(1, 'Operation not permitted', 'ps')
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(lane_agent.subprocess, 'run', refuse_ps)
+    assert expected and lane_agent._started(os.getpid()) == expected
+    assert lane_agent._started(gone.pid) == ''
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='a macOS sandbox')
+def test_a_lane_registers_inside_a_macos_sandbox(tmp_path):
+    # Even a sandbox that allows everything refuses setuid binaries such as ps.
+    lane = [sys.executable, str(REPO / 'harness/lane_agent.py'), 'run', '--slot', 'validator',
+            '--terminal', '--log', str(tmp_path / 'lane.log'), '--exits',
+            str(tmp_path / 'exits.jsonl'), '--', sys.executable, '-c',
+            'import time; time.sleep(1)']
+    result = subprocess.run(['sandbox-exec', '-p', '(version 1)(allow default)', *lane],
+                            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                            env={**os.environ, 'PYTHONPATH': str(REPO)}, timeout=60)
+    assert result.returncode == 0, (tmp_path / 'lane.log').read_text()
+    receipt = json.loads((tmp_path / 'validator-process.json').read_text())
+    assert receipt['status'] == 'running'
+    assert receipt['wrapper']['started'] and receipt['worker']['started']
+
+
+def test_a_started_agent_the_lane_stops_is_not_reported_as_a_launch_failure(tmp_path,
+                                                                           monkeypatch):
+    monkeypatch.setattr(lane_agent, '_started', lambda pid: '')
+    rc = lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(30)'],
+                             slot='validator', log=tmp_path/'lane.log',
+                             exits=tmp_path/'exit.jsonl')
+    log = (tmp_path/'lane.log').read_text()
+    assert rc == 127 and 'could not start' not in log
+    assert f'lane-agent: {sys.executable} started as pid ' in log
+    assert 'but the lane failed: cannot publish worker process identity' in log
+
+
+def test_ready_fires_once_after_the_receipt_or_after_the_exit(tmp_path, monkeypatch):
+    seen = []
+
+    def ready():
+        seen.append(((tmp_path/'validator-process.json').exists(),
+                     (tmp_path/'exits.jsonl').exists()))
+
+    lane = dict(slot='validator', log=tmp_path/'lane.log', exits=tmp_path/'exits.jsonl',
+                terminal=True, ready=ready)
+    assert lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(1)'],
+                               **lane) == 0
+    assert seen == [(True, False)]
+    seen.clear()
+    (tmp_path/'validator-process.json').unlink()
+    (tmp_path/'exits.jsonl').unlink()
+    monkeypatch.setattr(lane_agent, '_started', lambda pid: '')
+    assert lane_agent.run_lane([sys.executable, '-c', 'import time; time.sleep(30)'],
+                               **lane) == 127
+    assert seen == [(False, True)]

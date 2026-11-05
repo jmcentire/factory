@@ -30,6 +30,19 @@ Validator reuses its existing conversation instead of creating another one. Each
 has its own private tmux socket; inspect and control only the exact owned session.
 Never send status prose to a shell or fall back to another pane when an agent exits.
 
+The launcher reports a run started only after each seat has registered its process. A
+seat that stops or never registers fails the start: the launcher closes the run's tmux
+session, keeps the task record, and queues the seat's last wrapper line for the Validator
+with the command that retries the start on the same record:
+
+```sh
+python harness/run_record.py start --runs <runs> --run <run>
+```
+
+Start runs from a shell outside any sandbox. On macOS the run's tmux server and every
+seat inherit the launching shell's sandbox, and an agent there cannot save its state; the
+launcher warns when it detects one.
+
 ## Author inputs and conversations
 
 The Validator uses `harness/role_inputs.py prepare` to make separate author repositories.

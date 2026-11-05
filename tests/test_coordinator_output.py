@@ -113,3 +113,39 @@ print("LAST", flush=True)
                                      capture_output=True)
             if current.returncode == 0 and current.stdout == server:
                 subprocess.run([*tmux, "kill-server"], check=True)
+
+
+def test_a_seat_that_cannot_start_fails_a_real_start(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c",
+                    "user.email=test@example.invalid", "commit", "--allow-empty",
+                    "-qm", "initial"], check=True)
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    stub = binary / "codex"
+    # Found on PATH, so the launcher opens its window, but it cannot be executed.
+    stub.write_text("#!/nonexistent/interpreter\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binary) + ":/opt/homebrew/bin:/usr/bin:/bin")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("FACTORY_CONFIG", raising=False)
+    monkeypatch.setenv("FACTORY_SEAT_BILLING", "plan")
+    for role in ("VALIDATOR", "ORCHESTRATOR", "CODER", "TESTER"):
+        monkeypatch.setenv(f"FACTORY_{role}_AGENT", "codex")
+        monkeypatch.setenv(f"FACTORY_{role}_MODEL", "fixture")
+        monkeypatch.setenv(f"FACTORY_{role}_EFFORT", "")
+    runs = tmp_path / "runs"
+    root = run_record.create(runs, "broken", repo, b"Disposable startup probe")
+    doc = json.loads((root / "harness.json").read_text())
+    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    try:
+        with pytest.raises(ValueError, match="the validator stopped during startup; "
+                           "lane-agent: could not start codex"):
+            run_record.start(runs, "broken")
+        assert subprocess.run([*tmux, "has-session", "-t", "=broken"],
+                              capture_output=True).returncode != 0
+        assert "retry with:" in json.loads((root / "validator/inbox.jsonl").read_text())["text"]
+    finally:
+        subprocess.run([*tmux, "kill-server"], capture_output=True)
