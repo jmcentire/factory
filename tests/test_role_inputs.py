@@ -104,12 +104,12 @@ def _commit_links(source, runs):
     run_record.create(runs, "linked", source, b"Implement behavior")
 
 
-def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
+def test_unincluded_directory_link_is_omitted_and_recorded(tmp_path, inputs):
     source, runs, _ = inputs
     _commit_links(source, runs)
     coder, tester = tmp_path / "coder", tmp_path / "tester"
-    result = role_inputs.prepare(runs, "linked", "coder", coder, [],
-                                 ["tests", ".claude/skills/x", "outside"])
+    result = role_inputs.prepare(runs, "linked", "coder", coder, [], ["tests", "outside"])
+    assert result["omitted_directory_links"] == [".claude/skills/x"]
     assert (coder / ".agents/skills/x/SKILL.md").read_text() == "SKILL"
     assert ".claude/skills/x" not in result["files"] and "outside" not in result["files"]
     assert not (coder / ".claude").exists() and not (coder / "outside").is_symlink()
@@ -118,15 +118,14 @@ def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
     role_inputs.verify(runs, "linked", "tester", tester)
 
 
-@pytest.mark.parametrize("role,link", [("coder", ".claude/skills/x"), ("coder", "outside"),
-                                       ("tester", ".claude/skills/x"), ("tester", "outside")])
+@pytest.mark.parametrize("role,link", [("coder", "outside"), ("tester", ".claude/skills/x"),
+                                       ("tester", ".claude"), ("tester", "outside")])
 def test_selected_directory_or_escaping_link_is_refused(tmp_path, inputs, role, link):
     source, runs, _ = inputs
     _commit_links(source, runs)
-    other = "outside" if link != "outside" else ".claude/skills/x"
-    includes, excludes = ([link], []) if role == "tester" else ([], ["tests", other])
+    includes, excludes = ([link], []) if role == "tester" else ([], ["tests"])
     dest = tmp_path / role
-    with pytest.raises(RuntimeError, match="link"):
+    with pytest.raises((RuntimeError, ValueError), match="link"):
         role_inputs.prepare(runs, "linked", role, dest, includes, excludes)
     assert not dest.exists()
 
