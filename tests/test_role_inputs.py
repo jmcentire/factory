@@ -159,8 +159,9 @@ def test_malformed_tree_with_a_link_and_an_entry_at_one_path_is_refused(tmp_path
     rows = [f"040000 tree {real}\treal", f"120000 blob {link}\td"]
     rows.append(f"040000 tree {real}\td" if subtree else f"100644 blob {blob}\td")
     tree = git("mktree", stdin="\n".join(rows) + "\n")
-    git("reset", "-q", "--soft", git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                                 "commit-tree", tree, "-m", "malformed"))
+    commit = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit-tree", tree, "-m", "malformed")
+    git("reset", "-q", "--soft", commit)
     run_record.create(runs, "malformed", source, b"Implement behavior")
     with pytest.raises(RuntimeError, match="duplicate or file-and-directory"):
         role_inputs.prepare(runs, "malformed", "coder", tmp_path / "coder", [], [])
