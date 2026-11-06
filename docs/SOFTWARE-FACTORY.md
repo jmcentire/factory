@@ -94,6 +94,11 @@ Create a catalog only when the particular operation needs one, and only then. Op
 
 For readable output, set `--log /absolute/path/status.jsonl` and ask your LLM to summarize that file or explain a particular event. The optional file contains structured records, not a polished narrative. Its default is `/dev/null`; required decisions and messages remain in the run inboxes. No extra log-processing service is required.
 
+Herald is optional outward reporting, not the transport between Factory roles and not a startup prerequisite. `harness/escalate.py` retains run status, attention items, questions and heartbeat results under the run's `orchestrator/` directory. `FACTORY_HERALD=auto` (default) also reports through the existing Herald MCP connection when `HERALD_FACTORY_TOKEN` or `~/.harness/secrets/HERALD_FACTORY_TOKEN` is configured. `HERALD_URL` selects its base URL (default `https://dash.herald.tools`). `FACTORY_HERALD=off` never reads that credential or contacts Herald; it does not remove the user's connector or credentials.
+
+Missing credentials, disabled reporting and a remote delivery failure do not stop Factory. Each result and local record explicitly says `delivered: false` and why (`not-configured`, `disabled`, `failed` or a local-only resolution). Remote success alone says `delivered: true`. Reporting degradation returns success for the local operation, not proof of human receipt. Questions and cited answers still remain in the local ledger, and answered questions are not sent again. With Herald off, use the initiating conversation and run records for human-facing questions; no remote stale-agent alert is promised. The reporter neither issues credentials nor retries failed remote delivery automatically. Invalid input/configuration and a local record-write failure remain errors.
+
+
 ## Release-check choices
 
 User direction for signatures: “no signatures that aren't automated verified by what the user actually said”. No manual signature or repeated authorization ceremony is required. If an automated attestation is used, retain the actual user instruction and verify that the claimed action and scope follow it; a signature or content hash alone is not proof of permission. This is a constraint on optional attestations, not a requirement to create them.

@@ -5,7 +5,7 @@ Founder direction (2026-10-16): the Orchestrator and the Validator assess the co
 progress regularly; status reporting does not substitute for it. The Validator writes a debrief
 at every slice boundary and at least every 60 minutes of run time, as a run artifact
 (``artifacts/debriefs/<UTC stamp>.json`` beside a short ``.md``), so a collector can post it to
-the human's surface (Herald) without reading the Validator's pane.
+an optional human-facing surface such as Herald without reading the Validator's pane.
 
 The invariant: **every debrief item is classified, and every verified item cites the work.**
 What the lanes say is a claim; it goes under ``unverified`` with the check that would settle it.

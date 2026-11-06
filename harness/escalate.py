@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Orchestrator's outward channel: run facts to the founder's Herald dash (its /mcp).
+"""Retain run facts locally and optionally report them to the founder's Herald dash (/mcp).
 
 Three levels, chosen by who must act:
 - informational: a status update. `post_update` with `status`; the founder need not act.
@@ -9,11 +9,15 @@ Three levels, chosen by who must act:
   what needs doing). `needs_attention`, class `critical`.
 
 A question is asked once. Before a question goes out, the question ledger is checked; an
-answered question is refused here and its answer printed, so the seat that asked uses it. An
-unreachable Herald is never silent: the attempt is journalled and the exit status says so.
+answered question is refused here and its answer printed, so the seat that asked uses it.
+Herald is optional: FACTORY_HERALD=auto (the default) uses an existing factory-run token;
+FACTORY_HERALD=off never reads credentials or contacts Herald. Missing credentials or failed
+remote delivery retain the fact locally with an explicit non-delivery disposition, not a
+workflow gate or a claim that the human received it. There is no automatic retry.
 
-The token is a Herald `factory-run` agent token (`herald token issue <agent> --kind factory-run`),
-read from HERALD_FACTORY_TOKEN or ~/.harness/secrets/HERALD_FACTORY_TOKEN. It is never printed.
+The token is read from HERALD_FACTORY_TOKEN or ~/.harness/secrets/HERALD_FACTORY_TOKEN.
+This reporter never creates credentials. Local evidence failures and invalid inputs remain
+errors; optional reporting cannot excuse losing the record.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import pathlib
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -112,15 +117,17 @@ def prior_question(root: pathlib.Path, key: str, question: str) -> dict[str, Any
     return found
 
 
-def token() -> str:
+def token(*, required: bool = True) -> str:
     value = os.environ.get("HERALD_FACTORY_TOKEN", "").strip()
     if not value:
         path = pathlib.Path.home() / ".harness" / "secrets" / "HERALD_FACTORY_TOKEN"
         try:
             value = path.read_text(encoding="utf-8").strip()
-        except OSError:
+        except FileNotFoundError:
             value = ""
-    if not value:
+        except OSError as error:
+            raise EscalationError("cannot read the Herald factory-run token file") from error
+    if not value and required:
         raise EscalationError(
             "no Herald factory-run token: run `herald token issue factory --kind factory-run` and "
             "store it in ~/.harness/secrets/HERALD_FACTORY_TOKEN (0600)"
@@ -236,6 +243,68 @@ class Herald:
         return structured if isinstance(structured, dict) else {}
 
 
+def _reporting_settings() -> tuple[str, str]:
+    mode = os.environ.get("FACTORY_HERALD", "auto").strip().lower()
+    if mode not in {"auto", "off"}:
+        raise EscalationError("FACTORY_HERALD must be auto or off")
+    url = os.environ.get("HERALD_URL", "https://dash.herald.tools")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid = (
+            parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+            and parsed.username is None and parsed.password is None
+            and not parsed.query and not parsed.fragment
+            and not any(char.isspace() for char in url)
+        )
+        _ = parsed.port  # malformed or out-of-range ports are configuration errors too
+    except ValueError:
+        valid = False
+    if not valid:
+        raise EscalationError(
+            "HERALD_URL must be an HTTP(S) base URL with a host and no credentials"
+        )
+    return mode, url
+
+
+def _deliver(
+    tool: str, arguments: Mapping[str, object], *, client: Herald | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    "Optional remote output; configuration errors are not mistaken for transport degradation."
+    mode, url = _reporting_settings()
+    if mode == "off":
+        return {}, {"delivered": False, "delivery": "disabled"}
+    if client is None:
+        bearer = token(required=False)
+        if not bearer:
+            return {}, {"delivered": False, "delivery": "not-configured"}
+        client = Herald(url, bearer)
+    try:
+        client.open()
+        result = client.call(tool, arguments)
+    except EscalationError as error:
+        return {}, {"delivered": False, "delivery": "failed", "error": str(error)}
+    return result, {"delivered": True, "delivery": "delivered"}
+
+
+def _record_delivery(root: pathlib.Path, row: Mapping[str, Any]) -> None:
+    "Retain the fact and make non-delivery visible to local observers without stopping work."
+    _append(_orchestrator_dir(root) / "escalations.jsonl", row)
+    if not row["delivered"]:
+        _append(
+            root / "events.jsonl",
+            {
+                "ts": row["at"],
+                "kind": "escalation-failed" if row["delivery"] == "failed" else "escalation-local",
+                "class": "attention",
+                "source": "escalate.py",
+                "wake": row["level"] in {"important", "critical"},
+                "detail": f"{row['level']} {row['key']}: {row.get('summary', '')}",
+                "delivery": row["delivery"],
+                "error": row.get("error"),
+            },
+        )
+
+
 def _run_name(root: pathlib.Path) -> str:
     return root.resolve().name
 
@@ -257,6 +326,7 @@ def escalate(
     question: bool = False,
     client: Herald | None = None,
 ) -> dict[str, Any]:
+    _reporting_settings()
     if level not in LEVELS:
         raise EscalationError(f"level must be one of {', '.join(LEVELS)}")
     summary = " ".join(summary.split())
@@ -277,45 +347,33 @@ def escalate(
                 "answer": prior["answer"],
                 "source": prior.get("answer_source"),
             }
-    herald = client or Herald(os.environ.get("HERALD_URL", "https://dash.herald.tools"), token())
-    row: dict[str, Any] = {"at": _now(), "level": level, "key": scoped, "summary": summary[:200]}
-    try:
-        herald.open()
-        if level == "informational":
-            status = f"{_run_name(root)}: {summary}"
-            if detail:
-                status += f" -- {' '.join(detail.split())}"
-            result = herald.call(
-                "post_update", {"contract_version": CONTRACT_VERSION, "status": status[:500]}
-            )
-        else:
-            arguments: dict[str, object] = {
-                "contract_version": CONTRACT_VERSION,
-                "key": scoped,
-                "class": CLASS_FOR[level],
-                "summary": summary[:200],
-            }
-            if detail:
-                arguments["detail"] = detail[:1000]
-            result = herald.call("needs_attention", arguments)
-            row["occurrence"] = result.get("occurrence")
-    except EscalationError as error:
-        row.update({"delivered": False, "error": str(error)})
-        _append(folder / "escalations.jsonl", row)
-        _append(
-            root / "events.jsonl",
-            {
-                "ts": row["at"],
-                "kind": "escalation-failed",
-                "class": "attention",
-                "source": "escalate.py",
-                "wake": True,
-                "detail": f"{level} {scoped}: {error}",
-            },
-        )
-        raise
-    row["delivered"] = True
-    _append(folder / "escalations.jsonl", row)
+    row: dict[str, Any] = {
+        "at": _now(), "level": level, "key": scoped, "summary": summary[:200],
+        "detail": detail[:1000],
+    }
+    if level == "informational":
+        status = f"{_run_name(root)}: {summary}"
+        if detail:
+            status += f" -- {' '.join(detail.split())}"
+        tool = "post_update"
+        arguments: dict[str, object] = {
+            "contract_version": CONTRACT_VERSION, "status": status[:500],
+        }
+    else:
+        tool = "needs_attention"
+        arguments = {
+            "contract_version": CONTRACT_VERSION,
+            "key": scoped,
+            "class": CLASS_FOR[level],
+            "summary": summary[:200],
+        }
+        if detail:
+            arguments["detail"] = detail[:1000]
+    result, delivery = _deliver(tool, arguments, client=client)
+    row.update(delivery)
+    if level != "informational" and delivery["delivered"]:
+        row["occurrence"] = result.get("occurrence")
+    _record_delivery(root, row)
     if question:
         _append(
             folder / "questions.jsonl",
@@ -331,7 +389,8 @@ def escalate(
     return {
         "answered": False,
         "key": scoped,
-        "delivered": True,
+        "recorded": True,
+        **delivery,
         "occurrence": row.get("occurrence"),
     }
 
@@ -354,44 +413,49 @@ def record_answer(root: pathlib.Path, *, key: str, answer: str, source: str) -> 
 
 
 def resolve(root: pathlib.Path, *, key: str, client: Herald | None = None) -> dict[str, Any]:
+    _reporting_settings()
     scoped = _scoped_key(root, key)
-    occurrence = None
-    for row in _rows(_orchestrator_dir(root) / "escalations.jsonl"):
-        if row.get("key") == scoped and row.get("occurrence"):
-            occurrence = row["occurrence"]
+    attention = [
+        row for row in _rows(_orchestrator_dir(root) / "escalations.jsonl")
+        if row.get("key") == scoped and row.get("level") in {"important", "critical"}
+    ]
+    if not attention:
+        raise EscalationError(f"no recorded attention item for {scoped}")
+    occurrence = next((row["occurrence"] for row in reversed(attention)
+                       if row.get("occurrence")), None)
     if occurrence is None:
-        raise EscalationError(f"no delivered attention item for {scoped}")
-    herald = client or Herald(os.environ.get("HERALD_URL", "https://dash.herald.tools"), token())
-    herald.open()
-    herald.call(
-        "resolve", {"contract_version": CONTRACT_VERSION, "key": scoped, "occurrence": occurrence}
-    )
-    _append(
-        _orchestrator_dir(root) / "escalations.jsonl",
-        {
-            "at": _now(),
-            "level": "resolved",
-            "key": scoped,
-            "occurrence": occurrence,
-            "delivered": True,
-        },
-    )
-    return {"key": scoped, "resolved": occurrence}
+        # No known remote alert to resolve. Never invent an occurrence or send another post.
+        delivery: dict[str, Any] = {"delivered": False, "delivery": "local-only"}
+    else:
+        _, delivery = _deliver(
+            "resolve", {"contract_version": CONTRACT_VERSION, "key": scoped,
+                        "occurrence": occurrence}, client=client
+        )
+    _record_delivery(root, {
+        "at": _now(), "level": "resolved", "key": scoped, "occurrence": occurrence,
+        **delivery,
+    })
+    return {"key": scoped, "recorded": True,
+            "resolved": occurrence if delivery["delivered"] else None, **delivery}
 
 
 def heartbeat(
     root: pathlib.Path, *, interval: int, done: bool = False, client: Herald | None = None
-) -> None:
-    "The factory's dead-man switch: Herald raises a stale alert when these stop, unless done."
-    herald = client or Herald(os.environ.get("HERALD_URL", "https://dash.herald.tools"), token())
-    herald.open()
+) -> dict[str, Any]:
+    "Optional dead-man reporting. Without Herald, no remote stale-agent alert is promised."
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
+        raise EscalationError("heartbeat interval must be a positive integer")
     arguments: dict[str, object] = {
         "contract_version": CONTRACT_VERSION,
         "interval_seconds": interval,
     }
     if done:
         arguments["done"] = True
-    herald.call("heartbeat", arguments)
+    _, delivery = _deliver("heartbeat", arguments, client=client)
+    row = {"at": _now(), "level": "heartbeat", "key": f"factory/{_run_name(root)}",
+           "interval_seconds": interval, "done": done, **delivery}
+    _record_delivery(root, row)
+    return {"recorded": True, **delivery}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -443,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "resolve":
             print(json.dumps(resolve(args.root, key=args.key)))
             return 0
-        heartbeat(args.root, interval=args.interval, done=args.done)
+        print(json.dumps(heartbeat(args.root, interval=args.interval, done=args.done)))
         return 0
     except EscalationError as error:
         print(f"escalate: {error}", file=sys.stderr)
