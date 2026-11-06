@@ -187,8 +187,8 @@ def materialize_commit(
 
     ``select`` is called once for every listed entry; only entries it accepts are read and
     written. Links are still resolved against the whole tree, so an unselected entry is never
-    checked or materialized. With ``directory_link``, a selected contained link to a tree
-    directory is passed to it and omitted instead of refused; it may raise to refuse.
+    read, link-resolved or materialized. With ``directory_link``, a selected contained link to
+    a tree directory is passed to it and omitted instead of refused; it may raise to refuse.
 
     With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
     LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
@@ -410,10 +410,14 @@ def _tree_entries(listing: bytes, *, admit_symlinks: bool, max_files: int) -> li
         entries.append(entry)
         if len(entries) > max_files:
             raise HostGitError(f"commit has more than {max_files} files")
-    names = {entry.path for entry in entries}
-    if len(names) != len(entries) or any(parent in names for name in names
-                                         for parent in name.parents):
-        raise HostGitError("Git tree listing has a duplicate or file-and-directory path")
+    names: set[PurePosixPath] = set()
+    for entry in entries:
+        if entry.path in names:
+            raise HostGitError(f"Git tree listing has a duplicate path: {entry.path}")
+        names.add(entry.path)
+    for name in names:
+        if any(parent in names for parent in name.parents):
+            raise HostGitError(f"Git tree listing has a file-and-directory path above {name}")
     return entries
 
 

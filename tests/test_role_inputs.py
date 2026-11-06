@@ -163,7 +163,7 @@ def test_malformed_tree_with_a_link_and_an_entry_at_one_path_is_refused(tmp_path
                  "commit-tree", tree, "-m", "malformed")
     git("reset", "-q", "--soft", commit)
     run_record.create(runs, "malformed", source, b"Implement behavior")
-    with pytest.raises(RuntimeError, match="duplicate or file-and-directory"):
+    with pytest.raises(RuntimeError, match="duplicate path|file-and-directory path"):
         role_inputs.prepare(runs, "malformed", "coder", tmp_path / "coder", [], [])
 
 
