@@ -283,19 +283,57 @@ def test_opencode_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
                                 model="opencode/deepseek-v4.1-flash-free", kindex_record=RECORD,
                                 env_file=tmp_path / "creds.env",
                                 environ={"HOME": str(operator), "OPENROUTER_API_KEY": "or-key"})
-    config = Path(setup.env["XDG_CONFIG_HOME"])
-    assert not config.is_relative_to(operator)
-    servers = json.loads((config / "opencode" / "opencode.json").read_text())["mcp"]["servers"]
+    home = Path(setup.env["HOME"])
+    assert not home.is_relative_to(operator)
+    config = home / ".config" / "opencode" / "opencode.json"
+    servers = json.loads(config.read_text())["mcp"]["servers"]
     assert servers == {"kindex": {"type": "local",
                                   "command": [SERVER["command"], *SERVER["args"]],
                                   "environment": SERVER["env"], "disabled": False}}
     assert setup.env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
-    assert "XDG_DATA_HOME" not in setup.env  # sign-in and sessions stay the operator's
     assert "OPENROUTER_API_KEY=or-key" in (tmp_path / "creds.env").read_text()
     with pytest.raises(ValueError, match="no signed-in plan"):
         agents.prepare_lane("opencode", billing="plan", home=tmp_path / "p", model="",
                             kindex_record=RECORD, env_file=tmp_path / "p.env",
                             environ={"HOME": str(operator)})
+
+
+def _opencode_data(base: Path) -> Path:
+    data = base / "opencode"
+    data.mkdir(parents=True)
+    (data / "auth.json").write_text('{"openrouter":{"type":"api","key":"k"}}', encoding="utf-8")
+    (data / "opencode.db").write_text("operator sessions", encoding="utf-8")
+    return data
+
+
+def test_opencode_lanes_share_only_the_sign_in(tmp_path: Path) -> None:
+    # Each lane keeps its own session database (and tool output, snapshots); only auth.json is
+    # the operator's, so a Coder cannot read the Tester's prompts and tool results.
+    operator = _home(tmp_path)
+    data = _opencode_data(operator / ".local" / "share")
+    homes = []
+    for slot in ("coder", "tester"):
+        setup = agents.prepare_lane("opencode", billing="metered", home=tmp_path / slot,
+                                    model="m", kindex_record=RECORD,
+                                    env_file=tmp_path / f"{slot}.env",
+                                    environ={"HOME": str(operator)})
+        own = Path(setup.env["HOME"]) / ".local" / "share" / "opencode"
+        assert (own / "auth.json").resolve() == (data / "auth.json").resolve()
+        assert sorted(entry.name for entry in own.iterdir()) == ["auth.json"]
+        homes.append(Path(setup.env["HOME"]))
+    assert homes[0] != homes[1]
+
+
+def test_opencode_lane_finds_a_sign_in_under_a_custom_data_home(tmp_path: Path) -> None:
+    # The lane runs under env -i, so the operator's XDG_DATA_HOME is read at setup time.
+    operator = _home(tmp_path)
+    data = _opencode_data(tmp_path / "custom-data")
+    setup = agents.prepare_lane("opencode", billing="metered", home=tmp_path / "lane",
+                                model="m", kindex_record=RECORD, env_file=tmp_path / "c.env",
+                                environ={"HOME": str(operator),
+                                         "XDG_DATA_HOME": str(tmp_path / "custom-data")})
+    auth = Path(setup.env["HOME"]) / ".local" / "share" / "opencode" / "auth.json"
+    assert auth.resolve() == (data / "auth.json").resolve()
 
 
 def test_credentials_reach_the_child_only_through_an_owner_only_file(tmp_path: Path) -> None:

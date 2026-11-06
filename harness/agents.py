@@ -655,21 +655,26 @@ class OpenCode(Harness):
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
         # OpenCode reads its global configuration (MCP servers, AGENTS.md rules, commands,
-        # plugins) from $XDG_CONFIG_HOME/opencode, and its sign-in and sessions from
-        # $XDG_DATA_HOME/opencode. The lane moves only the configuration: its own names only the
-        # lane's Kindex, while sign-in and sessions stay the operator's, so a resume finds its
-        # session. OPENCODE_DISABLE_CLAUDE_CODE keeps the operator's ~/.claude CLAUDE.md and
-        # skills out. The repository's own opencode.json still applies, as Claude Code's
-        # project settings do.
-        config = home / "xdg"
+        # plugins) from $XDG_CONFIG_HOME/opencode, and its session database, tool output and
+        # snapshots from $XDG_DATA_HOME/opencode; both default under HOME, as do the ~/.agents
+        # and ~/.claude skills it loads. The lane gets a HOME of its own, so a Coder and a
+        # Tester never share a session database. Its configuration names only the lane's
+        # Kindex, and the one piece of the operator's data it shares is the provider sign-in,
+        # auth.json, found where the operator's own opencode keeps it.
+        private = home / "home"
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        operator_data = Path(environ.get("XDG_DATA_HOME") or operator_home / ".local" / "share")
+        auth = operator_data / "opencode" / "auth.json"
+        if auth.is_file():
+            _link(private / ".local" / "share" / "opencode" / "auth.json", auth)
         servers: dict[str, object] = {}
         if server is not None:
             command, args, env = _server(server)
             servers["kindex"] = {"type": "local", "command": [command, *args],
                                  "environment": env, "disabled": False}
-        _write(config / "opencode" / "opencode.json", json.dumps(
+        _write(private / ".config" / "opencode" / "opencode.json", json.dumps(
             {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": servers}}))
-        return LaneSetup(env={"XDG_CONFIG_HOME": str(config),
+        return LaneSetup(env={"HOME": str(private),
                               "OPENCODE_DISABLE_CLAUDE_CODE": "1",
                               "OPENCODE_DISABLE_AUTOUPDATE": "1"})
 
