@@ -291,6 +291,10 @@ def test_opencode_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
                                   "command": [SERVER["command"], *SERVER["args"]],
                                   "environment": SERVER["env"], "disabled": False}}
     assert setup.env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
+    # No ancestor or project opencode.json, .opencode, .claude or .agents is merged in, and the
+    # operator's ~/.agents skills are not under the lane's HOME.
+    assert setup.env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+    assert not (home / ".agents").exists() and not (home / ".claude").exists()
     assert "OPENROUTER_API_KEY=or-key" in (tmp_path / "creds.env").read_text()
     with pytest.raises(ValueError, match="no signed-in plan"):
         agents.prepare_lane("opencode", billing="plan", home=tmp_path / "p", model="",

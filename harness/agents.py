@@ -661,6 +661,10 @@ class OpenCode(Harness):
         # Tester never share a session database. Its configuration names only the lane's
         # Kindex, and the one piece of the operator's data it shares is the provider sign-in,
         # auth.json, found where the operator's own opencode keeps it.
+        # OPENCODE_DISABLE_PROJECT_CONFIG stops OpenCode walking up from the repository to the
+        # filesystem root merging every opencode.json, .opencode, .claude and .agents it finds
+        # (and AGENTS.md rules), which could replace the lane's Kindex or add MCP servers. The
+        # lane's configuration is then only its own, as a codex lane's is with --ignore-rules.
         private = home / "home"
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
         operator_data = Path(environ.get("XDG_DATA_HOME") or operator_home / ".local" / "share")
@@ -675,6 +679,7 @@ class OpenCode(Harness):
         _write(private / ".config" / "opencode" / "opencode.json", json.dumps(
             {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": servers}}))
         return LaneSetup(env={"HOME": str(private),
+                              "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
                               "OPENCODE_DISABLE_CLAUDE_CODE": "1",
                               "OPENCODE_DISABLE_AUTOUPDATE": "1"})
 
