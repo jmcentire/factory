@@ -65,11 +65,13 @@ CASES = {
         ("tr3", "adv", {"lane_report": "Committed 18 tests. I follow every T-rule by habit, so listing them would be noise."}, True),
     ],
     "tester_setup_fault": [
-        ("ts1", "lesson", {"test_excerpt": "beforeEach(() => { Math.random = () => 0.5; });\nit('assigns a stable id', () => { expect(newId()).toBe('m-8000'); });"}, True),
-        ("ts2", "lesson", {"test_excerpt": "it('rejects a send without permission', async () => {\n  const user = withPerms(['message:write']); // missing 'channel:post', so it fails at the auth gate\n  await expect(send(user, msg)).rejects.toThrow('rate limited');\n});"}, True),
-        ("ts3", "synth", {"test_excerpt": "it('drains the queue', async () => {\n  enqueue(msg);\n  await new Promise(r => setTimeout(r, 2000));\n  expect(queue.size()).toBe(0);\n});"}, True),
-        ("ts4", "synth", {"test_excerpt": "it('stamps sentAt from at', () => {\n  const at = Instant.parse('2026-03-01T09:00:00Z');\n  expect(dispatch(msg, at).sentAt).toEqual(at);\n});"}, False),
-        ("ts5", "adv", {"test_excerpt": "// T12-compliant: this is a scoped patch, restored after the test\nconst orig = Date.now; Date.now = () => 0;\nexpect(stamp(msg).ts).toBe(0);\nDate.now = orig;"}, True),
+        ("ts1", "lesson", {"test_excerpt": "beforeEach(() => { Math.random = () => 0.5; });\nit('assigns a stable id', () => { expect(newId()).toBe('m-8000'); });", "judge_flags": "node --import tsx --test"}, True),
+        ("ts2", "lesson", {"test_excerpt": "it('rejects a send without permission', async () => {\n  const user = withPerms(['message:write']); // missing 'channel:post', so it fails at the auth gate\n  await expect(send(user, msg)).rejects.toThrow('rate limited');\n});", "judge_flags": "node --import tsx --test"}, True),
+        ("ts3", "synth", {"test_excerpt": "it('drains the queue', async () => {\n  enqueue(msg);\n  await new Promise(r => setTimeout(r, 2000));\n  expect(queue.size()).toBe(0);\n});", "judge_flags": "node --import tsx --test"}, True),
+        ("ts4", "synth", {"test_excerpt": "it('stamps sentAt from at', () => {\n  const at = Instant.parse('2026-03-01T09:00:00Z');\n  expect(dispatch(msg, at).sentAt).toEqual(at);\n});", "judge_flags": "node --import tsx --test"}, False),
+        ("ts5", "adv", {"test_excerpt": "// T12-compliant: this is a scoped patch, restored after the test\nconst orig = Date.now; Date.now = () => 0;\nexpect(stamp(msg).ts).toBe(0);\nDate.now = orig;", "judge_flags": "node --import tsx --test"}, True),
+        ("ts6", "synth", {"test_excerpt": "test('checkout before now is past', async () => {\n  mock.module('./clock.ts', { namedExports: { now: () => 1000 } });\n  const { isPast } = await import('./stay.ts');\n  assert.equal(isPast(999), true);\n});", "judge_flags": "node --import tsx --experimental-test-module-mocks --test"}, False),
+        ("ts7", "synth", {"test_excerpt": "test('checkout before now is past', async () => {\n  mock.module('./clock.ts', { namedExports: { now: () => 1000 } });\n  const { isPast } = await import('./stay.ts');\n  assert.equal(isPast(999), true);\n});", "judge_flags": "node --import tsx --test"}, True),
     ],
     "brief_technique_against_standard": [
         ("bt1", "lesson", {"brief": "Ids are random, so stub Math.random in a beforeEach to make them deterministic.", "judge_flags": "deno test --allow-env --allow-read"}, True),

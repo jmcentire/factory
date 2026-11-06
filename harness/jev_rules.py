@@ -674,13 +674,15 @@ TESTER_SETUP_FAULT = {
     "instructions": {
         "question": (
             "Does `test_excerpt` patch a global, sleep or wait on wall-clock time, depend"
-            " on an unstable runtime flag, or assert on a path the test setup never "
-            "reaches?"
+            " on a runtime flag that `judge_flags` does not include, or assert on a path the "
+            "test setup never reaches?"
         ),
-        "inspect": "`test_excerpt`",
+        "compare": ["`test_excerpt`", "`judge_flags`"],
         "focus": (
             "Judge the test code itself. Injecting a clock or random source through the "
-            "contract's own parameters is the standard's way, and is not a fault."
+            "contract's own parameters is the standard's way, and is not a fault. A flag in "
+            "`judge_flags` is the repository's own test command, so a test that needs it (such as "
+            "--experimental-test-module-mocks for node:test's mock.module) is not a fault."
         ),
     },
     "criteria": {
@@ -1304,7 +1306,10 @@ RULEBOOK = (
         "msg-r2 §6, founder 2026-10-09",
     ),
     _rule(
-        "tester_setup_fault", TESTER_SETUP_FAULT, ("test_excerpt",), "msg-r2 §6, founder 2026-10-09"
+        "tester_setup_fault",
+        TESTER_SETUP_FAULT,
+        ("test_excerpt", "judge_flags"),
+        "msg-r2 §6, founder 2026-10-09",
     ),
     _rule(
         "brief_technique_against_standard",
