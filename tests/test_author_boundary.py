@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from harness import agents
 from harness.codex_lane_session import run_turn
 from harness.lane_agent import run_lane
 from harness.validator_boundary import (
@@ -95,6 +96,26 @@ print(json.dumps({'type':'item.completed',
         assert exits[-1]["rc"] == 0
     assert result == 0
     assert not (tmp_path / "control/forged-exit.json").exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual model-child kernel boundary")
+def test_opencode_lane_variables_survive_the_boundary(tmp_path, monkeypatch):
+    # Launch and resume both start the model as lane_agent.py run --env-file <the lane's file>
+    # under the boundary, so this is the environment every OpenCode turn sees.
+    monkeypatch.chdir(tmp_path)
+    record = binding(tmp_path)
+    env_file = tmp_path / "control-host" / "opencode.env"
+    setup = agents.prepare_lane("opencode", billing="metered", home=tmp_path / "lane", model="m",
+                                kindex_record=None, env_file=env_file,
+                                environ={"HOME": str(tmp_path / "operator")})
+    seen = tmp_path / "seen.json"
+    command = [sys.executable, "-c", "import json,os,sys; "
+               "open(sys.argv[1],'w').write(json.dumps(dict(os.environ)))", str(seen)]
+    assert run_lane(command, slot="tester", log=tmp_path / "control/model.log",
+                    exits=tmp_path / "control/exits.jsonl", env_file=env_file,
+                    boundary_record=record, boundary_role="coder") == 0
+    child = json.loads(seen.read_text())
+    assert {name: child.get(name) for name in setup.env} == dict(setup.env)
 
 
 def test_missing_required_boundary_refuses_author_window(tmp_path):
