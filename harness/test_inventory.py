@@ -4,14 +4,25 @@
 Every runner-specific parse lives here, so the gates that consume an inventory
 (``discovery_check.py``) validate one documented format instead of reading console lines.
 
-  test_inventory.py pytest|vitest|deno [-- <runner command prefix>]
+  test_inventory.py pytest|vitest|deno|node [-- <runner command prefix>]
 
 Run it in the tree to inventory. The prefix launches the runner (default ``python3 -m pytest``,
-``npx vitest``, ``deno test``); the adapter appends its own collect-only flags, so nothing runs:
+``npx vitest``, ``deno test``, ``node --test``); the adapter appends its own collect-only flags,
+so nothing runs, except under node, which has no such mode:
 
   pytest  ``--collect-only --verbosity=-1``  node ids ``<module>::<name>``
   vitest  ``list --json``                    ``[{"name", "file"}]``
   deno    ``--filter /^$/ --reporter=junit``  every module loads, every test is reported skipped
+  node    ``--test-reporter=<events>``       inserted after ``--test``; the suite runs (below)
+
+node: name filters cannot stand in for collection (Node 20 reports filtered tests skipped,
+overwriting their own skip; Node 22+ drops them), so the adapter runs the suite once and reads
+each test's final result. Pass or fail is runnable; skip or todo is skipped; a suite is never a
+test; names join suites and parent tests with `` > `` as vitest does. A test belongs to its
+top-level test's file, which must be a file Node ran, so a ``--test-isolation=none`` suite
+cannot be inventoried. Node 20, unlike 22+, runs subtests of a todo parent as ordinary tests.
+A file that fails outside any test is a runner failure. The command must not set
+``--test-reporter``.
 
 Exit 0 prints exactly one JSON object on stdout::
 
@@ -51,6 +62,7 @@ PREFIXES = {
     "pytest": ["python3", "-m", "pytest"],
     "vitest": ["npx", "vitest"],
     "deno": ["deno", "test"],
+    "node": ["node", "--test"],
 }
 
 Test = dict[str, str]
@@ -108,6 +120,30 @@ test.only = (...args) => { note(args, false, site()); return register.only(...ar
 Deno.test = test;
 """
 _DENO_SITE = re.compile(r"(file://[^\s()]+?):\d+:\d+\)?\s*$")
+
+
+# Supplied to ``node --test`` as its reporter. Only final results are read: ``test:pass`` and
+# ``test:fail`` arrive once per test and suite, children before their parent, one file after
+# another. The end line proves the stream was not cut short.
+_NODE_REPORTER = """
+export default async function* inventory(source) {
+  for await (const { type, data } of source) {
+    // Each test file Node runs in its own process is enqueued at the top level under its path.
+    if (type === "test:enqueue" && data.nesting === 0) {
+      yield JSON.stringify({ enqueued: data.name, file: data.file ?? null }) + "\\n";
+    }
+    if (type !== "test:pass" && type !== "test:fail") continue;
+    yield JSON.stringify({
+      name: data.name, nesting: data.nesting, file: data.file ?? null,
+      failed: type === "test:fail", suite: data.details?.type === "suite",
+      // Node marks skip and todo by presence: an empty reason still skips.
+      skip: data.skip !== undefined && data.skip !== false,
+      todo: data.todo !== undefined && data.todo !== false,
+    }) + "\\n";
+  }
+  yield JSON.stringify({ end: true }) + "\\n";
+}
+"""
 
 
 class InventoryError(RuntimeError):
@@ -232,7 +268,81 @@ def deno_tests(tree: pathlib.Path, prefix: list[str]) -> Inventory:
     return runnable, skipped
 
 
-ADAPTERS = {"pytest": pytest_tests, "vitest": vitest_tests, "deno": deno_tests}
+def _node_rows(tree: pathlib.Path, prefix: list[str]) -> list[dict]:
+    if "--test" not in prefix:
+        raise InventoryError("the node:test command must pass --test (node --test, tsx --test)")
+    if any(word.startswith("--test-reporter") for word in prefix):
+        raise InventoryError("leave --test-reporter out of the command; the inventory sets its own")
+    with tempfile.TemporaryDirectory() as directory:
+        reporter = pathlib.Path(directory, "inventory_reporter.mjs")
+        events = pathlib.Path(directory, "events.jsonl")
+        reporter.write_text(_NODE_REPORTER, encoding="utf-8")
+        at = prefix.index("--test") + 1
+        # node --test exits 1 when a test fails; a failing test is still a collected test.
+        ran = _run([*prefix[:at], f"--test-reporter={reporter.as_uri()}",
+                    f"--test-reporter-destination={events}", *prefix[at:]], tree, ok=(0, 1))
+        diagnostic = (ran.stderr or ran.stdout).strip()[-400:]
+        try:
+            rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()
+                    if line.strip()]
+        except (OSError, json.JSONDecodeError) as error:
+            raise InventoryError(f"node --test wrote no readable test results ({error}): "
+                                 f"{diagnostic}") from None
+    if not rows or rows[-1] != {"end": True}:
+        raise InventoryError(f"node --test did not finish reporting: {diagnostic}")
+    if ran.returncode != 0 and not any(row.get("failed") for row in rows):
+        raise InventoryError(f"node --test exited {ran.returncode} with no failing test: "
+                             f"{diagnostic}")
+    return rows[:-1]
+
+
+def node_tests(tree: pathlib.Path, prefix: list[str]) -> Inventory:
+    runnable: list[Test] = []
+    skipped: list[Test] = []
+    # Results still waiting for their parent: (nesting, [(name, runnable)]).
+    waiting: list[tuple[int, list[tuple[str, bool]]]] = []
+    ran: set[str] = set()
+    for row in _node_rows(tree, prefix):
+        if "enqueued" in row:
+            if isinstance(row["enqueued"], str) and isinstance(row["file"], str) and \
+                    os.path.realpath(tree / row["enqueued"]) == os.path.realpath(row["file"]):
+                ran.add(os.path.realpath(row["file"]))
+            continue
+        name, nesting, file = row.get("name"), row.get("nesting"), row.get("file")
+        if not (isinstance(name, str) and isinstance(nesting, int) and isinstance(file, str)):
+            raise InventoryError(f"node --test reported a result with no name or file: {row}")
+        file = file.removeprefix("file://")
+        below: list[tuple[str, bool]] = []
+        while waiting and waiting[-1][0] > nesting:
+            below = waiting.pop()[1] + below
+        # The runner reports a file that ran no test as one top-level test named by its path.
+        if nesting == 0 and not below and os.path.realpath(tree / name) == os.path.realpath(file):
+            if row.get("failed"):
+                raise InventoryError(f"node --test could not run {_module(tree, file)}: it failed "
+                                     "outside any test; run it to see why")
+            continue
+        runs = not (row.get("skip") or row.get("todo"))
+        # A suite is not a test; a skipped suite whose tests never registered is listed skipped.
+        own = ([] if below or runs else [(name, False)]) if row.get("suite") else [(name, runs)]
+        tests = own + [(f"{name} > {child}", child_runs) for child, child_runs in below]
+        if nesting > 0:
+            waiting.append((nesting, tests))
+            continue
+        if os.path.realpath(file) not in ran:
+            raise InventoryError(f"node --test credited top-level test {name!r} to "
+                                 f"{_module(tree, file)}, which is not a test file it ran (a "
+                                 "shared helper registered it, or isolation is not per file)")
+        module = _module(tree, file)
+        for test, test_runs in tests:
+            (runnable if test_runs else skipped).append({"module": module, "name": test})
+    if waiting:
+        raise InventoryError("node --test reported results with no enclosing top-level test: "
+                             f"{[name for _nesting, tests in waiting for name, _ in tests][:5]}")
+    return runnable, skipped
+
+
+ADAPTERS = {"pytest": pytest_tests, "vitest": vitest_tests, "deno": deno_tests,
+            "node": node_tests}
 
 
 def main(argv: list[str] | None = None) -> int:

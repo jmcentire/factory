@@ -333,6 +333,107 @@ def last_lane_line(log: Path) -> str:
     return said[-1] if said else f"see {log}"
 
 
+# gh reads these before its own keyring; a user signed in only through them keeps that sign-in.
+GITHUB_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
+# Claude Code's own config lock (proper-lockfile: a directory, stale after 10 s unrefreshed).
+CLAUDE_LOCK_STALE_SECONDS = 10.0
+
+
+def trust_claude_folders(home: Path, folders: list[Path], *, wait: float = 5.0) -> None:
+    """Record folder trust for the run's authorized folders before a Claude Code seat starts.
+
+    An interactive seat otherwise opens on "trust this folder?" with "No, exit" selected and sits
+    idle until someone answers it in the pane. Writes ``projects[<path>].hasTrustDialogAccepted``
+    in ``~/.claude.json`` under Claude Code's own lock, keeping every other key; the first change
+    keeps the prior file as ``.claude.json.factory-backup``. Raises OSError/ValueError without
+    writing when the file cannot be safely updated; the caller reports it and launches anyway.
+    """
+    import time
+
+    config = home / ".claude.json"
+    lock = Path(f"{config}.lock")
+    real = config.resolve()  # a dotfile-managed symlink keeps pointing at the updated file
+    keys = [str(folder.resolve()) for folder in folders]
+    for _ in range(3):
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                lock.mkdir()
+                break
+            except FileExistsError:
+                try:
+                    stale = time.time() - lock.stat().st_mtime > CLAUDE_LOCK_STALE_SECONDS
+                except FileNotFoundError:
+                    continue
+                if stale:
+                    print(f"factory: removing stale lock {lock}", file=sys.stderr)
+                    try:
+                        lock.rmdir()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                if time.monotonic() > deadline:
+                    raise OSError(f"{lock} is held") from None
+                time.sleep(0.05)
+        try:
+            try:
+                before = os.stat(real)
+                original = real.read_bytes()
+                doc = json.loads(original)
+            except FileNotFoundError:
+                before, original, doc = None, None, {}
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{real} is not valid JSON") from error
+            projects = doc.setdefault("projects", {}) if isinstance(doc, dict) else None
+            if not isinstance(projects, dict):
+                raise ValueError(f"{real} has an unexpected shape")
+            if all(isinstance(projects.get(key), dict)
+                   and projects[key].get("hasTrustDialogAccepted") is True for key in keys):
+                return
+            for key in keys:
+                entry = projects.setdefault(key, {})
+                if not isinstance(entry, dict):
+                    raise ValueError(f"{real} has an unexpected entry for {key}")
+                entry["hasTrustDialogAccepted"] = True
+            if original is not None:
+                try:
+                    write_new(Path(f"{real}.factory-backup"), original)
+                except FileExistsError:
+                    pass
+            temporary = real.with_name(f".{real.name}.factory-{secrets.token_hex(6)}")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         stat.S_IMODE(before.st_mode) if before else 0o600)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(doc, stream, indent=2, ensure_ascii=False)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                # A writer that skipped the lock changed it under us: start over from its bytes.
+                try:
+                    now = os.stat(real)
+                    changed = before is None or (now.st_ino, now.st_size, now.st_mtime_ns) != (
+                        before.st_ino, before.st_size, before.st_mtime_ns)
+                except FileNotFoundError:
+                    changed = before is not None
+                if changed:
+                    continue
+                os.replace(temporary, real)
+            finally:
+                temporary.unlink(missing_ok=True)
+            directory = os.open(real.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            return
+        finally:
+            try:
+                lock.rmdir()
+            except FileNotFoundError:
+                pass
+    raise OSError(f"{real} kept changing during the update")
+
+
 def start(runs: Path, run: str) -> None:
     import importlib
     import shutil
@@ -410,6 +511,13 @@ def start(runs: Path, run: str) -> None:
                             or stream.read(len(prompt.encode()) + 1) != prompt.encode()):
                         raise ValueError("retained kickoff brief changed") from None
             continue
+        if agent == "claude":
+            try:
+                trust_claude_folders(Path(os.environ["HOME"]), [Path(doc["repository"]), root])
+            except (KeyError, OSError, ValueError) as error:
+                print(f"factory: warning: could not pre-trust the {role}'s folders for Claude "
+                      f"Code ({error}); accept its folder-trust prompt in the {role} window",
+                      file=sys.stderr)
         argv = resident_command(agent, model, effort, prompt, root)
         executable = shutil.which(argv[0])
         if executable is None:
@@ -435,6 +543,10 @@ def start(runs: Path, run: str) -> None:
                         "CODEX_HOME")
             if key in os.environ
         }
+        # The Validator opens authorized pull requests; gh auth held only in the environment
+        # reaches it. The Orchestrator and the authors keep no GitHub credential from here.
+        if role == "validator":
+            env.update({key: os.environ[key] for key in GITHUB_ENV if key in os.environ})
         # Reuse the adapter's credential declarations. Plan mode never inherits API keys.
         adapter = agents.harness("codex" if agent == "ollama" else agent)
         for key in adapter.api_env:

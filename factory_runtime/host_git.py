@@ -87,6 +87,10 @@ class HostGitError(RuntimeError):
     """Host Git could not read the repository without trusting what the agent wrote."""
 
 
+class _DirectoryLinkError(HostGitError):
+    """A contained relative link names a real tree directory rather than a regular file."""
+
+
 @dataclass(frozen=True)
 class MaterializedCommit:
     commit: str
@@ -175,9 +179,16 @@ def materialize_commit(
     contained_file_links: bool = False,
     lfs_objects: str | Path | None = None,
     max_lfs_bytes: int | None = None,
+    select: Callable[[PurePosixPath], bool] | None = None,
+    directory_link: Callable[[PurePosixPath], None] | None = None,
     runner: Runner = subprocess.run,
 ) -> MaterializedCommit:
     """Write exactly ``commit``'s tree into a new ``destination`` from raw Git objects.
+
+    ``select`` is called once for every listed entry; only entries it accepts are read and
+    written. Links are still resolved against the whole tree, so an unselected entry is never
+    read, link-resolved or materialized. With ``directory_link``, a selected contained link to
+    a tree directory is passed to it and omitted instead of refused; it may raise to refuse.
 
     With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
     LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
@@ -191,15 +202,26 @@ def materialize_commit(
         admit_symlinks=admit_symlinks,
         max_files=max_files,
     )
+    listed = entries
+    if select is not None:
+        entries = [entry for entry in entries if select(entry.path)]
     blobs = _read_blobs(repository, entries, max_total_bytes=max_total_bytes, runner=runner)
     if contained_file_links:
-        modes = {entry.path: entry.mode for entry in entries}
+        modes = {entry.path: entry.mode for entry in listed}
         directories = {parent for name in modes for parent in name.parents}
+        omitted = set()
         for entry in entries:
             if entry.mode == _SYMLINK_MODE:
-                contained_file_target(
-                    entry.path, os.fsdecode(blobs[entry.object_id]), modes, directories,
-                )
+                try:
+                    contained_file_target(
+                        entry.path, os.fsdecode(blobs[entry.object_id]), modes, directories,
+                    )
+                except _DirectoryLinkError:
+                    if directory_link is None:
+                        raise
+                    directory_link(entry.path)
+                    omitted.add(entry.path)
+        entries = [entry for entry in entries if entry.path not in omitted]
     pointers = _lfs_pointers(entries, blobs)
     hydrate: dict[PurePosixPath, _LfsObject] = {}
     if lfs_objects is not None and pointers:
@@ -243,6 +265,9 @@ def contained_file_target(
             current /= part
         if index < len(parts) - 1 and (current not in directories or current in modes):
             raise HostGitError(f"{path} traverses a non-directory file link target")
+    if (current in directories and path not in directories
+            and not any(name in modes for name in (current, *path.parents))):
+        raise _DirectoryLinkError(f"{path} links to a tree directory, not a regular file")
     if modes.get(current) not in _REGULAR_MODES or parts[-1] in {"", ".", ".."}:
         raise HostGitError(f"{path} must link directly to a regular tree file")
     return current
@@ -385,6 +410,14 @@ def _tree_entries(listing: bytes, *, admit_symlinks: bool, max_files: int) -> li
         entries.append(entry)
         if len(entries) > max_files:
             raise HostGitError(f"commit has more than {max_files} files")
+    names: set[PurePosixPath] = set()
+    for entry in entries:
+        if entry.path in names:
+            raise HostGitError(f"Git tree listing has a duplicate path: {entry.path}")
+        names.add(entry.path)
+    for name in names:
+        if any(parent in names for parent in name.parents):
+            raise HostGitError(f"Git tree listing has a file-and-directory path above {name}")
     return entries
 
 

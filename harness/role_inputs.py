@@ -96,11 +96,27 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
         raise ValueError("role inputs already prepared; preserve the resident author's context")
     with tempfile.TemporaryDirectory(prefix="factory-inputs-") as temporary:
         source = Path(temporary).resolve() / "tree"
+        listed: list[PurePosixPath] = []
+        omitted: list[str] = []
+
+        def select(path: PurePosixPath) -> bool:
+            listed.append(path)
+            return (not within(path, withheld)
+                    and (role == "coder" or within(path, selected)))
+
+        def directory_link(path: PurePosixPath) -> None:
+            if within(path, selected):
+                raise ValueError(f"selected input is a link to a directory: {path}")
+            omitted.append(path.as_posix())
+
+        # Withheld paths and in-tree directory links the role did not include are never
+        # materialized; the real directory is still delivered when selected.
         materialize_commit(Path(task["repository"]), task["resolved_commit"], source,
-                           admit_symlinks=True, contained_file_links=True,
+                           admit_symlinks=True, contained_file_links=True, select=select,
+                           directory_link=directory_link,
                            max_files=1000000, max_total_bytes=16 * 1024**3)
         for selection in selected + paths(excludes):
-            if not (source / selection).exists():
+            if not any(within(path, [selection]) for path in listed):
                 raise ValueError(f"selected input path is absent at the base commit: {selection}")
         files = [p for p in source.rglob("*") if p.is_file() or p.is_symlink()]
         kept = {p.relative_to(source).as_posix() for p in files
@@ -108,7 +124,10 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
                 and (role == "coder" or within(PurePosixPath(p.relative_to(source)), selected))}
         for name in kept:
             item = source / name
-            if item.is_symlink() and item.resolve().relative_to(source).as_posix() not in kept:
+            # exists() follows the link as the author's OS will; resolve() alone is lexical
+            # through missing directories.
+            if item.is_symlink() and (not item.exists()
+                                      or item.resolve().relative_to(source).as_posix() not in kept):
                 raise ValueError(f"selected symlink refers to withheld input: {name}")
         destination.mkdir(mode=0o700)
         for name in sorted(kept):
@@ -123,7 +142,8 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     initial = run_host_git(destination, ["rev-parse", "HEAD"]).decode().strip()
     result = dict(role=role, repository=str(destination), source_commit=task["resolved_commit"],
                   initial_commit=initial, includes=includes, excludes=excludes,
-                  files=sorted(kept), tree_digest=tree_digest(destination))
+                  files=sorted(kept), omitted_directory_links=omitted,
+                  tree_digest=tree_digest(destination))
     record.write_new(receipt_path, (json.dumps(result, indent=2) + "\n").encode())
     return result
 
