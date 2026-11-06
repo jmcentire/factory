@@ -87,7 +87,7 @@ class HostGitError(RuntimeError):
     """Host Git could not read the repository without trusting what the agent wrote."""
 
 
-class DirectoryLinkError(HostGitError):
+class _DirectoryLinkError(HostGitError):
     """A contained relative link names a real tree directory rather than a regular file."""
 
 
@@ -216,7 +216,7 @@ def materialize_commit(
                     contained_file_target(
                         entry.path, os.fsdecode(blobs[entry.object_id]), modes, directories,
                     )
-                except DirectoryLinkError:
+                except _DirectoryLinkError:
                     if directory_link is None:
                         raise
                     directory_link(entry.path)
@@ -267,7 +267,7 @@ def contained_file_target(
             raise HostGitError(f"{path} traverses a non-directory file link target")
     if (current in directories and parts[-1] not in {"", ".", ".."}
             and not any(name in modes for name in (current, *path.parents))):
-        raise DirectoryLinkError(f"{path} links to a tree directory, not a regular file")
+        raise _DirectoryLinkError(f"{path} links to a tree directory, not a regular file")
     if modes.get(current) not in _REGULAR_MODES or parts[-1] in {"", ".", ".."}:
         raise HostGitError(f"{path} must link directly to a regular tree file")
     return current
