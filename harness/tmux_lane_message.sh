@@ -202,7 +202,8 @@ fi
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
-[[ "$THREAD_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+# One grammar for every harness's session id (agents.SESSION_ID): a UUID, or OpenCode's ses_<id>.
+"$FACTORY_PYTHON" "$D/agents.py" check-session -- "$THREAD_ID" || {
   echo "lane-message: retained session id is malformed" >&2
   exit 70
 }
@@ -291,7 +292,7 @@ if [ "$BOUNDARY_RECORD" != null ]; then
 fi
 case "$AGENT" in
   codex|codex-ollama|codex-interactive) ;;
-  cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
+  cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode)
     [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
       echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
     } ;;

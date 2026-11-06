@@ -29,6 +29,12 @@ from factory_core.engagement import (  # noqa: E402 - core decision, imported by
     normalize,
 )
 
+_HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
+if _HARNESS_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_ROOT)
+
+import agents  # noqa: E402  (harness/agents.py: the session id grammar every harness shares)
+
 
 class LaneDialogueError(RuntimeError):
     """A dialogue operation could not prove its closed contract."""
@@ -53,10 +59,7 @@ def _lane_argument(value: str) -> str:
 # prose, an answer or a status probe.
 _SENDERS = frozenset({"validator", "orchestrator", "watchdog"})
 _AUTHORITIES = frozenset({"human-answer", "ratified-spec", "runtime-protocol"})
-_THREAD = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
+_THREAD = agents.SESSION_ID
 _MAX_JOURNAL_BYTES = 8 * 1024 * 1024
 MAX_TEXT_BYTES = 16 * 1024  # the ceiling on one question, answer or status text
 

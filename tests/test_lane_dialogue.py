@@ -194,3 +194,32 @@ def test_progress_reviews_come_only_from_the_validator_and_wrap_ups_only_from_th
     # The journal that holds them still validates as a whole.
     record_delivery(root, message_id=str(review["message_id"]), thread_id=THREAD,
                     transport="resume")
+
+
+@pytest.mark.parametrize("thread", ["ses_e4d3a79d5ffeXREazYAR92oFUO", THREAD])
+def test_a_review_reaches_a_lane_whatever_shape_its_session_id_has(
+    tmp_path: Path, thread: str,
+) -> None:
+    """OpenCode names a session ses_<id>, not a UUID: a Validator review to an opencode Tester
+    must record its delivery like any other."""
+    root = run_root(tmp_path)
+    review = plan_message(
+        root, sender="validator", lane="tester", message_kind="progress-review",
+        text="Stay inside your own clone.", basis="observed a read outside the lane",
+        authority="ratified-spec",
+    )
+    row = record_delivery(root, message_id=str(review["message_id"]), thread_id=thread,
+                          transport="resume")
+    assert row["thread_id"] == thread
+
+
+@pytest.mark.parametrize("thread", ["ses_short", "ses_x;ls -la /", "not-a-session", ""])
+def test_a_malformed_session_id_is_refused(tmp_path: Path, thread: str) -> None:
+    root = run_root(tmp_path)
+    review = plan_message(
+        root, sender="validator", lane="tester", message_kind="progress-review",
+        text="x", basis="y", authority="ratified-spec",
+    )
+    with pytest.raises(LaneDialogueError):
+        record_delivery(root, message_id=str(review["message_id"]), thread_id=thread,
+                        transport="resume")

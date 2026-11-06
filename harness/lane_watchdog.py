@@ -110,7 +110,7 @@ REVIEW_EXPIRY_WAITS = 4
 # Lanes whose retained session a lane message resumes: a Codex exec thread, or a registry
 # harness's session (harness/agents.py), recorded by the lane wrapper as soon as it streams.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy", "muse",
-                              "cursor-agent", "prime-agent"})
+                              "cursor-agent", "prime-agent", "opencode"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
 # ("commits=21Top finding"), and that is still a completion.
 _DONE = re.compile(r"^\W*__LANE_DONE__\s+(\S+)\s+commits=\d+(?!\d)")
@@ -184,6 +184,11 @@ def _response_text(value: object) -> str | None:
         if not isinstance(step, dict) or step.get("step_type") != "agent_response":
             return None
         text = step.get("text_delta")
+    elif value.get("type") == "text" and isinstance(value.get("part"), dict):
+        part = value["part"]  # OpenCode: one finished text part of the assistant's step
+        if part.get("type") != "text":
+            return None
+        text = part.get("text")
     elif value.get("type") == "message_end":
         message = value.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -273,11 +278,17 @@ def _tmux(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
 
 
+# On macOS only the setuid /bin/ps may read another process's state and CPU time. A ps found
+# earlier on a lane's PATH (Nix ps-adv_cmds is not setuid) prints "ps: time: requires
+# entitlement" and leaves those columns blank, so every snapshot would read as unavailable.
+PS = "/bin/ps" if sys.platform == "darwin" else "ps"
+
+
 def process_snapshot() -> dict[int, dict[str, Any]] | None:
     """Read identities without command lines; failure is unknown, not an empty process table."""
     try:
         result = subprocess.run(
-            ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="], capture_output=True,
+            [PS, "-A", "-o", "pid=,ppid=,lstart=,stat=,time="], capture_output=True,
             text=True, check=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
     except (OSError, subprocess.SubprocessError):
         return None

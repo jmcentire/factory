@@ -232,6 +232,10 @@ def test_a_lane_names_its_model_family_from_the_model_first_then_a_single_vendor
     assert family("cursor-agent", "grok-4.7-xhigh") == "xai"
     assert family("claude-ollama", "glm-5.3:cloud") == "zhipu"
     assert family("claude", "claude-opus-5-5") == "anthropic"
+    # An opencode model names its provider route first; the family is the model's own.
+    assert family("opencode", "openrouter/~deepseek/deepseek-flash-latest") == "deepseek"
+    assert family("opencode", "opencode/deepseek-v4.1-flash-free") == "deepseek"
+    assert family("opencode", "") == ""
     # A multi-vendor agent with no named model, or a named model no prefix recognizes (a custom
     # provider can serve anything under any name), does not say.
     assert family("cursor-agent", "") == "" and family("prime-agent", "") == ""
@@ -447,7 +451,7 @@ def test_every_lane_agent_is_described_once_and_only_the_per_use_agents_are_mete
     assert match is not None
     assert set(match.group(1).split("|")) == set(lane_agent.AGENTS)
     assert {name for name, agent in lane_agent.AGENTS.items() if agent.metered} == {
-        "codex-ollama", "prime-agent"
+        "codex-ollama", "prime-agent", "opencode"
     }
 
 
