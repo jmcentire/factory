@@ -485,21 +485,53 @@ def test_ready_fires_once_after_the_receipt_or_after_the_exit(tmp_path, monkeypa
 
 def test_an_agent_that_exits_before_it_registers_is_announced_after_its_exit(tmp_path,
                                                                            monkeypatch):
-    # A CLI that is not signed in can exit before the wrapper reads its start time. Unreaped,
-    # it still has one, so a receipt alone would wake the launcher before the exit is recorded.
+    # Keep the exited child unreaped: a receipt alone must not wake the launcher before
+    # its actual exit is recorded. macOS lacks waitid(WNOWAIT), so observe NOTE_EXIT.
+    import select
+    import socket
+    from contextlib import closing
+
     real_started = lane_agent._started
+    with socket.socket() as gate:
+        gate.bind(("127.0.0.1", 0))
+        gate.listen(1)
+        gate.settimeout(5)
 
-    def exited_first(pid):
-        if pid != os.getpid():
-            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
-        return real_started(pid)
+        def release_child():
+            with gate.accept()[0] as child:
+                child.settimeout(5)
+                child.sendall(b"x")
 
-    monkeypatch.setattr(lane_agent, '_started', exited_first)
-    seen = []
-    rc = lane_agent.run_lane(
-        [sys.executable, '-c', 'raise SystemExit(3)'], slot='validator', terminal=True,
-        log=tmp_path/'lane.log', exits=tmp_path/'exits.jsonl',
-        ready=lambda: seen.append((tmp_path/'exits.jsonl').exists()))
+        def exited_first(pid):
+            if pid != os.getpid():
+                if hasattr(os, "waitid"):
+                    release_child()
+                    os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+                else:
+                    with closing(select.kqueue()) as events:
+                        watch = select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                                              flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                              fflags=select.KQ_NOTE_EXIT)
+                        # Register before releasing the child; neither observation reaps it.
+                        events.control([watch], 0, 0)
+                        release_child()
+                        observed = events.control(None, 1, 5)
+                        assert len(observed) == 1
+                        assert observed[0].ident == pid
+                        assert observed[0].fflags & select.KQ_NOTE_EXIT
+            return real_started(pid)
+
+        monkeypatch.setattr(lane_agent, '_started', exited_first)
+        seen = []
+        command = (
+            "import socket; "
+            f"gate = socket.create_connection({gate.getsockname()!r}, timeout=5); "
+            "assert gate.recv(1) == b'x'; gate.close(); raise SystemExit(3)"
+        )
+        rc = lane_agent.run_lane(
+            [sys.executable, '-c', command], slot='validator', terminal=True,
+            log=tmp_path/'lane.log', exits=tmp_path/'exits.jsonl',
+            ready=lambda: seen.append((tmp_path/'exits.jsonl').exists()))
     assert rc == 3 and seen == [True]
 
 

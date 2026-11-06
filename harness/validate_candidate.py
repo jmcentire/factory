@@ -26,6 +26,40 @@ _record = (importlib.import_module("harness.run_record") if __package__
 load, write_new = _record.load, _record.write_new
 
 
+def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None:
+    """Retain raw evidence before notifying the existing independent reviewer.
+
+    Command success is never product acceptance. A failed inbox write preserves the
+    result and fails visibly; a queued notice does not attest that review happened.
+    """
+    result["acceptance"] = "not-evaluated"
+    path = result_root / "result.json"
+    write_new(path, (json.dumps(result, indent=2) + "\n").encode())
+    candidate = result.get("candidate", {}).get("commit", result["requested_commit"])
+    notice = (
+        f"Validation evidence for run {result['run']}, candidate {candidate}: "
+        f"{result['status']} (exit {result['exit_code']}). "
+        f"Result: {path}. Output: {result_root / 'output.log'}. "
+        "Acceptance is not-evaluated. Continue the regular code and test quality check-ins; "
+        "Do not substitute endgame review for earlier check-ins. Review actual code, tests "
+        "and behavioral evidence "
+        "before accepting the affected claims. Internal-document/comment wording checks, "
+        "duplicate assertions and tests of doubles do not prove the promised behavior. "
+        "Inspect observed negative and positive controls; raise concrete findings to the "
+        "Validator, including architecture, maintainability and proportionate operability gaps. "
+        "Drop unproductive arguments immediately; escalate persistent corrections or disputed "
+        "importance after three to four substantive rounds without requiring consensus. "
+        "This notice being queued does not mean a review occurred."
+    )
+    try:
+        _record.message(root, "orchestrator", "host", notice)
+    except (ValueError, OSError, RuntimeError) as error:
+        raise ValueError(
+            f"validation evidence retained at {path}; Orchestrator review notice "
+            f"could not be queued: {error}"
+        ) from error
+
+
 def validate(
     runs: Path,
     run: str,
@@ -92,7 +126,7 @@ def validate(
             exit_code=70, status="validation-failed", error=str(error),
             finished_at=dt.datetime.now(dt.UTC).isoformat(),
         )
-        write_new(result_root / "result.json", (json.dumps(result, indent=2) + "\n").encode())
+        retain_result(root, result_root, result)
         return 70, result_root
     env = {name: os.environ[name] for name in ("PATH", "LANG", "TMPDIR") if name in os.environ}
     env.update(HOME=str(result_root), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
@@ -123,7 +157,7 @@ def validate(
         status="tests-passed" if code == 0 else "tests-failed",
         finished_at=dt.datetime.now(dt.UTC).isoformat(),
     )
-    write_new(result_root / "result.json", (json.dumps(result, indent=2) + "\n").encode())
+    retain_result(root, result_root, result)
     return code, result_root
 
 
@@ -157,7 +191,9 @@ def main() -> int:
             print(f"LFS: hydrated {candidate['lfs_hydrated']} file(s), "
                   f"{candidate['lfs_bytes']} bytes; "
                   f"{candidate['lfs_pointers_left']} pointer file(s) remain")
-        print(f"{'PASS' if code == 0 else 'FAIL'}: {result}/result.json")
+        print(f"{'PASS' if code == 0 else 'FAIL'}: checks only; "
+              f"product acceptance not evaluated; {result}/result.json")
+        print("Product acceptance: not evaluated. Orchestrator review notice queued.")
         return 0 if code == 0 else 1
     except (ValueError, OSError, RuntimeError) as error:
         print(f"validation: {error}", file=sys.stderr)

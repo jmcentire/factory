@@ -54,6 +54,10 @@ Every test declares its authority. A test that declares none is normative.
 
 **T4. Assert the promised outcome at the most stable boundary that shows it.** The persisted row, the event, the money moved, the response the caller acts on. Not call counts, private methods, log wording or the status envelope. Ask of every assertion: would a correct rewrite of the internals break it? If so, it tests structure.[^desiderata]
 
+Internal comments, developer documentation and instructions are not runtime behavior. Finding a phrase in Markdown or a comment does not prove its meaning or that the software follows it. Do not add regexes, snapshots or phrase inventories to pin that prose. Review it semantically. A document parser or shipped manifest can have a real input/output contract; test that contract with valid and invalid inputs, and state the narrow claim. A mandated public message or exact wire format can also be a contract. The file extension is not the distinction, and no blanket file/regex ban decides test quality.
+
+For each proposed assertion, the Tester and Validator must be able to answer: what user expectation fails if this is wrong, and what plausible broken behavior would this assertion detect? A harmless comment or documentation rewording must not break a behavior test. Conversely, keeping the words while disabling the promised behavior must not keep its evidence green. A test of a prose linter only proves the linter, not policy compliance or product safety.
+
 ---
 
 ## Which test for which claim
@@ -305,6 +309,8 @@ Mechanical mutants flip operators and drop statements. They rarely produce the d
 - One invariant at three layers. Test it once at the cheapest layer that can expose it, plus a live probe on Critical surfaces.
 - A whole payload when two fields are the promise.
 - The double.
+- Internal prose, source spelling or instruction wording masquerading as behavior (T4).
+- A separately named test for every requirement when an existing fixture already exposes the same failure. Extend that fixture; add another test only for a distinct failure, boundary or history.
 
 A test that raises no confidence in a promise costs run time and reviewer trust, and someone will later "fix" it on the assumption that it mattered.
 
@@ -328,6 +334,8 @@ Deleting a test that no longer adds evidence is healthy. Record why. The deletio
 | A green-now guard is red on unrelated behavior | Validator investigates the regression against the governing intent; retain the failure evidence |
 
 The loop "run, edit the expectations, run again" is forbidden in every lane.
+
+Before accepting a suite, the Validator reads its actual assertions and fixtures against the contract, not just the Tester's report. Reject unsupported prose/structure pins, duplicate evidence and assertions of a double's own configured behavior. Real outputs of the system under test observed through a recorder at a declared seam can establish composition behavior (T17); they do not prove the real provider or downstream effect. The Tester corrects them without receiving implementation. Use a bounded, behavior-changing negative control where T44 selects sensitivity evidence; a syntax error, import failure or deleted sentence is not evidence that a behavioral test catches a defect. Prioritize demonstrated damaging or unrecoverable production failures. Retain the observed red result and valid positive control in the existing review/output, reusing unchanged trustworthy evidence. If required evidence is missing, report a gap; do not replace it with more tests or a count. This review adds no blanket mutation campaign or new release prerequisite.
 
 **T38. Generated tests are candidates.** A test written by a model is a hypothesis until it cites its item (T1), names its falsifier (T31) and is seen red. When Meta filtered model-written tests, 75% built, 57% passed reliably and 25% added coverage, and the tool kept only passing tests because it had no oracle to say a failing one was right.[^meta] Passing is the one property a self-agreeing test has by construction. Green is also weak evidence when the suite is weak: in one study, 29.6% of patches that passed a repository's tests behaved differently from the reference fix.[^swebench]
 

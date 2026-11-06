@@ -1,3 +1,9 @@
+> Update, 2026-11-06: the testing-quality repair removes only `check-doctrine`
+> and its literal-prose tests. They checked document wording, not role behavior
+> or adequacy of evidence. The other release gates below remain. The earlier
+> refusal of broad gate removal remains historical fact; this correction does
+> not revive that proposal.
+
 # Direct Factory cleanup: implemented changes versus proposals
 
 This inventory describes the uncommitted candidate on `fix/direct-factory-cleanup`, based on `e3ea9e56c50cb89b0fdeb01acc8431b27097237a`. It is not a release or installation claim. Factory remains stopped. The goal is clean, extensible, local, durable, maintainable, reliable software produced by four independent roles; fewer lines or fewer checks are not goals by themselves.

@@ -376,9 +376,15 @@ def start(runs: Path, run: str) -> None:
         model, effort = choices[role]["model"], choices[role]["effort"]
         directive = "validate" if role == "validator" else "orchestrate"
         prompt = (
-            f"Act as Factory {role}. Read {home}/prompts/{directive}.md and {root}/TASK.md. "
+            f"Act as Factory {role}. Read {home}/prompts/{directive}.md, "
+            f"{home}/docs/SOFTWARE-FACTORY.md and {root}/TASK.md. "
             f"Run {run}; repository {doc['repository']}; commit {doc['resolved_commit']}. "
             f"Use the harness at {tools}. Read {root}/{role}/inbox.jsonl when checking progress. "
+            "Both coordinators review actual code and tests at the initial approach, first useful "
+            "increment, material progress and each correction round under Regular quality "
+            "check-ins. Guide early; drop unproductive arguments immediately. Escalate an "
+            "unresolved issue or disputed importance to the user after three to four meaningful "
+            "correction rounds; consensus is not required. "
             "Remain in this conversation until the Validator completes the task. "
             "Use relevant Kindex history before scans and material decisions. "
             "Current user instructions govern. Preserve assigned agents and models. "
@@ -405,8 +411,12 @@ def start(runs: Path, run: str) -> None:
                         raise ValueError("retained kickoff brief changed") from None
             continue
         argv = resident_command(agent, model, effort, prompt, root)
-        if shutil.which(argv[0]) is None:
+        executable = shutil.which(argv[0])
+        if executable is None:
             raise ValueError(f"{role} executable is unavailable: {argv[0]}")
+        # A bare name can fall through PATH after ENOENT from a missing shebang
+        # interpreter. Launch the selected executable or fail, never a later agent.
+        argv[0] = str(Path(executable).absolute())
         if agent == "ollama":
             # Reuse the authors' availability guard: `ollama launch` can otherwise
             # download a missing model. Naming a model is not permission to install it.

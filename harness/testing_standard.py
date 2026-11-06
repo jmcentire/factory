@@ -42,7 +42,8 @@ PREAMBLE = """MANDATORY FIRST READING — THE FOUNDER'S TESTING STANDARD (role=t
 Read every document below in full before you write, change or run any test. They are the
 founder's testing standard (How We Test, the T-rules), the Tester role doctrine and, when
 present, this run's testing strategy. They bind every test you write: a test that breaks them
-is rejected whether or not it passes. Every lane report cites the T-rules it relied on.
+is rejected whether or not it passes. Citing rules is not evidence of compliance. Explain
+the user expectation, real observation and falsifier; report actual results and limitations.
 """
 
 

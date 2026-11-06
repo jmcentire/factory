@@ -18,7 +18,7 @@ fails `make ship`.
 Scanned: prompts/, docs/, harness/, factory_core/, factory_runtime/ (text and code) and the
 top-level README.md, AGENTS.md, CLAUDE.md and REVIEW.md. Not scanned:
 CHANGELOG.md (history), docs/proposals/, docs/HISTORICAL_MARKDOWN/ and docs/PROVENANCE-SYNC.md
-(archival records; check_doctrine_sync.py treats PROVENANCE-SYNC.md as history too), and
+(archival records), and
 docs/practices/incident-response.md (the paging standard for products
 the factory builds, not for the factory's own run loop).
 

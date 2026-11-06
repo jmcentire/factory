@@ -8,7 +8,7 @@ TypeSafe API: they import only
 What must hold: every rule has an atomic question, the fields it reads, criteria with a `what`,
 and a three-way band (yes above 0.7, no below 0.3, escalate between); ids are unique; every case
 supplies exactly its rule's fields and has a label; each msg-r2 rule has a positive, a negative,
-and a lesson-drawn case. Current role prompts retain concrete oversight and response duties.
+and a lesson-drawn case.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCREEN = ROOT / "docs" / "proposals" / "jev-screen"
-ORCHESTRATE = ROOT / "prompts" / "orchestrate.md"
-VALIDATE = ROOT / "prompts" / "validate.md"
 
 _BACKTICK = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
 
@@ -127,21 +125,3 @@ def test_cases_cover_both_labels_and_a_lesson(rid: str) -> None:
 def test_case_ids_are_unique() -> None:
     ids = [cid for cases in CASES.values() for cid, _, _, _ in cases]
     assert len(ids) == len(set(ids))
-
-
-def test_orchestrator_owns_concrete_oversight_without_fixed_rulebook_ceremony() -> None:
-    text = ORCHESTRATE.read_text(encoding="utf-8")
-    assert "Own strategic oversight and process adherence" in text
-    assert "State the action, evidence and needed correction" in text
-    assert "Validator owns product acceptance" in text
-    assert "do not require assessments, grant permission or stop any process" in text
-    assert "Never send test implementation to the Coder" in text
-
-
-
-def test_validator_addresses_concrete_orchestrator_findings() -> None:
-    text = VALIDATE.read_text(encoding="utf-8")
-    assert "Orchestrator independently owns strategic oversight" in text
-    assert "Address its concrete findings" in text
-    assert "do not demote it to an on-demand reviewer or ignore it" in text
-    assert "user owns scope and agent/model choices" in text

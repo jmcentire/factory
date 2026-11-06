@@ -2,6 +2,8 @@
 
 A review is a series of narrow passes. Each pass looks for one class of violation and ignores everything else.
 
+In normal Factory work, both Validator and Orchestrator apply the relevant code and test passes throughout the work under [Regular quality check-ins](../SOFTWARE-FACTORY.md#regular-quality-check-ins), not just at completion. Choose depth for the actual risk and scope; the pass inventory is a review aid, not a requirement to create another reviewer or report for each label. Explain inapplicable guidance or scoped exclusions in the existing review and escalate consequential tradeoffs. Drop unproductive arguments immediately; escalate persistent correction loops or disputed importance after three to four substantive rounds even without consensus. Current user direction and TESTING T44 govern over older blanket campaign language.
+
 Broad reviews fail in a predictable way. Attention spreads across everything, the easy findings fill the page, and the structural defect goes unseen: the copied field used as authority, the swallowed error on the money path. Nobody was looking only for it. A narrow pass can't miss that way. It has one question, a short list of what a violation looks like, and permission to ignore the rest. Passes are cheap, run in parallel, and each one can be checked.
 
 Rules are cited by ID: A# from [How We Architect Systems](ARCHITECTURE.md), W# from [How We Write Code](HOW-WE-WRITE-CODE.md), T# from [How We Test](TESTING.md).

@@ -1,4 +1,4 @@
-.PHONY: help install uninstall doctor dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-doctrine check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance ship
+.PHONY: help install uninstall doctor dev venv clean-venv check-python show-python test test-isolation tessera test-tessera lint typecheck check-purity check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance ship
 
 .DEFAULT_GOAL := help
 
@@ -216,9 +216,6 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py
 
-check-doctrine: check-python ## structural parity for active doctrine surfaces
-	$(PY) scripts/check_doctrine_sync.py
-
 HUMAN_GATES_ARGS ?=
 AUTHORITY_ARGS ?=
 
@@ -259,7 +256,7 @@ check-glossary: check-python ## glossary referent-integrity + single-definition-
 # Fail-closed: `make` stops at the first non-zero gate, so `ship` is green only if every
 # gate is green. Purity runs first — the boundary guarantee is the cheapest and most
 # important check.
-ship: check-purity check-doctrine check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> doctrine -> human-gates -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
+ship: check-purity check-human-gates check-wiring check-authority check-harness check-denial-probes check-acceptance check-glossary lint typecheck test ## run every gate (purity -> human-gates -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 	@echo "ship: all gates green (fail-closed)."
 
 help:
