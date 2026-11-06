@@ -202,7 +202,8 @@ fi
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
-[[ "$THREAD_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+# One grammar for every harness's session id (agents.SESSION_ID): a UUID, or OpenCode's ses_<id>.
+"$FACTORY_PYTHON" "$D/agents.py" check-session -- "$THREAD_ID" || {
   echo "lane-message: retained session id is malformed" >&2
   exit 70
 }

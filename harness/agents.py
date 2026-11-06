@@ -47,6 +47,13 @@ TURN_RECORD = "factory-lane-turn/1"
 # The address Ollama serves its Anthropic-compatible Messages API on; claude-ollama talks to
 # nothing else, so no Anthropic key can leave the machine through it.
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+# A retained session id, the one a lane message resumes by. Most harnesses (Codex, Claude Code,
+# cursor-agent, agy, muse) name a session by UUID; OpenCode names it ses_<base62>. The id travels
+# as one argv element, so the grammar admits nothing a shell or CLI parser could act on.
+SESSION_ID = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|ses_[0-9A-Za-z]{20,64})$"
+)
 
 
 @dataclass(frozen=True)
@@ -641,7 +648,9 @@ class OpenCode(Harness):
     def session_in(self, line: str) -> str:
         event = _json_line(line)
         session = event.get("sessionID")
-        return session if event.get("type") == "step_start" and isinstance(session, str) else ""
+        if event.get("type") != "step_start" or not isinstance(session, str):
+            return ""
+        return session if SESSION_ID.fullmatch(session) else ""
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
@@ -772,6 +781,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
+    check = sub.add_parser("check-session", help="exit 0 when the id is a well-formed retained "
+                           "session id (SESSION_ID), 70 otherwise")
+    check.add_argument("session")
     describe = sub.add_parser("describe", help="resumable and plan, NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
@@ -815,6 +827,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="lane-setup's NUL-separated output")
     args = parser.parse_args(argv)
     try:
+        if args.command == "check-session":
+            return 0 if SESSION_ID.fullmatch(args.session) else 70
         if args.command == "turn-record":
             chosen = harness(args.agent)
             if args.persistent:

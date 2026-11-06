@@ -196,6 +196,16 @@ def test_each_harness_announces_its_session_in_its_first_event(name: str) -> Non
     assert agents.harness(name).session_in(line) == session
 
 
+@pytest.mark.parametrize("name", sorted(STREAMS))
+def test_every_announced_session_is_one_a_lane_message_accepts(name: str) -> None:
+    """tmux_lane_message.sh and lane_dialogue.py refuse an id outside SESSION_ID, so a session
+    the wrapper records must fit it, or the Validator cannot reach that lane again."""
+    assert agents.SESSION_ID.fullmatch(STREAMS[name][1])
+    out = subprocess.run([sys.executable, str(REPO / "harness" / "agents.py"), "check-session",
+                          "--", STREAMS[name][1]], check=False)
+    assert out.returncode == 0
+
+
 def test_billing_source_is_read_from_the_init_event() -> None:
     claude, cursor = agents.harness("claude"), agents.harness("cursor-agent")
     assert claude.billing_in(STREAMS["claude"][0]) == "plan"
