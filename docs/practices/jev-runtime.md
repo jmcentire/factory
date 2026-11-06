@@ -52,6 +52,7 @@ parent traversal, symlinks (including parent directories), non-regular files, em
 oversized sources, and invalid UTF-8 cannot supply evidence. Missing fields mark the affected
 rules unavailable. The Orchestrator must inspect those checks manually, obtain the missing
 artifacts, or block; it may not interpret unavailable as compliant.
+Attach `judge_flags` whenever `test_excerpt` is attached, so the flag check can run.
 
 ## Consume the receipt
 

@@ -269,7 +269,7 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 - A unit without contract tests: nominal, each provokable error, the catch-all.
 - A composition without an order test; a seam without a test through real units.
 - A disposition or signal never forced by a test.
-- Mocks of the thing under test; patching instead of a declared seam (T16; following the repository convention it records is not a blocking finding); fixtures where real payloads exist.
+- Mocks of the thing under test; patching instead of a declared seam (T16; following the T28 record of the repository convention is not a blocking finding); fixtures where real payloads exist.
 - A test with no named falsifier, or a Critical invariant with no semantic falsifier (T31).
 - A mutant declared after its result was read, or one that touches a test, fixture, mask or oracle (T42).
 - A blanket mask or a regex in a test body where a normalizer belongs (T29); a golden file no human confirmed against the specification (T30).

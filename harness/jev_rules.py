@@ -724,8 +724,8 @@ TESTER_FLAG_FAULT = {
         ),
         "compare": ["`test_excerpt`", "`judge_flags`"],
         "focus": (
-            "`judge_flags` is the command the judge runs, the repository's own test command. A "
-            "flag it passes is not a fault, however experimental."
+            "`judge_flags` is the command the judge runs. A flag it passes is not a fault, "
+            "however experimental."
         ),
     },
     "criteria": {
