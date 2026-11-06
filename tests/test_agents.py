@@ -486,6 +486,9 @@ def test_done_claim_requires_a_typed_agent_response() -> None:
         # Muse can run the next message straight on with no newline after the count.
         json.dumps({"payload_type": "run.terminal.completed",
                     "payload": {"text": f"ok\n{done}Top finding: all items hold."}}),
+        # OpenCode 2.x run --format json: a finished text part of the assistant's step.
+        json.dumps({"type": "text", "sessionID": "ses_x", "part": {"type": "text",
+                                                                   "text": f"ok\n{done}"}}),
     ):
         assert lane_watchdog._done_in(line)
     # The protocol's unfilled form, echoed back in a prompt event, is not a completion.
@@ -499,6 +502,10 @@ def test_done_claim_requires_a_typed_agent_response() -> None:
         {"event": "step_update", "step_update": {"step_type": "tool_result", "text_delta": done}},
         {"payload": {"text": done}},
         {"type": "user", "content": done},
+        # OpenCode tool output and reasoning are not the assistant's answer.
+        {"type": "tool_use", "part": {"type": "tool", "state": {"output": done}}},
+        {"type": "reasoning", "part": {"type": "reasoning", "text": done}},
+        {"type": "text", "part": {"type": "tool", "text": done}},
     ):
         assert not lane_watchdog._done_in(json.dumps(event))
     assert not lane_watchdog._done_in(done)

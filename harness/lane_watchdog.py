@@ -184,6 +184,11 @@ def _response_text(value: object) -> str | None:
         if not isinstance(step, dict) or step.get("step_type") != "agent_response":
             return None
         text = step.get("text_delta")
+    elif value.get("type") == "text" and isinstance(value.get("part"), dict):
+        part = value["part"]  # OpenCode: one finished text part of the assistant's step
+        if part.get("type") != "text":
+            return None
+        text = part.get("text")
     elif value.get("type") == "message_end":
         message = value.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant":
