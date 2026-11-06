@@ -673,28 +673,24 @@ TESTER_SETUP_FAULT = {
     "type": "noul",
     "instructions": {
         "question": (
-            "Does `test_excerpt` patch a global, sleep or wait on wall-clock time, depend"
-            " on a runtime flag that `judge_flags` does not include, or assert on a path the "
-            "test setup never reaches?"
+            "Does `test_excerpt` patch a global, sleep or wait on wall-clock time, or "
+            "assert on a path the test setup never reaches?"
         ),
-        "compare": ["`test_excerpt`", "`judge_flags`"],
+        "inspect": "`test_excerpt`",
         "focus": (
             "Judge the test code itself. Injecting a clock or random source through the "
-            "contract's own parameters is the standard's way, and is not a fault. A flag in "
-            "`judge_flags` is the repository's own test command, so a test that needs it (such as "
-            "--experimental-test-module-mocks for node:test's mock.module) is not a fault."
+            "contract's own parameters is the standard's way, and is not a fault."
         ),
     },
     "criteria": {
         "true": {
             "what": (
-                "The test monkeypatches a global, sleeps, relies on a runtime flag the judge "
-                "does not pass, or never reaches the behaviour it claims to test"
+                "The test monkeypatches a global, sleeps, or never reaches the behaviour it "
+                "claims to test"
             ),
             "examples": [
                 "Math.random = () => 0.42; const id = newMessageId();",
                 "await new Promise(r => setTimeout(r, 1500)); expect(queue.size).toBe(0);",
-                "// run with --seed=7 so ids are stable\nexpect(id).toBe('a3f9')",
                 (
                     "it('rejects unauthorized send', ...) with only one of the two required "
                     "permissions granted, so the request fails at auth before the send path"
@@ -711,6 +707,40 @@ TESTER_SETUP_FAULT = {
                 (
                     "const svc = makeService({ rng: seeded(7) }); // rng is a declared "
                     "constructor parameter"
+                ),
+            ],
+        },
+    },
+}
+
+# Lesson 6, split out (PLAT-4844, 2026-11-06): whether a flag is "unstable" depends on the
+# judge's own command, so the flag check reads it. node:test's mock.module needs
+# --experimental-test-module-mocks, which a repository's own test command may pass.
+TESTER_FLAG_FAULT = {
+    "type": "noul",
+    "instructions": {
+        "question": (
+            "Does `test_excerpt` depend on a runtime flag that `judge_flags` does not include?"
+        ),
+        "compare": ["`test_excerpt`", "`judge_flags`"],
+        "focus": (
+            "`judge_flags` is the command the judge runs, the repository's own test command. A "
+            "flag it passes is not a fault, however experimental."
+        ),
+    },
+    "criteria": {
+        "true": {
+            "what": "The test needs a runtime flag the judge's command does not pass",
+            "examples": [
+                "// run with --seed=7 so ids are stable\nexpect(id).toBe('a3f9')",
+            ],
+        },
+        "false": {
+            "what": "Every flag the test needs is in the judge's command, or it needs none",
+            "examples": [
+                (
+                    "mock.module('./clock.ts', { namedExports: { now: () => 1000 } }); "
+                    "(judge_flags: node --experimental-test-module-mocks --test)"
                 ),
             ],
         },
@@ -1306,10 +1336,13 @@ RULEBOOK = (
         "msg-r2 §6, founder 2026-10-09",
     ),
     _rule(
-        "tester_setup_fault",
-        TESTER_SETUP_FAULT,
+        "tester_setup_fault", TESTER_SETUP_FAULT, ("test_excerpt",), "msg-r2 §6, founder 2026-10-09"
+    ),
+    _rule(
+        "tester_flag_fault",
+        TESTER_FLAG_FAULT,
         ("test_excerpt", "judge_flags"),
-        "msg-r2 §6, founder 2026-10-09",
+        "msg-r2 §6, PLAT-4844",
     ),
     _rule(
         "brief_technique_against_standard",
