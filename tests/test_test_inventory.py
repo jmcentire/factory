@@ -161,3 +161,122 @@ def test_a_runner_failure_or_unparseable_output_prints_no_inventory(
         patch.chdir(tmp_path)
         assert test_inventory.main([runner, "--", sys.executable, _fake(tmp_path, body)]) == 70
     assert capsys.readouterr().out == ""
+
+
+def _node_fake(tree: Path, rows: list[dict], exit_code: int = 0, end: bool = True) -> str:
+    """A node --test stand-in that writes the inventory reporter's lines to its destination."""
+
+    lines = [json.dumps(row) for row in rows] + ([json.dumps({"end": True})] if end else [])
+    return _fake(tree, f"""
+assert sys.argv[1] == "--test", sys.argv
+assert sys.argv[2].startswith("--test-reporter=file://"), sys.argv
+destination = sys.argv[3].removeprefix("--test-reporter-destination=")
+open(destination, "w").write({chr(10).join(lines)!r} + "\\n")
+sys.exit({exit_code})
+""")
+
+
+def _enqueued(file: Path) -> dict:
+    """Node enqueues each test file it runs at the top level under its own path."""
+
+    return {"enqueued": str(file), "file": str(file)}
+
+
+def _result(name: str, nesting: int, file: Path, **flags: bool) -> dict:
+    return {"name": name, "nesting": nesting, "file": str(file), "failed": False,
+            "suite": False, "skip": False, "todo": False, **flags}
+
+
+def test_node_results_become_tests_named_through_their_suites(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """node:test reports children before their parent. Suites are not tests, a failing test is
+    still collected, skip and todo are not runnable, a test a shared helper registers belongs to
+    its top-level test's module, and a file that ran no test is not one."""
+
+    test_file = tmp_path.resolve() / "test" / "cap.test.ts"
+    helper = tmp_path.resolve() / "test" / "shared.ts"
+    empty_file = tmp_path.resolve() / "test" / "helpers.test.ts"
+    rows = [
+        _enqueued(test_file),
+        _enqueued(empty_file),
+        _result("R7.1 refuses x", 1, test_file),
+        _result("R7.8 shared behaviour", 1, helper),
+        _result("R7.2 later", 1, test_file, skip=True),
+        _result("R7.3 todo", 1, test_file, todo=True),
+        _result("R7.4 deep", 2, test_file, failed=True),
+        _result("inner", 1, test_file, suite=True),
+        _result("skipped suite", 1, test_file, suite=True, skip=True),
+        _result("cap", 0, test_file, suite=True),
+        _result("R7.5 subtest", 1, test_file, failed=True),
+        _result("parent", 0, test_file, skip=True),
+        _result("test/helpers.test.ts", 0, empty_file),
+    ]
+    runner = _node_fake(tmp_path, rows, exit_code=1)
+    document = _document(tmp_path, "node", "--", sys.executable, runner, "--test", "test",
+                         capsys=capsys)
+
+    module = "test/cap.test.ts"
+    assert document["tests"] == [{"module": module, "name": name} for name in (
+        "cap > R7.1 refuses x", "cap > R7.8 shared behaviour", "cap > inner > R7.4 deep",
+        "parent > R7.5 subtest")]
+    assert document["skipped"] == [{"module": module, "name": name} for name in (
+        "cap > R7.2 later", "cap > R7.3 todo", "cap > skipped suite", "parent")]
+
+
+@pytest.mark.parametrize("rows, exit_code, end, argv", [
+    # A file that failed outside any test did not load.
+    ([_result("test/a.test.ts", 0, Path("test/a.test.ts"), failed=True)], 1, True, ["--test"]),
+    # The reporter never finished.
+    ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, False, ["--test"]),
+    # Exit 1 with no test run is a runner failure (Node 20: "Could not find" a glob).
+    ([], 1, True, ["--test"]),
+    # Exit 1 that no failing test explains (a wrapper or post-run failure).
+    ([_enqueued(Path("test/a.test.ts")), _result("R7.1", 0, Path("test/a.test.ts"))], 1, True,
+     ["--test"]),
+    ([_result("R7.1", 0, Path("test/a.test.ts"))], 7, True, ["--test"]),
+    ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, []),
+    ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, ["--test", "--test-reporter=tap"]),
+    # A result whose top-level test never reported.
+    ([_result("R7.1", 1, Path("test/a.test.ts"))], 0, True, ["--test"]),
+    # A top-level test credited to a file Node did not run: a shared helper registered it.
+    ([_enqueued(Path("test/a.test.ts")), _result("R7.1", 0, Path("lib/shared.ts"))], 0, True,
+     ["--test"]),
+])
+def test_a_node_runner_failure_prints_no_inventory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], rows: list[dict], exit_code: int,
+    end: bool, argv: list[str],
+) -> None:
+    rows = [{**row, "file": str(tmp_path.resolve() / row["file"])} for row in rows]
+    rows = [{**row, "enqueued": row["file"]} if "enqueued" in row else row for row in rows]
+    runner = _node_fake(tmp_path, rows, exit_code=exit_code, end=end)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.chdir(tmp_path)
+        assert test_inventory.main(["node", "--", sys.executable, runner, *argv]) == 70
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs the node runtime")
+def test_real_node_test_results_are_an_inventory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "test").mkdir()
+    (tmp_path / "test" / "cap.test.mjs").write_text(
+        'import { describe, it, test } from "node:test";\n'
+        'describe("cap", () => {\n'
+        '  it("R7.1 runs", () => {});\n'
+        '  it.skip("R7.2 skipped", () => {});\n'
+        '  it("R7.3 option", { skip: "later" }, () => {});\n'
+        '  it.todo("R7.4 todo");\n'
+        '  describe("inner", () => { it("R7.5 fails", () => { throw new Error("x"); }); });\n'
+        "});\n"
+        'test("parent", async (t) => { await t.test("R7.6 subtest", () => {}); });\n'
+        'test("R7.7 skipped inside", (t) => { t.skip(""); });\n')
+    document = _document(tmp_path, "node", "--", "node", "--test", "test/cap.test.mjs",
+                         capsys=capsys)
+
+    assert [test["name"] for test in document["tests"]] == [
+        "cap > R7.1 runs", "cap > inner > R7.5 fails", "parent", "parent > R7.6 subtest"]
+    assert [test["name"] for test in document["skipped"]] == [
+        "cap > R7.2 skipped", "cap > R7.3 option", "cap > R7.4 todo", "R7.7 skipped inside"]
+    assert {test["module"] for test in document["tests"]} == {"test/cap.test.mjs"}

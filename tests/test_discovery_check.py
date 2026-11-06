@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -276,3 +278,23 @@ def test_a_verdict_needs_the_strategy_ratified_and_a_freeze_when_it_declares_mod
     assert "no Tester slot froze" in capsys.readouterr().err
     strategy.write_text("no planned tests in this run\n")
     assert _require(root, candidate, strategy) == 0
+
+
+def test_a_timed_out_inventory_stops_the_runners_children(tmp_path: Path) -> None:
+    """A node:test inventory runs the suite; a timeout must not leave its workers running."""
+
+    pidfile = tmp_path / "child.pid"
+    command = [sys.executable, "-c",
+               "import subprocess, sys; child = subprocess.Popen([sys.executable, '-c', "
+               "'import time; time.sleep(60)']); "
+               f"open({str(pidfile)!r}, 'w').write(str(child.pid)); child.wait()"]
+    with pytest.raises(discovery_check.DiscoveryError, match="did not complete"):
+        discovery_check.collected(tmp_path, command, timeout_s=2)
+    pid = int(pidfile.read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    pytest.fail("the runner's child outlived the inventory timeout")
