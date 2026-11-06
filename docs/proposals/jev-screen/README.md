@@ -71,7 +71,8 @@ allowing to happen?) names the rule ids the resident Orchestrator consumes.
 | `adversarial_review_deferred` | §5 the adversarial review postponed past the first green judge |
 | `tester_brief_omits_standard` | §6 a Tester brief without TESTING.md and the TESTING-STRATEGY as mandatory reading |
 | `tester_report_no_t_rules` | §6 a Tester lane report that cites no T-rule (founder, 2026-10-09) |
-| `tester_setup_fault` | §6 tests with patched globals, sleeps, unstable flags, or unreached paths (founder, 2026-10-09) |
+| `tester_setup_fault` | §6 tests with patched globals, sleeps, or unreached paths (founder, 2026-10-09) |
+| `tester_flag_fault` | §6 a test that needs a runtime flag the judge's own command does not pass (PLAT-4844) |
 | `brief_technique_against_standard` | §7 brief advice to patch a global, sleep, or use a flag the judge does not pass |
 | `dispatch_before_orch_review` | §7 a ruling or brief sent before the Orchestrator reviewed it |
 | `ruling_contradicts_signature` | §7 a ruling against a contract signature or type, which it leaves unchanged |

@@ -212,7 +212,7 @@ def test_every_screened_rule_runs_with_real_retained_evidence_handles(tmp_path: 
     )
     seen = []
     screen.screen_pending(root, lambda p: (seen.append(p), response(p))[1])
-    assert set(seen[0]["questions"]) == set(screen.RULES) and len(screen.RULES) == 23
+    assert set(seen[0]["questions"]) == set(screen.RULES) and len(screen.RULES) == 24
     assert all(v["band"] == "no" for v in receipts(root)[0]["body"]["results"].values())
     channel.record_assessment(root, report(root))
 

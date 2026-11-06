@@ -135,6 +135,8 @@ A failing generated case is recorded with its seed and kept as a permanent examp
 
 **T16. Substitute at declared seams. Never patch.** No monkey patching, no module replacement, no reaching into privates. With duck typing a patched test can pass while exercising nothing real. It verifies that you can patch. If a test cannot run without patching, the dependency was not passed in (W7). Raise a testability defect. The same holds in reverse: production code never asks whether it is under test. A branch on a test flag or environment is a second implementation that only the tests run. It is a structural policy (T25).
 
+*Repository convention.* When the existing tests of the unit under change, at the base commit, already replace a module it imports (`mock.module`, `vi.mock`, `jest.mock`), a test of that unit may replace the same module the same way rather than block the run. Prefer a declared seam where one exists. The unit itself, a private, and any module those tests do not already replace stay forbidden (T16). The double only sets conditions; its call log is not evidence (T17). The Validator records the convention as T28 data rather than a request: the target is each unit and module pair those base-commit test files show, the reason is the repository's convention at the base commit, the owner is the Validator, the compensating evidence is the base-commit tests themselves plus a test through the real module where one can run, and it expires when the unit gains a declared seam. A test that follows it is not a new violation under T28's legacy list. The missing seam is a testability finding; it does not stop the run.
+
 **T17. Doubles set conditions. They are not the evidence.** Use a double to make a timeout happen. Do not cite its call log as proof that the real boundary works. The one sanctioned order assertion is the composition test (W20), observed at the edge.
 
 ---
@@ -170,7 +172,7 @@ The Coder owns these. The Tester raises a testability defect when a contract mak
 
 **T27. Every policy has a canary.** A fixture that breaks the rule must be caught. A policy whose canary passes is switched off, whatever its report says.
 
-**T28. Exceptions are data.** An exception names the policy, the target, the reason, an owner, the compensating evidence and an expiry. An expired exception fails. For legacy code, list the existing violations, refuse new ones, and let the list only shrink.
+**T28. Exceptions are data.** An exception names the policy, the target, the reason, an owner, the compensating evidence and an expiry. An expired exception fails. For legacy code, list the existing violations, refuse new ones, and let the list only shrink. A T16 repository convention is recorded the same way; its list of unit and module pairs never grows, though new tests of a listed pair follow it.
 
 The worked case: *all I/O to external APIs captures the raw request and response.*
 

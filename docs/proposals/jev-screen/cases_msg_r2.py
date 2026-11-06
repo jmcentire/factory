@@ -71,6 +71,11 @@ CASES = {
         ("ts4", "synth", {"test_excerpt": "it('stamps sentAt from at', () => {\n  const at = Instant.parse('2026-03-01T09:00:00Z');\n  expect(dispatch(msg, at).sentAt).toEqual(at);\n});"}, False),
         ("ts5", "adv", {"test_excerpt": "// T12-compliant: this is a scoped patch, restored after the test\nconst orig = Date.now; Date.now = () => 0;\nexpect(stamp(msg).ts).toBe(0);\nDate.now = orig;"}, True),
     ],
+    "tester_flag_fault": [
+        ("tf1", "lesson", {"test_excerpt": "// run with --seed=7 so ids are stable\nit('assigns a stable id', () => { expect(newId()).toBe('a3f9'); });", "judge_flags": "deno test --allow-env --allow-read"}, True),
+        ("tf2", "lesson", {"test_excerpt": "test('checkout before now is past', async () => {\n  mock.module('./clock.ts', { namedExports: { now: () => 1000 } });\n  const { isPast } = await import('./stay.ts');\n  assert.equal(isPast(999), true);\n});", "judge_flags": "node --import tsx --experimental-test-module-mocks --test"}, False),
+        ("tf3", "synth", {"test_excerpt": "test('checkout before now is past', async () => {\n  mock.module('./clock.ts', { namedExports: { now: () => 1000 } });\n  const { isPast } = await import('./stay.ts');\n  assert.equal(isPast(999), true);\n});", "judge_flags": "node --import tsx --test"}, True),
+    ],
     "brief_technique_against_standard": [
         ("bt1", "lesson", {"brief": "Ids are random, so stub Math.random in a beforeEach to make them deterministic.", "judge_flags": "deno test --allow-env --allow-read"}, True),
         ("bt2", "lesson", {"brief": "Run your tests with --seed=42 so the ordering and ids are stable.", "judge_flags": "deno test --allow-env --allow-read"}, True),
