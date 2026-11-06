@@ -32,6 +32,14 @@ missing. When doctor says `READY`, you are done. Otherwise apply the fixes it li
 To use it, open Claude Code in the repository you want to work on. Type `/build` for small
 work, or `/validate` to start a full factory run. `factory --help` lists the CLI.
 
+### Optional status reporting
+
+Factory does not require Herald. Existing configured reporting still sends status, attention,
+resolution and heartbeat updates to Herald's MCP. Set `FACTORY_HERALD=off` for local-only
+reporting, or leave the default `auto` to use an existing token when present. Missing credentials
+or remote failure preserve local records and report non-delivery without blocking the run.
+See [the reporting contract](docs/SOFTWARE-FACTORY.md#defaults-forward-progress-and-optional-output).
+
 ### Choosing models
 
 User choices win: lane `--agent/--model/--effort`, then `FACTORY_<ROLE>_AGENT/MODEL/EFFORT`, then role defaults in `~/.config/factory/config.toml` (or `FACTORY_CONFIG`), then shipped defaults. Shipped adapters are Codex for Validator/Coder/Tester and Agy for Orchestrator; no model name is mandated. An empty model uses the selected CLI's configured model, then that CLI's built-in default. A malformed or explicitly missing configuration reports an error instead of silently falling back.

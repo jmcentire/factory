@@ -175,25 +175,44 @@ def test_a_question_is_never_informational(tmp_path: Path) -> None:
         )
 
 
-def test_unreachable_herald_is_journalled_and_raised(tmp_path: Path) -> None:
+def test_unreachable_herald_is_journalled_without_blocking_local_work(tmp_path: Path) -> None:
     root = run_root(tmp_path)
-    with pytest.raises(escalate.EscalationError, match="unreachable"):
-        escalate.escalate(
-            root, level="critical", key="down", summary="x", client=client(FakeHerald(down=True))
-        )
+    result = escalate.escalate(
+        root, level="critical", key="down", summary="x", client=client(FakeHerald(down=True))
+    )
+    assert result["recorded"] is True and result["delivered"] is False
+    assert result["delivery"] == "failed" and "unreachable" in result["error"]
+    ledger = [
+        json.loads(line)
+        for line in (root / "orchestrator" / "escalations.jsonl").read_text().splitlines()
+    ]
+    assert ledger[-1]["summary"] == "x" and ledger[-1]["delivered"] is False
+    assert ledger[-1]["delivery"] == "failed" and ledger[-1]["error"] == result["error"]
     events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
     assert events[-1]["kind"] == "escalation-failed" and events[-1]["wake"] is True
+    assert events[-1]["error"] == result["error"]
 
 
 def test_a_refusal_names_herald_code(tmp_path: Path) -> None:
-    with pytest.raises(escalate.EscalationError, match="member-not-granted"):
-        escalate.escalate(
-            run_root(tmp_path),
-            level="informational",
-            key="s",
-            summary="x",
-            client=client(FakeHerald(refuse="post_update")),
-        )
+    root = run_root(tmp_path)
+    result = escalate.escalate(
+        root,
+        level="informational",
+        key="s",
+        summary="x",
+        client=client(FakeHerald(refuse="post_update")),
+    )
+    assert result["recorded"] is True and result["delivered"] is False
+    assert result["delivery"] == "failed" and "member-not-granted" in result["error"]
+    ledger = [
+        json.loads(line)
+        for line in (root / "orchestrator" / "escalations.jsonl").read_text().splitlines()
+    ]
+    assert ledger[-1]["summary"] == "x" and ledger[-1]["delivered"] is False
+    assert ledger[-1]["delivery"] == "failed" and ledger[-1]["error"] == result["error"]
+    events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
+    assert events[-1]["kind"] == "escalation-failed" and events[-1]["wake"] is False
+    assert events[-1]["error"] == result["error"]
 
 
 def test_resolve_uses_the_delivered_occurrence(tmp_path: Path) -> None:
@@ -236,14 +255,26 @@ def test_an_edge_refusal_names_its_status_and_title(tmp_path: Path) -> None:
         problem = {"title": "Error 1010: Access denied", "status": 403}
         return 403, {"Content-Type": "application/json"}, json.dumps(problem).encode()
 
-    with pytest.raises(escalate.EscalationError, match="HTTP 403 Error 1010: Access denied"):
-        escalate.escalate(
-            run_root(tmp_path),
-            level="critical",
-            key="edge",
-            summary="x",
-            client=escalate.Herald("https://dash.example", "tok", transport=cloudflare),
-        )
+    root = run_root(tmp_path)
+    result = escalate.escalate(
+        root,
+        level="critical",
+        key="edge",
+        summary="x",
+        client=escalate.Herald("https://dash.example", "tok", transport=cloudflare),
+    )
+    assert result["recorded"] is True and result["delivered"] is False
+    assert result["delivery"] == "failed"
+    assert "HTTP 403 Error 1010: Access denied" in result["error"]
+    ledger = [
+        json.loads(line)
+        for line in (root / "orchestrator" / "escalations.jsonl").read_text().splitlines()
+    ]
+    assert ledger[-1]["summary"] == "x" and ledger[-1]["delivered"] is False
+    assert ledger[-1]["delivery"] == "failed" and ledger[-1]["error"] == result["error"]
+    events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
+    assert events[-1]["kind"] == "escalation-failed" and events[-1]["wake"] is True
+    assert events[-1]["error"] == result["error"]
 
 
 def test_a_done_heartbeat_tells_herald_silence_is_expected(tmp_path: Path) -> None:
