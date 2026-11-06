@@ -124,7 +124,10 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
                 and (role == "coder" or within(PurePosixPath(p.relative_to(source)), selected))}
         for name in kept:
             item = source / name
-            if item.is_symlink() and item.resolve().relative_to(source).as_posix() not in kept:
+            # exists() follows the link as the author's OS will; resolve() alone is lexical
+            # through missing directories.
+            if item.is_symlink() and (not item.exists()
+                                      or item.resolve().relative_to(source).as_posix() not in kept):
                 raise ValueError(f"selected symlink refers to withheld input: {name}")
         destination.mkdir(mode=0o700)
         for name in sorted(kept):

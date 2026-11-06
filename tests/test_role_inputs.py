@@ -104,6 +104,18 @@ def _commit_links(source, runs):
     run_record.create(runs, "linked", source, b"Implement behavior")
 
 
+def test_link_through_an_omitted_directory_is_refused_not_left_dangling(tmp_path, inputs):
+    source, runs, _ = inputs
+    (source / "real").mkdir()
+    (source / "real/f").write_text("F")
+    (source / "dir").mkdir()
+    (source / "dir/link").symlink_to("../real")
+    (source / "alias").symlink_to("dir/../real/f")
+    _commit_links(source, runs)
+    with pytest.raises(ValueError, match="withheld input: alias"):
+        role_inputs.prepare(runs, "linked", "coder", tmp_path / "coder", [], ["tests", "outside"])
+
+
 def test_unincluded_directory_link_is_omitted_and_recorded(tmp_path, inputs):
     source, runs, _ = inputs
     _commit_links(source, runs)
