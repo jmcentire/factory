@@ -91,6 +91,46 @@ def test_public_symlink_cannot_expose_withheld_source(tmp_path, inputs):
         role_inputs.prepare(runs, "linked", "tester", tmp_path / "tester", ["api"], [])
 
 
+def _commit_links(source, runs):
+    """An in-tree directory link (wandercom/wander's .claude/skills shape) and an escaping one."""
+    (source / ".agents/skills/x").mkdir(parents=True)
+    (source / ".agents/skills/x/SKILL.md").write_text("SKILL")
+    (source / ".claude/skills").mkdir(parents=True)
+    (source / ".claude/skills/x").symlink_to("../../.agents/skills/x")
+    (source / "outside").symlink_to("../../escape")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "links"], check=True)
+    run_record.create(runs, "linked", source, b"Implement behavior")
+
+
+def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
+    source, runs, _ = inputs
+    _commit_links(source, runs)
+    coder, tester = tmp_path / "coder", tmp_path / "tester"
+    result = role_inputs.prepare(runs, "linked", "coder", coder, [],
+                                 ["tests", ".claude/skills/x", "outside"])
+    assert (coder / ".agents/skills/x/SKILL.md").read_text() == "SKILL"
+    assert ".claude/skills/x" not in result["files"]
+    assert not (coder / ".claude").exists() and not (coder / "outside").is_symlink()
+    role_inputs.verify(runs, "linked", "coder", coder)
+    role_inputs.prepare(runs, "linked", "tester", tester, ["api"], [])
+    role_inputs.verify(runs, "linked", "tester", tester)
+
+
+@pytest.mark.parametrize("role,link", [("coder", ".claude/skills/x"), ("coder", "outside"),
+                                       ("tester", ".claude/skills/x"), ("tester", "outside")])
+def test_selected_directory_or_escaping_link_is_refused(tmp_path, inputs, role, link):
+    source, runs, _ = inputs
+    _commit_links(source, runs)
+    other = "outside" if link != "outside" else ".claude/skills/x"
+    includes, excludes = ([link], []) if role == "tester" else ([], ["tests", other])
+    dest = tmp_path / role
+    with pytest.raises(RuntimeError, match="link"):
+        role_inputs.prepare(runs, "linked", role, dest, includes, excludes)
+    assert not dest.exists()
+
+
 def test_unknown_or_missing_selection_is_not_silently_empty(tmp_path, inputs):
     _, runs, _ = inputs
     with pytest.raises(ValueError, match="absent"):

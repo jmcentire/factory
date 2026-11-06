@@ -175,9 +175,13 @@ def materialize_commit(
     contained_file_links: bool = False,
     lfs_objects: str | Path | None = None,
     max_lfs_bytes: int | None = None,
+    select: Callable[[PurePosixPath], bool] | None = None,
     runner: Runner = subprocess.run,
 ) -> MaterializedCommit:
     """Write exactly ``commit``'s tree into a new ``destination`` from raw Git objects.
+
+    With ``select``, only entries it accepts are read and written; links are still resolved
+    against the whole tree, so an unselected entry is never checked or materialized.
 
     With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
     LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
@@ -191,9 +195,12 @@ def materialize_commit(
         admit_symlinks=admit_symlinks,
         max_files=max_files,
     )
+    listed = entries
+    if select is not None:
+        entries = [entry for entry in entries if select(entry.path)]
     blobs = _read_blobs(repository, entries, max_total_bytes=max_total_bytes, runner=runner)
     if contained_file_links:
-        modes = {entry.path: entry.mode for entry in entries}
+        modes = {entry.path: entry.mode for entry in listed}
         directories = {parent for name in modes for parent in name.parents}
         for entry in entries:
             if entry.mode == _SYMLINK_MODE:
