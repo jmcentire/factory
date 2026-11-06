@@ -112,6 +112,8 @@ AGENTS: Mapping[str, Agent] = {
     "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
     # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
     "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
+    # OpenCode bills its provider per use from its own auth.json; it has no plan to sign in to.
+    "opencode": Agent("opencode", "opencode", "argv", False, "registry", metered=True),
 }
 
 

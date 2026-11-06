@@ -37,7 +37,7 @@ def _home(tmp_path: Path) -> Path:
 
 def test_registry_lists_every_harness_the_lanes_accept() -> None:
     for name in ("claude", "claude-ollama", "codex", "agy", "muse", "prime-agent",
-                 "cursor-agent"):
+                 "cursor-agent", "opencode"):
         assert name in agents.HARNESSES
     assert lane_agent.agent("claude").auth == "claude-plan"
     assert lane_agent.agent("claude-ollama").auth == "ollama-server"
@@ -46,6 +46,9 @@ def test_registry_lists_every_harness_the_lanes_accept() -> None:
     assert lane_agent.agent("prime-agent").auth == "registry"
     # Metered by construction: a prime-agent lane needs a spend cap even without --metered.
     assert lane_agent.agent("prime-agent").metered
+    # OpenCode bills its provider per use from its own auth.json: metered by construction too.
+    assert lane_agent.agent("opencode").auth == "registry"
+    assert lane_agent.agent("opencode").metered
     assert not any(lane_agent.agent(name).metered
                    for name in ("claude", "claude-ollama", "agy", "muse", "cursor-agent"))
     # Every registry harness tmux_lane.sh routes through lane-setup is one lane_agent knows.
@@ -71,7 +74,7 @@ def test_turn_cli_prints_nul_separated_argv(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(("name", "flag"), [
     ("claude", "--resume"), ("claude-ollama", "--resume"), ("muse", "--session-id"),
-    ("cursor-agent", "--resume"), ("agy", "--conversation"),
+    ("cursor-agent", "--resume"), ("agy", "--conversation"), ("opencode", "--session"),
 ])
 def test_every_registry_harness_resumes_its_session(name: str, flag: str, tmp_path: Path) -> None:
     made = agents.harness(name).turn(model="m", effort="", cwd=tmp_path, resume="sess-1234")
@@ -99,6 +102,9 @@ def test_a_plan_lane_never_admits_an_api_key() -> None:
     assert "CURSOR_API_KEY" not in agents.harness("cursor-agent").admitted_env("plan")
     with pytest.raises(ValueError):
         agents.harness("prime-agent").admitted_env("plan")
+    with pytest.raises(ValueError):
+        agents.harness("opencode").admitted_env("plan")
+    assert "OPENROUTER_API_KEY" in agents.harness("opencode").admitted_env("metered")
 
 
 def test_lane_setup_writes_only_admitted_variables(tmp_path: Path) -> None:
@@ -177,6 +183,10 @@ STREAMS = {
     "muse": ('{"schema_version":1,"stream":{"kind":"session","id":"01a14609-38d9-7751-9cca-'
              'b4f193d1ec5f"},"payload_type":"runtime.command.accepted","payload":{}}',
              "01a14609-38d9-7751-9cca-b4f193d1ec5f"),
+    # opencode 2.2.5, 2026-11-06.
+    "opencode": ('{"type":"step_start","timestamp":1793996242368,"sessionID":"ses_e4d7dc7abffeP'
+                 'muHXwATHL87o6","part":{"type":"step-start"}}',
+                 "ses_e4d7dc7abffePmuHXwATHL87o6"),
 }
 
 
@@ -210,6 +220,72 @@ def test_outcomes_read_each_harness_final_event() -> None:
     cursor = agents.harness("cursor-agent").outcome(
         '{"type":"result","result":"OK","session_id":"s-123456789","usage":{"inputTokens":5}}')
     assert cursor.text == "OK" and cursor.session == "s-123456789"
+
+
+def _opencode_event(kind: str, **part: object) -> str:
+    return json.dumps({"type": kind, "sessionID": STREAMS["opencode"][1], "part": part})
+
+
+def test_opencode_answer_is_the_last_step_that_spoke() -> None:
+    # A tool-calling step, then the step that answers (opencode 2.2.5's stream, shortened).
+    stream = "\n".join([
+        STREAMS["opencode"][0],
+        _opencode_event("tool_use", type="tool", tool="read", state={"status": "completed"}),
+        _opencode_event("step_finish", type="step-finish", reason="tool-calls", cost=0.002,
+                        tokens={"input": 6000, "output": 39, "reasoning": 4,
+                                "cache": {"read": 1664, "write": 10}}),
+        STREAMS["opencode"][0],
+        _opencode_event("text", type="text", text="HEL"),
+        _opencode_event("text", type="text", text="LO"),
+        _opencode_event("step_finish", type="step-finish", reason="stop", cost=0.001,
+                        tokens={"input": 48, "output": 5, "reasoning": 0,
+                                "cache": {"read": 7680, "write": 0}}),
+    ])
+    outcome = agents.harness("opencode").outcome(stream)
+    assert outcome.text == "HELLO" and outcome.session == STREAMS["opencode"][1]
+    assert outcome.tokens == {"input": 6058, "cached": 9344, "output": 48}
+    assert outcome.cost_usd == pytest.approx(0.003)
+    # A turn that never started keeps what opencode said, so the operator sees the error.
+    failed = agents.harness("opencode").outcome("Error: provider not found\n")
+    assert failed.session == "" and "provider not found" in failed.text
+
+
+def test_opencode_turn_runs_standalone_and_keeps_the_prompt_a_message(tmp_path: Path) -> None:
+    made = agents.harness("opencode").turn(
+        model="openrouter/~deepseek/deepseek-flash-latest", effort="", cwd=tmp_path)
+    # Without --standalone the turn goes to the operator's background service, which ignores
+    # the lane's configuration.
+    assert made.argv[:3] == ("opencode", "run", "--standalone")
+    assert made.argv[made.argv.index("--format") + 1] == "json"
+    assert made.argv[made.argv.index("--model") + 1] == \
+        "openrouter/~deepseek/deepseek-flash-latest"
+    assert made.argv[-1] == "--" and made.prompt_via == "argv"
+    with pytest.raises(ValueError, match="#variant"):
+        agents.harness("opencode").turn(model="m", effort="high", cwd=tmp_path)
+
+
+def test_opencode_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
+    operator = _home(tmp_path)
+    own = operator / ".config" / "opencode"
+    own.mkdir(parents=True)
+    (own / "opencode.json").write_text('{"mcp":{"servers":{"github":{}}}}', encoding="utf-8")
+    setup = agents.prepare_lane("opencode", billing="metered", home=tmp_path / "lane",
+                                model="opencode/deepseek-v4.1-flash-free", kindex_record=RECORD,
+                                env_file=tmp_path / "creds.env",
+                                environ={"HOME": str(operator), "OPENROUTER_API_KEY": "or-key"})
+    config = Path(setup.env["XDG_CONFIG_HOME"])
+    assert not config.is_relative_to(operator)
+    servers = json.loads((config / "opencode" / "opencode.json").read_text())["mcp"]["servers"]
+    assert servers == {"kindex": {"type": "local",
+                                  "command": [SERVER["command"], *SERVER["args"]],
+                                  "environment": SERVER["env"], "disabled": False}}
+    assert setup.env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
+    assert "XDG_DATA_HOME" not in setup.env  # sign-in and sessions stay the operator's
+    assert "OPENROUTER_API_KEY=or-key" in (tmp_path / "creds.env").read_text()
+    with pytest.raises(ValueError, match="no signed-in plan"):
+        agents.prepare_lane("opencode", billing="plan", home=tmp_path / "p", model="",
+                            kindex_record=RECORD, env_file=tmp_path / "p.env",
+                            environ={"HOME": str(operator)})
 
 
 def test_credentials_reach_the_child_only_through_an_owner_only_file(tmp_path: Path) -> None:

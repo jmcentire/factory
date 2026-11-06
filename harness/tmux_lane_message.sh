@@ -291,7 +291,7 @@ if [ "$BOUNDARY_RECORD" != null ]; then
 fi
 case "$AGENT" in
   codex|codex-ollama|codex-interactive) ;;
-  cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
+  cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode)
     [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
       echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
     } ;;

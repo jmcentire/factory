@@ -12,7 +12,8 @@ per-vendor branches, and a new harness is one entry.
 
 Each model runs in its own vendor's harness where one exists (it was trained there): Claude in
 Claude Code, GPT in Codex, Gemini in Antigravity, Muse in Muse Code, Grok in Cursor's agent CLI,
-and GLM in Claude Code pointed at the local Ollama server (``ollama launch claude``'s shape).
+GLM in Claude Code pointed at the local Ollama server (``ollama launch claude``'s shape), and the
+open models OpenRouter and OpenCode Zen serve (DeepSeek among them) in OpenCode.
 
 Billing (founder direction, 2026-10-16): a seat runs on the operator's signed-in plan, never on a
 per-use API key, unless the operator launches it metered. ``api_env`` names the variables that
@@ -585,6 +586,85 @@ class CursorAgent(Harness):
         return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
 
 
+class OpenCode(Harness):
+    """OpenCode (``opencode run``), for the models its providers serve (DeepSeek, Qwen and the
+    rest of OpenRouter or OpenCode Zen). The model is ``provider/model`` and names its effort as
+    a ``#variant``, so the factory passes no separate effort.
+
+    Every turn runs ``--standalone``: without it ``opencode run`` hands the turn to the
+    operator's shared background service, which already loaded the operator's configuration and
+    ignores this lane's environment. Provider keys live in OpenCode's own ``auth.json``, so a
+    turn bills its provider per use: the harness has no plan path and its lanes are metered."""
+
+    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
+             last_message_file: str = "", max_turns: int = 400,
+             extra: Sequence[str] = ()) -> Turn:
+        if effort:
+            raise ValueError("opencode takes its effort as the model's #variant, not --effort")
+        argv = ["opencode", "run", "--standalone", "--format", "json", "--auto"]
+        argv += ["--model", model] if model else []
+        argv += ["--session", resume] if resume else []
+        argv += list(extra)
+        argv += ["--"]  # the prompt follows; a prompt that opens with "-" stays a message
+        return Turn(tuple(argv), "argv")
+
+    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
+        session, text, step, cost = "", "", "", 0.0
+        tokens = {"input": 0, "cached": 0, "output": 0}
+        for line in stdout.splitlines():
+            event = _json_line(line)
+            if not event:
+                continue
+            session = session or self.session_in(line)
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            assert isinstance(part, dict)
+            kind = event.get("type")
+            if kind == "step_start":
+                step = ""
+            elif kind == "text":
+                step += str(part.get("text") or "")
+            elif kind == "step_finish":
+                # A step that only called tools says nothing; the answer is the last one that spoke.
+                text = step or text
+                cost += float(str(part.get("cost") or 0.0))
+                used = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+                assert isinstance(used, dict)
+                cache = used.get("cache") if isinstance(used.get("cache"), dict) else {}
+                assert isinstance(cache, dict)
+                tokens["input"] += _int(used.get("input")) + _int(cache.get("write"))
+                tokens["cached"] += _int(cache.get("read"))
+                tokens["output"] += _int(used.get("output")) + _int(used.get("reasoning"))
+        if not session:  # no turn ran: keep what it said (an error) for the operator
+            return Outcome(text=stdout.strip()[-20_000:], session="", cost_usd=0.0)
+        return Outcome(text=text or step, session=session, cost_usd=cost, tokens=tokens)
+
+    def session_in(self, line: str) -> str:
+        event = _json_line(line)
+        session = event.get("sessionID")
+        return session if event.get("type") == "step_start" and isinstance(session, str) else ""
+
+    def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
+                   operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
+        # OpenCode reads its global configuration (MCP servers, AGENTS.md rules, commands,
+        # plugins) from $XDG_CONFIG_HOME/opencode, and its sign-in and sessions from
+        # $XDG_DATA_HOME/opencode. The lane moves only the configuration: its own names only the
+        # lane's Kindex, while sign-in and sessions stay the operator's, so a resume finds its
+        # session. OPENCODE_DISABLE_CLAUDE_CODE keeps the operator's ~/.claude CLAUDE.md and
+        # skills out. The repository's own opencode.json still applies, as Claude Code's
+        # project settings do.
+        config = home / "xdg"
+        servers: dict[str, object] = {}
+        if server is not None:
+            command, args, env = _server(server)
+            servers["kindex"] = {"type": "local", "command": [command, *args],
+                                 "environment": env, "disabled": False}
+        _write(config / "opencode" / "opencode.json", json.dumps(
+            {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": servers}}))
+        return LaneSetup(env={"XDG_CONFIG_HOME": str(config),
+                              "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+                              "OPENCODE_DISABLE_AUTOUPDATE": "1"})
+
+
 HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
@@ -598,6 +678,9 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False),
     "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",)),
+    "opencode": OpenCode("opencode", "opencode", (), True,
+                         api_env=("OPENCODE_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"),
+                         plan=False),
 }
 
 

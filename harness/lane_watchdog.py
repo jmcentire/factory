@@ -110,7 +110,7 @@ REVIEW_EXPIRY_WAITS = 4
 # Lanes whose retained session a lane message resumes: a Codex exec thread, or a registry
 # harness's session (harness/agents.py), recorded by the lane wrapper as soon as it streams.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy", "muse",
-                              "cursor-agent", "prime-agent"})
+                              "cursor-agent", "prime-agent", "opencode"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
 # ("commits=21Top finding"), and that is still a completion.
 _DONE = re.compile(r"^\W*__LANE_DONE__\s+(\S+)\s+commits=\d+(?!\d)")
