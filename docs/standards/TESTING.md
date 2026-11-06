@@ -135,6 +135,8 @@ A failing generated case is recorded with its seed and kept as a permanent examp
 
 **T16. Substitute at declared seams. Never patch.** No monkey patching, no module replacement, no reaching into privates. With duck typing a patched test can pass while exercising nothing real. It verifies that you can patch. If a test cannot run without patching, the dependency was not passed in (W7). Raise a testability defect. The same holds in reverse: production code never asks whether it is under test. A branch on a test flag or environment is a second implementation that only the tests run. It is a structural policy (T25).
 
+*Repository convention.* When the target repository's own tests at the base commit already replace modules for the code under change (`mock.module`, `vi.mock`, `jest.mock`, `unittest.mock.patch`), that is the repository's sanctioned seam: follow it rather than block, with no T28 exception. Record in the run's evidence the existing test files that establish it. It covers only the dependencies those tests already replace, never the unit under change (T17), and does not carry the convention to code whose tests do not already use it. Note the missing seam as a testability finding; it does not stop the run.
+
 **T17. Doubles set conditions. They are not the evidence.** Use a double to make a timeout happen. Do not cite its call log as proof that the real boundary works. The one sanctioned order assertion is the composition test (W20), observed at the edge.
 
 ---

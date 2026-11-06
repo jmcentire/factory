@@ -376,7 +376,7 @@ Mark task 8 complete.
 **Testing:** (`$FACTORY_HOME/docs/standards/TESTING.md`)
 - [ ] Every invariant has a test citing it, of the kind T5 assigns, at the cheapest layer that can expose it (T6)
 - [ ] Every test names its falsifier and was seen red (T31); a repair was red first (T32)
-- [ ] No patching, no flake held green by retry or sleep (T16, T33)
+- [ ] No patching outside the repository convention T16 allows; no flake held green by retry or sleep (T16, T33)
 - [ ] All tests pass, and the evidence is reported per invariant, not as a count (T40)
 
 **Documentation:**
