@@ -265,7 +265,7 @@ def contained_file_target(
             current /= part
         if index < len(parts) - 1 and (current not in directories or current in modes):
             raise HostGitError(f"{path} traverses a non-directory file link target")
-    if (current in directories and parts[-1] not in {"", ".", ".."}
+    if (current in directories and path not in directories
             and not any(name in modes for name in (current, *path.parents))):
         raise _DirectoryLinkError(f"{path} links to a tree directory, not a regular file")
     if modes.get(current) not in _REGULAR_MODES or parts[-1] in {"", ".", ".."}:
@@ -410,6 +410,10 @@ def _tree_entries(listing: bytes, *, admit_symlinks: bool, max_files: int) -> li
         entries.append(entry)
         if len(entries) > max_files:
             raise HostGitError(f"commit has more than {max_files} files")
+    names = {entry.path for entry in entries}
+    if len(names) != len(entries) or any(parent in names for name in names
+                                         for parent in name.parents):
+        raise HostGitError("Git tree listing has a duplicate or file-and-directory path")
     return entries
 
 
