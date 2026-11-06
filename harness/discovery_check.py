@@ -48,6 +48,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -139,16 +140,24 @@ def inventory(output: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
 
 def collected(tree: pathlib.Path, command: list[str],
               timeout_s: float) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    # Its own session, so a timeout also stops the runner's children (a node:test inventory runs
+    # the suite).
     try:
-        completed = subprocess.run(command, cwd=tree, stdin=subprocess.DEVNULL,
-                                   capture_output=True, text=True, timeout=timeout_s,
-                                   check=False)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        process = subprocess.Popen(command, cwd=tree, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+    except OSError as error:
         raise DiscoveryError(f"the inventory command did not complete: {error}") from None
-    if completed.returncode != 0:
-        raise DiscoveryError(f"the inventory command exited {completed.returncode}: "
-                             f"{(completed.stderr or completed.stdout).strip()[-400:]}")
-    return inventory(completed.stdout)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired as error:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise DiscoveryError(f"the inventory command did not complete: {error}") from None
+    if process.returncode != 0:
+        raise DiscoveryError(f"the inventory command exited {process.returncode}: "
+                             f"{(stderr or stdout).strip()[-400:]}")
+    return inventory(stdout)
 
 
 def candidate_tree(tree: pathlib.Path, candidate: str) -> None:

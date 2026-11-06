@@ -7,8 +7,9 @@ Every runner-specific parse lives here, so the gates that consume an inventory
   test_inventory.py pytest|vitest|deno|node [-- <runner command prefix>]
 
 Run it in the tree to inventory. The prefix launches the runner (default ``python3 -m pytest``,
-``npx vitest``, ``deno test``, and for node the repository's ``npm test`` script when it is one
-plain ``node``/``tsx`` ``--test`` command, else ``node --test``); the adapter appends its own
+``npx vitest``, ``deno test``, and for node the repository's ``npm test`` script, which must then
+be one plain ``node``/``tsx`` ``--test`` command, else ``node --test`` when there is no script);
+the adapter appends its own
 collect-only flags, so nothing runs, except under node, which has no such mode:
 
   pytest  ``--collect-only --verbosity=-1``  node ids ``<module>::<name>``
@@ -23,8 +24,10 @@ behave the same). So the node adapter runs the suite once and reads the runner's
 results through a reporter it supplies: a test that passed or failed is runnable, one reported
 ``skip`` or ``todo`` is skipped (a todo cannot fail the run), and a suite is never a test. Names
 join enclosing suites and parent tests with `` > `` as vitest does, so a subtest created with
-``t.test`` is listed too. A failing test is still a collected test (exit 1 is accepted when the
-reporter finished); a file that fails outside any test (it does not load) is a runner failure.
+``t.test`` is listed too. A test belongs to the module of its top-level suite or test, so one a
+shared helper registers counts for the test file that called it. A failing test is still a
+collected test (exit 1 is accepted when the reporter finished); a file that fails outside any test
+is a runner failure.
 The command must not set ``--test-reporter`` itself. Node 20 does not expand globs in
 ``--test`` arguments; pass files there.
 
@@ -127,8 +130,8 @@ _DENO_SITE = re.compile(r"(file://[^\s()]+?):\d+:\d+\)?\s*$")
 
 
 # Supplied to ``node --test`` as its reporter. Only final results are read: ``test:pass`` and
-# ``test:fail`` arrive once per test and suite, children before their parent. The end line proves
-# the stream was not cut short.
+# ``test:fail`` arrive once per test and suite, children before their parent, one file after
+# another. The end line proves the stream was not cut short.
 _NODE_REPORTER = """
 export default async function* inventory(source) {
   for await (const { type, data } of source) {
@@ -136,7 +139,9 @@ export default async function* inventory(source) {
     yield JSON.stringify({
       name: data.name, nesting: data.nesting, file: data.file ?? null,
       failed: type === "test:fail", suite: data.details?.type === "suite",
-      skip: Boolean(data.skip), todo: Boolean(data.todo),
+      // Node marks skip and todo by presence: an empty reason still skips.
+      skip: data.skip !== undefined && data.skip !== false,
+      todo: data.todo !== undefined && data.todo !== false,
     }) + "\\n";
   }
   yield JSON.stringify({ end: true }) + "\\n";
@@ -267,17 +272,25 @@ def deno_tests(tree: pathlib.Path, prefix: list[str]) -> Inventory:
 
 
 def node_prefix(tree: pathlib.Path) -> list[str]:
-    """The ``npm test`` script when it is one plain ``node``/``tsx`` ``--test`` command (no shell
-    syntax), so the inventory runs what the repository runs; else ``node --test``."""
+    """The ``npm test`` script, which must be one plain ``node``/``tsx`` ``--test`` command (no
+    shell syntax or unquoted glob the shell would expand), so the inventory runs what the
+    repository runs; ``node --test`` when there is no script. Anything else needs the command
+    passed explicitly."""
 
     try:
         script = json.loads((tree / "package.json").read_text(encoding="utf-8"))["scripts"]["test"]
-        words = shlex.split(script)
     except (OSError, ValueError, KeyError, TypeError):
         return ["node", "--test"]
+    try:
+        words = shlex.split(script)
+    except ValueError:
+        words = []
     if not words or words[0] not in ("node", "tsx") or "--test" not in words \
-            or set(script) & set("|&;<>$`()"):
-        return ["node", "--test"]
+            or set(script) & set("|&;<>$`()") \
+            or any(set(word) & set("*?[") for word in script.split() if word[0] not in "'\"") \
+            or any(word.startswith("--test-reporter") for word in words):
+        raise InventoryError(f"package.json's test script is not one plain node/tsx --test command "
+                             f"without its own reporter ({script!r}); pass the command after --")
     local = tree / "node_modules" / ".bin" / words[0]
     return [str(local), *words[1:]] if words[0] == "tsx" and local.exists() else words
 
@@ -311,14 +324,16 @@ def _node_rows(tree: pathlib.Path, prefix: list[str]) -> list[dict]:
 
 
 def node_tests(tree: pathlib.Path, prefix: list[str]) -> Inventory:
-    rows = _node_rows(tree, prefix)
-    # Per file, results that still wait for their parent: (nesting, [(name, runnable)]).
-    pending: dict[str, list[tuple[int, list[tuple[str, bool]]]]] = {}
-    for row in rows:
+    print(f"test-inventory: running {shlex.join(prefix)}", file=sys.stderr)
+    runnable: list[Test] = []
+    skipped: list[Test] = []
+    # Results still waiting for their parent: (nesting, [(name, runnable)]).
+    waiting: list[tuple[int, list[tuple[str, bool]]]] = []
+    for row in _node_rows(tree, prefix):
         name, nesting, file = row.get("name"), row.get("nesting"), row.get("file")
         if not (isinstance(name, str) and isinstance(nesting, int) and isinstance(file, str)):
             raise InventoryError(f"node --test reported a result with no name or file: {row}")
-        waiting = pending.setdefault(file, [])
+        file = file.removeprefix("file://")
         below: list[tuple[str, bool]] = []
         while waiting and waiting[-1][0] > nesting:
             below = waiting.pop()[1] + below
@@ -326,20 +341,21 @@ def node_tests(tree: pathlib.Path, prefix: list[str]) -> Inventory:
         if nesting == 0 and not below and os.path.realpath(tree / name) == os.path.realpath(file):
             if row.get("failed"):
                 raise InventoryError(f"node --test could not run {_module(tree, file)}: it failed "
-                                     "outside any test (it did not load); run it to see why")
+                                     "outside any test; run it to see why")
             continue
         runs = not (row.get("skip") or row.get("todo"))
         # A suite is not a test; a skipped suite whose tests never registered is listed skipped.
         own = ([] if below or runs else [(name, False)]) if row.get("suite") else [(name, runs)]
-        waiting.append((nesting, own + [(f"{name} > {child}", runs and child_runs)
-                                        for child, child_runs in below]))
-    runnable: list[Test] = []
-    skipped: list[Test] = []
-    for file, waiting in pending.items():
+        tests = own + [(f"{name} > {child}", child_runs) for child, child_runs in below]
+        if nesting > 0:
+            waiting.append((nesting, tests))
+            continue
         module = _module(tree, file)
-        for _nesting, tests in waiting:
-            for name, runs in tests:
-                (runnable if runs else skipped).append({"module": module, "name": name})
+        for test, test_runs in tests:
+            (runnable if test_runs else skipped).append({"module": module, "name": test})
+    if waiting:
+        raise InventoryError("node --test reported results with no enclosing top-level test: "
+                             f"{[name for _nesting, tests in waiting for name, _ in tests][:5]}")
     return runnable, skipped
 
 
@@ -353,11 +369,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"usage: test_inventory.py {'|'.join(ADAPTERS)} [-- <runner command prefix>]",
               file=sys.stderr)
         return 64
-    runner = arguments[0]
-    prefix = arguments[2:] or (node_prefix(pathlib.Path.cwd()) if runner == "node"
-                               else PREFIXES[runner])
+    runner, tree = arguments[0], pathlib.Path.cwd()
     try:
-        tests, skipped = ADAPTERS[runner](pathlib.Path.cwd(), prefix)
+        prefix = arguments[2:] or (node_prefix(tree) if runner == "node" else PREFIXES[runner])
+        tests, skipped = ADAPTERS[runner](tree, prefix)
     except InventoryError as error:
         print(f"test-inventory: {error}", file=sys.stderr)
         return 70

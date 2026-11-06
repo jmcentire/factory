@@ -185,20 +185,23 @@ def test_node_results_become_tests_named_through_their_suites(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """node:test reports children before their parent. Suites are not tests, a failing test is
-    still collected, skip and todo are not runnable, and a file that ran no test is not one."""
+    still collected, skip and todo are not runnable, a test a shared helper registers belongs to
+    its top-level test's module, and a file that ran no test is not one."""
 
     test_file = tmp_path.resolve() / "test" / "cap.test.ts"
+    helper = tmp_path.resolve() / "test" / "shared.ts"
     empty_file = tmp_path.resolve() / "test" / "helpers.test.ts"
     rows = [
         _result("R7.1 refuses x", 1, test_file),
+        _result("R7.8 shared behaviour", 1, helper),
         _result("R7.2 later", 1, test_file, skip=True),
         _result("R7.3 todo", 1, test_file, todo=True),
         _result("R7.4 deep", 2, test_file, failed=True),
         _result("inner", 1, test_file, suite=True),
         _result("skipped suite", 1, test_file, suite=True, skip=True),
         _result("cap", 0, test_file, suite=True),
-        _result("R7.5 subtest", 1, test_file),
-        _result("parent", 0, test_file),
+        _result("R7.5 subtest", 1, test_file, failed=True),
+        _result("parent", 0, test_file, skip=True),
         _result("test/helpers.test.ts", 0, empty_file),
     ]
     runner = _node_fake(tmp_path, rows, exit_code=1)
@@ -207,9 +210,10 @@ def test_node_results_become_tests_named_through_their_suites(
 
     module = "test/cap.test.ts"
     assert document["tests"] == [{"module": module, "name": name} for name in (
-        "cap > R7.1 refuses x", "cap > inner > R7.4 deep", "parent", "parent > R7.5 subtest")]
+        "cap > R7.1 refuses x", "cap > R7.8 shared behaviour", "cap > inner > R7.4 deep",
+        "parent > R7.5 subtest")]
     assert document["skipped"] == [{"module": module, "name": name} for name in (
-        "cap > R7.2 later", "cap > R7.3 todo", "cap > skipped suite")]
+        "cap > R7.2 later", "cap > R7.3 todo", "cap > skipped suite", "parent")]
 
 
 @pytest.mark.parametrize("rows, exit_code, end, argv", [
@@ -222,6 +226,8 @@ def test_node_results_become_tests_named_through_their_suites(
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 7, True, ["--test"]),
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, []),
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, ["--test", "--test-reporter=tap"]),
+    # A result whose top-level test never reported.
+    ([_result("R7.1", 1, Path("test/a.test.ts"))], 0, True, ["--test"]),
 ])
 def test_a_node_runner_failure_prints_no_inventory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], rows: list[dict], exit_code: int,
@@ -238,13 +244,23 @@ def test_a_node_runner_failure_prints_no_inventory(
 @pytest.mark.parametrize("script, prefix", [
     ("tsx --test 'src/**/*.test.ts'", ["tsx", "--test", "src/**/*.test.ts"]),
     ("node --import tsx --test src", ["node", "--import", "tsx", "--test", "src"]),
-    ("npm run build && node --test dist", ["node", "--test"]),
-    ("vitest run", ["node", "--test"]),
+    ("npm run build && node --test dist", None),
+    ("NODE_ENV=test node --test test", None),
+    ("node --test test/*.test.js", None),
+    ("tsx --test --test-reporter=spec src", None),
+    ("vitest run", None),
 ])
 def test_the_node_prefix_is_the_repositorys_plain_test_script(
-    tmp_path: Path, script: str, prefix: list[str]
+    tmp_path: Path, script: str, prefix: list[str] | None
 ) -> None:
+    """A test script the inventory cannot run faithfully is refused, never guessed around."""
+
+    assert test_inventory.node_prefix(tmp_path) == ["node", "--test"]
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": script}}))
+    if prefix is None:
+        with pytest.raises(test_inventory.InventoryError, match="pass the command after --"):
+            test_inventory.node_prefix(tmp_path)
+        return
     assert test_inventory.node_prefix(tmp_path) == prefix
     (tmp_path / "node_modules" / ".bin").mkdir(parents=True)
     (tmp_path / "node_modules" / ".bin" / "tsx").write_text("")
@@ -266,12 +282,13 @@ def test_real_node_test_results_are_an_inventory(
         '  it.todo("R7.4 todo");\n'
         '  describe("inner", () => { it("R7.5 fails", () => { throw new Error("x"); }); });\n'
         "});\n"
-        'test("parent", async (t) => { await t.test("R7.6 subtest", () => {}); });\n')
+        'test("parent", async (t) => { await t.test("R7.6 subtest", () => {}); });\n'
+        'test("R7.7 skipped inside", (t) => { t.skip(""); });\n')
     document = _document(tmp_path, "node", "--", "node", "--test", "test/cap.test.mjs",
                          capsys=capsys)
 
     assert [test["name"] for test in document["tests"]] == [
         "cap > R7.1 runs", "cap > inner > R7.5 fails", "parent", "parent > R7.6 subtest"]
     assert [test["name"] for test in document["skipped"]] == [
-        "cap > R7.2 skipped", "cap > R7.3 option", "cap > R7.4 todo"]
+        "cap > R7.2 skipped", "cap > R7.3 option", "cap > R7.4 todo", "R7.7 skipped inside"]
     assert {test["module"] for test in document["tests"]} == {"test/cap.test.mjs"}
