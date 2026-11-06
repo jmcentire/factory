@@ -231,6 +231,9 @@ def test_node_results_become_tests_named_through_their_suites(
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, False, ["--test"]),
     # Exit 1 with no test run is a runner failure (Node 20: "Could not find" a glob).
     ([], 1, True, ["--test"]),
+    # Exit 1 that no failing test explains (a wrapper or post-run failure).
+    ([_enqueued(Path("test/a.test.ts")), _result("R7.1", 0, Path("test/a.test.ts"))], 1, True,
+     ["--test"]),
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 7, True, ["--test"]),
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, []),
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, ["--test", "--test-reporter=tap"]),

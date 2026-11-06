@@ -151,8 +151,12 @@ def collected(tree: pathlib.Path, command: list[str],
     try:
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as error:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.kill()
+        process.wait()
         raise DiscoveryError(f"the inventory command did not complete: {error}") from None
     if process.returncode != 0:
         raise DiscoveryError(f"the inventory command exited {process.returncode}: "

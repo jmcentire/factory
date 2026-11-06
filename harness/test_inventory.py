@@ -288,8 +288,8 @@ def _node_rows(tree: pathlib.Path, prefix: list[str]) -> list[dict]:
                                  f"{diagnostic}") from None
     if not rows or rows[-1] != {"end": True}:
         raise InventoryError(f"node --test did not finish reporting: {diagnostic}")
-    if ran.returncode != 0 and not any("name" in row for row in rows):
-        raise InventoryError(f"node --test exited {ran.returncode} without running a test: "
+    if ran.returncode != 0 and not any(row.get("failed") for row in rows):
+        raise InventoryError(f"node --test exited {ran.returncode} with no failing test: "
                              f"{diagnostic}")
     return rows[:-1]
 
