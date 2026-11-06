@@ -111,7 +111,7 @@ def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
     result = role_inputs.prepare(runs, "linked", "coder", coder, [],
                                  ["tests", ".claude/skills/x", "outside"])
     assert (coder / ".agents/skills/x/SKILL.md").read_text() == "SKILL"
-    assert ".claude/skills/x" not in result["files"]
+    assert ".claude/skills/x" not in result["files"] and "outside" not in result["files"]
     assert not (coder / ".claude").exists() and not (coder / "outside").is_symlink()
     role_inputs.verify(runs, "linked", "coder", coder)
     role_inputs.prepare(runs, "linked", "tester", tester, ["api"], [])
