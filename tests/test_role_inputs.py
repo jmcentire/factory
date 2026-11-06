@@ -97,6 +97,7 @@ def _commit_links(source, runs):
     (source / ".agents/skills/x/SKILL.md").write_text("SKILL")
     (source / ".claude/skills").mkdir(parents=True)
     (source / ".claude/skills/x").symlink_to("../../.agents/skills/x")
+    (source / ".claude/skills/y").symlink_to("../../.agents/skills/x/")
     (source / "outside").symlink_to("../../escape")
     subprocess.run(["git", "-C", str(source), "add", "."], check=True)
     subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c",
@@ -104,12 +105,24 @@ def _commit_links(source, runs):
     run_record.create(runs, "linked", source, b"Implement behavior")
 
 
-def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
+def test_link_through_an_omitted_directory_is_refused_not_left_dangling(tmp_path, inputs):
+    source, runs, _ = inputs
+    (source / "real").mkdir()
+    (source / "real/f").write_text("F")
+    (source / "dir").mkdir()
+    (source / "dir/link").symlink_to("../real")
+    (source / "alias").symlink_to("dir/../real/f")
+    _commit_links(source, runs)
+    with pytest.raises(ValueError, match="withheld input: alias"):
+        role_inputs.prepare(runs, "linked", "coder", tmp_path / "coder", [], ["tests", "outside"])
+
+
+def test_unincluded_directory_link_is_omitted_and_recorded(tmp_path, inputs):
     source, runs, _ = inputs
     _commit_links(source, runs)
     coder, tester = tmp_path / "coder", tmp_path / "tester"
-    result = role_inputs.prepare(runs, "linked", "coder", coder, [],
-                                 ["tests", ".claude/skills/x", "outside"])
+    result = role_inputs.prepare(runs, "linked", "coder", coder, [], ["tests", "outside"])
+    assert result["omitted_directory_links"] == [".claude/skills/x", ".claude/skills/y"]
     assert (coder / ".agents/skills/x/SKILL.md").read_text() == "SKILL"
     assert ".claude/skills/x" not in result["files"] and "outside" not in result["files"]
     assert not (coder / ".claude").exists() and not (coder / "outside").is_symlink()
@@ -118,17 +131,40 @@ def test_unselected_directory_link_is_never_materialized(tmp_path, inputs):
     role_inputs.verify(runs, "linked", "tester", tester)
 
 
-@pytest.mark.parametrize("role,link", [("coder", ".claude/skills/x"), ("coder", "outside"),
-                                       ("tester", ".claude/skills/x"), ("tester", "outside")])
-def test_selected_directory_or_escaping_link_is_refused(tmp_path, inputs, role, link):
+@pytest.mark.parametrize("role,link,refusal", [
+    ("coder", "outside", "escaping"), ("tester", "outside", "escaping"),
+    ("tester", ".claude/skills/x", "link to a directory"),
+    ("tester", ".claude", "link to a directory")])
+def test_selected_directory_or_escaping_link_is_refused(tmp_path, inputs, role, link, refusal):
     source, runs, _ = inputs
     _commit_links(source, runs)
-    other = "outside" if link != "outside" else ".claude/skills/x"
-    includes, excludes = ([link], []) if role == "tester" else ([], ["tests", other])
+    includes, excludes = ([link], []) if role == "tester" else ([], ["tests"])
     dest = tmp_path / role
-    with pytest.raises(RuntimeError, match="link"):
+    with pytest.raises((RuntimeError, ValueError), match=refusal):
         role_inputs.prepare(runs, "linked", role, dest, includes, excludes)
     assert not dest.exists()
+
+
+@pytest.mark.parametrize("subtree", [True, False])
+def test_malformed_tree_with_a_link_and_an_entry_at_one_path_is_refused(tmp_path, inputs, subtree):
+    source, runs, _ = inputs
+
+    def git(*args, stdin=None):
+        return subprocess.run(["git", "-C", str(source), *args], input=stdin, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    blob = git("hash-object", "-w", "--stdin", stdin="F")
+    link = git("hash-object", "-w", "--stdin", stdin="real")
+    real = git("mktree", stdin=f"100644 blob {blob}\tf\n")
+    rows = [f"040000 tree {real}\treal", f"120000 blob {link}\td"]
+    rows.append(f"040000 tree {real}\td" if subtree else f"100644 blob {blob}\td")
+    tree = git("mktree", stdin="\n".join(rows) + "\n")
+    commit = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit-tree", tree, "-m", "malformed")
+    git("reset", "-q", "--soft", commit)
+    run_record.create(runs, "malformed", source, b"Implement behavior")
+    with pytest.raises(RuntimeError, match="duplicate path|file-and-directory path"):
+        role_inputs.prepare(runs, "malformed", "coder", tmp_path / "coder", [], [])
 
 
 def test_unknown_or_missing_selection_is_not_silently_empty(tmp_path, inputs):
