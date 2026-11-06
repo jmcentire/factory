@@ -251,7 +251,7 @@ def test_ollama_coordinator_checks_availability_without_downloading(launch, monk
             capture(model_probe=True)
     else:
         _, _, command = invocation(capture(model_probe=True), "validator")
-        assert command[:5] == ["ollama", "launch", "codex", "--model", "chosen-local:latest"]
+        assert command[:5] == [str(stub), "launch", "codex", "--model", "chosen-local:latest"]
     assert [json.loads(row) for row in log.read_text().splitlines()] == [
         ["show", "chosen-local:latest"]
     ]

@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -122,13 +123,25 @@ def test_a_seat_that_cannot_start_fails_a_real_start(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c",
                     "user.email=test@example.invalid", "commit", "--allow-empty",
                     "-qm", "initial"], check=True)
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    stub = binary / "codex"
-    # Found on PATH, so the launcher opens its window, but it cannot be executed.
-    stub.write_text("#!/nonexistent/interpreter\n")
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(binary) + ":/opt/homebrew/bin:/usr/bin:/bin")
+    first, fallback, utilities = (tmp_path / name for name in ("first", "fallback", "utilities"))
+    for directory in (first, fallback, utilities):
+        directory.mkdir()
+    # Only explicitly selected host utilities are reachable, never a host agent binary.
+    for name in ("tmux", "git", "ps", "bash", "sh", "env"):
+        executable = shutil.which(name)
+        assert executable is not None
+        (utilities / name).symlink_to(executable)
+    selected = first / "codex"
+    selected.write_text("#!/nonexistent/interpreter\n")
+    selected.chmod(0o755)
+    marker = tmp_path / "forbidden-fallback-executed"
+    alternate = fallback / "codex"
+    alternate.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\n"
+        f"Path({str(marker)!r}).touch()\nraise SystemExit(3)\n"
+    )
+    alternate.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join(map(str, (first, fallback, utilities))))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("FACTORY_CONFIG", raising=False)
     monkeypatch.setenv("FACTORY_SEAT_BILLING", "plan")
@@ -139,16 +152,28 @@ def test_a_seat_that_cannot_start_fails_a_real_start(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     root = run_record.create(runs, "broken", repo, b"Disposable startup probe")
     doc = json.loads((root / "harness.json").read_text())
-    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    tmux = [str(utilities / "tmux"), "-L", doc["tmux_socket"]]
     try:
-        with pytest.raises(ValueError, match="the validator stopped during startup; "
-                           "lane-agent: could not start codex"):
+        failure = None
+        try:
             run_record.start(runs, "broken")
+        except ValueError as error:
+            failure = error
+        if failure is None:
+            # A wrongly launched fallback may not reach user code before startup returns.
+            # Wait only for its observable output/exit, never retry startup to get a pass.
+            deadline = time.monotonic() + 5
+            while not marker.exists() and not (root / "validator-exits.jsonl").exists():
+                assert time.monotonic() < deadline, "Unexpected coordinator did not finish"
+                time.sleep(0.01)
+        assert not marker.exists(), "Startup executed a different PATH candidate"
+        assert failure is not None, "An unexecutable selected coordinator must fail startup"
+        assert str(selected) in str(failure)
         assert subprocess.run([*tmux, "has-session", "-t", "=broken"],
-                              capture_output=True).returncode != 0
+                              capture_output=True, timeout=5).returncode != 0
         assert "retry with:" in json.loads((root / "validator/inbox.jsonl").read_text())["text"]
     finally:
-        subprocess.run([*tmux, "kill-server"], capture_output=True)
+        subprocess.run([*tmux, "kill-server"], capture_output=True, timeout=5)
 
 
 def test_a_real_start_registers_its_seats_under_a_custom_tmux_socket_directory(tmp_path,

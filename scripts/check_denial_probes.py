@@ -165,7 +165,7 @@ def _collect_nodeids(nodeids_file: Path | None) -> set[str]:
 # Recursion floor (plan 5.1): a row is gate-on-gate iff its registered probe
 # tests import or mutate ANOTHER row's registered impl. Gate subjects are
 # object-level artifacts, never another gate's output. The one meta-set below
-# (the purity/doctrine/wiring/acceptance/registry guards) is CLOSED BY
+# (the purity/wiring/acceptance/registry guards) is CLOSED BY
 # DECLARATION and changes under the user's actual direction; Gate I — the registry gate,
 # the sole gate-over-gates — is the single exemption and is terminal.
 # ---------------------------------------------------------------------------
@@ -174,7 +174,6 @@ _META_GATE_EXEMPTIONS = frozenset({"I"})
 _META_CONTROL_TOKENS: dict[str, frozenset[str]] = {
     # token -> the gate ids that OWN it (self-reference is not recursion)
     "check_core_purity": frozenset({"D"}),
-    "check_doctrine_sync": frozenset(),
     "check_wiring": frozenset(),
     "check_acceptance": frozenset({"ACC"}),
     "check_denial_probes": frozenset({"I"}),
@@ -232,7 +231,6 @@ _SHIP_CHAIN_DISPOSITIONS: dict[str, str] = {
     # target -> "gate:<id>" (registered) | "meta" (declared meta-set) |
     #           "toolchain" (language hygiene, not a factory gate)
     "check-purity": "gate:D",
-    "check-doctrine": "meta",
     "check-human-gates": "gate:NHG",
     "check-wiring": "meta",
     "check-authority": "meta",

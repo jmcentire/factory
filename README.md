@@ -124,7 +124,7 @@ not a control running*), so the table marks what is **implemented** vs **doctrin
 | `comprehensiveness.py` | The intake-completeness gate (the entrance) — a deterministic, injection-resistant registry of structural field predicates that decides comprehensive vs needs-info without an LLM. Fields/thresholds/rules are data. | **Implemented** |
 | `adapters.py` + `target.py` | The target-as-data boundary + the environment-ladder dependency seams — the five `Protocol` seams for all target contact, resolved by name from a signed data-only `TargetManifest` (never a code import). The manifest also binds the operational build ABI: authorized pattern-catalog digest, construction modes, and hard attempt ceiling. | **Implemented** |
 | `roles.py` | Target RBAC bundles — capabilities as the atomic unit, roles as per-target named bundles, grants as per-target data. These target roles are not additional factory workflow roles. | **Implemented** (schema; live RBAC/SSO is doctrine-only) |
-| `scripts/check_core_purity.py` + `scripts/check_doctrine_sync.py` | "The factory is itself a regulated system" — executable fail-closed guards prove the core imports nothing target-specific and the active documentation still has the canonical four-role workflow and retained evidence requirements. | **Implemented** |
+| `scripts/check_core_purity.py` | The executable guard rejects target-specific imports in the core. Policy wording is reviewed semantically; matching internal prose does not prove that the runtime follows it. | **Implemented purity guard; no prose-compliance claim** |
 
 ### Executable runtime status
 
@@ -266,7 +266,6 @@ The tree plus each module's first-line invariant docstring is the inventory;
 ```bash
 make dev          # install the package + dev tooling (editable); `make install` includes this
 make check-purity # prove the core imports nothing target-specific
-make check-doctrine # prove active doctrine surfaces retain the canonical structure
 make test         # run the pytest suite
 make ship         # every gate, fail-closed: purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test
 make test-isolation # macOS: prove kernel-enforced Coder/Tester separation

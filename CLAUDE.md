@@ -32,11 +32,10 @@ The tree, not a listing here, is the authority.
 make install        # put this checkout to use (venv, launcher, /commands); ends in doctor
 make doctor         # read-only: is the install complete? prints the fix for each gap
 make check-purity   # the boundary guarantee — run this first
-make check-doctrine # workflow consistency (four roles / independent evidence / eight principles)
 make test           # pytest suite
 make lint           # ruff
 make typecheck      # mypy
-make ship           # every gate, fail-closed (purity -> doctrine -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
+make ship           # every gate, fail-closed (purity -> wiring -> authority -> harness -> denial-probes -> acceptance -> glossary -> lint -> typecheck -> test)
 make test-isolation # macOS kernel isolation proof
 make test-tessera   # real signing + runtime-through-preview proof
 ```
