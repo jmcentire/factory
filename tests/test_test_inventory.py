@@ -176,6 +176,12 @@ sys.exit({exit_code})
 """)
 
 
+def _enqueued(file: Path) -> dict:
+    """Node enqueues each test file it runs at the top level under its own path."""
+
+    return {"enqueued": str(file), "file": str(file)}
+
+
 def _result(name: str, nesting: int, file: Path, **flags: bool) -> dict:
     return {"name": name, "nesting": nesting, "file": str(file), "failed": False,
             "suite": False, "skip": False, "todo": False, **flags}
@@ -192,6 +198,8 @@ def test_node_results_become_tests_named_through_their_suites(
     helper = tmp_path.resolve() / "test" / "shared.ts"
     empty_file = tmp_path.resolve() / "test" / "helpers.test.ts"
     rows = [
+        _enqueued(test_file),
+        _enqueued(empty_file),
         _result("R7.1 refuses x", 1, test_file),
         _result("R7.8 shared behaviour", 1, helper),
         _result("R7.2 later", 1, test_file, skip=True),
@@ -228,44 +236,21 @@ def test_node_results_become_tests_named_through_their_suites(
     ([_result("R7.1", 0, Path("test/a.test.ts"))], 0, True, ["--test", "--test-reporter=tap"]),
     # A result whose top-level test never reported.
     ([_result("R7.1", 1, Path("test/a.test.ts"))], 0, True, ["--test"]),
+    # A top-level test credited to a file Node did not run: a shared helper registered it.
+    ([_enqueued(Path("test/a.test.ts")), _result("R7.1", 0, Path("lib/shared.ts"))], 0, True,
+     ["--test"]),
 ])
 def test_a_node_runner_failure_prints_no_inventory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], rows: list[dict], exit_code: int,
     end: bool, argv: list[str],
 ) -> None:
     rows = [{**row, "file": str(tmp_path.resolve() / row["file"])} for row in rows]
+    rows = [{**row, "enqueued": row["file"]} if "enqueued" in row else row for row in rows]
     runner = _node_fake(tmp_path, rows, exit_code=exit_code, end=end)
     with pytest.MonkeyPatch.context() as patch:
         patch.chdir(tmp_path)
         assert test_inventory.main(["node", "--", sys.executable, runner, *argv]) == 70
     assert capsys.readouterr().out == ""
-
-
-@pytest.mark.parametrize("script, prefix", [
-    ("tsx --test 'src/**/*.test.ts'", ["tsx", "--test", "src/**/*.test.ts"]),
-    ("node --import tsx --test src", ["node", "--import", "tsx", "--test", "src"]),
-    ("npm run build && node --test dist", None),
-    ("NODE_ENV=test node --test test", None),
-    ("node --test test/*.test.js", None),
-    ("tsx --test --test-reporter=spec src", None),
-    ("vitest run", None),
-])
-def test_the_node_prefix_is_the_repositorys_plain_test_script(
-    tmp_path: Path, script: str, prefix: list[str] | None
-) -> None:
-    """A test script the inventory cannot run faithfully is refused, never guessed around."""
-
-    assert test_inventory.node_prefix(tmp_path) == ["node", "--test"]
-    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": script}}))
-    if prefix is None:
-        with pytest.raises(test_inventory.InventoryError, match="pass the command after --"):
-            test_inventory.node_prefix(tmp_path)
-        return
-    assert test_inventory.node_prefix(tmp_path) == prefix
-    (tmp_path / "node_modules" / ".bin").mkdir(parents=True)
-    (tmp_path / "node_modules" / ".bin" / "tsx").write_text("")
-    if prefix[0] == "tsx":
-        assert test_inventory.node_prefix(tmp_path)[0] == str(tmp_path / "node_modules/.bin/tsx")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs the node runtime")
