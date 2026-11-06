@@ -96,11 +96,19 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
         raise ValueError("role inputs already prepared; preserve the resident author's context")
     with tempfile.TemporaryDirectory(prefix="factory-inputs-") as temporary:
         source = Path(temporary).resolve() / "tree"
+        listed: list[PurePosixPath] = []
+
+        def select(path: PurePosixPath) -> bool:
+            listed.append(path)
+            return (not within(path, withheld)
+                    and (role == "coder" or within(path, selected)))
+
+        # Withheld paths are never materialized, so an unselected link cannot abort the run.
         materialize_commit(Path(task["repository"]), task["resolved_commit"], source,
-                           admit_symlinks=True, contained_file_links=True,
+                           admit_symlinks=True, contained_file_links=True, select=select,
                            max_files=1000000, max_total_bytes=16 * 1024**3)
         for selection in selected + paths(excludes):
-            if not (source / selection).exists():
+            if not any(within(path, [selection]) for path in listed):
                 raise ValueError(f"selected input path is absent at the base commit: {selection}")
         files = [p for p in source.rglob("*") if p.is_file() or p.is_symlink()]
         kept = {p.relative_to(source).as_posix() for p in files
