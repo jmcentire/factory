@@ -19,8 +19,9 @@ node: name filters cannot stand in for collection (Node 20 reports filtered test
 overwriting their own skip; Node 22+ drops them), so the adapter runs the suite once and reads
 each test's final result. Pass or fail is runnable; skip or todo is skipped; a suite is never a
 test; names join suites and parent tests with `` > `` as vitest does. A test belongs to its
-top-level test's file, which must be a file Node ran (per-file isolation, the default). A file
-that fails outside any test is a runner failure. The command must not set ``--test-reporter``.
+top-level test's file, which must be a file Node ran, so a ``--test-isolation=none`` suite
+cannot be inventoried. Node 20, unlike 22+, runs subtests of a todo parent as ordinary tests.
+A file that fails outside any test is a runner failure. The command must not set ``--test-reporter``.
 
 Exit 0 prints exactly one JSON object on stdout::
 
