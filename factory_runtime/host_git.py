@@ -180,8 +180,9 @@ def materialize_commit(
 ) -> MaterializedCommit:
     """Write exactly ``commit``'s tree into a new ``destination`` from raw Git objects.
 
-    With ``select``, only entries it accepts are read and written; links are still resolved
-    against the whole tree, so an unselected entry is never checked or materialized.
+    ``select`` is called once for every listed entry; only entries it accepts are read and
+    written. Links are still resolved against the whole tree, so an unselected entry is never
+    checked or materialized.
 
     With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
     LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
