@@ -260,6 +260,37 @@ def test_opencode_answer_is_the_last_step_that_spoke() -> None:
     assert failed.session == "" and "provider not found" in failed.text
 
 
+def test_opencode_outcome_surfaces_a_terminal_error() -> None:
+    # opencode 2.2.5 emits {"type":"error","error":{...}} for a failed step or execution.
+    stream = "\n".join([
+        STREAMS["opencode"][0],
+        _opencode_event("text", type="text", text="partial answer"),
+        json.dumps({"type": "error", "sessionID": STREAMS["opencode"][1],
+                    "error": {"name": "APIError", "message": "insufficient credits"}}),
+    ])
+    outcome = agents.harness("opencode").outcome(stream)
+    assert outcome.text == "opencode error: insufficient credits"
+    assert outcome.session == STREAMS["opencode"][1]
+    # An error before any step started is surfaced the same way.
+    early = json.dumps({"type": "error", "sessionID": STREAMS["opencode"][1],
+                        "error": {"type": "aborted", "message": "Session interrupted: x"}})
+    assert agents.harness("opencode").outcome(early).text == \
+        "opencode error: Session interrupted: x"
+
+
+def test_opencode_outcome_keeps_the_latest_speaking_step_when_the_stream_ends_early() -> None:
+    stream = "\n".join([
+        STREAMS["opencode"][0],
+        _opencode_event("text", type="text", text="first"),
+        _opencode_event("step_finish", type="step-finish", reason="tool-calls", cost=0.0,
+                        tokens={"input": 1, "output": 1, "reasoning": 0,
+                                "cache": {"read": 0, "write": 0}}),
+        STREAMS["opencode"][0],
+        _opencode_event("text", type="text", text="second"),
+    ])  # no step_finish: the process ended mid-step
+    assert agents.harness("opencode").outcome(stream).text == "second"
+
+
 def test_opencode_turn_runs_standalone_and_keeps_the_prompt_a_message(tmp_path: Path) -> None:
     made = agents.harness("opencode").turn(
         model="openrouter/~deepseek/deepseek-flash-latest", effort="", cwd=tmp_path)

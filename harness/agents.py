@@ -616,7 +616,7 @@ class OpenCode(Harness):
         return Turn(tuple(argv), "argv")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
-        session, text, step, cost = "", "", "", 0.0
+        session, text, step, failure, cost = "", "", "", "", 0.0
         tokens = {"input": 0, "cached": 0, "output": 0}
         for line in stdout.splitlines():
             event = _json_line(line)
@@ -630,6 +630,11 @@ class OpenCode(Harness):
                 step = ""
             elif kind == "text":
                 step += str(part.get("text") or "")
+            elif kind == "error":
+                # A failed step or execution ends the turn; what it said is the outcome.
+                error = event.get("error") if isinstance(event.get("error"), dict) else {}
+                assert isinstance(error, dict)
+                failure = str(error.get("message") or error.get("name") or event.get("error"))
             elif kind == "step_finish":
                 # A step that only called tools says nothing; the answer is the last one that spoke.
                 text = step or text
@@ -641,9 +646,13 @@ class OpenCode(Harness):
                 tokens["input"] += _int(used.get("input")) + _int(cache.get("write"))
                 tokens["cached"] += _int(cache.get("read"))
                 tokens["output"] += _int(used.get("output")) + _int(used.get("reasoning"))
+        if failure:
+            return Outcome(text=f"opencode error: {failure}", session=session, cost_usd=cost,
+                           tokens=tokens)
         if not session:  # no turn ran: keep what it said (an error) for the operator
             return Outcome(text=stdout.strip()[-20_000:], session="", cost_usd=0.0)
-        return Outcome(text=text or step, session=session, cost_usd=cost, tokens=tokens)
+        # A stream that ends inside a step that already spoke: that step is the latest answer.
+        return Outcome(text=step or text, session=session, cost_usd=cost, tokens=tokens)
 
     def session_in(self, line: str) -> str:
         event = _json_line(line)
