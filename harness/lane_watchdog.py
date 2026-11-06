@@ -273,11 +273,17 @@ def _tmux(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
 
 
+# On macOS only the setuid /bin/ps may read another process's state and CPU time. A ps found
+# earlier on a lane's PATH (Nix ps-adv_cmds is not setuid) prints "ps: time: requires
+# entitlement" and leaves those columns blank, so every snapshot would read as unavailable.
+PS = "/bin/ps" if sys.platform == "darwin" else "ps"
+
+
 def process_snapshot() -> dict[int, dict[str, Any]] | None:
     """Read identities without command lines; failure is unknown, not an empty process table."""
     try:
         result = subprocess.run(
-            ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="], capture_output=True,
+            [PS, "-A", "-o", "pid=,ppid=,lstart=,stat=,time="], capture_output=True,
             text=True, check=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
     except (OSError, subprocess.SubprocessError):
         return None

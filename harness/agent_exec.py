@@ -24,6 +24,9 @@ import sys
 import time
 
 TIMED_OUT = 124
+# On macOS only the setuid /bin/ps reads another process's state; a non-setuid ps earlier on
+# PATH (Nix ps-adv_cmds) leaves the stat column blank.
+PS = "/bin/ps" if sys.platform == "darwin" else "ps"
 
 
 def run(argv: list[str], *, timeout_s: float, stdin_file: pathlib.Path | None,
@@ -95,7 +98,7 @@ def stop_group(process: subprocess.Popen[bytes]) -> None:
                 # macOS reports EPERM for a group containing only zombies. Do not suppress
                 # a permission failure while any live member remains.
                 rows = subprocess.check_output(
-                    ["ps", "-axo", "pgid=,stat="], text=True, timeout=5,
+                    [PS, "-axo", "pgid=,stat="], text=True, timeout=5,
                 )
                 if any(group == str(process.pid) and not state.startswith("Z")
                        for group, state in (row.split() for row in rows.splitlines())):

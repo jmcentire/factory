@@ -77,3 +77,24 @@ def test_dead_pane_stop_includes_previously_observed_orphans(monkeypatch):
 
     lane_watchdog.stop_pane('run:coder', tmux, expected=known[0], known=known)
     assert (known[1], signal.SIGTERM) in sent
+
+
+def test_process_snapshot_reads_system_ps_when_path_has_an_unentitled_one(tmp_path, monkeypatch):
+    """A lane PATH can put Nix's non-setuid ps first; on macOS it blanks state and time."""
+    import os
+    import sys
+
+    import pytest
+
+    from harness import lane_watchdog
+
+    if sys.platform != "darwin":
+        pytest.skip("the setuid /bin/ps entitlement split is macOS-only")
+    fake = tmp_path / "ps"
+    fake.write_text("#!/bin/sh\necho 'ps: time: requires entitlement' >&2\n"
+                    "echo '    1     0 Wed Oct 28 14:24:32 2026      s  '\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    table = lane_watchdog.process_snapshot()
+    assert table is not None
+    assert table[os.getpid()]["cpu"]
