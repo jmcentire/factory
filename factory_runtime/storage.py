@@ -82,8 +82,8 @@ def _xattr_result(result: int, path: Path) -> int:
 
 
 def _xattrs(path: Path) -> dict[str, str]:
-    if hasattr(os, "listxattr") and hasattr(os, "getxattr"):
-        getter = os.getxattr  # type: ignore[attr-defined]
+    getter = getattr(os, "getxattr", None)
+    if hasattr(os, "listxattr") and getter is not None:
         return {name: base64.b64encode(getter(path, name, follow_symlinks=False)).decode()
                 for name in sorted(os.listxattr(path, follow_symlinks=False))}
     if sys.platform != "darwin":
