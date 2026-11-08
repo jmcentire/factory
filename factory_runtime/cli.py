@@ -157,12 +157,32 @@ def _load_replay_store(arguments: argparse.Namespace) -> RunStore:
     return _load_workflow(arguments).store
 
 
+class _VersionAction(argparse.Action):
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+                 values: object, option_string: str | None = None) -> None:
+        from factory_runtime.version import format_version
+        print(format_version())
+        parser.exit()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="factory",
         description="Run normal Factory tasks or explicit historical runtime commands.",
     )
+    parser.add_argument("--version", action=_VersionAction, nargs=0)
     commands = parser.add_subparsers(dest="command", required=True)
+    version = commands.add_parser("version", help="identify the installed Factory build")
+    version.add_argument("--json", action="store_true")
+    cleanup = commands.add_parser("cleanup", help="inspect or archive completed run storage")
+    cleanup.add_argument("--runs", type=Path, default=Path(".factory/runs"))
+    cleanup.add_argument("--run")
+    cleanup.add_argument("--archive", action="store_true")
+    cleanup.add_argument("--archive-dir", type=Path)
+    cleanup.add_argument("--completed", action="store_true")
+    cleanup.add_argument("--apply", action="store_true")
+    cleanup.add_argument("--restore", type=Path)
+    cleanup.add_argument("--destination", type=Path)
     ordinary = commands.add_parser("run", help="start a task with assigned native agents")
     ordinary.add_argument("run")
     ordinary.add_argument("task")
@@ -3038,6 +3058,31 @@ def main(argv: list[str] | None = None) -> int:
     arguments: argparse.Namespace | None = None
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.command == "version":
+            from factory_runtime.version import format_version
+            print(format_version(as_json=arguments.json))
+            return 0
+        if arguments.command == "cleanup":
+            from factory_runtime.storage import archive_run, inventory, restore_archive
+            if arguments.restore is not None:
+                if (arguments.destination is None or arguments.run or arguments.archive
+                        or arguments.archive_dir):
+                    raise ValueError("restore requires --destination and no --run/--archive")
+                result = restore_archive(arguments.restore, arguments.destination,
+                                         apply=arguments.apply)
+            elif arguments.archive:
+                if not arguments.run or arguments.destination is not None:
+                    raise ValueError("archive requires --run and no --destination")
+                result = archive_run(arguments.runs, arguments.run,
+                                     completed=arguments.completed, apply=arguments.apply,
+                                     archive_dir=arguments.archive_dir)
+            else:
+                if (arguments.run or arguments.apply or arguments.completed
+                        or arguments.destination or arguments.archive_dir):
+                    raise ValueError("inventory takes only --runs; use --archive to select a run")
+                result = inventory(arguments.runs)
+            print(json.dumps(result, sort_keys=True))
+            return 0
         if arguments.command == "run":
             import subprocess
             script = Path(__file__).resolve().parents[1] / "harness/factory.sh"

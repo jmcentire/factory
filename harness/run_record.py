@@ -82,7 +82,10 @@ def create(
     top = Path(run_host_git(repository, ["rev-parse", "--show-toplevel"]).decode().strip())
     if top.resolve() != repository:
         raise ValueError("--repo must name the repository root")
+    from factory_runtime.version import build_identity
+
     record = dict(
+        factory_version=build_identity(),
         schema_version=SCHEMA,
         run_id=run,
         repository=str(repository),
@@ -435,6 +438,13 @@ def trust_claude_folders(home: Path, folders: list[Path], *, wait: float = 5.0) 
 
 
 def start(runs: Path, run: str) -> None:
+    from factory_runtime.storage import run_storage_lock
+
+    with run_storage_lock(run_root(runs, run)):
+        _start_locked(runs, run)
+
+
+def _start_locked(runs: Path, run: str) -> None:
     import importlib
     import shutil
     import subprocess
