@@ -56,6 +56,10 @@ def store(path: pathlib.Path, value: dict) -> None:
 
 
 def state_path(root: pathlib.Path, slot: str) -> pathlib.Path:
+    if slot in {"validator", "orchestrator"}:
+        if root.is_symlink():
+            raise ValueError("symlinked coordinator root")
+        return root / f"{slot}-persistent.json"
     if not re.fullmatch(r"(coder|tester)(-[a-z0-9][a-z0-9-]{0,15})?(\.[A-Za-z0-9_-]{1,40})?", slot):
         raise ValueError("invalid persistent slot")
     if root.is_symlink() or (root / "tmux-lanes").is_symlink():
@@ -73,7 +77,7 @@ def inspect(root: pathlib.Path, slot: str) -> dict:
         or value.get("slot") != slot
     ):
         raise ValueError("persistent lane binding mismatch")
-    receipt = read(root / "tmux-lanes" / f"{slot}-process.json")
+    receipt = read(state_path(root, slot).parent / f"{slot}-process.json")
     table = process_snapshot()
     if (
         table is None
@@ -102,6 +106,9 @@ def inspect(root: pathlib.Path, slot: str) -> dict:
 
 
 def planned(root: pathlib.Path, slot: str, identifier: str) -> dict:
+    if slot in {"validator", "orchestrator"}:
+        import inbox_wake
+        return inbox_wake.planned(root, slot, identifier)
     import lane_dialogue
 
     with lane_dialogue._locked(root) as directory:
@@ -452,7 +459,7 @@ def run(
                 "thread_id": state["session_id"],
                 "at": time.time(),
             }
-            if pending != "initial":
+            if pending != "initial" and slot not in {"validator", "orchestrator"}:
                 import lane_dialogue
 
                 lane_dialogue.record_delivery(
