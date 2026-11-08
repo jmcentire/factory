@@ -190,3 +190,19 @@ def test_unsupported_existing_terminal_is_never_used_as_fallback(root, monkeypat
     wake().tick(root)
     assert not state(root, "validator")["consumed"]
     assert calls == []
+
+
+def test_retained_crash_fragment_does_not_starve_later_valid_handoff(root):
+    run_record.message(root, "validator", "coder", "before crash")
+    inbox = root / "validator/inbox.jsonl"
+    with inbox.open("ab") as stream:
+        stream.write(b'{"sender": ')
+    # The existing durable writer preserves crash evidence and separates the next record.
+    run_record.message(root, "validator", "tester", "after crash")
+    original = inbox.read_bytes()
+    transport = Transport()
+    wake().tick(root, transport)
+    texts = "\n".join(batch["text"] for batch in batches(root, "validator"))
+    assert "before crash" in texts and "after crash" in texts
+    assert inbox.read_bytes() == original
+    assert len(state(root, "validator")["consumed"]) == 2
