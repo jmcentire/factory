@@ -10,7 +10,9 @@ from harness.run_record import resident_command
 
 @pytest.mark.parametrize("model,effort", [("", ""), ("opus", "high")])
 @pytest.mark.parametrize("prompt", ["Read the task and begin", "--task-looking-like-an-option"])
-def test_claude_prompt_survives_variadic_directory_argument(tmp_path, monkeypatch, model, effort, prompt):
+def test_claude_prompt_survives_variadic_directory_argument(
+    tmp_path, monkeypatch, model, effort, prompt
+):
     monkeypatch.setenv("FACTORY_LANE_SANDBOX", "on")
     argv = resident_command("claude", model, effort, prompt, tmp_path)
     # Claude's documented --add-dir <directories...> greedily accepts positional strings.
