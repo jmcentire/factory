@@ -146,3 +146,8 @@ the run is complete. The run's tmux session also owns the worker lifetime. Missi
 recipients remain visible, never recorded as delivered. Startup and periodic drain use retained
 records rather than waiting only for a future file change. Role routing and independent author
 inputs are unchanged: this worker delivers to coordinators, not directly across author lanes.
+
+Native permission denials remain visible in the retained agent output; an idle/completed native
+turn is not successful task completion. This transport does not provide an interactive tool-approval
+response UI and never answers permission requests itself. Resolve permission blockers through the
+operator's existing authorized controls, not by silently widening an agent's permissions.
