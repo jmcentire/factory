@@ -872,6 +872,36 @@ def run_lane(
             if process is not None and process.poll() is None:
                 process.terminate()
 
+    def rejection_output() -> None:
+        # A rejected CLI may leave a descendant holding stdout open. Drain bounded
+        # diagnostics only; never wait for descendants or treat output as protocol.
+        import select
+        import time
+
+        assert process is not None and process.stdout is not None
+        descriptor = process.stdout.fileno()
+        deadline = time.monotonic() + 1.0
+        remaining = 4 * 1024 * 1024
+        os.set_blocking(descriptor, False)
+        try:
+            while remaining and time.monotonic() < deadline:
+                if not select.select([descriptor], [], [],
+                                     max(0, deadline - time.monotonic()))[0]:
+                    break
+                try:
+                    raw = os.read(descriptor, min(65536, remaining))
+                except BlockingIOError:
+                    continue
+                if not raw:
+                    return
+                sys.stdout.buffer.write(raw)
+                sys.stdout.buffer.flush()
+                _append(log, raw)
+                remaining -= len(raw)
+            _append(log, b"lane-agent: startup diagnostic drain reached time or size bound\n")
+        finally:
+            os.set_blocking(descriptor, True)
+
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
         stopped = True
@@ -899,11 +929,10 @@ def run_lane(
                 sys.stdout.buffer.flush()
                 _append(log, raw)
                 _watch(raw)
-            if persistent and process.poll() is not None:
+            if persistent and process.poll() not in {None, 0}:
                 # A native CLI can reject argv before a process receipt exists. Retain its
                 # actual diagnostic and exit, rather than attempting a stream handshake.
-                for raw in process.stdout:
-                    emit(raw)
+                rejection_output()
                 rc = process.wait()
             elif persistent:
                 import persistent_lane
@@ -924,10 +953,7 @@ def run_lane(
             # Also covers exit between the poll above and initial stdin/identity checks.
             # Once a native session exists, binding/protocol failures remain lane failures.
             assert process is not None and process.stdout is not None
-            for raw in process.stdout:
-                sys.stdout.buffer.write(raw)
-                sys.stdout.buffer.flush()
-                _append(log, raw)
+            rejection_output()
             assert native_exit is not None
             rc = native_exit
         elif process is not None and process.poll() is None:
