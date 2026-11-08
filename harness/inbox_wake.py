@@ -11,8 +11,13 @@ import fcntl
 import hashlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+_HARNESS_ROOT = str(Path(__file__).resolve().parent)
+if _HARNESS_ROOT not in sys.path:
+    sys.path.insert(0, _HARNESS_ROOT)
 
 ROLES = ("validator", "orchestrator")
 
