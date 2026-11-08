@@ -188,7 +188,7 @@ def cycle(root: Path, transport) -> dict:
         seat = recipients.setdefault(recipient, {"consumed": [], "pending": None})
         if not seat["pending"]:
             known = set(seat["consumed"])
-            pending = []
+            pending: list[dict] = []
             size = 0
             for event in events(root, recipient):
                 if event["id"] in known:
