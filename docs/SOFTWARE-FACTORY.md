@@ -132,7 +132,7 @@ introducing another AI orchestrator. Existing runs are not converted or restarte
 retain their current terminal behavior and report automatic inbox wake as unsupported; the worker
 never guesses a safe terminal prompt or substitutes an agent.
 
-A deterministic `inbox_wake.py run --root RUN_ROOT` worker starts with new runs. It drains retained
+A deterministic `python harness/inbox_wake.py run --root RUN_ROOT` worker starts with new runs. It drains retained
 coordinator inboxes and author exit records, including completions written before it started.
 A durable batch ID survives retries and worker restarts. Busy native sessions are left alone;
 only their acknowledged input boundary can accept another batch. An acknowledgment proves
@@ -140,7 +140,8 @@ native receipt, not completion, validation or approval. Pending/uncertain writes
 same ID; they are not replayed as new requests. Native process/session identity is checked on
 all delivery attempts. The worker does not restart a dead seat.
 
-Use `inbox_wake.py status --root RUN_ROOT` for delivery state and `stop --root RUN_ROOT` when
+Use `python harness/inbox_wake.py status --root RUN_ROOT` for delivery state and
+`python harness/inbox_wake.py stop --root RUN_ROOT` when
 the run is complete. The run's tmux session also owns the worker lifetime. Missing or dead
 recipients remain visible, never recorded as delivered. Startup and periodic drain use retained
 records rather than waiting only for a future file change. Role routing and independent author
