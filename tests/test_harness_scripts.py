@@ -1893,7 +1893,12 @@ def test_factory_starts_a_git_target_without_catalog_or_operational_abi(tmp_path
     assert not (root / "run.json").exists()
     commands = tmux_log.read_text()
     assert "new-session" in commands and "new-window" in commands
-    assert "--prompt-interactive" in commands
+    orchestrator = orchestrator_tmux_line(tmux_log)
+    assert "--persistent" in orchestrator and "--input-format stream-json" in orchestrator
+    prompt = root / "orchestrator/initial-prompt.txt"
+    assert str(prompt) in orchestrator and str(root / "TASK.md") in prompt.read_text()
+    assert (root / "TASK.md").read_text() == "some task"
+    assert "-n inbox-wake " in commands
 
 
 @pytest.mark.parametrize("executable", ["tmux", "ollama"])
@@ -2427,7 +2432,8 @@ def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, mon
     blocker.unlink()
     run_record.start(runs, "r1")
     assert sum("new-session" in call for call in calls) == 1
-    assert sum("new-window" in call for call in calls) == 1
+    assert {call[call.index("-n") + 1] for call in calls if "new-window" in call} == {
+        "orchestrator", "inbox-wake"}
     assert (root / "harness.json").read_bytes() == original
 
 
