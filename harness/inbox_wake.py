@@ -59,6 +59,30 @@ def planned(root: Path, recipient: str, identifier: str) -> dict:
     return value
 
 
+def quarantine(root: Path, source: Path, offset: int, raw: bytes) -> None:
+    """Retain an explicit corruption diagnostic; never rewrite source journal bytes."""
+    directory = folder(root) / "quarantine"
+    if directory.is_symlink():
+        raise ValueError("symlinked quarantine directory")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    record = {
+        "source": str(source.relative_to(root)),
+        "offset": offset,
+        "length": len(raw),
+        "digest": hashlib.sha256(raw).hexdigest(),
+        "reason": "malformed complete JSON event; skipped, original bytes retained",
+    }
+    identifier = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+    path = directory / (identifier + ".json")
+    if not path.exists():
+        store(path, record)
+        print(
+            f"factory: quarantined malformed inbox event {record['source']} "
+            f"at byte {offset}; diagnostic {path}",
+            file=sys.stderr,
+        )
+
+
 def events(root: Path, recipient: str) -> list[dict]:
     """Read complete retained records, including completions before worker start."""
     import stat
@@ -81,9 +105,14 @@ def events(root: Path, recipient: str) -> list[dict]:
                     raise ValueError("oversized inbox event")
                 if not raw.endswith(b"\n"):
                     break
-                row = json.loads(raw)
-                if not isinstance(row, dict):
-                    raise ValueError("malformed event")
+                try:
+                    row = json.loads(raw)
+                    if not isinstance(row, dict):
+                        raise ValueError("event is not an object")
+                except (ValueError, UnicodeError):
+                    quarantine(root, path, offset, raw)
+                    offset += len(raw)
+                    continue
                 key = (
                     str(path.relative_to(root))
                     + ":"
@@ -201,6 +230,7 @@ def cycle(root: Path, transport) -> dict:
             seat["consumed"] += batch["event_ids"]
             seat["pending"] = None
         store(base / "state.json", state)
+    state["quarantined"] = sorted(p.name for p in (base / "quarantine").glob("*.json"))
     state["status"] = "running"
     store(base / "state.json", state)
     return state
