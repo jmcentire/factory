@@ -324,3 +324,62 @@ The dependency arrow points **consumer → factory, never the reverse** (see `PR
 
 The optional [Jev runtime screen](docs/practices/jev-runtime.md) adds bounded, retained semantic
 observations to the resident Orchestrator. Select it explicitly per run; it grants no authority.
+
+### Run storage and build identity
+
+`factory version --json` reports the installed package version, Factory Git revision
+and dirty state (when available), harness schema and Python version. `factory --version`
+is the short form. New ordinary runs retain this identity as `factory_version` in
+`harness.json`, separately from the target repository revision. Older records are
+unknown, not evidence that a user ran the latest Factory.
+
+Inspect storage before deciding what to reclaim:
+
+```sh
+factory cleanup --runs ~/.factory-runs
+factory cleanup --runs .factory/runs --run finished-task --archive --completed
+# After reviewing the plan and stopping the completed run's exact sessions:
+factory cleanup --runs .factory/runs --run finished-task --archive --completed --apply
+# If the source disk cannot stage a compressed copy, use another volume:
+factory cleanup --runs .factory/runs --run finished-task --archive --completed \
+  --archive-dir /Volumes/Archive/factory --apply
+factory cleanup --restore /Volumes/Archive/factory/finished-task.tar.gz \
+  --destination /new/path/finished-task --apply
+```
+
+Without `--apply`, cleanup/restore only report their plan. Archival currently supports
+ordinary `factory-harness/3` directories, not arbitrary folders or historical signed
+runs. `--completed` is an explicit declaration that work is finished and all writers
+are stopped; recorded live worker/wrapper processes and exact tmux sessions still
+refuse archival. Startup and archival are serialized. It never stops agents.
+
+Archival preserves all regular-file bytes (including uncommitted files, local commits,
+Git objects, generated caches and logs), directory/file modes and symlink targets.
+It verifies the compressed archive against a per-file digest receipt before removing
+the selected original directory. Keep the `.tar.gz` and `.archive.json` together.
+Restore requires a new destination and never overwrites an existing directory. Hardlinked
+files restore as independent files. Extended attributes (including resource forks) are
+retained in the archive and private receipt. Restore attempts to apply them and reports
+any OS-protected attributes it cannot restore; their original bytes remain archived.
+Restored files belong to the restoring user.
+Linked Git worktrees and alternate object stores require separate preservation and
+are refused rather than producing an unusable archive. Sufficient staging space is
+required: compression is not an in-place cure for an entirely full disk.
+
+Inventory reports apparent regular-file lengths, not filesystem allocated blocks;
+hardlinks and filesystem sharing can make physical reclaim differ from those totals.
+It distinguishes run-root bytes from referenced external Coder/Tester repositories. Those external repositories are reported, **not reclaimed**, and the
+report is not a claim of exclusive ownership. Unregistered candidate directories,
+shared dependency caches and operator repositories remain outside this tool's scope.
+Do not interpret a successful archive as closing or accepting a task.
+
+At the end of work, the Validator/Orchestrator should inspect this inventory, record
+which resources are retained and why, stop their exact finished sessions, and offer
+or apply cleanup within the operator's authorization. Do not accumulate fresh clones
+for successive judging rounds when a safe reusable workspace suffices. Standalone
+Coder/Tester repositories remain necessary for the existing isolation boundary;
+shared Git worktrees are not a drop-in replacement for those lanes.
+
+Storage inventory reports run-directory bytes, compressed archive bytes, and their
+combined local footprint separately. Archives on another volume and externally
+referenced lane repositories are not included in that combined total.

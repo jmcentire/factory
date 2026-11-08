@@ -151,3 +151,18 @@ Native permission denials remain visible in the retained agent output; an idle/c
 turn is not successful task completion. This transport does not provide an interactive tool-approval
 response UI and never answers permission requests itself. Resolve permission blockers through the
 operator's existing authorized controls, not by silently widening an agent's permissions.
+
+## Storage at task completion
+
+Before declaring the working environment tidy, inspect `factory cleanup --runs ROOT`.
+Record retained evidence and referenced external lanes, distinguish active work from
+completed work, and surface the explicit archive plan. Stop only exact finished
+processes. Within operator authorization, `factory cleanup --runs ROOT --run RUN
+--archive --completed --apply` preserves a verified compressed copy before removing
+that selected run directory. It does not accept the task, stop agents or clean external
+lanes automatically. Keep archives and receipts together and verify restore when
+retention matters. Unknown ownership, live processes and linked Git stores refuse.
+
+Use `factory version --json` with the new run's retained `factory_version` when
+investigating an issue. Current installation identity is not proof of the version
+that produced an older run. See README's storage section for limits and restoration.
