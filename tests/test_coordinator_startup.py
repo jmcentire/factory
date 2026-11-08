@@ -81,7 +81,16 @@ def launch(tmp_path, monkeypatch):
             index += 1
         assert words[index] == sys.executable
         assert Path(words[index + 1]).name == "lane_agent.py"
-        assert "--terminal" in words[index:]
+        if (role == "orchestrator"
+                or environment.get("FACTORY_VALIDATOR_AGENT") in {"claude", "agy"}):
+            assert "--persistent" in words[index:]
+            assert "--terminal" not in words[index:]
+            assert words[words.index("--session-agent", index) + 1] in {"claude", "agy"}
+            prompt_path = Path(words[words.index("--prompt-arg", index) + 1])
+            assert prompt_path.parent == root / role
+            assert prompt_path.stat().st_mode & 0o077 == 0
+        else:
+            assert "--terminal" in words[index:]
         command = words[words.index("--", index) + 1:]
         return call, environment, command
 
@@ -103,16 +112,17 @@ def test_startup_pins_exact_inputs_and_uses_only_two_coordinators(launch):
     record = json.loads(before)
     assert (root / "TASK.md").read_bytes() == b"Keep this exact task.\n"
     assert (root / "harness.json").read_bytes() == before
-    assert [c[c.index("-n") + 1] for c in calls if "-n" in c] == ["validator", "orchestrator"]
+    assert [c[c.index("-n") + 1] for c in calls if "-n" in c] == [
+        "validator", "orchestrator", "inbox-wake"]
     for role in ("validator", "orchestrator"):
         call, environment, command = invocation(calls, role)
         assert call[1:3] == ["-L", record["tmux_socket"]]
         assert call[call.index("-c") + 1] == str(repository)
         assert environment["FACTORY_CONTROL_ROOT"] == str(root)
-        assert record["resolved_commit"] in command[-1]
-        assert str(root / "TASK.md") in command[-1]
-        assert "Kindex" in command[-1]
-        assert "Remain in this conversation" in command[-1]
+        prompt_file = root / role / "initial-prompt.txt"
+        prompt = prompt_file.read_text() if prompt_file.exists() else command[-1]
+        assert record["resolved_commit"] in prompt
+        assert str(root / "TASK.md") in prompt
     assert not (root / "run.json").exists()
     assert not (root / "orchestrator/bin").exists()
 
@@ -141,12 +151,14 @@ def test_generated_environment_excludes_credentials_and_foreign_run_context(
             assert key not in result["env"]
 
 
-def test_agy_keeps_interactive_prompt_without_permission_bypass(launch):
+def test_agy_keeps_native_stream_without_permission_bypass(launch):
     root, _, _, capture, _, execute = launch
     argv = execute(capture(), "orchestrator")["argv"]
-    assert argv[argv.index("--add-dir") + 1] == str(root)
-    assert argv[argv.index("--prompt-interactive") + 1]
-    assert not set(argv) & {"--dangerously-skip-permissions", "--sandbox", "--print", "-p",
+    assert str(root) in [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    assert (root / "orchestrator/initial-prompt.txt").read_text()
+    assert not set(argv) & {"--dangerously-skip-permissions", "--sandbox",
                             "--disable-slash-commands"}
 
 
@@ -157,7 +169,7 @@ def test_help_format_is_not_a_startup_prerequisite(launch):
     # Any help probe would fail the capture boundary. The actual supported invocation works.
     agy.write_text(original.replace("import json, os, sys", "import json, os, sys\n"
                    "assert '--help' not in sys.argv"))
-    assert "--prompt-interactive" in execute(capture(), "orchestrator")["argv"]
+    assert "--input-format" in execute(capture(), "orchestrator")["argv"]
 
 
 @pytest.mark.parametrize("terminal,expected", [
@@ -222,7 +234,7 @@ def test_unsupported_native_flag_records_failure_without_model_substitution(laun
     completed = subprocess.run(["/bin/bash", "-c", wrapper], cwd=repository,
                                capture_output=True, text=True)
     assert completed.returncode == 64, completed.stderr
-    assert "unsupported option --model" in completed.stderr
+    assert "unsupported option --model" in completed.stderr + completed.stdout
     invocations = [json.loads(line) for line in receipt.read_text().splitlines()]
     assert len(invocations) == 1
     assert invocations[0][invocations[0].index("--model") + 1] == "operator-selected"
@@ -269,7 +281,7 @@ def test_kickoff_validator_gets_private_brief_without_duplicate_process(launch, 
     monkeypatch.setenv("FACTORY_VALIDATOR_AGENT", "kickoff")
     calls = capture()
     windows = [c[c.index("-n") + 1] for c in calls if "-n" in c]
-    assert windows == ["orchestrator"]
+    assert windows == ["orchestrator", "inbox-wake"]
     brief = root / "validator/BRIEF.md"
     assert "inbox.jsonl" in brief.read_text() and str(root / "TASK.md") in brief.read_text()
     assert brief.stat().st_mode & 0o077 == 0

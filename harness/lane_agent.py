@@ -872,6 +872,36 @@ def run_lane(
             if process is not None and process.poll() is None:
                 process.terminate()
 
+    def rejection_output() -> None:
+        # A rejected CLI may leave a descendant holding stdout open. Drain bounded
+        # diagnostics only; never wait for descendants or treat output as protocol.
+        import select
+        import time
+
+        assert process is not None and process.stdout is not None
+        descriptor = process.stdout.fileno()
+        deadline = time.monotonic() + 1.0
+        remaining = 4 * 1024 * 1024
+        os.set_blocking(descriptor, False)
+        try:
+            while remaining and time.monotonic() < deadline:
+                if not select.select([descriptor], [], [],
+                                     max(0, deadline - time.monotonic()))[0]:
+                    break
+                try:
+                    raw = os.read(descriptor, min(65536, remaining))
+                except BlockingIOError:
+                    continue
+                if not raw:
+                    return
+                sys.stdout.buffer.write(raw)
+                sys.stdout.buffer.flush()
+                _append(log, raw)
+                remaining -= len(raw)
+            _append(log, b"lane-agent: startup diagnostic drain reached time or size bound\n")
+        finally:
+            os.set_blocking(descriptor, True)
+
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
         stopped = True
@@ -899,7 +929,12 @@ def run_lane(
                 sys.stdout.buffer.flush()
                 _append(log, raw)
                 _watch(raw)
-            if persistent:
+            if persistent and process.poll() not in {None, 0}:
+                # A native CLI can reject argv before a process receipt exists. Retain its
+                # actual diagnostic and exit, rather than attempting a stream handshake.
+                rejection_output()
+                rc = process.wait()
+            elif persistent:
                 import persistent_lane
 
                 assert run_root is not None and session_file is not None and prompt is not None
@@ -911,7 +946,17 @@ def run_lane(
                     emit(raw)
                 rc = process.wait()
     except (OSError, ValueError, RuntimeError) as error:
-        if process is not None and process.poll() is None:
+        native_exit = process.poll() if process is not None else None
+        early_rejection = (persistent and not session_seen and native_exit is not None
+                           and native_exit != 0)
+        if early_rejection:
+            # Also covers exit between the poll above and initial stdin/identity checks.
+            # Once a native session exists, binding/protocol failures remain lane failures.
+            assert process is not None and process.stdout is not None
+            rejection_output()
+            assert native_exit is not None
+            rc = native_exit
+        elif process is not None and process.poll() is None:
             # Receipt failure must not leave an untracked model running. This is terminal
             # cleanup of our own Popen child, not the supervisor's resumable pause operation.
             process.terminate()
@@ -922,10 +967,11 @@ def run_lane(
                 process.wait(timeout=5)
         # "could not start" only when it never did: a started agent the lane stopped is another
         # failure, and naming it as a launch failure sends the reader to the wrong cause.
-        _append(log, (f"lane-agent: could not start {argv[0]}: {error}\n" if process is None
-                      else f"lane-agent: {argv[0]} started as pid {process.pid}, but the lane "
-                      f"failed: {error}\n").encode())
-        rc = 127
+        if not early_rejection:
+            _append(log, (f"lane-agent: could not start {argv[0]}: {error}\n" if process is None
+                          else f"lane-agent: {argv[0]} started as pid {process.pid}, but the lane "
+                          f"failed: {error}\n").encode())
+            rc = 127
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)

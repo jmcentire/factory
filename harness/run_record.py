@@ -242,7 +242,7 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
         head = [agent, "--add-dir", str(root),
                 *(["--dangerously-skip-permissions"] if unrestricted else []),
                 *model_args, *effort_args]
-        return [*head, *(["--prompt-interactive"] if agent == "agy" else []), prompt]
+        return [*head, *(["--prompt-interactive"] if agent == "agy" else ["--"]), prompt]
     if agent == "muse":
         return ["muse", *(["--yolo"] if unrestricted else []), *model_args,
                 *(["--reasoning-effort", effort] if effort else []), prompt]
@@ -487,6 +487,8 @@ def start(runs: Path, run: str) -> None:
             "unresolved issue or disputed importance to the user after three to four meaningful "
             "correction rounds; consensus is not required. "
             "Remain in this conversation until the Validator completes the task. "
+            f"At completion run {sys.executable} {tools}/inbox_wake.py stop "
+            f"--root {root} to stop inbox polling. "
             "Use relevant Kindex history before scans and material decisions. "
             "Current user instructions govern. Preserve assigned agents and models. "
             "Do not create a catalog, signatures, waivers or approval paperwork."
@@ -518,7 +520,26 @@ def start(runs: Path, run: str) -> None:
                 print(f"factory: warning: could not pre-trust the {role}'s folders for Claude "
                       f"Code ({error}); accept its folder-trust prompt in the {role} window",
                       file=sys.stderr)
-        argv = resident_command(agent, model, effort, prompt, root)
+        native_stream = agent in {"claude", "agy"}
+        if native_stream:
+            extra = ["--add-dir", str(root)]
+            if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
+                extra.append("--dangerously-skip-permissions")
+            # A flag after --add-dir terminates its variadic arguments in both CLIs.
+            built = agents.harness(agent).persistent_turn(
+                model=model, effort=effort, cwd=Path(doc['repository']), extra=extra)
+            argv = list(built.argv)
+            if os.environ.get("FACTORY_LANE_SANDBOX", "on") != "off":
+                argv = [arg for arg in argv if arg != "--dangerously-skip-permissions"]
+                if "--permission-mode" in argv:
+                    argv[argv.index("--permission-mode") + 1] = "default"
+            prompt_file = directory / "initial-prompt.txt"
+            if not prompt_file.exists():
+                write_new(prompt_file, prompt.encode())
+            elif prompt_file.read_text() != prompt:
+                raise ValueError("retained initial coordinator prompt changed")
+        else:
+            argv = resident_command(agent, model, effort, prompt, root)
         executable = shutil.which(argv[0])
         if executable is None:
             raise ValueError(f"{role} executable is unavailable: {argv[0]}")
@@ -579,7 +600,10 @@ def start(runs: Path, run: str) -> None:
             "run",
             "--slot",
             role,
-            "--terminal",
+            *(["--persistent", "--run-root", str(root), "--session-agent", agent,
+               "--session-file", str(root / f"{role}-session-id"),
+               "--prompt-arg", str(prompt_file), "--plan-only"]
+              if native_stream else ["--terminal"]),
             "--log",
             str(root / f"{role}-lane.log"),
             "--exits",
@@ -634,7 +658,12 @@ def start(runs: Path, run: str) -> None:
                 raise SeatStartFailed(seat)
             if waited.returncode:
                 raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
-        # No dispatcher typing prose, no supervisor that can stop work for review lag.
+        if any(agent in {"claude", "agy"} for agent in selected.values()):
+            wake = shlex.join([sys.executable, str(tools / "inbox_wake.py"),
+                               "run", "--root", str(root)])
+            subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
+                            "-n", "inbox-wake", "-c", doc['repository'], wake], check=True)
+        # Native inbox transport only; no supervisor may stop work for review lag.
         print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
         if selected["validator"] == "kickoff":
             print(f"Existing Validator: read {root}/validator/BRIEF.md")

@@ -122,3 +122,32 @@ The authority check supports explicit user overrides, for example `make AUTHORIT
 The testing standard is supplied to Tester lanes; instruction delivery is not proof of compliance. The former literal-prose `check-doctrine` gate and its tests were removed: they established only the behavior of their lint rules, not that agents follow instructions or that runtime controls work. Never rebuild them as behavioral acceptance. Validator and Orchestrator own semantic review of the actual evidence.
 
 Denial tests must exercise the prohibited action and its absence, including a positive control for valid work; a collecting test or a matching string is not proof of behavior. Use actual baseline failures or bounded mutation checks where they establish that the test detects the regression. Acceptance-ledger and glossary checks remain enabled.
+
+### Durable coordinator wake delivery
+
+New Claude and Antigravity coordinator seats use the existing acknowledged native JSON-stream
+transport. Their tmux panes show output; send operator input with `inject.sh RUN validator|orchestrator
+"message"`, rather than typing into those panes. This retains one native conversation without
+introducing another AI orchestrator. Existing runs are not converted or restarted. Other adapters
+retain their current terminal behavior and report automatic inbox wake as unsupported; the worker
+never guesses a safe terminal prompt or substitutes an agent.
+
+A deterministic `python harness/inbox_wake.py run --root RUN_ROOT` worker starts with new runs. It drains retained
+coordinator inboxes and author exit records, including completions written before it started.
+A durable batch ID survives retries and worker restarts. Busy native sessions are left alone;
+only their acknowledged input boundary can accept another batch. An acknowledgment proves
+native receipt, not completion, validation or approval. Pending/uncertain writes retain their
+same ID; they are not replayed as new requests. Native process/session identity is checked on
+all delivery attempts. The worker does not restart a dead seat.
+
+Use `python harness/inbox_wake.py status --root RUN_ROOT` for delivery state and
+`python harness/inbox_wake.py stop --root RUN_ROOT` when
+the run is complete. The run's tmux session also owns the worker lifetime. Missing or dead
+recipients remain visible, never recorded as delivered. Startup and periodic drain use retained
+records rather than waiting only for a future file change. Role routing and independent author
+inputs are unchanged: this worker delivers to coordinators, not directly across author lanes.
+
+Native permission denials remain visible in the retained agent output; an idle/completed native
+turn is not successful task completion. This transport does not provide an interactive tool-approval
+response UI and never answers permission requests itself. Resolve permission blockers through the
+operator's existing authorized controls, not by silently widening an agent's permissions.

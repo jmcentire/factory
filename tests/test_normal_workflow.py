@@ -133,8 +133,9 @@ def test_start_has_only_assigned_residents_and_private_socket(tmp_path, reposito
     ):
         run_record.start(runs, "task")
     launches = [call for call in calls if "new-session" in call or "new-window" in call]
-    assert len(launches) == 2
-    assert {call[call.index("-n") + 1] for call in launches} == {"validator", "orchestrator"}
+    assert len(launches) == 3
+    assert {call[call.index("-n") + 1] for call in launches} == {
+        "validator", "orchestrator", "inbox-wake"}
     _, doc = run_record.load(runs, "task")
     assert all(call[:3] == ["tmux", "-L", doc["tmux_socket"]] for call in calls)
     assert "private/model" in launches[0][-1] and "assigned/tester" in launches[0][-1]
@@ -312,7 +313,8 @@ def test_partial_start_failure_stops_only_its_session_and_retains_failure(tmp_pa
     calls.clear()
     run_record.start(runs, "task")
     assert sum("new-session" in call for call in calls) == 1
-    assert sum("new-window" in call for call in calls) == 1
+    assert {call[call.index("-n") + 1] for call in calls if "new-window" in call} == {
+        "orchestrator", "inbox-wake"}
     assert not any("kill-session" in call for call in calls)
     assert json.loads((root / "validator/inbox.jsonl").read_text()) == notice
     assert (root / "harness.json").read_bytes() == original
