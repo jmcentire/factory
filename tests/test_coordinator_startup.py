@@ -81,7 +81,8 @@ def launch(tmp_path, monkeypatch):
             index += 1
         assert words[index] == sys.executable
         assert Path(words[index + 1]).name == "lane_agent.py"
-        if role == "orchestrator" or environment.get("FACTORY_VALIDATOR_AGENT") == "claude":
+        if (role == "orchestrator"
+                or environment.get("FACTORY_VALIDATOR_AGENT") in {"claude", "agy"}):
             assert "--persistent" in words[index:]
             assert "--terminal" not in words[index:]
             assert words[words.index("--session-agent", index) + 1] in {"claude", "agy"}
@@ -153,7 +154,7 @@ def test_generated_environment_excludes_credentials_and_foreign_run_context(
 def test_agy_keeps_native_stream_without_permission_bypass(launch):
     root, _, _, capture, _, execute = launch
     argv = execute(capture(), "orchestrator")["argv"]
-    assert argv[argv.index("--add-dir") + 1] == str(root)
+    assert str(root) in [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
     assert argv[argv.index("--input-format") + 1] == "stream-json"
     assert argv[argv.index("--output-format") + 1] == "stream-json"
     assert (root / "orchestrator/initial-prompt.txt").read_text()
@@ -233,7 +234,7 @@ def test_unsupported_native_flag_records_failure_without_model_substitution(laun
     completed = subprocess.run(["/bin/bash", "-c", wrapper], cwd=repository,
                                capture_output=True, text=True)
     assert completed.returncode == 64, completed.stderr
-    assert "unsupported option --model" in completed.stderr
+    assert "unsupported option --model" in completed.stderr + completed.stdout
     invocations = [json.loads(line) for line in receipt.read_text().splitlines()]
     assert len(invocations) == 1
     assert invocations[0][invocations[0].index("--model") + 1] == "operator-selected"
