@@ -158,3 +158,35 @@ def test_inbox_routing_does_not_open_author_cross_talk(root):
             run_record.message(root, recipient, "orchestrator", "bypass independent inputs")
     assert not (root / "coder/inbox.jsonl").exists()
     assert not (root / "tester/inbox.jsonl").exists()
+
+
+def test_another_cycle_owner_cannot_deliver_concurrently(root):
+    import fcntl
+
+    run_record.message(root, "validator", "coder", "single owner")
+    folder = root / "inbox-wake"
+    folder.mkdir()
+    transport = Transport()
+    with (folder / "owner.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert wake().tick(root, transport)["status"] == "owned"
+        assert transport.calls == []
+    wake().tick(root, transport)
+    assert transport.calls
+
+
+def test_unsupported_existing_terminal_is_never_used_as_fallback(root, monkeypatch):
+    import subprocess
+
+    run_record.message(root, "validator", "coder", "read results")
+    calls = []
+
+    def forbid_terminal(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("delivery must not fall back to shell or tmux input")
+
+    monkeypatch.setattr(subprocess, "run", forbid_terminal)
+    monkeypatch.setattr(subprocess, "Popen", forbid_terminal)
+    wake().tick(root)
+    assert not state(root, "validator")["consumed"]
+    assert calls == []
