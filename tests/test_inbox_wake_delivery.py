@@ -206,3 +206,17 @@ def test_retained_crash_fragment_does_not_starve_later_valid_handoff(root):
     assert "before crash" in texts and "after crash" in texts
     assert inbox.read_bytes() == original
     assert len(state(root, "validator")["consumed"]) == 2
+
+
+def test_stopped_daemon_returns_without_new_transport_or_session_probe(root, monkeypatch):
+    import subprocess
+
+    wake().stop(root)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("closed run must not launch or probe a session")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    wake().run(root)
+    assert wake().status(root)["status"] == "stopped"

@@ -95,7 +95,7 @@ def native(tmp_path, monkeypatch):
     try:
         eventually(lambda: errors or phase() == "idle")
         assert not errors
-        yield tmp_path, wake, driver, receipt, phase
+        yield tmp_path, wake, driver, receipt, phase, child
     finally:
         (tmp_path / "allow-ack").touch()
         (tmp_path / "allow-result").touch()
@@ -115,7 +115,7 @@ def consumed(root):
 
 
 def test_native_receipt_not_write_attempt_consumes_and_busy_session_defers_next_batch(native):
-    root, wake, driver, receipt, phase = native
+    root, wake, driver, receipt, phase, child = native
     run_record.message(root, "validator", "coder", "first complete")
     wake.tick(root)
     assert not consumed(root)
@@ -133,7 +133,7 @@ def test_native_receipt_not_write_attempt_consumes_and_busy_session_defers_next_
 
 
 def test_mismatched_retained_process_cannot_receive_message(native):
-    root, wake, driver, receipt, phase = native
+    root, wake, driver, receipt, phase, child = native
     run_record.message(root, "validator", "host", "must not reach foreign process")
     changed = {**receipt, "worker": {**receipt["worker"], "started": "wrong-process-start"}}
     driver.store(root / "validator-process.json", changed)
@@ -144,3 +144,19 @@ def test_mismatched_retained_process_cannot_receive_message(native):
         assert (root / "received.jsonl").read_bytes() == before
     finally:
         driver.store(root / "validator-process.json", receipt)
+
+
+def test_daemon_ends_when_owned_native_recipient_exits(native, monkeypatch):
+    root, wake, driver, receipt, phase, child = native
+    child.stdin.close()
+    child.wait(timeout=5)
+
+    # With the actual owned recipient gone, neither a replacement process nor a new
+    # tmux command is necessary to establish that this run's transport should stop.
+    def forbidden(*args, **kwargs):
+        raise AssertionError("dead recipient must not be restarted or probed via another shell")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    wake.run(root)
+    assert wake.status(root)["status"] == "recipients-unavailable"
