@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "install.py"
 
@@ -178,3 +180,33 @@ def test_doctor_warns_without_gnu_timeout(tmp_path: Path) -> None:
     (tmp_path / "gtimeout").write_text("#!/bin/sh\n", encoding="utf-8")
     (tmp_path / "gtimeout").chmod(0o755)
     assert inst._timeout_check(str(tmp_path)).status == "ok"
+
+
+@pytest.mark.parametrize(
+    ("variables", "expected"),
+    [
+        ({"CLAUDE_CONFIG_DIR": "{profile}"}, "{profile}/commands"),
+        ({"CLAUDE_CONFIG_DIR": ""}, "{home}/.claude/commands"),
+        ({}, "{home}/.claude/commands"),
+        ({"CLAUDE_CONFIG_DIR": "{profile}", "CLAUDE_COMMANDS_DIR": "{explicit}"}, "{explicit}"),
+    ],
+    ids=["profile", "empty-profile", "no-profile", "explicit-override"],
+)
+def test_make_installer_targets_use_the_claude_profiles_commands(
+    tmp_path: Path, variables: dict[str, str], expected: str
+) -> None:
+    """`make install|doctor|uninstall` pass --commands-dir themselves, so the Makefile, not just
+    install.py, must follow CLAUDE_CONFIG_DIR. Dry runs only: nothing is written."""
+
+    def fill(value: str) -> str:
+        return value.format(home=tmp_path / "home", profile=tmp_path / "profile",
+                            explicit=tmp_path / "explicit")
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_COMMANDS_DIR")}
+    env.update(HOME=str(tmp_path / "home"), **{k: fill(v) for k, v in variables.items()})
+    for target in ("install", "doctor", "uninstall"):
+        done = subprocess.run(["make", "-n", "--no-print-directory", target], cwd=REPO,
+                              env=env, capture_output=True, text=True, check=False)
+        assert f'--commands-dir "{fill(expected)}"' in done.stdout, (target, done.stdout,
+                                                                    done.stderr)
