@@ -539,8 +539,13 @@ def _start_locked(runs: Path, run: str) -> None:
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
                 extra.append("--dangerously-skip-permissions")
             # A flag after --add-dir terminates its variadic arguments in both CLIs.
+            # A retained session id means this start is a retry: resume that conversation, or the
+            # lane refuses the new one as "native conversation changed".
+            session = root / f"{role}-session-id"
+            resume = session.read_text().strip() if session.is_file() else ""
             built = agents.harness(agent).persistent_turn(
-                model=model, effort=effort, cwd=Path(doc['repository']), extra=extra)
+                model=model, effort=effort, cwd=Path(doc['repository']), resume=resume,
+                extra=extra)
             argv = list(built.argv)
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") != "off":
                 argv = [arg for arg in argv if arg != "--dangerously-skip-permissions"]
