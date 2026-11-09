@@ -37,12 +37,6 @@ done
 case "$RUNS" in *[!0-9]*) echo "--runs must be an integer >= 2" >&2; exit 64 ;; esac
 [ "$RUNS" -ge 2 ] || { echo "--runs must be >= 2 (one run cannot detect a flake)" >&2; exit 64; }
 
-WORK="${MUTATE_WORKDIR:-/tmp/flake}/$NAME"
-rm -rf "$WORK" 2>/dev/null
-mkdir -p "$WORK" || exit 70
-rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
-rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
-
 # The target declares its test tool; this harness never assumes one. A pack
 # names it in build.test_command, and when a pack declares none the Validator
 # selects one in planning and passes it here. Assuming pytest silently made
@@ -52,6 +46,16 @@ if [ -z "${TEST_CMD:-}" ]; then
   echo "  the target's build.test_command declares it, or the Validator selects one." >&2
   exit 64
 fi
+
+WORK="${MUTATE_WORKDIR:-/tmp/flake}/$NAME"
+# Keep the target's python3 below; only workspace preparation uses Factory's interpreter.
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+(
+  source "$D/factory_python.sh"
+  PYTHONPATH="$D/.." "$FACTORY_PYTHON" "$D/workspace_sync.py" prepare-scratch \
+    --source "$SRC" --tests "$TESTS" --destination "$WORK" >/dev/null
+) || exit 70
+
 TIMEOUT=$(command -v timeout || command -v gtimeout) || { echo "flake: needs GNU timeout (macOS: brew install coreutils)" >&2; exit 69; }
 verdict() { printf '%s: %s\n' "$NAME" "$*"; }
 

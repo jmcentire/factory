@@ -393,6 +393,38 @@ before marking existing clones; this change does not perform that migration.
 Explicit lane preparation/relaunch marks its own repository, and archive restore
 marks its new destination, but neither is a bulk backfill operation.
 
+When refreshing a known transient candidate, use the installed Factory interpreter:
+
+```sh
+python -m factory_runtime.kindex_workspace sync --source /path/to/source \
+  --destination /path/to/transient-candidate --delete --exclude .git --exclude .factory
+```
+
+The command creates a missing marker before rsync and protects existing markers
+from deletion and replacement, including nested markers. It hides sender markers,
+fails on rsync errors, and refuses overlapping source/destination trees or a linked
+destination root. Overlap checks use filesystem identities as well as ancestry,
+including case aliases. Caller exclude patterns cannot override marker protection.
+Empty/clear-list (`!`) exclusion rules and arbitrary rsync flags such as
+`--delete-excluded` are not accepted.
+This is not a canonical publication command: use the existing lane export to omit
+runtime markers from accepted work.
+
+`harness/flake.sh` and `harness/mutate.sh` use the same sync boundary and reset
+exclusive scratch contents in place while retaining the root marker. Normal
+validation already materializes each candidate beneath a separately marked result
+directory. Raw Git materialization and immutable snapshot helpers remain byte-exact;
+their callers must keep temporary content beneath a marked ancestor.
+Scratch reset refuses destinations with Git metadata; it is not an author-lane
+reset command. Deletion-enabled sync preserves nested markers and therefore may
+retain an otherwise empty stale directory containing a marker.
+
+Upgrade at the next command boundary: updating Factory does not rewrite an active
+shell's loaded script or an agent's already-issued rsync command. Replace future
+ad-hoc candidate refreshes with the command above; do not restart productive agents
+or touch live candidate data as part of installation. Any repair of an existing
+missing marker must separately verify that exact path is a transient workspace.
+
 Linked Git worktrees and alternate object stores require separate preservation and
 are refused rather than producing an unusable archive. Sufficient staging space is
 required: compression is not an in-place cure for an entirely full disk.

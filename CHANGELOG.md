@@ -3,6 +3,29 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.27] - 2026-11-09
+
+### Fixed
+
+- Transient Factory run roots, author clones and validation workspaces carry inherited
+  `.kindex-no-index` metadata. Private Kindex queries and generated knowledge remain available;
+  accepted source snapshots omit the marker. Restored archives retain or acquire exclusion
+  before their workspace bytes are restored.
+- Mutation and flake scratch resets preserve the root exclusion continuously. The supported
+  transient workspace sync creates missing markers before copying and protects existing root
+  and nested markers during `rsync --delete`. Physical source/destination overlap, unsafe
+  markers and filter-list clearing are refused before synchronization. Scratch reset refuses
+  Git repositories.
+
+### Rollout
+
+- Requires a Kindex version that honors `.kindex-no-index`. Existing standalone clones are
+  not automatically backfilled. Use the supported sync only for verified transient targets;
+  never mark canonical repositories or shared parents.
+- Updating Factory does not repair running external raw sync commands. Adopt the supported
+  command at a natural command boundary without restarting productive agents. No live data,
+  registry or process migration is performed by this release.
+
 ## [0.8.26] - 2026-10-21
 
 ### Fixed

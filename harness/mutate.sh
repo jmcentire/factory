@@ -54,6 +54,16 @@ done
 [ -n "$SRC" ] && [ -n "$TESTS" ] || { echo "--src and --tests are required" >&2; exit 64; }
 [ -f "$PATCH" ] || { echo "no patch script at $PATCH" >&2; exit 64; }
 
+# The target declares its test tool; this harness never assumes one. A pack
+# names it in build.test_command, and when a pack declares none the Validator
+# selects one in planning and passes it here. Assuming pytest silently made
+# every non-Python target unrunnable.
+if [ -z "${TEST_CMD:-}" ]; then
+  echo "$(basename "$0"): no test command. Pass --test-cmd '<argv>' or set TEST_CMD;" >&2
+  echo "  the target's build.test_command declares it, or the Validator selects one." >&2
+  exit 64
+fi
+
 # --- oracle receipt (Gate N seam): machine-derive oracle adequacy from the kill ----
 # A mutation test's outcome is the load-bearing input to a surface's oracle_adequate
 # claim (SurfaceObservation.oracle_receipt + oracle_adequate). KILLED-by-the-named-oracle
@@ -121,20 +131,14 @@ PY
 trap _oracle_receipt EXIT
 
 WORK="${MUTATE_WORKDIR:-/tmp/mutate}/$NAME"
-rm -rf "$WORK" 2>/dev/null
-mkdir -p "$WORK" || exit 70
-rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
-rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
+# Keep the target's python3 below; only workspace preparation uses Factory's interpreter.
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+(
+  source "$D/factory_python.sh"
+  PYTHONPATH="$D/.." "$FACTORY_PYTHON" "$D/workspace_sync.py" prepare-scratch \
+    --source "$SRC" --tests "$TESTS" --destination "$WORK" >/dev/null
+) || exit 70
 
-# The target declares its test tool; this harness never assumes one. A pack
-# names it in build.test_command, and when a pack declares none the Validator
-# selects one in planning and passes it here. Assuming pytest silently made
-# every non-Python target unrunnable.
-if [ -z "${TEST_CMD:-}" ]; then
-  echo "$(basename "$0"): no test command. Pass --test-cmd '<argv>' or set TEST_CMD;" >&2
-  echo "  the target's build.test_command declares it, or the Validator selects one." >&2
-  exit 64
-fi
 TIMEOUT=$(command -v timeout || command -v gtimeout) || { echo "mutate: needs GNU timeout (macOS: brew install coreutils)" >&2; exit 69; }
 verdict() { ORACLE_VERDICT="$*"; printf '%s: %s\n' "$NAME" "$*"; }
 
