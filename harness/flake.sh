@@ -38,10 +38,13 @@ case "$RUNS" in *[!0-9]*) echo "--runs must be an integer >= 2" >&2; exit 64 ;; 
 [ "$RUNS" -ge 2 ] || { echo "--runs must be >= 2 (one run cannot detect a flake)" >&2; exit 64; }
 
 WORK="${MUTATE_WORKDIR:-/tmp/flake}/$NAME"
-rm -rf "$WORK" 2>/dev/null
-mkdir -p "$WORK" || exit 70
-rsync -a --exclude .git --exclude .factory "$SRC"/ "$WORK"/ 2>/dev/null
-rsync -a --delete "$TESTS"/tests/ "$WORK"/tests/ 2>/dev/null
+# Keep the target's python3 below; only workspace preparation uses Factory's interpreter.
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+(
+  source "$D/factory_python.sh"
+  PYTHONPATH="$D/.." "$FACTORY_PYTHON" "$D/workspace_sync.py" prepare-scratch \
+    --source "$SRC" --tests "$TESTS" --destination "$WORK" >/dev/null
+) || exit 70
 
 # The target declares its test tool; this harness never assumes one. A pack
 # names it in build.test_command, and when a pack declares none the Validator

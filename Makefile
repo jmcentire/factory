@@ -185,7 +185,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/boundary_register.py harness/claude_custody.py harness/author_custody.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/agents.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
-		harness/lane_repository.py \
+		harness/lane_repository.py harness/workspace_sync.py \
 		harness/orchestrator_channel.py harness/testing_standard.py harness/validator_debrief.py \
 		harness/discovery_check.py \
 		harness/strategy_plan.py harness/test_inventory.py \
@@ -202,7 +202,7 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/boundary_register.py harness/claude_custody.py harness/author_custody.py \
 		harness/attention_gate.py harness/codex_lane_session.py harness/dispatcher.py \
 		harness/host_git.py harness/agents.py harness/lane_agent.py harness/lane_budget.py harness/lane_dialogue.py \
-		harness/lane_repository.py \
+		harness/lane_repository.py harness/workspace_sync.py \
 		harness/orchestrator_channel.py harness/testing_standard.py harness/validator_debrief.py \
 		harness/discovery_check.py \
 		harness/strategy_plan.py harness/test_inventory.py \
