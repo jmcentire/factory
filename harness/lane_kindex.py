@@ -40,6 +40,8 @@ import subprocess
 import sys
 import threading
 
+from factory_runtime.kindex_workspace import mark_no_index
+
 SCHEMA = "factory-lane-kindex/2"
 MINIMUM_KINDEX = (0, 48, 0)
 SERVER_PATH = ("/usr/bin", "/bin")
@@ -219,9 +221,14 @@ def _importable_export(source: pathlib.Path, scratch: pathlib.Path) -> pathlib.P
 def prepare(
     repo: pathlib.Path, home: pathlib.Path, seed: pathlib.Path | None = None
 ) -> dict[str, object]:
+    if repo.is_symlink():
+        raise _refuse(f"lane repository must not be a symlink: {repo}")
     repo = repo.resolve()
     if not repo.is_dir():
         raise _refuse(f"lane repository is not a directory: {repo}")
+    # Also cover standalone clones and explicit relaunches of older lanes. Keep
+    # the marker on failed preparation; failure does not make a lane canonical.
+    mark_no_index(repo)
     lite = _tool("kindex-lite", "FACTORY_KINDEX_LITE_BIN")
     kin = lite.parent / "kin"  # the same installation's CLI, never another one on PATH
     if not os.access(kin, os.X_OK):

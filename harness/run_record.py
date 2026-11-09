@@ -99,6 +99,9 @@ def create(
     )
     root.parent.mkdir(parents=True, exist_ok=True)
     root.mkdir(mode=0o700)  # Existing runs, including failed launches, are never overwritten.
+    from factory_runtime.kindex_workspace import mark_no_index
+
+    mark_no_index(root)
     write_new(root / "TASK.md", task)
     write_new(root / "harness.json", (json.dumps(record, indent=2) + "\n").encode())
     return root

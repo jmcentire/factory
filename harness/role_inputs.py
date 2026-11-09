@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 from factory_runtime.host_git import materialize_commit, run_host_git
+from factory_runtime.kindex_workspace import NO_INDEX_MARKER, mark_no_index
 
 record = (importlib.import_module("harness.run_record") if __package__
           else importlib.import_module("run_record"))
@@ -79,6 +80,7 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     # A live or historical shared knowledge graph can disclose either author's work.
     # lane_kindex supplies the Validator's curated shared seed later.
     withheld.append(PurePosixPath(".kin"))
+    withheld.append(PurePosixPath(NO_INDEX_MARKER))
     root, task = record.load(runs, run)
     destination = destination.absolute()
     if destination.exists() or destination.is_symlink():
@@ -95,13 +97,14 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     if receipt_path.exists() or receipt_path.is_symlink():
         raise ValueError("role inputs already prepared; preserve the resident author's context")
     with tempfile.TemporaryDirectory(prefix="factory-inputs-") as temporary:
+        mark_no_index(Path(temporary))
         source = Path(temporary).resolve() / "tree"
         listed: list[PurePosixPath] = []
         omitted: list[str] = []
 
         def select(path: PurePosixPath) -> bool:
             listed.append(path)
-            return (not within(path, withheld)
+            return (NO_INDEX_MARKER not in path.parts and not within(path, withheld)
                     and (role == "coder" or within(path, selected)))
 
         def directory_link(path: PurePosixPath) -> None:
@@ -130,13 +133,17 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
                                       or item.resolve().relative_to(source).as_posix() not in kept):
                 raise ValueError(f"selected symlink refers to withheld input: {name}")
         destination.mkdir(mode=0o700)
+        mark_no_index(destination)
         for name in sorted(kept):
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source / name, target, follow_symlinks=False)
     # A fresh object database cannot reveal omitted paths through git show or git log.
     run_host_git(destination, ["init", "-q", "-b", f"lane/{role}"])
-    run_host_git(destination, ["add", "-f", "."])
+    # The marker is local runtime state, never part of an author's work product.
+    with (destination / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+        stream.write(f"\n/{NO_INDEX_MARKER}\n")
+    run_host_git(destination, ["add", "-f", "--", ".", f":(top,exclude){NO_INDEX_MARKER}"])
     run_host_git(destination, ["-c", "user.name=Factory", "-c", "user.email=factory@local",
                                "commit", "--allow-empty", "-qm", f"{role} input projection"])
     initial = run_host_git(destination, ["rev-parse", "HEAD"]).decode().strip()

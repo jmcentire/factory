@@ -39,7 +39,7 @@ def test_task_to_exact_candidate_result_without_paperwork(tmp_path, repository):
     root = run_record.create(runs, "ordinary", repository, b"Keep the correct value.\n")
     _, doc = run_record.load(runs, "ordinary")
     assert doc["log"] == os.devnull
-    assert sorted(p.name for p in root.iterdir()) == ["TASK.md", "harness.json"]
+    assert sorted(p.name for p in root.iterdir()) == [".kindex-no-index", "TASK.md", "harness.json"]
     # A dirty operator checkout must not change the subject or be overwritten.
     (repository / "value.txt").write_text("uncommitted user work\n")
     code, result_root = validate(
