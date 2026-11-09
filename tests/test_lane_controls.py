@@ -772,6 +772,36 @@ def test_watchdog_stops_a_lane_that_does_not_commit_and_wakes_the_operator(
     assert watched.at(9000) == "stalled" and watched.stops == ["r1:tester"]
 
 
+def test_a_lane_that_reported_done_is_waiting_not_stalled(tmp_path: Path) -> None:
+    # DIS-2032 (2026-11-09): a persistent Coder said it was done, then waited for the
+    # Validator; the stall window stopped it 22 minutes later and it could not be resumed.
+    watched = Watched(tmp_path)
+    _commit(watched.repo, T0 + 200, "a")
+    message = {"type": "item.completed",
+               "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps(message) + "\n")
+    assert watched.at(300) == "watching"
+    assert watched.at(900 + 1200 + 3600) == "watching"
+    assert watched.stops == []
+
+
+def test_time_the_machine_slept_is_not_stall_time(tmp_path: Path) -> None:
+    # DIS-2032: a laptop slept 43 minutes and the Tester's watcher counted it as idle.
+    watched = Watched(tmp_path)
+    awake = Clock()
+    watched.watch.awake = awake
+    _commit(watched.repo, T0 + 600, "a")
+    awake.value = T0 + 1000
+    assert watched.at(1000) == "watching"
+    awake.value += 30  # 30 s awake, then an hour asleep
+    assert watched.at(1000 + 3600) == "watching"
+    assert watched.stops == []
+    # Awake time still counts: idle past the window after waking is a stall.
+    awake.value += 1201
+    assert watched.at(1000 + 3600 + 1201) == "stalled"
+
+
 def test_a_lane_waiting_on_its_own_question_is_not_stalled(tmp_path: Path) -> None:
     from harness.lane_dialogue import record_question
 

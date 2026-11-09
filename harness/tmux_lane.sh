@@ -439,7 +439,8 @@ PY
     'import json,sys; print(json.load(sys.stdin)["root"])')
   if [ "$ACTION" = launch ]; then
     PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
-      --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" >/dev/null || \
+      --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
+      ${REPLACE_REASON:+--replacing} >/dev/null || \
       refuse 70 "author inputs are not the prepared role projection" \
         "use role_inputs.py prepare: Coder gets source minus tests; Tester gets selected public interfaces and specification, never a full clone"
   fi

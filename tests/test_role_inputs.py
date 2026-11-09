@@ -185,3 +185,27 @@ def test_launcher_refuses_full_clone_before_contacting_agent(tmp_path, inputs):
                             capture_output=True, text=True)
     assert result.returncode != 0
     assert "prepared role projection" in result.stderr
+
+
+def _commit_all(repo, message):
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Lane", "-c",
+                    "user.email=lane@example.invalid", "commit", "-qm", message], check=True)
+
+
+def test_a_replacement_round_continues_the_clone_its_author_committed_in(tmp_path, inputs):
+    # DIS-2032 (2026-11-09): coder.r2 was refused because the Coder had committed, so the
+    # Validator wrote the remaining fixes itself.
+    _, runs, _ = inputs
+    coder = tmp_path / "coder"
+    role_inputs.prepare(runs, "task", "coder", coder, [], ["tests"])
+    (coder / "src/app.py").write_text("the coder's work")
+    _commit_all(coder, "work")
+    with pytest.raises(ValueError, match="before first launch"):
+        role_inputs.verify(runs, "task", "coder", coder)
+    role_inputs.verify(runs, "task", "coder", coder, replacing=True)
+    subprocess.run(["git", "-C", str(coder), "checkout", "-q", "--orphan", "elsewhere"],
+                   check=True)
+    _commit_all(coder, "unrelated history")
+    with pytest.raises(ValueError, match="not descended"):
+        role_inputs.verify(runs, "task", "coder", coder, replacing=True)
