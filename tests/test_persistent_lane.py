@@ -87,8 +87,10 @@ for line in sys.stdin:
     else:
         emit({"event": "result", "result": {"conversation_id": session, "status": "SUCCESS"}})
     if text == "BACKGROUND_WAKE":
-        time.sleep(.3)
+        with (folder / "release-background").open() as release:
+            release.read()
         emit({"type": "result", "session_id": session, "result": "background task finished"})
+        emit({"type": "background-boundary"})
 """
 
 
@@ -263,10 +265,16 @@ def test_enqueue_and_success_result_never_fabricate_native_ack(native_lane, agen
 def test_self_started_turn_while_idle_keeps_lane_usable(native_lane):
     # Claude Code starts its own turn when a background task finishes; no message was delivered.
     lane = native_lane("claude")
+    os.mkfifo(lane.folder / "release-background")
     wake = lane.plan("BACKGROUND_WAKE")
     lane.send(wake)
     eventually(lambda: lane.raw()["turns"] == 2)
-    time.sleep(.6)
+    with (lane.folder / "release-background").open("w") as release:
+        release.write("finish")
+    # The later stream frame proves the driver finished processing the result, including
+    # its state update. A delay or a producer-side signal cannot establish that boundary.
+    eventually(lambda: any(json.loads(raw).get("type") == "background-boundary"
+                           for raw in lane.output))
     assert not lane.errors and lane.raw()["phase"] == "idle" and lane.raw()["turns"] == 2
     after = lane.plan("after the wake")
     lane.send(after)
