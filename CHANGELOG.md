@@ -5,6 +5,14 @@ public API is still pre-1.0.
 
 ## [0.8.28] - 2026-11-09
 
+### Fixed
+
+- Idle Claude background-task completions keep the persistent lane available. Coordinator
+  retries resume retained Claude/Agy conversations rather than starting a new native session.
+- Background completion attribution during a newly submitted input remains a separate,
+  pre-existing limitation. Idle background errors remain visible in the raw stream without
+  a separately recorded outcome.
+
 ### Changed
 
 - Removed obsolete signed authorization, ratification and scheduler-registration workflows
