@@ -19,6 +19,13 @@ from harness.validate_candidate import validate
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def advisory_disabled(monkeypatch):
+    # These cases isolate ordinary coordinator behavior. Dedicated advisory tests
+    # cover enabled startup; the operator's real credentials must not change scope.
+    monkeypatch.setenv("FACTORY_JEV_SCREEN", "off")
+
+
 @pytest.fixture
 def repository(tmp_path):
     repo = tmp_path / "repo with spaces"

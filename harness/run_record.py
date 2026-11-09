@@ -62,6 +62,8 @@ def create(
     *,
     budget: float | None = None,
     log: str = os.devnull,
+    jev_mode: str | None = None,
+    jev_calls: int = 1000,
 ) -> Path:
     from factory_runtime.host_git import run_host_git
 
@@ -82,9 +84,15 @@ def create(
     top = Path(run_host_git(repository, ["rev-parse", "--show-toplevel"]).decode().strip())
     if top.resolve() != repository:
         raise ValueError("--repo must name the repository root")
+    import importlib
+
     from factory_runtime.version import build_identity
 
+    screen_module = (importlib.import_module("harness.system_one") if __package__
+                     else importlib.import_module("system_one"))
+
     record = dict(
+        system_one=screen_module.configuration(jev_mode, jev_calls),
         factory_version=build_identity(),
         schema_version=SCHEMA,
         run_id=run,
@@ -676,6 +684,24 @@ def _start_locked(runs: Path, run: str) -> None:
                                "run", "--root", str(root)])
             subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
                             "-n", "inbox-wake", "-c", doc['repository'], wake], check=True)
+        # Advisory startup must not enter the coordinator cleanup/kill path.
+        try:
+            screen_module = (importlib.import_module("harness.system_one") if __package__
+                             else importlib.import_module("system_one"))
+            screen = screen_module.checked(doc.get("system_one"))
+            if screen and screen["enabled"]:
+                worker = shlex.join([sys.executable, str(tools / "system_one.py"),
+                                     "run", "--root", str(root)])
+                subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
+                                "-n", "system-one", "-c", doc['repository'], worker], check=True)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            notice = (f"System One startup unavailable ({type(error).__name__}); "
+                      "coordinators continue with raw observation and manual review.")
+            print(notice, file=sys.stderr)
+            try:
+                message(root, "orchestrator", "host", notice)
+            except (OSError, ValueError):
+                print("System One startup notice could not be queued.", file=sys.stderr)
         # Native inbox transport only; no supervisor may stop work for review lag.
         print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
         if selected["validator"] == "kickoff":
@@ -712,6 +738,8 @@ def main() -> int:
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--budget", type=float)
+    parser.add_argument("--jev-screen", choices=["auto", "on", "off"])
+    parser.add_argument("--jev-screen-calls", type=int, default=1000)
     parser.add_argument("--log", default=os.environ.get("FACTORY_LOG", os.devnull))
     parser.add_argument("--to", choices=["validator", "orchestrator"])
     parser.add_argument("--slot", help="author slot for terminal output capture")
@@ -729,6 +757,7 @@ def main() -> int:
                     args.repo,
                     args.task_file.read_bytes(),
                     budget=args.budget,
+                    jev_mode=args.jev_screen, jev_calls=args.jev_screen_calls,
                     log=args.log,
                 )
             )

@@ -2411,6 +2411,9 @@ IGNITION_FILES = ("harness.json", "TASK.md")
 def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, monkeypatch):
     from harness import run_record
 
+    # Isolate retry/preflight behavior from optional advisory screening.
+    monkeypatch.setenv("FACTORY_JEV_SCREEN", "off")
+
     repository = projection_fixture(tmp_path)
     runs = tmp_path / "runs"
     root = run_record.create(runs, "r1", repository, b"Retain this exact task")

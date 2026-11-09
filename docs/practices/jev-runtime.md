@@ -1,83 +1,66 @@
-# Jev observations in a resident run
+# System One observations in a normal run
 
-The dispatcher can screen activity with the 17 msg-r2 rules in `harness/jev_rules.py`.
-The resident Orchestrator still reads the entire activity journal and performs the standing
-checks. Jev supplies untrusted, uncalibrated observations; it never grants a transition,
-clears a block, or substitutes for a missing artifact. The API contract is the
-[TypeSafe API reference](https://docs.typesafe.ai/api), checked 2026-10-09.
+System One is an advisory host worker, separate from the resident Orchestrator.
+It uses the same retained-log reader as `dispatcher.py --observe`; the normal
+observer remains fast, read-only and independent of provider availability.
+The worker never accepts work, clears findings, stops agents or imposes a review gate.
 
-## Select and bound it
+## Selection and credentials
 
-The screen is on in every run whose operator environment holds a TypeSafe key
-(`TYPESAFE_API_KEY`, or the operator's personal `JMC_JEV_API_KEY`), with 1,000 calls; pass
-`--jev-screen-calls N` (1–1000) to set a different ceiling (founder, 2026-10-20: a run must not
-be launched blind by leaving a flag out). The screen sends bounded captured lane text and retained
-run artifacts to `https://api.typesafe.ai/v1/systemone`. Only with no key at all does metadata
-record `jev_screen: null`, and the Orchestrator then runs every check by hand. Selection records the exact
-rulebook digest, `jev-1.13.0`, and the call ceiling. The key is transferred only to the run's
-tmux session environment, never to metadata, prompts, launch command strings, or receipts;
-the Orchestrator and author lanes use scrubbed environments.
+New runs accept `--jev-screen auto|on|off` (or `FACTORY_JEV_SCREEN`, default `auto`)
+and `--jev-screen-calls N` (1–1000, default 1000). Auto selects screening only when
+the launch environment contains `TYPESAFE_API_KEY` or `JMC_JEV_API_KEY`. On selects
+it even without a key, in which case calls are reported unavailable. Off sends
+nothing. Selection, pinned model and rulebook digest are retained in `harness.json`
+under `system_one`, never the credential. Existing runs without that field stay
+disabled; they are not silently migrated or restarted.
 
-Each request is at most 128 KiB, each retained artifact at most 16 KiB, and each response at
-most 64 KiB. A subprocess imposes an eight-second total deadline. There are no retries or
-redirects, and at most four requests per dispatcher poll. Before each call, a durable
-reservation consumes one of the run's N calls. A restart never repeats a reserved call:
-an interrupted call becomes unavailable. Exhaustion, outages, malformed answers, and missing
-context are explicit unavailable results. They cannot manufacture a negative finding.
-The call/input ceilings bound exposure and consumption; they are not a live billing meter.
+The private tmux server's host environment supplies the provider key. Coordinators
+and authors keep their existing scrubbed environments; no key is put into prompts,
+command arguments or run metadata. If a retained run starts under a host without its
+key, screening is unavailable rather than silently claiming success.
 
-`orchestrator/jev.jsonl` retains each reservation and receipt, the input state, activity and
-request digests, rulebook/model configuration, raw probabilities, and band decisions.
-The channel uses bounded regular-file journals and rejects corrupt or linked journal paths.
-Activity is never filtered by the screen. A lagging screen exposes a completed cursor prefix;
-the Orchestrator can assess that prefix while the remaining activity stays visible.
+Screening transmits bounded captured lane text to TypeSafe's
+`https://api.typesafe.ai/v1/systemone`. Do not enable it for material that is not
+authorized for that destination. Source text and provider scores remain untrusted.
 
-## Supply the evidence a rule needs
+## Observation, cost and recovery
 
-Pane records supply only `lane`, `pane_excerpt`, `pane_tail`, and `line`.
-`TASK.md` supplies `run_brief`, and `artifacts/testing-strategy.md` supplies `testing_strategy`.
-No pane is relabelled as a contract, test file, report, or brief.
+The host worker screens at most one new log chunk per tick, then waits two seconds.
+Each source chunk is approximately 16 KiB; requests are bounded to 128 KiB and
+responses to 64 KiB. The reused HTTP helper enforces an eight-second total deadline,
+no redirects and no retries. Network latency never blocks ordinary observation or
+author work. The configured call ceiling bounds consumption, not a live dollar meter.
 
-For a multi-artifact review, the Validator retains exact copies beneath the run's `artifacts/`
-directory and appends a checkpoint with `orchestrator_channel.py append --snapshot-file FILE`.
-That file contains a JSON object of evidence handles, for example:
+`system-one/` retains exact source byte ranges, identity and digest, inputs,
+configuration, reservations and receipts. A reservation is durable before a call;
+recovery never retries an interrupted request. Repeated observation does not spend
+again. Interrupted calls, provider failures and exhausted budgets are explicitly
+unavailable, never negative findings. Pending notification can be retried without
+repeating the API call; a crash at the inbox-write boundary may duplicate a notice
+with the same observation ID. Original logs are always retained independently.
 
-```json
-{"jev_evidence":{"brief":"artifacts/round-2-tester-brief.txt","judge_flags":"artifacts/judge-flags.txt","ruling":"artifacts/ruling-12.txt","contract_excerpt":"artifacts/contract-12.txt","lane_report":"artifacts/tester-report.txt","test_excerpt":"artifacts/tester-case.txt","validator_access":"artifacts/validator-access.txt"}}
-```
+The worker ignores coordinator inboxes and Orchestrator output, avoiding feedback
+from its own notices. It reads Validator and author logs. It stops when the run's
+existing inbox-stop marker is set or its tmux session ends. No running session is
+restarted to activate the feature.
 
-Use `--kind pre_dispatch --source validator --detail 'Review exact round-2 evidence'` with
-that snapshot. A retained path is evidence for review, not authorization. Absolute paths,
-parent traversal, symlinks (including parent directories), non-regular files, empty files,
-oversized sources, and invalid UTF-8 cannot supply evidence. Missing fields mark the affected
-rules unavailable. The Orchestrator must inspect those checks manually, obtain the missing
-artifacts, or block; it may not interpret unavailable as compliant.
+## Judgment and limits
 
-## Consume the receipt
+High and uncertain findings, plus unavailable observations, are queued to the
+existing Orchestrator inbox with exact retained evidence. Low scores are retained
+but do not clear any finding. The Orchestrator must inspect the evidence, distinguish
+claims from demonstrated violations, and send concrete findings to the Validator.
+Delivery is not proof of understanding or compliance.
 
-Enabled runs use `factory-orchestrator-assessment/4`: all assessment/3 fields plus
-`screen_review`. Include one entry for every new activity cursor through the assessment's
-`through_cursor`, in order, referencing its exact receipt digest:
+The normal rule set checks input contamination, Validator implementation authorship,
+interactive-auth stalls, presumed access, unnecessary fresh sessions or duplicate
+roles, paid overage, and weak/self-serving test evidence visible in lane output.
+It does not reintroduce obsolete model qualification, signature, cadence or
+pre-dispatch approval requirements. Log excerpts cannot prove unobserved file
+access or test quality; actual code/assertion review remains necessary.
 
-```json
-"screen_review": [{
-  "cursor": 7,
-  "receipt_digest": "sha256:<the retained receipt digest>",
-  "rules": {
-    "model_unqualified": {"decision":"block","basis":"No passing qualification receipt exists for this model and role."},
-    "unavailable": {"decision":"dismiss","basis":"Manually checked the missing artifact comparisons against the retained round-2 files; cite paths and conclusions here."}
-  }
-}]
-```
-
-Every `yes` (>0.7) and `escalate` (0.3–0.7 inclusive) rule requires its own disposition and
-bounded evidence basis. `no` (<0.3) grants nothing. Missing evidence and provider failures are
-grouped under one `unavailable` review per occurrence instead of seventeen false findings.
-A dismissal is the Orchestrator's manual judgment, not a Jev clearance. An upheld finding
-requires an adherence finding and `block`; the Validator's evidence-bound disposition,
-once it has fixed what the block names, remains the only route to resolve a block. Reports that omit, replace, or skip
-receipts are refused, including at transition-time revalidation. Exact report retries remain
-idempotent. Disabled runs retain assessment/3 and manual checks.
-
-These receipts prove delivery and review recording, not that a model understood a document.
-Tester reports must still cite the T-rules and demonstrate their application in the tests.
+The older `jev_screen.py` activity-journal/assessment APIs remain for historical
+runs. Their metadata and mandatory receipt-assessment protocol are not the normal
+workflow. Prototype scores in the proposal are not qualification of this worker or
+proof that its semantic classifications are correct.

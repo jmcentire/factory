@@ -136,7 +136,8 @@ def project(root: pathlib.Path, activity: Mapping[str, Any]) -> dict[str, str]:
 
 def request(payload: dict[str, Any]) -> dict[str, Any]:
     """Run one HTTP call under a total deadline, never via a shell."""
-    if not os.environ.get("TYPESAFE_API_KEY"):
+    key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JMC_JEV_API_KEY")
+    if not key:
         raise ScreenError("missing-key")
     try:
         result = subprocess.run(
@@ -145,6 +146,7 @@ def request(payload: dict[str, Any]) -> dict[str, Any]:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=TIMEOUT,
+            env={**os.environ, "TYPESAFE_API_KEY": key},
             check=False,
         )
     except subprocess.TimeoutExpired:
