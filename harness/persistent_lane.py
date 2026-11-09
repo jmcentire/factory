@@ -465,6 +465,10 @@ def run(
                 lane_dialogue.record_delivery(
                     root, message_id=pending, thread_id=state["session_id"], transport="persistent"
                 )
+        if done and state["session_id"] and state["phase"] == "idle":
+            # A turn the agent started itself (Claude Code wakes when a background task ends)
+            # finished while the lane was idle; it answers no delivered message, so stay idle.
+            done = False
         if done:
             if not state["session_id"] or not pending or state["phase"] != "working":
                 raise ValueError("unbound native turn result")
