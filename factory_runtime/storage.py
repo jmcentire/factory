@@ -25,6 +25,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from factory_runtime.kindex_workspace import NO_INDEX_MARKER, mark_no_index
+
 SCHEMA = "factory-run-archive/1"
 
 
@@ -453,16 +455,27 @@ def restore_archive(path: Path, destination: Path, *, apply: bool) -> dict[str, 
         raise ValueError("archive receipt must not be a symlink")
     manifest = json.loads(receipt.read_text())
     _verify_archive(path, manifest)
+    marker_entry = next((item for item in manifest["entries"]
+                         if item["path"] == NO_INDEX_MARKER), None)
+    if marker_entry is not None and marker_entry["kind"] != "file":
+        raise ValueError("archived Kindex exclusion marker must be a regular file")
     destination = destination.expanduser().absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError("restore destination must not exist")
     if not apply:
-        return {"destination": str(destination), "applied": False}
+        return {"destination": str(destination), "applied": False,
+                "kindex_exclusion_marker_added": marker_entry is None}
     destination.mkdir(parents=False, mode=0o700)
     try:
+        # Protect even legacy restores before any repository bytes appear. An
+        # archived marker is restored first with its original bytes and mode.
+        if marker_entry is None:
+            mark_no_index(destination)
+        ordered_entries = sorted(manifest["entries"],
+                                 key=lambda item: item["path"] != NO_INDEX_MARKER)
         # Manual restore never traverses a stored symlink. Links are created last.
         with tarfile.open(path, "r:gz") as archive:
-            for item in manifest["entries"]:
+            for item in ordered_entries:
                 output = destination / item["path"]
                 if item["kind"] == "directory":
                     output.mkdir(parents=True, exist_ok=True)
@@ -495,11 +508,16 @@ def restore_archive(path: Path, destination: Path, *, apply: bool) -> dict[str, 
         def content_only(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return [{key: value for key, value in item.items() if key != "xattrs"}
                     for item in items]
-        if content_only(_entries(destination)) != content_only(manifest["entries"]):
+        restored_entries = _entries(destination)
+        if marker_entry is None:
+            restored_entries = [item for item in restored_entries
+                                if item["path"] != NO_INDEX_MARKER]
+        if content_only(restored_entries) != content_only(manifest["entries"]):
             raise ValueError("restored files differ from receipt")
     except Exception:
         # Preserve partial output for diagnosis; archive remains authoritative.
         raise
     return {"destination": str(destination), "applied": True,
+            "kindex_exclusion_marker_added": marker_entry is None,
             "metadata_restore_limitations": limitations,
             "metadata_retained_in": str(receipt)}

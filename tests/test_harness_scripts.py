@@ -2202,7 +2202,8 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     export = json.loads(frozen.stdout)
     assert export["git_invoked_after_handoff"] is False
-    assert export["excluded_entries"] == [".git"]
+    assert set(export["excluded_entries"]) == {".git", ".kindex-no-index"}
+    assert not (Path(export["files_directory"]) / ".kindex-no-index").exists()
     assert export["source_file_count"] == 1
     assert (Path(export["files_directory"]) / "answer.txt").read_text() == (
         "agent-authored output\n"

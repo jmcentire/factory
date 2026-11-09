@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from factory_runtime.host_git import materialize_commit, run_host_git
+from factory_runtime.kindex_workspace import mark_no_index
 
 _record = (importlib.import_module("harness.run_record") if __package__
            else importlib.import_module("run_record"))
@@ -82,6 +83,7 @@ def validate(
     parent.mkdir(mode=0o700, exist_ok=True)
     result_root = parent / uuid.uuid4().hex
     result_root.mkdir(mode=0o700)
+    mark_no_index(result_root)
     candidate = result_root / "candidate"
     result: dict[str, Any] = {
         "run": run,

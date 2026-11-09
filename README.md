@@ -362,6 +362,37 @@ files restore as independent files. Extended attributes (including resource fork
 retained in the archive and private receipt. Restore attempts to apply them and reports
 any OS-protected attributes it cannot restore; their original bytes remain archived.
 Restored files belong to the restoring user.
+New run roots and Coder/Tester repositories carry `.kindex-no-index`, Kindex's
+presence marker excluding that directory and its descendants from automatic
+registration and background indexing. Active and finished lanes, including
+standalone clones, remain task-local. Kindex queries, captures and generated
+knowledge files remain available; reviewed knowledge becomes eligible in the
+canonical project after merge. The marker stays out of initial lane commits and
+accepted snapshots, and is retained when a run is archived. Restore marks older
+archives before restoring repository files and reports
+`kindex_exclusion_marker_added`; all original archived files still verify against
+the receipt. Neither cleanup nor restore opens Kindex stores or changes registries.
+
+This requires a Kindex release that honors `.kindex-no-index`; older Kindex
+versions can ignore it. Updating Factory does not retrofit existing run trees or
+stop running agents. Deploy the matching Kindex exclusion support to also reject
+previously registered temporary repositories. Inventory and any later archival
+remain separate, explicitly scoped operations.
+
+For already-created clones, run `factory cleanup --runs /actual/run/parent`
+without `--apply` to inventory paths recorded in each run's
+`inputs/coder.json` and `inputs/tester.json`. The `external_resources` report is a
+reference inventory, not proof of exclusive ownership or a complete list of old
+clones. This release has no bulk marker backfill command. An old standalone clone
+outside Kindex's recognized temporary locations can remain eligible until it is
+explicitly marked or otherwise excluded by Kindex. Do not infer that installing
+this Factory change makes every existing clone safe, and do not use directory
+names or a broad filesystem scan as authority to mark canonical repositories.
+A separately scoped migration must verify lifecycle records and canonical paths
+before marking existing clones; this change does not perform that migration.
+Explicit lane preparation/relaunch marks its own repository, and archive restore
+marks its new destination, but neither is a bulk backfill operation.
+
 Linked Git worktrees and alternate object stores require separate preservation and
 are refused rather than producing an unusable archive. Sufficient staging space is
 required: compression is not an in-place cure for an entirely full disk.

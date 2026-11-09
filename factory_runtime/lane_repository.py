@@ -25,11 +25,12 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from factory_runtime.kindex_workspace import NO_INDEX_MARKER
 from factory_runtime.snapshot import FrozenTree, SnapshotError, freeze_tree
 
 # Runtime state, not work product: the lane's own Kindex store and its read-only Kinbase
 # evidence. The Validator reads lane captures from the retained repository, not the snapshot.
-KINDEX_RUNTIME_ENTRIES = (".kin/local", ".kin/events")
+KINDEX_RUNTIME_ENTRIES = (".kin/local", ".kin/events", NO_INDEX_MARKER)
 
 
 class LaneRepositoryError(RuntimeError):
@@ -200,7 +201,7 @@ def _capture_plain_tree(
                 continue
             # A declared name is excluded wherever it occurs: nested packages each carry their
             # own node_modules (laptop/node_modules, tests/acceptance/l/node_modules).
-            if relative in KINDEX_RUNTIME_ENTRIES or name in exclude:
+            if relative in KINDEX_RUNTIME_ENTRIES or name == NO_INDEX_MARKER or name in exclude:
                 excluded.append(relative)
                 continue
             child = -1
