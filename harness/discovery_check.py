@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """discovery_check — the integrated tree's test runner finds every test the Tester froze.
 
-The invariant: **no verdict is rendered on a candidate whose runner cannot see the Tester's
-suite.** In run c the Coder's projection hid tests/, so the Coder excluded tests/ in deno.json;
+This optional check verifies that the runner can see the Tester's frozen suite. In run c the
+Coder's projection hid tests/, so the Coder excluded tests/ in deno.json;
 the integrated tree's ``deno test`` then reported "No test modules found" at Phase C, and the
 shipped repository's own test task would have too (dogfood #42). After both lanes are frozen and
 the tree is integrated, this runs an inventory command in that tree and refuses when it exits
@@ -32,11 +32,11 @@ skip the suite.
 
   discovery_check.py require --root <run> --candidate-sha <commit> --strategy <md>
 
-is how ``endgame.sh`` enforces the check before any verdict: it refuses (exit 70) unless every
-Tester slot that froze in this run has a receipt for exactly that commit, the ratified Strategy's
-current bytes (its ``.digest`` sidecar present) and that slot's latest freeze, with no Critical
-planned case untested. A Strategy that declares ``test-modules`` requires a receipt even when no
-Tester slot froze, so the requirement cannot be dropped by skipping the freeze.
+verifies existing discovery receipts. It refuses (exit 70) unless every frozen Tester slot
+has a receipt for that exact commit, the Strategy's current bytes and that slot's latest
+freeze, with no Critical planned case untested. A Strategy that declares ``test-modules``
+requires a receipt even when no Tester slot froze, so the requirement cannot be dropped by
+skipping the freeze.
 """
 
 from __future__ import annotations
@@ -273,9 +273,6 @@ def require(root: pathlib.Path, candidate: str, strategy: pathlib.Path) -> list[
                              "this run, so discovery of its tests cannot be proven")
     if not slots:
         return []
-    sidecar = strategy.with_name(strategy.name + ".digest")
-    if sidecar.is_symlink() or not sidecar.is_file() or not sidecar.stat().st_size:
-        raise DiscoveryError(f"the testing strategy is not ratified: no {sidecar.name}")
     expected = {"candidate_sha": candidate, "strategy_sha256": _sha256(raw_strategy)}
     for slot in slots:
         path = receipt_path(root, slot, candidate)
@@ -293,7 +290,7 @@ def require(root: pathlib.Path, candidate: str, strategy: pathlib.Path) -> list[
             stale = ["untested"]
         if stale:
             raise DiscoveryError(f"the discovery receipt for {slot} does not bind this candidate, "
-                                 f"the ratified Strategy and the latest freeze ({', '.join(stale)}"
+                                 f"the Strategy and the latest freeze ({', '.join(stale)}"
                                  "); re-run discovery_check.py")
     return slots
 

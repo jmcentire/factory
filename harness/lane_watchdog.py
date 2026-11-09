@@ -41,7 +41,7 @@ same session through ``tmux_lane_message.sh``:
   A notice that does not start a new life within five minutes ends the lane as capped.
 - **Progress review pause.** Every ``review_every_s`` of active work a Coder lane is paused (its
   turn ended, its pane kept) and the Validator is woken (``lane-review-due``) to freeze and review
-  it against the ratified specification and resume it with a ``FACTORY_REVIEW``. Paused time does
+  it against the task specification and resume it with a ``FACTORY_REVIEW``. Paused time does
   not count toward the cap, and the stall window carries across the pause rather than starting
   over; a review still missing after ``review_wait_s`` wakes the Validator again
   (``lane-review-overdue``). A new round launched over a paused lane closes it as

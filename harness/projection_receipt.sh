@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# projection_receipt.sh — refuse a dispatch whose signed strategy points a lane at
+# projection_receipt.sh — refuse a dispatch whose declared strategy points a lane at
 # something that lane can NEVER see.
 #
 # Why this exists: in run v8 the Tester's projection did not contain paths the
-# signed testing strategy told it to use. That is not a lane error and no amount of
+# declared testing strategy told it to use. That is not a lane error and no amount of
 # lane skill recovers from it — the projection is built fail-closed from
 # `tester-include:` lines, so a path outside that set is invisible by construction.
 # The lane discovered it AFTER dispatch, mid-run, and the cost was a stall plus a
@@ -100,7 +100,7 @@ done
 echo "projection-receipt: $ROLE — ${#REFS[@]} referenced path(s), ${#UNREACHABLE[@]} unreachable"
 if [ "${#UNREACHABLE[@]}" -gt 0 ]; then
   echo
-  echo "The signed artifact points this lane at paths its projection can never contain:"
+  echo "The declared input points this lane at paths its projection can never contain:"
   printf '    %s\n' "${UNREACHABLE[@]}"
   echo
   echo "Declared view: $(printf '%s ' "${INCL[@]}")"

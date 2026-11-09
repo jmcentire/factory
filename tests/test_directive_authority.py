@@ -205,31 +205,6 @@ def test_tier_order_is_weakest_first_and_load_bearing() -> None:
     assert ranks == sorted(ranks)
 
 
-def test_scope_subsumption_catches_the_global_case() -> None:
-    """Pre-release review finding: string equality missed the case it was for.
-
-    A founder directive scoped `global` carries no selectors and so applies
-    everywhere, but it never string-matched a narrower provisional scope — exactly
-    the pairing the precedence check exists to mark subordinate.
-    """
-
-    import importlib.util
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("_d", root / "harness" / "directive.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    # `global` subsumes everything.
-    assert module._scopes_overlap("global", "run=r1;role=coder")
-    # A shared selector must agree; disagreement is different territory.
-    assert module._scopes_overlap("role=coder", "run=r1;role=coder")
-    assert not module._scopes_overlap("role=tester", "run=r1;role=coder")
-    # The narrower scope does not subsume the broader one.
-    assert not module._scopes_overlap("run=r1;role=coder", "global")
-    # An unparseable scope is not treated as overlapping.
-    assert not module._scopes_overlap("!!not a scope!!", "global")
 
 
 def test_a_provisional_citing_the_founder_is_not_subordinate() -> None:

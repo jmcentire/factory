@@ -1,69 +1,22 @@
-# Practice — The Diff-Intent Gate
+# Practice — review changes against intent
 
-> Every diff is checked against the declared intent it operates under, before it is
-> applied or approved. A diff that alters a declared invariant is a **material change**;
-> material changes are never ratified in-stream by the agent that noticed them — the
-> agent stops and solicits human validation. Silence is denial.
+Compare a change with the user's current request and the repository contracts it
+operates under. The author’s explanation is evidence about an approach, not authority
+to change expected behavior.
 
-## Why this gate exists
+1. Identify the affected requirement, invariant or permission boundary. Inspect changes
+   to role ownership, scope, prohibitions and failure behavior alongside implementation.
+2. Trace the source when a requirement is uncertain: the current user request and
+   clarifications, public contracts and relevant Git history. An old implementation or
+   document does not override a later user instruction.
+3. Distinguish an intended change from an accidental side effect or an agent-invented
+   requirement. State the concrete before/after behavior and its consequence.
+4. The Validator resolves routine interpretation within authorized scope, records
+   consequential decisions and preserves independent author inputs. Ask the user about
+   material ambiguity in the requested outcome, a consequential tradeoff or an action
+   outside existing authority; continue independent work while it is unresolved.
+5. Review the candidate and meaningful regression evidence. Preserve actual platform
+   permissions and report unchecked assumptions or failures accurately.
 
-On 2026-07-07 an AI-co-authored docs commit (`ab45e3c`) promoted pipeline stages and
-human-owned artifacts into "ten role agents" and stamped the result canonical. The drift
-did not arrive as a suspicious edit; it arrived as authoritative-sounding text, and every
-subsequent reader — agent and human-adjacent alike — inherited it as gospel until the
-founder spot-checked it (2026-07-20). The founder then supplied the settled
-Validator/Coder/Tester and three-phase structure directly (2026-07-26). The lesson:
-*reading* cannot be trusted to catch what *diffing against a quoted invariant* will. The
-role-count re-assertion is the canonical worked example — changing the count, changing a
-role identity, or promoting a phase/artifact into a role is a material change, full stop.
-The count is four (Validator, Orchestrator, Coder, Tester) by founder ruling, 2026-09-21.
-
-## The rule
-
-1. **Intent is what is signed, not what is plausible.** The reference for "material" is
-   the declared intent artifact — the doctrine sentence, spec item, constraint, or
-   invariant the diff operates under — never the diff author's explanation, and never
-   the reviewer's sense of reasonableness. The declared inventory, with each
-   statement's tier (sacrosanct / invariant-by-design / epistemic / free), lives in
-   [`../DOCTRINE-KERNEL.md`](../DOCTRINE-KERNEL.md) — tier lookup precedes judgment;
-   inference is only for statements the kernel does not list. A diff whose governing
-   intent cannot be located is itself an escalation, not a pass.
-2. **The tells are deltas in commitment language.** Flag any hunk that adds, removes, or
-   rewrites: a count or cardinality ("exactly three", "one owner per fact"); a MUST /
-   NEVER / ONLY / ALWAYS sentence; a named role, authority, or gate; a fail-closed /
-   fail-open disposition; a scope word (all / only / except / regardless); a
-   prohibition; or the promotion of an example into a rule or a rule into background.
-   These are mechanical, greppable signals — run them as a pre-pass, not a vibe.
-3. **Trace provenance before you solicit.** A smart flag is a dossier, not an alarm.
-   Locate the earliest introduction of the changed claim (`git log -S '<claim>'`), its
-   authorship (human-solo commit vs agent co-authored), and the nearest human-signed
-   antecedent stating the same intent (a signed spec, a founder-authored commit, a
-   captured founder statement). Classify the change: **(a) founder-intended** — cite
-   the origin and proceed under it; **(b) agent-introduced with no human antecedent** —
-   presumptive drift or hallucination; **(c) unintended side-effect** of an
-   otherwise-intended change. The solicitation carries the before/after, the named
-   invariant, and this dossier.
-4. **Lanes escalate; the Validator decides; the founder's words govern.** A lane's only
-   verdicts are "**material — soliciting validation**" (quote the exact before/after, name the
-   invariant, attach the provenance dossier, stop) or "**not material — proceeding**" (quote
-   the invariant as held). The Validator decides each solicitation and records it: a change
-   that contradicts what the founder said is refused, because the founder's words outrank
-   every agent's (AUTHORITY.md H4); a change their words do not settle is decided on the
-   evidence and recorded, and the founder may override it afterwards (P-0001). **No agent
-   ratifies its own directives.**
-5. **Fail closed.** An unvalidated material change is blocked — not deferred, not
-   merged with a caveat.
-6. **Self-application.** This gate governs changes to itself and to the kernel.
-
-## The drop-in prompt (any agent lane)
-
-> Before applying or approving this diff: locate the declared intent it operates under
-> (kernel entry, doctrine sentence, spec item, constraint). Quote it. If the diff
-> alters a count, a MUST/NEVER/ONLY, a named role or authority, a fail-closed
-> disposition, a scope word, or removes a prohibition: trace its provenance
-> (`git log -S` the claim — earliest introduction, human or agent authorship, nearest
-> human-signed antecedent), then say: "This looks like a material change to declared
-> intent: [before] → [after]. Provenance: [intended / agent-introduced, no human
-> antecedent / side-effect]. I am not authorized to ratify it. Soliciting validation."
-> Then stop. If no governing intent can be found, that is also an escalation.
-> Otherwise, state the invariant you checked and that it held.
+The same reasoning applies to workflow and instruction changes. A document diff is not
+a reason to recreate an approval prerequisite that the user has already removed.

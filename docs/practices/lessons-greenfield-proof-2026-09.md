@@ -6,14 +6,13 @@ a way to build software, and carrying it forward turned every bug fix into a cer
 
 What survived is about getting a thing to work.
 
-1. **Phase A never froze the interface.** The ratified spec named fields but not wire
+1. **The shared interface was underspecified.** The spec named fields but not wire
    shapes: HTTP paths, signature headers, token-file format, `--json` key names, signed
    document schemas. Two lanes working blind cannot converge on unnamed shapes, and 45
    Validator rulings were needed after the fact to close the gap (16 of them pure
    "shape" rulings). Rule: **the interface contract (argv, output keys and types,
-   endpoints, headers, document schemas, filesystem layout, budgets) is a ratified Phase
-   A artifact**, produced in Pact plan-only mode, and both the Coder and the Tester's
-   harness consume the same file. A Detector Reviewer pass must check the Tester's
+   endpoints, headers, document schemas, filesystem layout, budgets) is an explicit public contract**, and both the Coder and the Tester's
+   harness consume that contract. A Detector Reviewer pass must check the Tester's
    harness for invented conventions and for demands a blind product cannot satisfy
    (instrument-private taxonomies, unreachable witnesses).
 2. **The instrument was full of defects.** NameErrors, an impossible calendar date
@@ -26,15 +25,13 @@ What survived is about getting a thing to work.
    Codex/Ollama: no prompt caching, 250–450 shell commands per packet, ~300M input tokens
    over 23 packets, repeated context-loss loops, quota stalls, mid-turn crashes, and a
    final packet that regressed the vector by nine nodes. Claude coders in worktrees with
-   direct judge access cleared more nodes in their first hour. Rule: **qualify the Coder
-   on a synthetic packet with a token/command budget before the run; enforce ceilings in
-   the launcher (compaction threshold, command cap), not in the prompt; record tokens
-   per green node per provider; prefer providers with prompt caching.**
-4. **The sandbox denied `.git` writes and nobody had noticed for seven attempts.** Rule:
-   the launcher's qualification packet must include a commit; if the sandbox forbids it,
-   the **content-addressed handoff** (Coder declares `git diff HEAD --binary | sha256`,
-   Validator recomputes before judging and commits on the Coder's behalf) is the
-   documented protocol from day one.
+   direct judge access cleared more nodes in their first hour, an arrangement that does
+   not establish independent testing. Lesson: record the actual arrangement, consumption
+   and limitations; preserve user-selected models and real metered budget ceilings.
+4. **The sandbox denied `.git` writes and nobody had noticed for seven attempts.**
+   Verify that author workspaces support the required actions. Preserve platform restrictions
+   and use the existing supported export path; do not broaden permissions or silently claim
+   a commit or export succeeded.
 5. **Merges belong to the Coder.** Parallel worktrees doubled throughput; conflicts went
    back to the Coder as a short packet rather than being resolved by the certifier.
    Keep that.
@@ -68,13 +65,9 @@ What survived is about getting a thing to work.
     check it against the failing run: if the change would have rescued the run that
     exposed it, it is suspect. Here it would not have — the disambiguation alone still
     scored 85% against a 95% floor — and that is what made the change defensible.
-7. **The human-owned gates are discovered last and cost the most wall time.** Two of
-    the final three reds were a rights grant and a human exercise: no product defect,
-    no Coder packet, just a person who had to sign something and a person who had to
-    sit down for twenty decisions. They surfaced at day five because nothing forced
-    them earlier. Rule: **enumerate every gate requiring a human act during Phase A,
-    name the owner, and collect them before the first Coder dispatch.** A human gate
-    discovered at the end is a schedule risk that no amount of Coder throughput fixes.
+7. **Discover actual external dependencies early.** Identify permissions and services
+   the requested work genuinely needs, verify which are available and report concrete gaps.
+   Do not invent human acts or repeat approvals already supplied by the user.
 8. **Never put mutable status inside an immutable digest preimage.** The auxiliary
     corpus binds its identity over the exact bytes of `RIGHTS.md`, and `RIGHTS.md`
     opens with a status line ("grant recorded; current-digest re-attestation and

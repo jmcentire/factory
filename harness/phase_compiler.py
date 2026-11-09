@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Own the deterministic ordering of every generated Phase-A artifact region."""
 
-# The executable must import sibling harness controls both as a script and in tests.
+# Import the sibling artifact helpers used by this data compiler.
 # ruff: noqa: E402
 
 from __future__ import annotations
 
-import argparse
-import json
 import pathlib
 import sys
 
@@ -23,7 +21,6 @@ from agreement_contract import (
 )
 from agreement_contract import (
     MAX_ARTIFACT_BYTES,
-    AgreementContractError,
     _atomic_replace,
     _read_regular,
     update_strategy,
@@ -35,7 +32,6 @@ from run_guidance import (  # noqa: E402
     MARKERS as GUIDANCE_MARKERS,
 )
 from run_guidance import (
-    RunGuidanceError,
     update_artifacts,
 )
 from run_guidance import (
@@ -48,7 +44,6 @@ from semantic_union import (
     END as SEMANTIC_END,
 )
 from semantic_union import (
-    SemanticUnionError,
     update_spec,
     verify_spec,
 )
@@ -148,37 +143,3 @@ def verify(root: pathlib.Path, artifacts: pathlib.Path) -> None:
     verify_guidance(root, artifacts)
     verify_agreement(root, artifacts)
     _verify_order(artifacts)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("update", "verify"))
-    parser.add_argument("--root", type=pathlib.Path, required=True)
-    parser.add_argument("--artifacts", type=pathlib.Path, required=True)
-    arguments = parser.parse_args()
-    try:
-        if arguments.command == "update":
-            update(arguments.root, arguments.artifacts)
-        else:
-            verify(arguments.root, arguments.artifacts)
-        print(
-            json.dumps(
-                {"schema_version": "factory-phase-compiler/1", "verified": True},
-                sort_keys=True,
-            )
-        )
-    except (
-        AgreementContractError,
-        OSError,
-        PhaseCompilerError,
-        RunGuidanceError,
-        SemanticUnionError,
-        UnicodeDecodeError,
-    ) as exc:
-        print(f"phase compiler refused: {exc}", file=sys.stderr)
-        return 71
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

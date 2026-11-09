@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """install — put this checkout to use: the ``factory`` launcher and the Claude Code commands.
 
-``make install`` builds the venv and the pinned Tessera, then calls this to write two kinds of
+``make install`` builds the venv, then calls this to write two kinds of
 thin, generated file outside the repository:
 
-  launcher   ``$BINDIR/factory`` — runs ``.venv/bin/factory`` with ``FACTORY_TESSERA_BIN``
-             defaulted to the pinned build, so no activation step and no stray ``tessera``.
+  launcher   ``$BINDIR/factory`` — runs ``.venv/bin/factory`` without an activation step.
   loaders    ``~/.claude/commands/{validate,engineer,test,orchestrate,build,review}.md`` — each
              tells the agent to read the canonical prompt in this checkout. The prompt bytes
              stay here; the loader only names where they are.
@@ -56,7 +55,6 @@ class Layout:
 
     root: Path
     venv: Path
-    tessera: Path
     bindir: Path
     commands_dir: Path
 
@@ -89,14 +87,9 @@ def render_loader(layout: Layout, name: str, source: str) -> str:
 
 
 def render_launcher(layout: Layout) -> str:
-    tessera = shlex.quote(str(layout.tessera))
     body = (
         "#!/bin/sh\n"
         f"# factory launcher for the checkout at {layout.root} (written by `make install`).\n"
-        "# Uses the pinned Tessera build unless FACTORY_TESSERA_BIN is already set.\n"
-        f'if [ -z "${{FACTORY_TESSERA_BIN:-}}" ] && [ -x {tessera} ]; then\n'
-        f"  FACTORY_TESSERA_BIN={tessera}; export FACTORY_TESSERA_BIN\n"
-        "fi\n"
         f'exec {shlex.quote(str(layout.venv / "bin" / "factory"))} "$@"\n'
     )
     return f"{body}# factory-launcher/1 sha256={_digest(body)}\n"
@@ -181,16 +174,6 @@ def _python_check(layout: Layout) -> Check:
     if not stamp.exists() or stamp.stat().st_mtime < pyproject.stat().st_mtime:
         return Check("fail", "python", "virtualenv is behind pyproject.toml", "make install")
     return Check("ok", "python", f"{version} in {layout.venv}")
-
-
-def _tessera_check(layout: Layout, path_env: str) -> Check:
-    if os.access(layout.tessera, os.X_OK):
-        return Check("ok", "tessera", f"pinned build at {layout.tessera}")
-    if shutil.which("cargo", path=path_env) is None:
-        fix = "install Rust from https://rustup.rs, then: make install"
-    else:
-        fix = "make install"
-    return Check("fail", "tessera", "pinned build missing (needed to sign anything)", fix)
 
 
 def _launcher_check(layout: Layout, path_env: str) -> list[Check]:
@@ -309,8 +292,6 @@ def _layout(arguments: argparse.Namespace) -> Layout:
     return Layout(
         root=root,
         venv=Path(arguments.venv).expanduser().resolve() if arguments.venv else root / ".venv",
-        tessera=(Path(arguments.tessera).expanduser().resolve() if arguments.tessera
-                 else root / ".tools/tessera/target/release/tessera"),
         bindir=Path(arguments.bindir).expanduser(),
         commands_dir=Path(arguments.commands_dir).expanduser(),
     )
@@ -321,7 +302,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("install", "uninstall", "doctor"))
     parser.add_argument("--root", default=str(ROOT), help="the factory checkout")
     parser.add_argument("--venv", default="", help="virtualenv (default: <root>/.venv)")
-    parser.add_argument("--tessera", default="", help="pinned Tessera binary")
     parser.add_argument("--bindir", default="~/.local/bin", help="where the launcher goes")
     parser.add_argument("--commands-dir", default="~/.claude/commands",
                         help="Claude Code user commands directory")

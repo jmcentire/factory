@@ -111,7 +111,7 @@ def test_check_passes_when_registry_complete(tmp_path: Path) -> None:
         f"{proc.stderr}\n{proc.stdout}"
     )
     assert "GREEN" in proc.stdout
-    # Every gate id the plan names should be registered.
+    # Every retained gate in this group should be registered.
     for gate in [
         "A",
         "B",
@@ -119,7 +119,6 @@ def test_check_passes_when_registry_complete(tmp_path: Path) -> None:
         "D",
         "E",
         "F",
-        "G",
         "H",
         "I",
         "J",

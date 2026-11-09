@@ -52,7 +52,8 @@ def _lane_argument(value: str) -> str:
 # The watchdog is a sender only of the generated wrap-up notice (lane_watchdog.py), never of
 # prose, an answer or a status probe.
 _SENDERS = frozenset({"validator", "orchestrator", "watchdog"})
-_AUTHORITIES = frozenset({"human-answer", "ratified-spec", "runtime-protocol"})
+_SPEC_AUTHORITIES = frozenset({"task-specification", "ratified-spec"})
+_AUTHORITIES = _SPEC_AUTHORITIES | {"human-answer", "runtime-protocol"}
 _THREAD = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -261,7 +262,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                     raise LaneDialogueError("status probe carries invalid authority")
             elif kind == "progress-review":
                 if (row.get("question_id") is not None or sender != "validator"
-                        or authority != "ratified-spec"):
+                        or authority not in _SPEC_AUTHORITIES):
                     raise LaneDialogueError("only the Validator may plan a progress review")
             elif kind == "wrap-up":
                 if (row.get("question_id") is not None or sender != "watchdog"
@@ -269,7 +270,7 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                     raise LaneDialogueError("only the watchdog may plan a wrap-up notice")
             elif kind == "spec-answer":
                 question_id = row.get("question_id")
-                if sender != "validator" or authority not in {"human-answer", "ratified-spec"}:
+                if sender != "validator" or authority not in (_SPEC_AUTHORITIES | {"human-answer"}):
                     raise LaneDialogueError("only the Validator may plan a specification answer")
                 if (question_id not in questions or str(question_id) in corrected
                         or questions[str(question_id)]["lane"] != lane):
@@ -532,15 +533,16 @@ def plan_message(
             if question_id is not None or authority != "runtime-protocol" or sender == "watchdog":
                 raise LaneDialogueError("status probes use only runtime-protocol authority")
         elif message_kind == "progress-review":
-            # The Validator's review of a paused or finished lane, judged against the ratified
+            # The Validator's review of a paused or finished lane, judged against the task
             # specification; it binds no question and passes the coder leak guard upstream.
-            if question_id is not None or sender != "validator" or authority != "ratified-spec":
+            if (question_id is not None or sender != "validator"
+                    or authority != "task-specification"):
                 raise LaneDialogueError("only the Validator may send a progress review")
         elif message_kind == "wrap-up":
             if question_id is not None or sender != "watchdog" or authority != "runtime-protocol":
                 raise LaneDialogueError("only the watchdog may send a wrap-up notice")
         elif message_kind == "spec-answer":
-            if sender != "validator" or authority not in {"human-answer", "ratified-spec"}:
+            if sender != "validator" or authority not in {"human-answer", "task-specification"}:
                 raise LaneDialogueError("only the Validator may answer a specification question")
             questions = {
                 str(row["question_id"]): row for row in rows if row.get("record_type") == "question"

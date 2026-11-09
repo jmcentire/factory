@@ -340,7 +340,7 @@ else
   if [ "$KIND" = "review" ]; then
     # The Validator's progress review of a paused or finished Coder or Tester (lane_watchdog.py
     # pauses a Coder every --review-every-minutes): requirement ids and observed behaviour against
-    # the ratified specification, resumed into the lane's own session so it keeps its context.
+    # the task specification, resumed into the lane's own session so it keeps its context.
     # Founder, 2026-10-20: each role is one long-lived session; a review never becomes a new round.
     case "$LANE" in coder|tester) ;; *)
       echo "lane-message: a progress review goes to the Coder or the Tester" >&2; exit 64 ;;
@@ -366,14 +366,14 @@ PY
       echo "lane-message: review requires --verdict on-track|redirect|repair" >&2; exit 64 ;;
     esac
     BODY_FILE="$REVIEW_FILE"
-    AUTHORITY="ratified-spec"
-    BASIS="${BASIS:-Validator progress review against the ratified specification}"
+    AUTHORITY="task-specification"
+    BASIS="${BASIS:-Validator progress review against the task specification}"
     MESSAGE_KIND="progress-review"
     VERDICT_WORD=$(printf '%s' "$VERDICT" | tr 'a-z-' 'A-Z_')
     if [ "$LANE" = tester ]; then
-      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your tests against the ratified specification. It names requirements, amendments and the behaviour it observed, never the implementation."$'\n'
+      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your tests against the task specification. It names requirements, amendments and the behaviour it observed, never the implementation."$'\n'
     else
-      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your work against the ratified specification. It names requirements and the behaviour it observed, never the tests."$'\n'
+      PREFIX="FACTORY_REVIEW verdict=$VERDICT_WORD"$'\n'"The Validator reviewed your work against the task specification. It names requirements and the behaviour it observed, never the tests."$'\n'
     fi
     if [ "$VERDICT" = repair ]; then
       SUFFIX=$'\n'"Fix what it names, keeping what already works: rerun the checks that passed before and restore any you break. Then commit and end with the lane's done line again."$'\n'
@@ -390,8 +390,8 @@ PY
       echo "lane-message: answer requires --question-id, --answer-file, --basis, and --authority" >&2
       exit 64
     }
-    case "$AUTHORITY" in human-answer|ratified-spec) ;; *)
-      echo "lane-message: answer authority must be human-answer|ratified-spec" >&2; exit 64 ;;
+    case "$AUTHORITY" in human-answer|task-specification) ;; *)
+      echo "lane-message: answer authority must be human-answer|task-specification" >&2; exit 64 ;;
     esac
     BODY_FILE="$ANSWER_FILE"
     MESSAGE_KIND="spec-answer"

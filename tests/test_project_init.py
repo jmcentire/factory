@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 
 from factory_runtime.authority import human_public_keys, verify_receipt
-from factory_runtime.cli import main
 from factory_runtime.project_init import (
     ProjectInitError,
     init_project,
@@ -192,23 +191,6 @@ def test_each_worker_gets_only_its_own_key(tmp_path: Path) -> None:
             project.worker_env(role)
 
 
-def test_cli_init_and_record_statement(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    binary = os.environ.get("FACTORY_TESSERA_BIN") or pytest.skip("needs FACTORY_TESSERA_BIN")
-    keys = tmp_path / "keys"
-    assert main(["init", "--keys-dir", str(keys), "--repository-id", "demo",
-                 "--tessera-bin", str(binary)]) == 0
-    minted = json.loads(capsys.readouterr().out)
-    assert set(minted["workers"]) == {"validator", "orchestrator", "coder", "tester"}
-
-    assert main([
-        "record-statement", "--keys-dir", str(keys), "--run-id", "run-1",
-        "--action", "authorize-change", "--subject-digest", SUBJECT,
-        "--said", "Build it.", "--said-at", "2026-10-04T06:10Z",
-        "--output", str(tmp_path / "r.json"), "--tessera-bin", str(binary),
-    ]) == 0
-    assert (tmp_path / "r.json").is_file()
-
-
 def test_init_mints_the_chain_root_the_genesis_commits_to(tmp_path: Path) -> None:
     from factory_core.manifest import digest_bytes
     from factory_runtime.durability import load_chain_root_material
@@ -361,13 +343,12 @@ def test_a_factory_init_project_passes_stage_r_and_resolves_its_target(tmp_path:
     }
     request_path = tmp_path / "target-request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
-    assert main([
-        "record-statement", "--keys-dir", str(project.keys_dir), "--run-id", "run-1",
-        "--action", "authorize-target-resolution", "--subject-digest", digest_obj(request),
-        "--request", str(request_path), "--said", "Yes, use that repo.", "--said-at", "now",
-        "--output", str(tmp_path / "target-receipt.json"),
-        "--tessera-bin", os.environ["FACTORY_TESSERA_BIN"],
-    ]) == 0
+    record_human_statement(
+        project, run_id="run-1", action="authorize-target-resolution",
+        subject_digest=digest_obj(request), request=request,
+        said="Yes, use that repo.", said_at="now",
+        output_path=tmp_path / "target-receipt.json", tessera=cli,
+    )
 
     workflow = FactoryWorkflow(
         repo / ".factory" / "runs", authority_policy=project.policy, tessera=cli

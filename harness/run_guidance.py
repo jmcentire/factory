@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Admit, compile, project, and verify per-run standards, loops, and recipes.
 
-Selected source documents remain externally checkpoint-bound configuration.  Only obligations
-that the Validator applies and the human ratifies through generated Product, Architecture, and
-Testing regions become intent.  Host checks prove exact membership, routing, and evidence
-identity; they do not claim that a digest understands a standard or that routing proves
-substantive compliance.
+Selected source documents are retained configuration inputs. Generated Product, Architecture,
+and Testing regions record the Validator's application of those inputs. Host checks prove
+exact membership, routing, and evidence identity. They do not claim that a digest understands
+a standard or that routing proves substantive compliance.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import pathlib
@@ -659,7 +657,9 @@ def update_artifacts(root: pathlib.Path, artifacts: pathlib.Path) -> GuidancePla
         path = artifacts / name
         digest_path = path.with_name(path.name + ".digest")
         if digest_path.exists() or digest_path.is_symlink():
-            raise RunGuidanceError(f"refusing to rewrite ratified {name}; supersede it first")
+            raise RunGuidanceError(
+                f"refusing to rewrite frozen {name}; create a new artifact version"
+            )
         raw = _read_regular(path, ceiling=MAX_GUIDANCE_BYTES)
         pending.append((path, raw, _replace_region(raw, name=name, section=section)))
     for path, old, new in pending:
@@ -1072,66 +1072,3 @@ def _summary(plan: GuidancePlan | None) -> dict[str, Any]:
         "application_digest": plan.application_digest,
         "obligation_count": len(plan.selected.obligations),
     }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    admission = subparsers.add_parser("admit")
-    admission.add_argument("--root", type=pathlib.Path, required=True)
-    admission.add_argument("--run-id", required=True)
-    admission.add_argument("--generation", type=int, required=True)
-    admission.add_argument("--config-source", action="append", default=[])
-    admission.add_argument("--config-digest", action="append", default=[])
-    for command in ("update-artifacts", "verify-plan", "status"):
-        child = subparsers.add_parser(command)
-        child.add_argument("--root", type=pathlib.Path, required=True)
-        child.add_argument("--artifacts", type=pathlib.Path, required=True)
-    projected = subparsers.add_parser("projection")
-    projected.add_argument("--root", type=pathlib.Path, required=True)
-    projected.add_argument("--artifacts", type=pathlib.Path, required=True)
-    projected.add_argument("--role", choices=ROLES, required=True)
-    projected.add_argument("--output", type=pathlib.Path, required=True)
-    evidence = subparsers.add_parser("verify-evidence")
-    evidence.add_argument("--root", type=pathlib.Path, required=True)
-    evidence.add_argument("--artifacts", type=pathlib.Path, required=True)
-    evidence.add_argument("--candidate-sha", required=True)
-    arguments = parser.parse_args()
-    try:
-        if arguments.command == "admit":
-            result = admit(
-                arguments.root,
-                run_id=arguments.run_id,
-                generation=arguments.generation,
-                config_sources=arguments.config_source,
-                config_digests=arguments.config_digest,
-            )
-        elif arguments.command == "update-artifacts":
-            result = _summary(update_artifacts(arguments.root, arguments.artifacts))
-        elif arguments.command == "verify-plan":
-            result = _summary(verify_plan(arguments.root, arguments.artifacts))
-        elif arguments.command == "projection":
-            result = write_projection(
-                arguments.root,
-                arguments.artifacts,
-                role=arguments.role,
-                output=arguments.output,
-            )
-        elif arguments.command == "verify-evidence":
-            verified = verify_evidence(
-                arguments.root,
-                arguments.artifacts,
-                candidate_sha=arguments.candidate_sha,
-            )
-            result = {"required": verified is not None, "verified": verified is not None}
-        else:
-            result = assessment_state(arguments.root, arguments.artifacts)
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
-    except (AgreementContractError, RunGuidanceError, OSError) as exc:
-        print(f"run guidance refused: {exc}", file=sys.stderr)
-        return 71
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

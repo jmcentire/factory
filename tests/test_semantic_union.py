@@ -228,7 +228,7 @@ def test_open_item_and_token_presence_cannot_fake_closed_spec(tmp_path: Path) ->
         verify_spec(artifacts2, spec2)
 
 
-def test_input_closure_drift_and_post_ratification_rewrite_are_refused(tmp_path: Path) -> None:
+def test_input_closure_drift_and_frozen_specification_rewrite_are_refused(tmp_path: Path) -> None:
     artifacts, spec, _raw, _ids = fixture(tmp_path)
     update_spec(artifacts, spec)
     extraction_path = (
@@ -239,5 +239,5 @@ def test_input_closure_drift_and_post_ratification_rewrite_are_refused(tmp_path:
         verify_spec(artifacts, spec)
 
     (spec.parent / "product-specification.md.digest").write_text("ratified\n", encoding="utf-8")
-    with pytest.raises(SemanticUnionError, match="refusing to rewrite a ratified"):
+    with pytest.raises(SemanticUnionError, match="refusing to rewrite a frozen"):
         update_spec(artifacts, spec)

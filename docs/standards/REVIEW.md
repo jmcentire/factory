@@ -269,7 +269,7 @@ The verdict is **Merge**, **Merge with dated exceptions** or **Block**. Any unre
 - A unit without contract tests: nominal, each provokable error, the catch-all.
 - A composition without an order test; a seam without a test through real units.
 - A disposition or signal never forced by a test.
-- Mocks of the thing under test; patching instead of a declared seam (T16); fixtures where real payloads exist.
+- Mocks of the thing under test; patching instead of a declared seam (T16); fixtures where real payloads exist. Distinguish unchanged legacy violations from new or expanded ones against the pinned original base (T28). Legacy violations alone do not block unrelated work; every newly created test obeys the standard, and retaining inherited tests does not establish adequate evidence for the affected claim.
 - A test with no named falsifier, or a Critical invariant with no semantic falsifier (T31).
 - A mutant declared after its result was read, or one that touches a test, fixture, mask or oracle (T42).
 - A blanket mask or a regex in a test body where a normalizer belongs (T29); a golden file no human confirmed against the specification (T30).

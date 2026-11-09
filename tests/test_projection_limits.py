@@ -6,22 +6,18 @@ retained manifest whose digest is not the one the run's target state names is re
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-import factory_runtime.cli as runtime_cli
 from factory_core.target import load_target_manifest
 from factory_runtime.projection_limits import (
     RETAINED_MANIFEST,
     ProjectionLimitsError,
     retained_projection_limits,
 )
-from factory_runtime.state import RunStore
-from tests.test_harness_scripts import execution_truth_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC = ROOT / "tests" / "fixtures" / "synthetic_target" / "target.toml"
@@ -124,51 +120,3 @@ def test_the_lane_freeze_refuses_half_a_run_binding(tmp_path: Path) -> None:
 
     assert refused.returncode == 70
     assert "must be given together" in refused.stderr
-
-
-def test_the_runner_bundle_receives_the_run_declared_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manifest = _manifest_with_limits(tmp_path, max_files=7, max_total_bytes=4096)
-    _operator, run_root, _context = execution_truth_fixture(
-        tmp_path, target_manifest=manifest
-    )
-    runs = run_root.parent
-    run = RunStore(runs).load("r1")
-    authorized = load_target_manifest(manifest).source_digest
-    assert run.target_state["target_manifest_digest"] == authorized
-    received: dict[str, object] = {}
-
-    def capture(root: object, **keywords: object) -> dict[str, object]:
-        received.update(keywords)
-        return {"projection_manifest_digest": "sha256:" + "0" * 64}
-
-    monkeypatch.setattr(runtime_cli, "bundle_runner_projection", capture)
-    receipt = tmp_path / "receipt.json"
-    receipt.write_text(json.dumps({"role": "coder"}), encoding="utf-8")
-    projection_root = tmp_path / "projection"
-    projection_root.mkdir()
-
-    assert (
-        runtime_cli.main(
-            [
-                "bundle-runner-projection",
-                "--runs",
-                str(runs),
-                "--run-id",
-                "r1",
-                "--role",
-                "coder",
-                "--projection-root",
-                str(projection_root),
-                "--projection-receipt",
-                str(receipt),
-                "--output",
-                str(tmp_path / "bundle.json"),
-            ]
-        )
-        == 0
-    )
-    assert received["max_files"] == 7
-    assert received["max_total_bytes"] == 4096
-    assert "max_file_bytes" not in received

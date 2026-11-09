@@ -20,17 +20,14 @@ spec.loader.exec_module(inst)
 
 
 def _layout(tmp_path: Path) -> inst.Layout:
-    """A complete fake checkout environment: venv python, synced stamp, executable Tessera."""
+    """A complete fake checkout environment: venv python and synced stamp."""
 
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "python").symlink_to(sys.executable)
     (venv / ".factory-deps").touch()
     os.utime(venv / ".factory-deps", (2**31, 2**31))  # newer than any pyproject.toml
-    tessera = tmp_path / "tessera"
-    tessera.write_text("#!/bin/sh\n", encoding="utf-8")
-    tessera.chmod(0o755)
-    return inst.Layout(root=REPO, venv=venv, tessera=tessera, bindir=tmp_path / "bin",
+    return inst.Layout(root=REPO, venv=venv, bindir=tmp_path / "bin",
                        commands_dir=tmp_path / "commands")
 
 
@@ -56,7 +53,7 @@ def test_install_then_doctor_is_ready(tmp_path: Path) -> None:
         assert str(REPO / source) in layout.loader(name).read_text(encoding="utf-8")
 
 
-def test_launcher_runs_the_venv_cli_with_the_pinned_tessera(tmp_path: Path) -> None:
+def test_launcher_runs_the_venv_cli_without_injecting_a_signer(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     (layout.venv / "bin" / "factory").write_text(
         '#!/bin/sh\necho "$FACTORY_TESSERA_BIN $*"\n', encoding="utf-8"
@@ -66,7 +63,7 @@ def test_launcher_runs_the_venv_cli_with_the_pinned_tessera(tmp_path: Path) -> N
     env = {k: v for k, v in os.environ.items() if k != "FACTORY_TESSERA_BIN"}
     out = subprocess.run([str(layout.launcher), "status"], capture_output=True, text=True,
                          env=env, check=True).stdout
-    assert out.strip() == f"{layout.tessera} status"
+    assert out.strip() == "status"
     env["FACTORY_TESSERA_BIN"] = "/explicit/tessera"
     out = subprocess.run([str(layout.launcher)], capture_output=True, text=True,
                          env=env, check=True).stdout
@@ -101,7 +98,6 @@ def test_existing_and_edited_files_are_never_overwritten_or_removed(tmp_path: Pa
 
 def test_doctor_names_each_missing_piece(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
-    layout.tessera.unlink()
     checks = inst.doctor(layout, _path_env(layout, tmp_path))
     assert {"launcher", "/validate", "/review"} <= _failing(checks)
     assert "tessera" not in _failing(checks)
@@ -111,7 +107,6 @@ def test_doctor_names_each_missing_piece(tmp_path: Path) -> None:
 
 def test_normal_install_is_ready_without_historical_signer(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
-    layout.tessera.unlink()
     inst.install(layout)
     assert not _failing(inst.doctor(layout, _path_env(layout, tmp_path)))
 
@@ -148,7 +143,7 @@ def test_loader_defers_to_the_seats_factory_home_over_the_installing_checkout(
 def test_doctor_flags_a_loader_from_another_checkout(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     inst.install(layout)
-    elsewhere = inst.Layout(root=tmp_path / "other", venv=layout.venv, tessera=layout.tessera,
+    elsewhere = inst.Layout(root=tmp_path / "other", venv=layout.venv,
                             bindir=layout.bindir, commands_dir=layout.commands_dir)
     (elsewhere.root / "prompts").mkdir(parents=True)
     (elsewhere.root / "prompts" / "build.md").write_text("# /build — x\n", encoding="utf-8")

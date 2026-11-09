@@ -339,7 +339,7 @@ def test_required_metrics_floor_pins_the_reference_corpus(tmp_path: Path) -> Non
     ]
     r = _run(tmp_path, baseline=baseline)
     assert r.returncode == 1
-    assert "thinned below its ratified floor" in r.stderr
+    assert "thinned below its recorded floor" in r.stderr
 
 
 def test_class_subject_delete_makes_no_tree_claim(tmp_path: Path) -> None:

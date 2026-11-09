@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Conserve extracted semantic evidence into an exact signed-spec checklist.
+"""Conserve extracted semantic evidence into an exact specification checklist.
 
 The deterministic guarantee starts after extraction: this program cannot decide
 whether prose contains an ambiguity or whether a ruling is wise.  It can prove
@@ -11,14 +11,12 @@ digest.  Extractor provenance is retained as a claim, not treated as authenticat
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
 import pathlib
 import re
 import stat
-import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Any
@@ -565,7 +563,7 @@ def update_spec(artifacts: pathlib.Path, spec: pathlib.Path) -> UnionResult:
     digest_path = spec.with_name(spec.name + ".digest")
     if digest_path.exists() or digest_path.is_symlink():
         raise SemanticUnionError(
-            "refusing to rewrite a ratified Product Specification; supersede it before signing"
+            "refusing to rewrite a frozen Product Specification; create a new artifact version"
         )
     result = load_union(artifacts)
     try:
@@ -613,36 +611,3 @@ def _summary(result: UnionResult) -> dict[str, Any]:
         "open_count": open_count,
         "closed_count": len(result.observations) - open_count,
     }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("inspect", "render", "update-spec", "verify"))
-    parser.add_argument("--artifacts", type=pathlib.Path, required=True)
-    parser.add_argument("--spec", type=pathlib.Path)
-    arguments = parser.parse_args()
-    try:
-        if arguments.command in {"update-spec", "verify"} and arguments.spec is None:
-            raise SemanticUnionError(f"{arguments.command} requires --spec")
-        if arguments.command == "render":
-            result = load_union(arguments.artifacts)
-            sys.stdout.write(render_section(result))
-        elif arguments.command == "update-spec":
-            assert arguments.spec is not None
-            result = update_spec(arguments.artifacts, arguments.spec)
-            print(json.dumps(_summary(result), sort_keys=True, separators=(",", ":")))
-        elif arguments.command == "verify":
-            assert arguments.spec is not None
-            result = verify_spec(arguments.artifacts, arguments.spec)
-            print(json.dumps(_summary(result), sort_keys=True, separators=(",", ":")))
-        else:
-            result = load_union(arguments.artifacts)
-            print(json.dumps(_summary(result), sort_keys=True, separators=(",", ":")))
-    except (OSError, SemanticUnionError) as exc:
-        print(f"semantic-union refused: {exc}", file=sys.stderr)
-        return 70
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

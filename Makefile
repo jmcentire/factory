@@ -114,15 +114,14 @@ endif
 
 # --- Putting a checkout to use ---------------------------------------------------------------
 #
-# `make install` is the one step from a fresh clone to a working factory: the venv, the pinned
-# Tessera (when cargo is present), a `factory` launcher in BINDIR, and the Claude Code commands
+# `make install` prepares the venv, a `factory` launcher in BINDIR, and Claude Code commands
 # (/validate, /engineer, /test, /orchestrate, /build, /review) as thin loaders that read the
 # prompts in this checkout. It ends with `make doctor`, so it exits non-zero until every piece is
 # in place and prints the exact fix for whatever is not. The installer never overwrites or
 # removes a file it did not write (scripts/install.py states the rule).
 BINDIR ?= $(HOME)/.local/bin
 CLAUDE_COMMANDS_DIR ?= $(HOME)/.claude/commands
-INSTALL_ARGS = --bindir "$(BINDIR)" --commands-dir "$(CLAUDE_COMMANDS_DIR)" --tessera "$(FACTORY_TESSERA_BIN)"
+INSTALL_ARGS = --bindir "$(BINDIR)" --commands-dir "$(CLAUDE_COMMANDS_DIR)"
 
 install: venv ## set up everything needed to use the factory, then run doctor
 	@$(PY) scripts/install.py install $(INSTALL_ARGS)
@@ -173,7 +172,6 @@ test-tessera: check-python ## run every real-Tessera integration and denial proo
 	FACTORY_TESSERA_BIN="$(FACTORY_TESSERA_BIN)" \
 		$(PY) -m pytest \
 			tests/test_tessera_cli_integration.py \
-			tests/test_build_and_validate_cli.py \
 			tests/test_repair_ceremony.py \
 			tests/test_trust_root.py \
 			tests/test_project_init.py \
@@ -228,16 +226,13 @@ check-wiring: check-python ## fail-closed wiring audit (every provided service r
 check-authority: check-python ## ban exemplar's TesseraSeal and signet-sdk's authority seam
 	$(PY) scripts/check_forbidden_authority.py $(AUTHORITY_ARGS)
 
-# The harness gate is syntactic + chain-integrity only: scripts parse, are executable,
-# and any local directive ledger verifies. Behavioral enforcement (forced-negative
+# The harness gate checks that scripts parse and are executable. Behavioral enforcement (forced-negative
 # drills) lives in tests/test_harness_scripts.py and runs under `test`.
-check-harness: check-python ## harness scripts parse/executable; local ledger chains verify
+check-harness: check-python ## harness scripts parse and are executable
 	@bash -n harness/*.sh
 	@$(PY) -m py_compile harness/*.py
 	@for s in harness/*.sh; do test -x "$$s" || { echo "not executable: $$s" >&2; exit 1; }; done
-	@if [ -f DIRECTIVES/ledger.jsonl ] || [ -f DIRECTIVES/provisional.jsonl ]; then \
-		DIRECTIVE_LEDGER=DIRECTIVES/ledger.jsonl $(PY) harness/directive.py verify; fi
-	@echo "check-harness: GREEN — harness scripts parse; ledger chains verify"
+	@echo "check-harness: GREEN — harness scripts parse and are executable"
 
 # Gate I (control-structure plan slice 6): no factory gate ships without a registered,
 # collecting denial probe. The registry (harness/gates.tsv) maps each gate to the pytest

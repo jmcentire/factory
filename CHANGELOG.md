@@ -3,6 +3,33 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.28] - 2026-11-09
+
+### Fixed
+
+- Idle Claude background-task completions keep the persistent lane available. Coordinator
+  retries resume retained Claude/Agy conversations rather than starting a new native session.
+- Background completion attribution during a newly submitted input remains a separate,
+  pre-existing limitation. Idle background errors remain visible in the raw stream without
+  a separately recorded outcome.
+
+### Changed
+
+- Removed obsolete signed authorization, ratification and scheduler-registration workflows
+  from executable commands, startup documentation, prompts and installation surfaces. Ordinary
+  startup retains the task, repository, starting HEAD/tree and native run identity.
+- Preserved explicit platform permissions, independent Coder/Tester roles, resident
+  Orchestrator oversight and meaningful acceptance evidence.
+- Clarified that unchanged legacy test violations remain reportable baseline context; new
+  and expanded tests must meet current standards, including tests copied into legacy files.
+
+### Rollout
+
+- New tasks use the current native harness. Existing runs retain their original artifacts,
+  session identities and selected agents; installation does not migrate or restart them.
+- Companion Factory skills are distributed separately by `wandercom/agent-skills` and need
+  that plugin's normal update flow.
+
 ## [0.8.27] - 2026-11-09
 
 ### Fixed

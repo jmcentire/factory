@@ -108,7 +108,7 @@ def main() -> None:
     )
     w(
         f"- task digest: `{harness.get('task_digest', 'UNDERIVED')}` "
-        "(harness.json; bound to Stage E)"
+        "(harness.json; retained task inputs)"
     )
     w(f"- declared budget: {harness.get('budget_usd') or 'none declared'}; "
       f"enforcement={harness.get('budget_enforcement', 'UNQUALIFIED')}")

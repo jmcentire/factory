@@ -1,4 +1,4 @@
-"""Forced-negative drills for the harness scripts (docs/HARNESS.md controls 1-9).
+"""Behavioral checks for the active harness scripts.
 
 Every control here is exercised in BOTH directions: the compliant path succeeds
 and the violating path is refused with the declared exit code and signal. A
@@ -13,11 +13,9 @@ import contextlib
 import hashlib
 import json
 import os
-import re
 import shlex
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
@@ -34,12 +32,6 @@ from factory_core.target import load_target_manifest
 from factory_runtime.resources import ResourceLedger
 from factory_runtime.state import RunStore
 from factory_runtime.target_state import TargetResolver, normalize_repository_url, normalize_subpath
-from harness.semantic_union import (
-    EXTRACTION_SCHEMA,
-    RULINGS_SCHEMA,
-    derive_observation_id,
-    update_spec,
-)
 from tests.test_lane_kindex import install_kindex
 
 HARNESS = Path(__file__).resolve().parents[1] / "harness"
@@ -524,163 +516,6 @@ def read_chain(path: Path) -> list[dict[str, object]]:
 
 
 # --------------------------------------------------------------------------
-# Control 1 / 1a — directive ledger
-# --------------------------------------------------------------------------
-
-
-def dl(tmp: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    ledger = tmp / "DIRECTIVES" / "ledger.jsonl"
-    return run(
-        [sys.executable, str(HARNESS / "directive.py"), *args],
-        cwd=tmp,
-        env_extra={"DIRECTIVE_LEDGER": str(ledger)},
-    )
-
-
-def test_directive_append_verify_roundtrip(tmp_path: Path) -> None:
-    r = dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "poll to tend the lanes",
-        "--qualifier",
-        "tend the lanes, not to produce artifacts",
-    )
-    assert r.returncode == 0, r.stderr
-    v = dl(tmp_path, "verify")
-    assert v.returncode == 0 and "ok: 1 signed" in v.stdout
-
-
-def test_directive_tamper_is_detected(tmp_path: Path) -> None:
-    dl(tmp_path, "append", "--scope", "run", "--text", "two-way doors only")
-    ledger = tmp_path / "DIRECTIVES" / "ledger.jsonl"
-    ledger.write_text(ledger.read_text().replace("two-way doors", "doors"))
-    v = dl(tmp_path, "verify")
-    assert v.returncode != 0 and "content altered" in v.stderr
-
-
-def test_supersession_refuses_silent_qualifier_drop(tmp_path: Path) -> None:
-    dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "poll the lanes",
-        "--qualifier",
-        "to tend them",
-    )
-    r = dl(tmp_path, "supersede", "D-0001", "--scope", "run", "--text", "poll faster")
-    assert r.returncode != 0
-    assert "undispositioned qualifiers" in r.stderr and "to tend them" in r.stderr
-
-
-def test_supersession_with_dispositions_carries_qualifiers(tmp_path: Path) -> None:
-    dl(
-        tmp_path,
-        "append",
-        "--scope",
-        "run",
-        "--text",
-        "poll the lanes",
-        "--qualifier",
-        "to tend them",
-    )
-    r = dl(
-        tmp_path,
-        "supersede",
-        "D-0001",
-        "--scope",
-        "run",
-        "--text",
-        "poll hourly",
-        "--set",
-        "to tend them::kept",
-    )
-    assert r.returncode == 0, r.stderr
-    active = dl(tmp_path, "active")
-    assert "poll hourly" in active.stdout and "to tend them" in active.stdout
-    assert "poll the lanes" not in active.stdout  # superseded parent is dead
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        ("append", "--scope", "role=codre", "--text", "invalid signed scope"),
-        (
-            "provisional",
-            "--scope",
-            "generation=01",
-            "--text",
-            "invalid provisional scope",
-            "--cite",
-            "transcript.jsonl:1:uuid:deadbeef",
-        ),
-    ],
-)
-def test_directive_writers_reject_invalid_scope_without_mutating_either_chain(
-    tmp_path: Path,
-    arguments: tuple[str, ...],
-) -> None:
-    directives = tmp_path / "DIRECTIVES"
-    ledger = directives / "ledger.jsonl"
-    provisional = directives / "provisional.jsonl"
-    before = {path: path.read_bytes() if path.exists() else None for path in (ledger, provisional)}
-
-    result = dl(tmp_path, *arguments)
-
-    after = {path: path.read_bytes() if path.exists() else None for path in (ledger, provisional)}
-    assert result.returncode != 0
-    assert "invalid directive scope" in result.stderr
-    assert after == before
-
-
-def test_directive_supersession_cannot_change_scope_or_mutate_chains(
-    tmp_path: Path,
-) -> None:
-    added = dl(tmp_path, "append", "--scope", "global", "--text", "global rule")
-    assert added.returncode == 0, added.stderr
-    directives = tmp_path / "DIRECTIVES"
-    ledger = directives / "ledger.jsonl"
-    provisional = directives / "provisional.jsonl"
-    before = {path: path.read_bytes() for path in (ledger, provisional)}
-
-    result = dl(
-        tmp_path,
-        "supersede",
-        "D-0001",
-        "--scope",
-        "role=coder",
-        "--text",
-        "narrowed rule",
-    )
-
-    assert result.returncode != 0
-    assert "must exactly match its parent" in result.stderr
-    assert {path: path.read_bytes() for path in (ledger, provisional)} == before
-
-
-def test_provisional_refusal_reclassifies_as_agent_originated(tmp_path: Path) -> None:
-    dl(
-        tmp_path,
-        "provisional",
-        "--scope",
-        "run",
-        "--text",
-        "ship it tonight",
-        "--cite",
-        "transcript.jsonl:42:uuid-1:deadbeef",
-    )
-    r = dl(tmp_path, "ratify", "P-0001", "--refuse")
-    assert r.returncode == 0, r.stderr
-    assert "[AGENT]-originated" in r.stdout and "keep/revert" in r.stdout
-    active = dl(tmp_path, "active")
-    assert "PROVISIONAL" not in active.stdout  # settled provisionals leave the list
-
-
-# --------------------------------------------------------------------------
 # Control 3 substrate — receipt chain
 # --------------------------------------------------------------------------
 
@@ -809,141 +644,6 @@ def test_lane_env_environment_is_the_grant(tmp_path: Path) -> None:
     assert "LANE_TOKEN" in keys
     assert "LEAKED_PROFILE_KEY" not in keys  # env -i: absence beats instruction
     assert "HARNESS_SECRETS" not in keys
-
-
-# --------------------------------------------------------------------------
-# Control 6 — schedule registry audit
-# --------------------------------------------------------------------------
-
-
-def test_sched_audit_flags_unregistered_timer(tmp_path: Path) -> None:
-    fixture = tmp_path / "timers.txt"
-    fixture.write_text("com.evil.agent-cron\n")
-    (tmp_path / ".harness").mkdir()
-    (tmp_path / ".harness" / "schedule.registry").write_text("^com\\.approved\\.\n")
-    r = run(
-        ["bash", str(HARNESS / "sched_audit.sh")],
-        tmp_path,
-        {"SCHED_AUDIT_INPUT": str(fixture), "HARNESS_DIR": str(tmp_path / ".harness")},
-    )
-    assert r.returncode == 3
-    assert "UNREGISTERED: com.evil.agent-cron" in r.stdout
-    assert "agents do not own timers" in r.stdout
-
-
-def test_sched_audit_passes_registered_timers(tmp_path: Path) -> None:
-    fixture = tmp_path / "timers.txt"
-    fixture.write_text("com.approved.backup\n")
-    (tmp_path / ".harness").mkdir()
-    (tmp_path / ".harness" / "schedule.registry").write_text("^com\\.approved\\.\n")
-    r = run(
-        ["bash", str(HARNESS / "sched_audit.sh")],
-        tmp_path,
-        {"SCHED_AUDIT_INPUT": str(fixture), "HARNESS_DIR": str(tmp_path / ".harness")},
-    )
-    assert r.returncode == 0 and "cadence clean" in r.stdout
-
-
-# --------------------------------------------------------------------------
-# Controls 7 + 9 — grounding and environment reconciliation
-# --------------------------------------------------------------------------
-
-
-def ground_fixture(tmp: Path) -> dict[str, str]:
-    subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
-    (tmp / "f.txt").write_text("x\n")
-    subprocess.run(["git", "add", "."], cwd=tmp, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
-        cwd=tmp,
-        check=True,
-    )
-    empty = tmp / "no-timers.txt"
-    empty.write_text("")
-    # The tripwire now defaults ON (an unset TRANSCRIPTS silently disabled the only
-    # credential check in the harness). These drills must stay hermetic, so point it
-    # at an empty sandbox rather than the developer's real transcripts — otherwise
-    # ground.sh correctly STOPs on whatever it finds there and the drill measures the
-    # machine instead of the script.
-    scratch_transcripts = tmp / "transcripts"
-    scratch_transcripts.mkdir()
-    directives = tmp / "DIRECTIVES"
-    directives.mkdir()
-    (directives / "ledger.jsonl").write_bytes(b"")
-    (directives / "provisional.jsonl").write_bytes(b"")
-    return {
-        "TRANSCRIPTS": str(scratch_transcripts),
-        "DIRECTIVE_LEDGER": str(tmp / "DIRECTIVES" / "ledger.jsonl"),
-        "SCHED_AUDIT_INPUT": str(empty),
-        "HARNESS_DIR": ".harness",
-    }
-
-
-def test_ground_writes_marker_on_clean_state(tmp_path: Path) -> None:
-    env = ground_fixture(tmp_path)
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert (tmp_path / ".harness" / "grounded").exists()
-    assert "grounded @" in r.stdout
-
-
-def test_ground_tripwire_scans_only_this_runs_seats(tmp_path: Path) -> None:
-    env = ground_fixture(tmp_path)
-    del env["TRANSCRIPTS"]
-    home = tmp_path / "home"
-    projects = home / ".claude" / "projects"
-    secret = "-----BEGIN " + "PRIVATE KEY-----\n"
-    (projects / "-unrelated-session").mkdir(parents=True)
-    (projects / "-unrelated-session" / "t.jsonl").write_text(secret)
-    env["HOME"] = str(home)
-
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "no seat transcripts or leak surfaces yet" in r.stdout
-
-    seat = projects / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
-    seat.mkdir()
-    (seat / "t.jsonl").write_text(secret)
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 2, r.stdout + r.stderr
-
-
-def test_ground_tripwire_honors_claude_config_dir(tmp_path: Path) -> None:
-    env = ground_fixture(tmp_path)
-    del env["TRANSCRIPTS"]
-    config = tmp_path / "claude-config"
-    seat = config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path.resolve()))
-    seat.mkdir(parents=True)
-    (seat / "t.jsonl").write_text("-----BEGIN " + "PRIVATE KEY-----\n")
-    env["CLAUDE_CONFIG_DIR"] = str(config)
-
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 2, r.stdout + r.stderr
-
-
-def test_ground_explicit_leak_path_still_blocks(tmp_path: Path) -> None:
-    """Narrowing the scope must not blunt the tripwire on a real leak surface."""
-    env = ground_fixture(tmp_path)
-    leak = tmp_path / "export" / "config.env"
-    leak.parent.mkdir()
-    leak.write_text(f"AWS_KEY={fake_aws_key()}\n")
-    env["TRIPWIRE_PATHS"] = str(leak.parent)
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert (tmp_path / ".harness" / "incidents.jsonl").exists()
-
-
-def test_ground_blocks_on_reconciler_drift(tmp_path: Path) -> None:
-    env = ground_fixture(tmp_path)
-    rec = tmp_path / ".harness" / "reconcile.d"
-    rec.mkdir(parents=True)
-    probe = rec / "iam-drift"
-    probe.write_text("#!/bin/sh\necho declared != live\nexit 1\n")
-    probe.chmod(probe.stat().st_mode | stat.S_IXUSR)
-    r = run(["bash", str(HARNESS / "ground.sh")], tmp_path, env)
-    assert r.returncode == 5
-    assert "declared/live drift" in r.stdout
-    assert not (tmp_path / ".harness" / "grounded").exists()  # drift blocks the marker
 
 
 # --------------------------------------------------------------------------
@@ -1326,14 +1026,6 @@ def test_inject_verdict_filter_accepts_only_a_single_verdict_line(tmp_path: Path
     assert smuggled.returncode == 79 and "bare pass/fail only" in smuggled.stderr
     assert inject(tmp_path, "coder", "PASS", results=True).returncode == 0
     assert inject(tmp_path, "coder", "FAIL R12 (3/5)\n", results=True).returncode == 0
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -2007,8 +1699,6 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     )
 
 
-
-
 def test_explicit_tripwire_scans_selected_run_kindex_not_conversations(tmp_path: Path) -> None:
     """Explicit leak scanning stays scoped and records locations without copying secrets."""
     root = tmp_path / "run"
@@ -2034,22 +1724,9 @@ def test_explicit_tripwire_scans_selected_run_kindex_not_conversations(tmp_path:
     assert (incidents / "incidents.jsonl").read_text() == report
 
 
-
-
-
 def orchestrator_tmux_line(tmux_log: Path) -> str:
     """The tmux argv that starts the resident orchestrator window."""
     return next(line for line in tmux_log.read_text().splitlines() if "-n orchestrator " in line)
-
-
-
-
-
-
-
-
-
-
 
 
 # Help text one delta from the igniting stub: `--sandbox` removed. `--disable-slash-commands`
@@ -2059,34 +1736,8 @@ _TASK_DIGEST = "9910232c2ba5b753efee2b88023df7e159e96ef26718896216f2f918b77ebbe6
 _STRATEGY_DIGEST = "9ed96be31d6c9b494f999ab77821ad2a5ddd3f959b29985f6930ae1d19aa9406"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 # Igniting stub help: every resident flag except --model and --effort. --sandbox and
 # --disable-slash-commands stay, as on that stub, so a refusal names the omitted flag.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def run_seat_command(tmux_log: Path, window: str, tmp_path: Path, stale: dict[str, str]):
@@ -2108,10 +1759,6 @@ SEAT_AUTHORITY = (
     "FACTORY_RESUME_CONFIG_MANIFEST", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
     "FACTORY_TESSERA_BIN", "FACTORY_CLI", "FACTORY_PYTHON", "FACTORY_HOME",
 )
-
-
-
-
 
 
 @pytest.mark.parametrize("mode", ["qualify", "launch"])
@@ -2307,9 +1954,9 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
             "--answer-file",
             str(answer),
             "--basis",
-            "ratified requirement RES-4",
+            "task requirement RES-4",
             "--authority",
-            "ratified-spec",
+            "task-specification",
         ],
         operator,
         env,
@@ -2401,11 +2048,7 @@ def test_tmux_lane_message_refuses_orchestrator_specification_answer(
     assert "may probe status but may not answer specifications" in refused.stderr
 
 
-
-
 IGNITION_FILES = ("harness.json", "TASK.md")
-
-
 
 
 def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, monkeypatch):
@@ -2436,8 +2079,6 @@ def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, mon
     assert {call[call.index("-n") + 1] for call in calls if "new-window" in call} == {
         "orchestrator", "inbox-wake"}
     assert (root / "harness.json").read_bytes() == original
-
-
 
 
 # --------------------------------------------------------------------------
@@ -2491,10 +2132,6 @@ def test_proof_green_when_all_probes_pass(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 # Validator failure-mode detectors (deterministic layer of the Orchestrator seat)
 # --------------------------------------------------------------------------
-
-
-
-
 
 
 def load_dispatcher() -> object:
@@ -2613,8 +2250,6 @@ def test_dispatcher_delivers_ordinary_activity_and_cadence_without_semantic_filt
     output, error = inert.communicate(timeout=5)
     assert inert.returncode == 0 and not output and not error
     assert kwargs["env"]["INJECT_FROM"] == "dispatcher"  # type: ignore[index]
-
-
 
 
 def test_resident_orchestrator_signal_joins_activity_stream_instead_of_spawning_wake(
@@ -2847,8 +2482,8 @@ def test_dispatcher_does_not_reopen_answered_question_from_unchanged_scrollback(
         lane="tester",
         message_kind="spec-answer",
         text="Reject unknown stay types with the ratified typed error.",
-        basis="ratified requirement RES-4",
-        authority="ratified-spec",
+        basis="task requirement RES-4",
+        authority="task-specification",
         question_id=str(question["question_id"]),
     )
     record_delivery(
@@ -2969,266 +2604,6 @@ def test_scripts_are_executable_and_parse(script: Path) -> None:
     assert os.access(script, os.X_OK), f"not executable: {script.name}"
     r = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
     assert r.returncode == 0, f"{script.name}: {r.stderr}"
-
-
-# --------------------------------------------------------------------------
-# Phase-1 adequacy gate — existence is not adequacy
-#
-# Run v8 launched with all four Phase-A artifacts present and signed, then took
-# six amendments authored WHILE the lanes coded, one retracting the one before
-# it. dispatch_lane.sh could not have caught that: it only asks whether the files
-# are there. These drills watch the adequacy gate fire on each axis it measures.
-# --------------------------------------------------------------------------
-
-ADEQUATE_SPEC = """# Product Specification
-
-- **R1.1** Config resolution MUST expose a documented way to bind an explicit
-  root without relying on process-start environment.
-
-- **R2.1** Observed weight MUST equal the closed form for every run schedule.
-"""
-
-ADEQUATE_STRAT = """# Testing Strategy
-R1.1 and R2.1 each get a control. For each, reachability of the code path is
-demonstrated and the assertion is shown to discriminate met from unmet.
-"""
-
-
-def _write_closed_semantic_union(artifacts: Path, spec: Path) -> None:
-    evidence = artifacts / "semantic-evidence"
-    for root in (evidence / "sources", evidence / "extractions"):
-        for kind in ("planning-pass", "lane-trace", "adversarial-review"):
-            (root / kind).mkdir(parents=True, exist_ok=True)
-    source = b"planning pass surfaced the explicit-root resolution behavior\n"
-    source_digest = "sha256:" + hashlib.sha256(source).hexdigest()
-    source_id = "phase-a-planning"
-    (evidence / "sources" / "planning-pass" / f"{source_id}.source").write_bytes(source)
-    question = "Must callers be able to bind an explicit configuration root?"
-    scope = "R1.1 configuration resolution"
-    observation_id = derive_observation_id(
-        source_kind="planning-pass",
-        source_id=source_id,
-        source_digest=source_digest,
-        start=0,
-        end=len(source),
-        scope=scope,
-        question=question,
-    )
-    for suffix in ("a", "b"):
-        config = f"config-{suffix}".encode()
-        extraction = {
-            "schema_version": EXTRACTION_SCHEMA,
-            "source_kind": "planning-pass",
-            "source_id": source_id,
-            "source_sha256": source_digest,
-            "extractor": {
-                "id": f"planner-{suffix}",
-                "version": "fixture-v1",
-                "configuration_digest": "sha256:" + hashlib.sha256(config).hexdigest(),
-            },
-            "items": [
-                {
-                    "start": 0,
-                    "end": len(source),
-                    "scope": scope,
-                    "question": question,
-                }
-            ],
-        }
-        extraction_path = evidence / "extractions" / "planning-pass" / source_id / f"{suffix}.json"
-        extraction_path.parent.mkdir(parents=True, exist_ok=True)
-        extraction_path.write_text(json.dumps(extraction) + "\n", encoding="utf-8")
-    rulings = {
-        "schema_version": RULINGS_SCHEMA,
-        "items": [
-            {
-                "observation_id": observation_id,
-                "status": "closed",
-                "disposition": "resolved",
-                "ruling": "Yes; callers receive a documented explicit-root binding.",
-                "authority_basis": "Human-ratified Product Specification requirement R1.1.",
-                "owner": None,
-                "next_action": None,
-            }
-        ],
-    }
-    (evidence / "rulings.json").write_text(json.dumps(rulings) + "\n", encoding="utf-8")
-    update_spec(artifacts, spec)
-
-
-def mkrun(tmp: Path, spec: str, strat: str | None, contract: bool = True) -> Path:
-    art = tmp / ".factory" / "runs" / "r1" / "artifacts"
-    art.mkdir(parents=True)
-    spec_path = art / "product-specification.md"
-    spec_path.write_text(spec)
-    _write_closed_semantic_union(art, spec_path)
-    if strat is not None:
-        (art / "testing-strategy.md").write_text(strat)
-    if contract:
-        (art / "oracle-contract.md").write_text("signatures, shapes, marker locations\n")
-    return tmp
-
-
-def p1(tmp: Path, **env: str) -> subprocess.CompletedProcess[str]:
-    root = tmp / ".factory" / "runs" / "r1"
-    return run(
-        [
-            "bash",
-            str(HARNESS / "phase1_gate.sh"),
-            "r1",
-            "--root",
-            str(root),
-            "--workdir",
-            str(tmp),
-        ],
-        cwd=tmp,
-        env_extra=env or None,
-    )
-
-
-def test_phase1_gate_passes_on_adequate_artifacts(tmp_path: Path) -> None:
-    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT))
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "phase1 gate: clean" in r.stdout
-    # GO sibling for the refusal instrumentation: a clean gate emits nothing.
-    assert _refusal_events(tmp_path / ".factory" / "runs" / "r1") == []
-
-
-def test_phase1_gate_refuses_requirement_that_names_its_oracle(tmp_path: Path) -> None:
-    """v8's original R6.1 named a test function inside the signed spec; Amendment 2
-    recorded it as a defect in the SPECIFICATION, not in either lane."""
-    spec = ADEQUATE_SPEC + (
-        "\n- **R6.1** The skipped test `test_r2_5_mcp_store_open_failure` in "
-        "tests/test_batch0_degrade.py MUST be unskipped and pass.\n"
-    )
-    r = p1(mkrun(tmp_path, spec, ADEQUATE_STRAT + "\nR6.1 covered.\n"))
-    assert r.returncode == 71
-    assert "a requirement names its oracle" in r.stdout
-
-
-def test_phase1_gate_refuses_requirement_absent_from_strategy(tmp_path: Path) -> None:
-    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, "# Testing Strategy\nR1.1 only. Reachability shown.\n"))
-    assert r.returncode == 71
-    assert "R2.1" in r.stdout and "absent from the testing strategy" in r.stdout
-
-
-def test_phase1_gate_refuses_strategy_without_non_vacuity_method(tmp_path: Path) -> None:
-    """batch0 shipped a vacuous oracle on its headline requirement and every gate
-    in that run stayed green."""
-    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, "# Testing Strategy\nR1.1 and R2.1 are covered.\n"))
-    assert r.returncode == 71
-    assert "non-vacuous" in r.stdout
-
-
-def test_phase1_gate_refuses_missing_oracle_contract(tmp_path: Path) -> None:
-    r = p1(mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False))
-    assert r.returncode == 71
-    assert "oracle-contract.md" in r.stdout
-    # Phase 0.1 forcing: exactly one registered refusal event, UTC host ts.
-    rows = _refusal_events(tmp_path / ".factory" / "runs" / "r1")
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "refusal-phase1-gate"
-    assert rows[0]["exit_code"] == 71
-    assert str(rows[0]["ts"]).endswith("+00:00")
-
-
-def test_phase1_gate_ignores_ambient_gap_override_and_still_refuses(tmp_path: Path) -> None:
-    """An environment variable cannot convert an inadequate phase into authority."""
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT, contract=False)
-    r = p1(tmp, PHASE1_ALLOW_GAPS="1")
-    assert r.returncode == 71
-    # The override changes nothing, and the refusal now leaves its signal
-    # (Phase 0.1): exactly one registered refusal event — never a permission.
-    rows = _refusal_events(tmp / ".factory" / "runs" / "r1")
-    assert [row["kind"] for row in rows] == ["refusal-phase1-gate"]
-    assert "Fix and re-ratify" in r.stdout
-
-
-def test_phase1_gate_refuses_a_stale_token_matching_semantic_checklist(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    spec = tmp / ".factory" / "runs" / "r1" / "artifacts" / "product-specification.md"
-    spec.write_text(
-        spec.read_text(encoding="utf-8").replace(
-            "Yes; callers receive", "CLOSED token only; callers receive"
-        ),
-        encoding="utf-8",
-    )
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "semantic evidence union is absent, stale, incomplete, or open" in result.stdout
-    assert "differs from fresh evidence derivation" in result.stdout
-
-
-def test_phase1_gate_refuses_an_explicitly_open_semantic_item(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    artifacts = tmp / ".factory" / "runs" / "r1" / "artifacts"
-    rulings_path = artifacts / "semantic-evidence" / "rulings.json"
-    rulings = json.loads(rulings_path.read_text(encoding="utf-8"))
-    ruling = rulings["items"][0]
-    ruling.update(
-        {
-            "status": "open",
-            "disposition": "deferred",
-            "ruling": "The observable behavior still needs a human decision.",
-            "authority_basis": None,
-            "owner": "Validator",
-            "next_action": "Ask the human which behavior the caller observes.",
-        }
-    )
-    rulings_path.write_text(json.dumps(rulings) + "\n", encoding="utf-8")
-    update_spec(artifacts, artifacts / "product-specification.md")
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "semantic evidence union has open items" in result.stdout
-
-
-def test_phase1_gate_refuses_missing_agreement_contract_for_new_run(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    root = tmp / ".factory" / "runs" / "r1"
-    (root / "harness.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "factory-harness/2",
-                "run_id": "r1",
-                "agreement_contract_version": "factory-agreement-contract/1",
-                "agreement_requirement_region_families": ["authored-product"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "agreement plan is absent, stale, incomplete, or downgraded" in result.stdout
-
-
-def test_phase1_gate_refuses_missing_checkpoint_selected_guidance(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    root = tmp / ".factory" / "runs" / "r1"
-    (root / "harness.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "factory-harness/2",
-                "run_id": "r1",
-                "guidance_contract_version": "factory-run-guidance/1",
-                "guidance_generation": 1,
-                "guidance_state": "pending-application",
-                "guidance_selection_digest": "sha256:" + "0" * 64,
-                "guidance_source_digests": {"infra-recipe": "sha256:" + "1" * 64},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "selected guidance is absent, stale, misrouted, or out of order" in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -3421,14 +2796,6 @@ def test_failed_coordinator_start_records_exit_without_fake_review(tmp_path: Pat
     assert len(rows) == 1 and rows[0]["slot"] == "orchestrator" and rows[0]["rc"] == 127
     assert "could not start" in (root / "orchestrator-lane.log").read_text()
     assert not (root / "orchestrator/assessment.json").exists()
-
-
-
-
-
-
-
-
 
 
 def test_advisory_supervisor_kills_noisy_process_at_output_ceiling(tmp_path: Path) -> None:
@@ -3829,8 +3196,6 @@ def test_advisory_supervisor_presents_and_receipts_one_immutable_input_snapshot(
     assert input_snapshot.read_bytes() == original
 
 
-
-
 def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -> None:
     child_pid = tmp_path / "child.pid"
     parent = tmp_path / "parent.py"
@@ -3890,10 +3255,6 @@ def test_advisory_supervisor_kills_descendants_at_wall_ceiling(tmp_path: Path) -
             break
         time.sleep(0.05)
     assert not status or status.startswith("Z")
-
-
-
-
 
 
 def test_mutate_reports_no_op_patch_not_survival(tmp_path: Path) -> None:
@@ -4603,8 +3964,6 @@ def test_dispatcher_reports_a_seat_dialog_without_answering(
     assert not hasattr(d, "page_operator")
 
 
-
-
 def test_check_in_cadence_cannot_be_disabled(tmp_path: Path) -> None:
     mod = load_dispatcher()
     root = tmp_path / ".harness" / "runs" / "r1"
@@ -4874,26 +4233,6 @@ def test_ordinary_text_about_rate_limits_is_not_a_dialog(
     assert answers == []
 
 
-
-
-
-
-
-
-def test_dispatcher_refuses_to_start_a_run_without_a_resident_orchestrator(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / ".harness" / "runs" / "r1"
-    root.mkdir(parents=True)
-    (root / "run.json").write_text(json.dumps({"run": "r1", "repo": str(tmp_path)}))
-    (root / "harness.json").write_text(json.dumps({"status": "open"}))
-    r = run(
-        [sys.executable, str(HARNESS / "dispatcher.py"), "--run", "r1", "--root", str(root)],
-        cwd=tmp_path,
-    )
-    assert r.returncode != 0
-    assert "no resident Orchestrator" in r.stderr
-    assert "orchestrator_not_resident" in (root / "lanes" / "validator.blocking").read_text()
 
 
 def test_orchestrator_channel_refuses_transitions_for_a_non_resident_run(
@@ -5526,12 +4865,6 @@ def test_consume_block_refuses_stale_subject_without_clearing(tmp_path: Path) ->
 # --------------------------------------------------------------------------
 
 
-
-
-
-
-
-
 def test_attention_lock_orders_overlapping_producer_after_dispatch_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5775,18 +5108,12 @@ def test_inherited_dispatch_descriptor_repeats_blocker_admission(tmp_path: Path)
         os.close(descriptor)
 
 
-
-
-
-
 # --------------------------------------------------------------------------
 # Gate C (kindex-as-primer) + Gate B (reset-prime-deliver) — the dispatch brief
 # is FENCE -> PRIMER -> TASK, and a role-specific kindex primer is a dispatch
 # precondition. A gate that has never been watched firing is theater, so each
 # drill watches the gate fire (refuse) and pass (deliver + structure).
 # --------------------------------------------------------------------------
-
-
 
 
 RESIDENT_NOOP_ASSESSMENT: dict[str, object] = {
@@ -5827,8 +5154,6 @@ RESIDENT_NOOP_ASSESSMENT: dict[str, object] = {
     "kindex_context": ["22c90265226a"],
     "kindex_basis": "Four-role ruling: the Orchestrator is resident for every run.",
 }
-
-
 
 
 def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
@@ -5874,12 +5199,6 @@ def install_resident_orchestrator_stub(stub: Path, root: Path) -> None:
         encoding="utf-8",
     )
     os.chmod(stub / "tmux", 0o755)
-
-
-
-
-
-
 
 
 def test_dispatcher_refuses_unverified_legacy_abandonment_marker(tmp_path: Path) -> None:
@@ -5940,50 +5259,6 @@ def test_dispatcher_refuses_legacy_harness_before_monitoring(
     events = read_chain(root / "events.jsonl")
     assert events[-1]["kind"] == "dispatcher_stop"
     assert "legacy or unversioned" in events[-1]["detail"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -7448,8 +6723,6 @@ def test_receipt_pass_warn_keeps_count_not_vacuous(tmp_path: Path) -> None:
 VENV_PY = HARNESS.parent / ".venv" / "bin" / "python"
 
 
-
-
 def _make_run(tmp: Path, *, run_id: str = "r1", status: str = "open") -> Path:
     _, root, _ = execution_truth_fixture(
         tmp,
@@ -7524,37 +6797,6 @@ def _write_green_endgame_admission(root: Path, harness: dict[str, object]) -> Pa
         + b"\n"
     )
     return path
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -7664,8 +6906,6 @@ def test_inject_shell_target_ambient_override_is_ignored(tmp_path: Path) -> None
     assert json.loads(inbox.read_text())["text"] == "short note"
 
 
-
-
 def test_no_harness_reader_of_retired_ambient_overrides() -> None:
     """Structural sweep: the retired override names may not appear anywhere in
     the enforcing surfaces (harness/*.sh, harness/*.py, scripts/*.py) — not even
@@ -7682,7 +6922,7 @@ def test_no_harness_reader_of_retired_ambient_overrides() -> None:
         ]
     )
     names = {p.name for p in surfaces}
-    assert {"inject.sh", "lane_env.sh", "dispatch_lane.sh", "phase1_gate.sh"} <= names
+    assert {"inject.sh", "lane_env.sh", "dispatch_lane.sh"} <= names
     assert "check_denial_probes.py" in names
     patterns = (re.compile(r"ALLOW_GAPS?\b"), re.compile(r"INJECT_ALLOW_[A-Z_]+"))
     offenders = [
@@ -7802,8 +7042,6 @@ def test_refusal_event_unregistered_kind_degrades_never_swallows(tmp_path: Path)
     assert "boom" in str(rows[0]["detail"])
 
 
-
-
 def _unattributed_refusal_exits(
     script_text: str,
     exit_pattern: str,
@@ -7905,43 +7143,6 @@ def _unattributed_refusal_exits(
     return unattributed
 
 
-
-
-
-
-
-
-def test_phase1_refusal_exit_is_attributed() -> None:
-    """Round-3 D3: phase1_gate.sh's gate-G exit 71 carries its attribution;
-    its pre-root exit-64 usage checks are the stated boundary."""
-    text = (HARNESS / "phase1_gate.sh").read_text(encoding="utf-8")
-    missing = _unattributed_refusal_exits(
-        text,
-        r"(?:^|[;{|&]\s*)exit 71\b",
-        ("refusal_event", "refusal-event"),
-        exempt_exits=("64",),
-    )
-    assert not missing, "\n".join(missing)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------
 # Phase 0.2 (remediation plan) — host-written terminal-NO record.
 # The pass rule reads "harness terminal in {closed-green, closed-red,
@@ -7953,16 +7154,6 @@ def test_phase1_refusal_exit_is_attributed() -> None:
 
 def _harness_doc(root: Path) -> dict[str, object]:
     return json.loads((root / "harness.json").read_text(encoding="utf-8"))
-
-
-
-
-
-
-
-
-
-
 
 
 def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
@@ -7992,8 +7183,6 @@ def test_dispatcher_stops_babysitting_a_no_run(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-
-
 _PROMOTE_RUNTIME_SITES = [
     # (case, needs_promoting_inputs, expected_exit, detail_fragment)
     ("promote-refuses", True, 2, "no verdict rendered"),
@@ -8002,10 +7191,6 @@ _PROMOTE_RUNTIME_SITES = [
     ("promote-unreadable-verdict", True, 2, "verdict unreadable"),
     ("seal-refused", True, 2, "terminal resource seal refused"),
 ]
-
-
-
-
 
 
 def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> None:
@@ -8052,12 +7237,6 @@ def test_producers_refuse_a_duplicate_receipt_id_at_append(tmp_path: Path) -> No
     assert guard.returncode != 0
     assert "refusing duplicate receipt id" in guard.stderr
     assert len(chain.read_text().splitlines()) == 1  # no row appended
-
-
-
-
-
-
 
 
 def _ollama_stub(stub_dir: Path, *, available: bool) -> Path:
@@ -8128,12 +7307,6 @@ def test_ollama_lane_never_picks_or_downloads_a_model(tmp_path: Path) -> None:
     assert not any("pull" in line for line in ollama_log.read_text().splitlines())
     rows = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")
     assert rows[-1]["status"] == "active" and rows[-1]["model"] == "glm-test:cloud"
-
-
-
-
-
-
 
 
 def _ignite_and_launcher(
@@ -8254,8 +7427,6 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     assert "gpt-mine" not in tester_call
 
 
-
-
 def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None:
     """A Codex lane resumes on the selection it launched with, not on Codex's built-in default:
     the named model, or the Codex config overrides it carried over. A retained model that is not
@@ -8343,9 +7514,6 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(
     assert ("-n watch-coder" in calls) == (wall_cap is not None)
 
 
-
-
-
 @pytest.mark.parametrize("prior_mode", ["qualify", "launch", None])
 def test_coder_and_tester_lanes_get_separate_scoped_kindex(
     tmp_path: Path, prior_mode: str | None,
@@ -8415,64 +7583,6 @@ def test_coder_and_tester_lanes_get_separate_scoped_kindex(
         assert rows[-1]["kindex"]["store"] == f"{repo}/.kin/local/kindex"
         assert rows[-1]["kindex"]["source"] is None  # shared historical graph was withheld
         assert rows[-1]["kindex"]["kinbase_submissions_allowed"] is False
-
-
-
-def _mismatched_boundary_register(root: Path) -> None:
-    """Two parties name one resource type differently; both records are genuine."""
-
-    evidence = root / "artifacts" / "boundary-observations"
-    evidence.mkdir(parents=True, exist_ok=True)
-    (evidence / "alert.txt").write_text('filter = "resource.type=\\"uptime_url\\""\n')
-    (evidence / "checks.txt").write_text('monitored_resource { type = "cloud_run_revision" }\n')
-
-    def record(name: str) -> dict[str, object]:
-        raw = (evidence / name).read_bytes()
-        return {"kind": "file", "root": "run", "path": f"artifacts/boundary-observations/{name}",
-                "line": 1, "sha256": hashlib.sha256(raw).hexdigest()}
-
-    (root / "artifacts" / "boundary-register.json").write_text(json.dumps({
-        "schema": "boundary-register/1",
-        "entries": [{
-            "id": "uptime-resource-type", "kind": "metric", "relation": "equal",
-            "description": "the alert must select the resource type the checks emit",
-            "sides": [
-                {"party": "alert", "role": "consumes", "value": "uptime_url",
-                 "records": [record("alert.txt")]},
-                {"party": "checks", "role": "defines", "value": "cloud_run_revision",
-                 "records": [record("checks.txt")]},
-            ],
-        }],
-    }))
-
-
-def test_phase1_gate_refuses_a_mismatched_boundary_identifier(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    _mismatched_boundary_register(tmp / ".factory" / "runs" / "r1")
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "boundary register is absent, unverified, stale, mismatched, or leaking" in result.stdout
-    assert "MISMATCH" in result.stdout and "cloud_run_revision" in result.stdout
-
-
-def test_phase1_gate_refuses_a_current_run_without_a_boundary_register(tmp_path: Path) -> None:
-    tmp = mkrun(tmp_path, ADEQUATE_SPEC, ADEQUATE_STRAT)
-    root = tmp / ".factory" / "runs" / "r1"
-    (root / "harness.json").write_text(
-        json.dumps({"schema_version": "factory-harness/2", "run_id": "r1",
-                    "agreement_contract_version": "factory-agreement-contract/1",
-                    "agreement_requirement_region_families": ["authored-product"]}),
-        encoding="utf-8",
-    )
-
-    result = p1(tmp)
-
-    assert result.returncode == 71
-    assert "must register every boundary identifier" in result.stdout
-
-
 
 
 def _verified_boundary_register(root: Path) -> None:

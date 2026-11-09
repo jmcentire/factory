@@ -55,7 +55,6 @@ from factory_runtime.evidence_plane import (
 from factory_runtime.generation import build_input_document, verify_prepared_generation
 from factory_runtime.orchestrator import BuildOutcome, FactoryOrchestrator, OrchestrationError
 from factory_runtime.repair import RepairBrief, RepairPlan, RepairPolicy, RepairSupervisor
-from factory_runtime.resources import ResourceLedger
 from factory_runtime.resume import derive_resume_checkpoint
 from factory_runtime.snapshot import tree_digest, verify_frozen_tree
 from factory_runtime.state import RunState, RunStateError, RunStore
@@ -1257,52 +1256,3 @@ def test_real_runtime_reaches_preview_through_authority_isolation_tests_and_evid
         expected_digest=outcome.execution.coder_snapshot.digest,
     )
     assert tree_digest(coder_snapshot.files_directory / "artifact") == outcome.candidate_digest
-
-    # The optional historical runtime replays PREVIEW through its explicit CLI,
-    # not through the ordinary task loader. Missing external anchors must still fail.
-    repository_root = Path(__file__).resolve().parents[1]
-    anchors = ["--genesis", str(genesis_path), "--root-public-key", root_public_key,
-               "--tessera-bin", str(binary.resolve(strict=True))]
-
-    def replay(command: str, *arguments: str, anchored: bool = True):
-        return subprocess.run(
-            [sys.executable, "-m", "factory_runtime.cli", command,
-             "--runs", str(workflow.root), "--run-id", "synthetic-run",
-             *(anchors if anchored else []), *arguments],
-            cwd=repository_root, capture_output=True, text=True,
-        )
-
-    checkpoint = replay(
-        "verify-resume-checkpoint", "--checkpoint", str(resume_checkpoint),
-        "--checkpoint-digest", digest_obj(resume_checkpoint_document),
-        "--config-source", f"runner={resume_config.resolve()}",
-    )
-    assert checkpoint.returncode == 0, checkpoint.stderr
-    post_preview_resource = tmp_path / "post-preview-resource"
-    post_preview_resource.mkdir()
-    resource_arguments = [
-        "--resource-id", "post-preview-proof", "--resource-type", "object-store",
-        "--identifier", str(post_preview_resource), "--creator-action", "integration-test",
-        "--ownership", "run-owned", "--baseline-json", '{"absent_at_plan":true}',
-        "--status", "planned", "--actor", "integration-test",
-    ]
-    refused = replay("record-resource", *resource_arguments, anchored=False)
-    assert refused.returncode != 0
-    assert "post-preview-proof" not in ResourceLedger(
-        workflow.root / "synthetic-run", "synthetic-run",
-    ).latest()
-    recorded = replay("record-resource", *resource_arguments)
-    assert recorded.returncode == 0, recorded.stderr
-    for status in ("failed", "retained"):
-        disposition = replay(
-            "disposition-resource", "--resource-id", "post-preview-proof",
-            "--status", status, "--reason", f"{status} authenticated replay proof",
-            "--residue", "true", "--actor", "integration-test",
-        )
-        assert disposition.returncode == 0, disposition.stderr
-    retained_resource = ResourceLedger(
-        workflow.root / "synthetic-run",
-        "synthetic-run",
-    ).latest()["post-preview-proof"]
-    assert retained_resource["status"] == "retained"
-    assert retained_resource["identifier"] == str(post_preview_resource)

@@ -1412,8 +1412,9 @@ def test_a_coder_prompt_carries_its_clock_and_its_review_cadence(
     delivery = lanes.root / "tmux-lanes" / "coder-delivery.env"
     assert delivery.stat().st_mode & 0o777 == 0o600
     recorded = dict(line.split("=", 1) for line in delivery.read_text().splitlines())
-    assert {"PATH", "FACTORY_CLI", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
-            "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CONFIG_MANIFEST"} <= set(recorded)
+    assert {"PATH", "FACTORY_PYTHON", "FACTORY_RUNS_DIR"} <= set(recorded)
+    assert not ({"FACTORY_CLI", "FACTORY_GENESIS", "FACTORY_ROOT_PUBLIC_KEY",
+                 "FACTORY_RESUME_CHECKPOINT", "FACTORY_RESUME_CONFIG_MANIFEST"} & set(recorded))
 
 
 def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(

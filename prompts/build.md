@@ -9,7 +9,7 @@
 > a verdict*, and the independence claim is false.
 >
 > **Use the four-role factory instead for anything non-trivial:** **`/validate`** (Validator —
-> owns the human relationship, the signed artifacts, running the tests, and the verdict)
+> owns the human relationship, the task inputs, running the tests, and the verdict)
 > dispatches **`/engineer`** (Coder) and **`/test`** (Tester), which share the specification and
 > have no channel to each other, while the resident **`/orchestrate`** (Orchestrator) watches
 > every lane.
@@ -84,10 +84,6 @@ Arguments: $ARGUMENTS
    dispatched this prompt, never by this file; it names no account and no key variable. If
    the loader states none, use the active identity and record which one you pushed as.
 4. Create the working directory `$BUILD_DIR`
-5. If the target has no `.factory/keys/genesis.tessera.json`, start the project as
-   `$FACTORY_HOME/prompts/validate.md` *Starting a project* says: `factory init` mints every
-   worker's key; the human signs nothing, and their messages are the authority
-   (`docs/standards/AUTHORITY.md`).
 
 ### Context gathering (parallel where possible)
 - **Task details:** the tracker ticket (a local ticket cache first, if the loader names one), GitHub issue (`gh issue view`), or parse plain-language description
@@ -376,7 +372,7 @@ Mark task 8 complete.
 **Testing:** (`$FACTORY_HOME/docs/standards/TESTING.md`)
 - [ ] Every invariant has a test citing it, of the kind T5 assigns, at the cheapest layer that can expose it (T6)
 - [ ] Every test names its falsifier and was seen red (T31); a repair was red first (T32)
-- [ ] No patching, no flake held green by retry or sleep (T16, T33)
+- [ ] Every new test obeys the standard; no new or expanded patching violations (T16), with unchanged legacy violations accounted for under T28; no flake held green by retry or sleep (T33)
 - [ ] All tests pass, and the evidence is reported per invariant, not as a count (T40)
 
 **Documentation:**

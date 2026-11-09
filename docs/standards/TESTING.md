@@ -172,6 +172,8 @@ The Coder owns these. The Tester raises a testability defect when a contract mak
 
 **T28. Exceptions are data.** An exception names the policy, the target, the reason, an owner, the compensating evidence and an expiry. An expired exception fails. For legacy code, list the existing violations, refuse new ones, and let the list only shrink.
 
+For tests, establish that baseline from the run's pinned original base commit and record the specific tests and violations, with their base provenance, in the existing review. Unchanged legacy test violations alone do not block unrelated work or require a new per-run approval. Every newly created test must obey the standard, including a test added to an existing file or copied from a legacy test; repository convention grants no exception. Reject new or expanded violations, even when the same unit or dependency was already mocked. Retaining a legacy test does not make it adequate evidence for changed behavior; assess the affected claim's coverage and remaining risk separately.
+
 The worked case: *all I/O to external APIs captures the raw request and response.*
 
 ```yaml

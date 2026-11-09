@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-import factory_runtime.cli as runtime_cli
 from factory_core.manifest import digest_obj
 from factory_runtime.instruction_control import (
     InstructionControlError,
@@ -142,81 +141,6 @@ def test_effective_contract_cannot_be_future_dated() -> None:
             current_time=NOW - 1,
         )
     assert future.value.code == "FUTURE_CONTRACT"
-
-
-def test_prepare_lane_dispatch_recovers_exact_effective_contract_after_partial_publication(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ledger = tmp_path / "ledger.jsonl"
-    provisional = tmp_path / "provisional.jsonl"
-    doctrine = tmp_path / "doctrine.md"
-    dispatch = tmp_path / "dispatch.json"
-    output = tmp_path / "instruction-inputs"
-    ledger.write_bytes(b"")
-    provisional.write_bytes(b"")
-    doctrine.write_text(
-        "## Shared foundation\nshared\n\n"
-        "## Directive — Validator\nvalidator\n\n"
-        "## Directive — Coder\ncoder\n\n"
-        "## Directive — Tester\ntester\n",
-        encoding="utf-8",
-    )
-    dispatch.write_text(
-        json.dumps(
-            {
-                "schema_version": "factory-lane-dispatch/1",
-                "run_id": "run-1",
-                "generation": 2,
-                "role": "coder",
-                "semantic_clearance": False,
-                "interpretation": {
-                    "restated_request": "Implement the exact objective.",
-                    "operational_consequence": "Return a bounded handoff.",
-                    "ambiguity": "none",
-                },
-                "directive_readback": [],
-                "task": "Implement the authorized behavior.",
-            }
-        ),
-        encoding="utf-8",
-    )
-    arguments = [
-        "prepare-lane-dispatch",
-        "--dispatch",
-        str(dispatch),
-        "--directive-ledger",
-        str(ledger),
-        "--directive-provisional",
-        str(provisional),
-        "--role-doctrine",
-        str(doctrine),
-        "--run-id",
-        "run-1",
-        "--generation",
-        "2",
-        "--role",
-        "coder",
-        "--effective-directives-output",
-        str(output / "effective.json"),
-        "--role-contract-output",
-        str(output / "role.json"),
-        "--readback-output",
-        str(output / "readback.json"),
-        "--task-output",
-        str(output / "task.txt"),
-    ]
-    monkeypatch.setattr(runtime_cli.time, "time", lambda: NOW)
-    assert runtime_cli.main(arguments) == 0
-    effective = (output / "effective.json").read_bytes()
-
-    # Simulate a crash after the first canonical publication and before the remaining files.
-    for name in ("role.json", "readback.json", "task.txt"):
-        (output / name).unlink()
-    monkeypatch.setattr(runtime_cli.time, "time", lambda: NOW + 86_400)
-    assert runtime_cli.main(arguments) == 0
-    assert (output / "effective.json").read_bytes() == effective
-    assert all((output / name).is_file() for name in ("role.json", "readback.json", "task.txt"))
 
 
 def test_tamper_and_noncanonical_supersession_refuse() -> None:

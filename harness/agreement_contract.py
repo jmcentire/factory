@@ -3,7 +3,7 @@
 
 The contract is testing IR, not a fourth intent authority.  It closes membership over the
 explicit Product-requirement region families named at ignition, derives single/cross-path from a
-retained participant inventory, and renders one deterministic register into the ratified Testing
+retained participant inventory, and renders one deterministic register into the Testing
 and Monitoring Strategy.  Phase-C evidence is exact-subject: mismatch witnesses bind the
 candidate plus the local-suite and agreement-oracle byte digests they compared.
 
@@ -14,14 +14,12 @@ never clear a Critical requirement.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
 import pathlib
 import re
 import stat
-import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -710,7 +708,7 @@ def update_strategy(root: pathlib.Path, artifacts: pathlib.Path) -> AgreementPla
     strategy = artifacts / "testing-strategy.md"
     if strategy.with_name(strategy.name + ".digest").exists():
         raise AgreementContractError(
-            "refusing to rewrite a ratified Testing Strategy; supersede it before signing"
+            "refusing to rewrite a frozen Testing Strategy; create a new artifact version"
         )
     raw = _read_regular(strategy, ceiling=MAX_ARTIFACT_BYTES)
     try:
@@ -974,55 +972,3 @@ def _summary(plan: AgreementPlan | None) -> dict[str, Any]:
         "participant_inventory_digest": plan.inventory_digest,
         "agreement_contract_digest": plan.contract_digest,
     }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "command",
-        choices=("inspect", "render", "update-strategy", "verify-plan", "verify-evidence"),
-    )
-    parser.add_argument("--root", type=pathlib.Path, required=True)
-    parser.add_argument("--artifacts", type=pathlib.Path, required=True)
-    parser.add_argument("--candidate-sha")
-    arguments = parser.parse_args()
-    try:
-        if arguments.command == "update-strategy":
-            plan = update_strategy(arguments.root, arguments.artifacts)
-            print(json.dumps(_summary(plan), sort_keys=True))
-        elif arguments.command == "verify-plan":
-            plan = verify_plan(arguments.root, arguments.artifacts)
-            print(json.dumps(_summary(plan), sort_keys=True))
-        elif arguments.command == "verify-evidence":
-            if not arguments.candidate_sha:
-                raise AgreementContractError("verify-evidence requires --candidate-sha")
-            evidence = verify_evidence(
-                arguments.root,
-                arguments.artifacts,
-                candidate_sha=arguments.candidate_sha,
-            )
-            print(
-                json.dumps(
-                    {
-                        "required": evidence is not None,
-                        "verified": evidence is not None,
-                        "schema_version": EVIDENCE_SCHEMA,
-                    },
-                    sort_keys=True,
-                )
-            )
-        else:
-            plan = load_plan(arguments.root, arguments.artifacts)
-            if arguments.command == "render":
-                if plan is not None:
-                    sys.stdout.write(render_section(plan))
-            else:
-                print(json.dumps(_summary(plan), sort_keys=True))
-    except AgreementContractError as exc:
-        print(f"agreement contract refused: {exc}", file=sys.stderr)
-        return 71
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

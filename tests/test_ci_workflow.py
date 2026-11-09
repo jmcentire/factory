@@ -25,7 +25,6 @@ def test_both_ci_platforms_run_every_tessera_gated_test_file() -> None:
     target = makefile.split("test-tessera:", 1)[1].split("\nlint:", 1)[0]
     assert {
         "tests/test_tessera_cli_integration.py",
-        "tests/test_build_and_validate_cli.py",
         "tests/test_repair_ceremony.py",
         "tests/test_trust_root.py",
     } <= set(target.split())
