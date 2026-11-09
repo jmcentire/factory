@@ -135,6 +135,8 @@ A failing generated case is recorded with its seed and kept as a permanent examp
 
 **T16. Substitute at declared seams. Never patch.** No monkey patching, no module replacement, no reaching into privates. With duck typing a patched test can pass while exercising nothing real. It verifies that you can patch. If a test cannot run without patching, the dependency was not passed in (W7). Raise a testability defect. The same holds in reverse: production code never asks whether it is under test. A branch on a test flag or environment is a second implementation that only the tests run. It is a structural policy (T25).
 
+*Legacy tests.* A test that exists at the base commit may keep a module replacement it already has; T28 lists it, and the list only shrinks. An unchanged legacy test does not block the run. Every test created in the run follows T16, even when an existing test of the same unit replaces the same module. A legacy violation is never permission for a new one.
+
 **T17. Doubles set conditions. They are not the evidence.** Use a double to make a timeout happen. Do not cite its call log as proof that the real boundary works. The one sanctioned order assertion is the composition test (W20), observed at the edge.
 
 ---
