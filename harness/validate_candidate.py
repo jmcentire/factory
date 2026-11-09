@@ -128,6 +128,7 @@ def validate(
             candidate,
             admit_symlinks=True,
             contained_file_links=True,
+            contained_directory_links=True,
             max_files=1000000,
             max_total_bytes=16 * 1024**3,
             lfs_objects=lfs_objects,

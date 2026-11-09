@@ -177,6 +177,7 @@ def materialize_commit(
     max_files: int,
     max_total_bytes: int,
     contained_file_links: bool = False,
+    contained_directory_links: bool = False,
     lfs_objects: str | Path | None = None,
     max_lfs_bytes: int | None = None,
     select: Callable[[PurePosixPath], bool] | None = None,
@@ -190,12 +191,22 @@ def materialize_commit(
     read, link-resolved or materialized. With ``directory_link``, a selected contained link to
     a tree directory is passed to it and omitted instead of refused; it may raise to refuse.
 
+    ``contained_directory_links`` materializes the whole tree with each contained relative link
+    to a real tree directory written as committed. It needs ``contained_file_links`` and
+    excludes ``select`` and ``directory_link``, so no directory link is ever silently omitted.
+
     With ``lfs_objects`` (a local LFS object directory, ``<oid[0:2]>/<oid[2:4]>/<oid>``), each
     LFS pointer is written as the verified content it names; ``max_lfs_bytes`` bounds that
     content and is then required."""
 
     if lfs_objects is not None and max_lfs_bytes is None:
         raise HostGitError("an LFS store needs a byte ceiling for the content it supplies")
+    if contained_directory_links and (
+        not contained_file_links or select is not None or directory_link is not None
+    ):
+        raise HostGitError(
+            "contained directory links need contained file links over the whole tree"
+        )
     tree = resolve_commit_tree(repository, commit, runner=runner)
     entries = _tree_entries(
         run_host_git(repository, ("ls-tree", "-rz", "--full-tree", commit), runner=runner),
@@ -217,6 +228,8 @@ def materialize_commit(
                         entry.path, os.fsdecode(blobs[entry.object_id]), modes, directories,
                     )
                 except _DirectoryLinkError:
+                    if contained_directory_links:
+                        continue
                     if directory_link is None:
                         raise
                     directory_link(entry.path)
