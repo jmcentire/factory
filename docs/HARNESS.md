@@ -96,16 +96,8 @@ acceptance, publication, installation or merge permission. Report the candidate,
 observed behavior, failures, unrun checks and remaining work. Preserve evidence and
 resident context until completion; stop only the intended owned processes.
 
-## Historical interfaces
+## Release checks
 
-`dispatch_lane.sh`, `promote.sh`, `record_no.sh`, `abandon_legacy.sh` and
-`orchestrator_wake.sh` now return migration diagnostics without reading or changing
-run records. They no longer start signed dispatches, classify host terminal outcomes,
-or create duplicate Orchestrators. Historical runs remain inspectable and are never
+Release checks remain in `make ship`; focused checks alone do not justify claiming
+that the full release is green. Prior run evidence remains on disk and is never
 silently restarted by an ordinary command.
-
-The optional generation and signed-ledger APIs under `factory_runtime` retain their own
-contracts and tests. They are not prerequisites or another acceptance authority for
-ordinary tasks. Prior harness architecture is available in Git history; it does not
-override the current user's instructions. Release checks remain in `make ship`; focused
-checks alone do not justify claiming that the full release is green.

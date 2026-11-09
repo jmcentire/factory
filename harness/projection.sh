@@ -4,7 +4,7 @@
 #
 # A tester-include path absent at the pin is skipped and named in the receipt (absent_includes):
 # the Tester's own suite (tests/acceptance) never exists before the Tester writes it. When the pin
-# has no `contracts` and the run supplies its ratified contracts (HARNESS_RUN_CONTRACTS, a
+# has no `contracts` and the run supplies its agreed interfaces (HARNESS_RUN_CONTRACTS, a
 # directory, with HARNESS_ORACLE_CONTRACT, the oracle-contract.md that declares every contract
 # file's sha256), the Tester's view gets those files at contracts/, each checked against its
 # declared digest, and the receipt names them (run_contracts). herald-dash-r2 stalled on exactly

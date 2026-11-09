@@ -453,7 +453,7 @@ def load_baseline(path: Path) -> frozenset[str]:
             )
         # 4.2 change 6: a suppression is a LOAN, not a title deed — every entry
         # names its owner and expiry (dates batched to one quarterly event so the
-        # single operator faces one bounded re-ratification), and the
+        # single operator faces one bounded review), and the
         # justification digest pins the justified text: renewal requires a fresh
         # justification digest, never a bulk date bump over unread prose.
         owner = entry.get("owner")
@@ -481,7 +481,7 @@ def load_baseline(path: Path) -> frozenset[str]:
         if expires < today:
             raise WiringError(
                 f"baseline {path} entry {i} EXPIRED {expires_raw}: "
-                f"{entry['finding']} (owner {owner}) — re-ratify or delete; an "
+                f"{entry['finding']} (owner {owner}) — review or delete; an "
                 f"expired suppression is a red finding, not a quiet permission"
             )
         if expires <= warn_horizon:
@@ -490,7 +490,7 @@ def load_baseline(path: Path) -> frozenset[str]:
     if expiring:
         print(
             "check_wiring WARN: baseline entries expiring within 14 days "
-            "(quarterly re-ratification due):",
+            "(quarterly review due):",
             file=sys.stderr,
         )
         for line in expiring:

@@ -8,7 +8,7 @@
     },
     "refusal-phase1-gate": {
       "class": "signal",
-      "description": "phase1_gate.sh gate G: artifact adequacy gate refused; lanes must not launch"
+      "description": "Historical phase-1 refusal event retained for reading existing run evidence"
     },
     "refusal-promote": {
       "class": "signal",

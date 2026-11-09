@@ -1043,37 +1043,27 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--run", required=True)
     p.add_argument("--root", required=True)
-    p.add_argument("--interval", type=int, default=30)
     p.add_argument("--observe", action="store_true",
                    help="read retained activity without control actions")
     p.add_argument("--after", default="{}", help="cursors JSON returned by the last observation")
     p.add_argument("--wait-seconds", type=float, default=0)
     args = p.parse_args()
     root = pathlib.Path(args.root)
-    if args.observe:
-        from run_record import load
+    if not args.observe:
+        p.error("--observe is required")
+    from run_record import load
 
-        root, _ = load(root.parent, args.run)
-        previous = json.loads(args.after)
-        if not isinstance(previous, dict) or not 0 <= args.wait_seconds <= 60:
-            p.error("--after must be an object; --wait-seconds must be between 0 and 60")
-        deadline = time.monotonic() + args.wait_seconds
-        while True:
-            result = observe(root, previous)
-            if result["entries"] or time.monotonic() >= deadline:
-                print(json.dumps(result))
-                return
-            time.sleep(min(1, max(0, deadline - time.monotonic())))
-    if not (root / "run.json").exists() or not (root / "harness.json").exists():
-        sys.exit(f"no checked run.json + harness.json under {root}")
-    dispatcher = Dispatcher(args.run, root, args.interval)
-    if dispatcher.orchestrator_mode != "resident-monitoring":
-        dispatcher._refuse_without_resident_orchestrator("dispatcher start requested")
-        sys.exit(
-            "dispatcher refused: run has no resident Orchestrator "
-            "(harness.json orchestrator_mode must be resident-monitoring)"
-        )
-    dispatcher.run_loop()
+    root, _ = load(root.parent, args.run)
+    previous = json.loads(args.after)
+    if not isinstance(previous, dict) or not 0 <= args.wait_seconds <= 60:
+        p.error("--after must be an object; --wait-seconds must be between 0 and 60")
+    deadline = time.monotonic() + args.wait_seconds
+    while True:
+        result = observe(root, previous)
+        if result["entries"] or time.monotonic() >= deadline:
+            print(json.dumps(result))
+            return
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
 if __name__ == "__main__":

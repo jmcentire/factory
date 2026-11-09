@@ -1,92 +1,31 @@
-# The Doctrine Kernel — tiered intent inventory
+# Design evidence for independent roles
 
-> **Status: RATIFIED by the founder, 2026-07-21; reconciled to the founder-supplied
-> role/phase doctrine revision, 2026-07-26 (four-role ruling: the Orchestrator is a role and
-> is always resident, 2026-09-21), and Criticality amendment,
-> 2026-07-27, plus the invariant/tool/checklist amendment, 2026-07-27, and the
-> Validator-as-product-manager capability/technical-guidance amendment, 2026-07-30, plus the
-> repair-feedback ruling, 2026-10-04: "tester stays blind and vice versa. Coder gets what the
-> validator tells it which should be minimal but depends on the nature of the failure. IS there
-> an architectural issue, a bad implementation, a bad test, etc."** An agent may still
-> treat a statement as *more* protected than listed, never
-> less. A statement moves down a tier or is removed on the founder's words, recorded verbatim
-> (the founder did so on 2026-10-18, P-0001, for every statement below that put a human gate in
-> the run). Changes to this file pass through the Diff-Intent Gate
-> ([`practices/diff-intent-gate.md`](./practices/diff-intent-gate.md)) like any other doctrine
-> change: an edit that contradicts the founder's words is refused.
+The current responsibilities and operating rules live in
+[SOFTWARE-FACTORY.md](SOFTWARE-FACTORY.md). This file retains the design evidence that
+informs the choice of independent author inputs and resident oversight.
 
-This is the prose analog of the invariant kernel: the declared inventory of what each
-load-bearing statement *is*, so the Diff-Intent Gate does tier lookup instead of
-judgment. Four tiers:
-
-- **S — Sacrosanct.** Founder axioms. Change requires the founder's explicit statement, recorded verbatim;
-  there is no evidence that revises them from below.
-- **I — Invariant by design.** Engineered invariants. Changeable only by explicit,
-  recorded redesign, named as such.
-- **E — Epistemic.** Held because current evidence supports them. Revisable — but only
-  with new cited evidence and provenance, recorded.
-- **X — Exercise to the reader.** Deliberately unbound. Implementation freedom;
-  no gate beyond the ordinary flows.
-
-## Tier S — Sacrosanct
-
-| # | Statement (anchor) |
-|---|---|
-| S1 | The founder owns product intent, and the founder's words are the authority. The run involves the founder only at a genuine impasse — no role in the run knows what needs doing; uncertainty, risk, a gate or a policy question is not one (P-0001, 2026-10-18). The Validator drafts and decides everything the founder's words leave open, records each decision and its evidence, and proceeds; the founder may override any decision afterwards. Nothing stops the run or waits on the founder. The factory implements, proves conformance, and produces evidence. |
-| S2 | **Exactly four roles: Validator, Orchestrator, Coder, Tester; exactly three pre-build phases: product specification, architecture, operational maturity.** The Orchestrator is resident and always running for every run; a run without one is refused. Each role is exactly one long-lived session for the whole run: no restart, no replication, no time limit (founder, 2026-10-20). Coder and Tester share the signed spec, have no channel to each other, and the Validator runs the tests. |
-| S3 | Intent authority exists only in the Product Specification, Architecture Specification, and Testing and Monitoring Strategy, each decided by the Validator against the founder's verbatim words with every item tagged by source, content-addressed, immutable for the run, and compared with the preserved verbatim input — never memory, a mutable ticket, a comment, or an agent's summary. The manifest records evidence; it does not originate intent. |
-| S4 | Lanes escalate; the Validator decides; the founder's words govern. A change that contradicts what the founder said is refused; mutation of doctrine rests on the founder's explicit, recorded words. The host mints the genesis and every key at project start (`factory init`); the founder signs nothing and is never asked to approve, confirm or ratify what they already asked for. |
-| S5 | Honesty in self-reports: nothing marked done, implemented, or satisfied that is partial or absent. |
-
-## Tier I — Invariant by design
-
-| # | Statement (anchor) |
-|---|---|
-| I1 | The eight non-negotiables (fail-closed on hazards; single authoritative owner per fact; least privilege; full auditability; no silent failure; honesty; provenance of intent; live-verified not self-attested). |
-| I2 | Segregation of duties: implementer ≠ verifier ≠ approver; identity resolution is deny-wins; Critical changes carry mandatory specialist review, and a target may require named approvers. |
-| I3 | Oracle independence: Coder and Tester receive the same signed spec but have no channel; the Tester never sees the implementation, the Coder never sees the tests, and the Validator tells an automated repair context only what the nature of the failure requires (implementation, architecture, test or specification), never test internals. |
-| I4 | The two controls (negative and positive) bound every correction spec against the trusted baseline. |
-| I5 | Oracle adequacy and criticality are independent axes: depth keys on oracle adequacy, never blast radius; a gap blocks on Critical, gates for expiring human risk acceptance on Standard, and reports-and-promotes on Cosmetic. |
-| I6 | The same built artifact is promoted up the ladder by digest; the evidence plane is content-addressed, hash-chained, and tamper-evident. |
-| I7 | The generic core names no target: targets are data behind adapter seams, never code imports (the purity guard enforces the code side; this doctrine enforces the prose side). |
-| I8 | No agent modifies its own directive, verifier set, approval rules, or sandbox permissions while producing or verifying a change under that policy. |
-| I9 | Provenance of intent distinguishes absence from corruption: a missing link is an evidence gap disposed by surface class; an unresolvable, mismatched, fabricated, or malformed link blocks every class. |
-| I10 | Criticality is decided and recorded per surface; a change inherits the highest declared side effect; unclassified is Critical. Critical evidence is deterministic with zero flake/retry tolerance and no waiver. |
-| I11 | Every downstream backreference binds both the exact invariant-document digest and canonical item digest. A new signed artifact version invalidates every plan, test, control, and evidence reference derived from the old version. |
-| I12 | Every run tool, credential, route, and integration has exactly one signed tier: Allowed, Recorded, or Verboten. Unknown and Verboten are absent/denied; scope ceilings are enforced before execution; a Recorded grant names its owner, scope and expiry; denial probes demonstrate the boundary. The tool policy projects phase-2/3 authority and cannot widen it. |
-| I13 | Every phase and promotion gate is an explicit checklist whose items are satisfied only by individually cited, content-addressed evidence recorded when obtained. Unchecked or uncited remains a visible gap; negative or invalid evidence cannot be converted to a pass. |
-| I14 | A formerly passing test is updated only when an exact signed item supersedes its asserted behavior. Unchanged authority means fix the implementation; artifact silence or conflicting supersession is decided by the Validator on the evidence and recorded. |
-| I15 | A green-now guard that fails against main on behavior unrelated to the defect is a **suspected over-constraint**: the Validator rules on it with the evidence and records the ruling. It is never reclassified as a red-now forcing test, and no implementation is driven to satisfy it. Every test that changed state against main is classified individually, not in aggregate. |
-| I16 | Every production monitor is **spec-derived** and carries a resolvable backreference to the acceptance criterion or invariant it watches; an unresolvable monitor backreference is an unauthorized assertion about production and blocks. Monitor authorship is class-scoped: Critical surfaces carry monitors authored outside the lane that implemented them. Density is recorded, never gated. |
-| I17 | An agent that evaluates an alert may not delete, weaken, or silence the monitor that produced it. Silencing is a change to the oracle: it is a proposal decided by the Validator through the specification-defect path and recorded. Monitor state (proposed-fix references) lives on the monitor, not in the agent. |
-| I18 | A defect is reproduced in a disposable environment and the reproduction recorded before any repair is written. Reproduction-impossible is a declared lane condition that gates; a reproduction that does not reproduce is recorded and never authorizes a repair. |
-| I19 | The independence tier actually achieved, plus the model, model version, and directive/prompt version of every agent that produced or judged the change, are recorded in the change-evidence manifest. A claimed tier the recorded arrangement does not support is a false verdict and blocks every class. |
-| I20 | Detection is exhaustive; notification is earned. A signal reaching a reader carries an actionable conclusion, and an unactionable alert is answered with a better conclusion or a specification defect — never a quieter monitor. |
-| I21 | Where a target requires named approvers on a Critical surface, they come from an explicit **named delegate roster** recorded per target, and an undeclared roster is then an evidence gap disposed of by class. No named human is a doctrine precondition (P-0001). |
-| I22 | Document parity is a Validator-gated control, not an inspection checkbox: the Coder produces current docs/contracts/generated-artifacts/compliance-corpus, the Tester authors the parity tests, and the Validator gates from the pinned SHA. It is machine-forced where mechanizable — generated artifacts (OpenAPI, stubs, types, knowledge export) are regenerated and diffed clean, and compliance/design coverage is a test (every ≥Standard surface resolves to a named control; every claimed-satisfied control resolves to enforcing evidence); where only inspection is possible, the basis and residual risk are declared. A document silently out of parity is negative evidence, not an absent nicety. |
-| I23 | The Validator is the product manager: the Product Specification asserts **capability, not implementation** — an outcome, guarantee, or invariant the system must exhibit, never the mechanism that delivers it. This is *no implementation*, not merely *no implementation details*; a mechanism smuggled in as the shape of a requirement (a story asserting a widget) is rejected. The Validator's arrived-at solution is not discarded but **quarantined into a separate technical-guidance register** in the Architecture Specification, labeled and offered as a *guide* the Coder may improve upon — binding only where an external interface or schema contract makes the mechanism the promise. Tests and monitors derive from the **north-star capability, never the mechanism**; a named output is asserted as itself only where it is a ratified external contract others depend on, else the oracle asserts the capability behind it. Implementation-derived oracles are fragile by construction — they break on legitimate re-implementation and miss the failures the mechanism never anticipated. |
-
-## Tier E — Epistemic
-
-| # | Statement (anchor) | Current evidence basis |
+| Reference | Design basis | Limitation |
 |---|---|---|
-| E1 | Cross-model diversity reduces correlated misreading; the verifier runs a different vendor than the implementer. | Correlated-failure research + converged industry practice. Revisable if measurement shows a better independence mechanism. |
-| E2 | Agents take large, loud, well-oracled work; humans take small, subtle work. | Oracle-adequacy observations. Revisable as oracle coverage changes. |
-| E3 | Interpretation depth degrades intent (each re-delegation is a lossy reconstruction); breadth against a fixed artifact preserves independence. | Founder multi-agent research (hop/relay and swarm studies). Refinable — e.g., relay degradation saturates; production-under-reconstruction diverges. |
-| E4 | Retry is recovery, not search: fresh context, bare pass/fail history, budget caps. A flaky test rerun to green is the same sampling error at test granularity. | Observed retry pathologies. Parameter values are per-target data; Critical test evidence has no retry budget. |
+| E1 | Cross-model diversity can reduce correlated misreading. | Model families are descriptive; explicit user assignments govern. Diversity does not prove independence or semantic correctness. |
+| E3 | Repeated interpretation and re-delegation can lose intent; independent work against the same public contract reduces that risk. | The Validator still interprets intent and judges the result. Separate inputs and Orchestrator oversight reduce, but do not eliminate, that limitation. |
 
-## Tier X — Exercise to the reader
+These bases came from the founder's multi-agent research and the project's recorded
+experience with correlated failure and interpretation loss. This document does not claim
+a new empirical result or a universal quantitative guarantee. Revisit the design when
+new evidence supports a better arrangement.
 
-| # | Freedom |
+The practical implementation is asymmetric Coder/Tester input, private author context,
+Validator-owned acceptance and an independently resident Orchestrator. Actual tests and
+observations establish the behavior of a candidate; role labels alone do not.
+
+## Referenced design principles
+
+These identifiers retain the references used by the testing standard. Their operational
+application is defined by the current workflow and standards.
+
+| Reference | Principle |
 |---|---|
-| X1 | Implementation structure, style, and libraries within the signed contracts. |
-| X2 | Vendor/model assignment per role, provided E1's independence holds. |
-| X3 | All per-target configuration within the fixed doctrine: surface/component ids, human-decided classes and wrong-cost rationales, side-effect edges, Standard flake budgets, gate/evidence ids, tool/inventory/scope ids within the fixed tier semantics, denylist tokens, adapter selections, and environment-rung composition. |
-| X4 | Tooling that assists a stage (spec ingest, diagnosis, coordination), provided it claims no role authority. |
-
-## Rule of interpretation
-
-A statement not listed here is not thereby free: unlisted commitment language falls to
-the Diff-Intent Gate's inference lane and is escalated when in doubt. The kernel exists
-so that the common case is a lookup, not a judgment — and so that when an agent infers,
-the inference is visibly an inference.
+| S4 | The user's instructions govern intent. Roles do not invent permission or redefine requested behavior to fit their work. |
+| I3 | Coder and Tester work from separate inputs and public contracts, with no direct channel or cross-reading of private work. Validator feedback preserves that separation. |
+| I5 | Criticality and oracle adequacy are distinct. An unresolved critical coverage gap blocks acceptance of that behavior; other work receives proportionate checks and an honest account of limitations. |
+| I14 | An expected outcome changes when its governing requirement changes. A mistaken test derivation or fixture is corrected from the contract with its reason preserved, not to make a candidate pass. |

@@ -1,8 +1,8 @@
 # Boundary identifiers: verified, never assumed
 
-A practice for every run, enforced in Phase A, at the Orchestrator's dispatch and verdict
-checkpoints, and at endgame. It exists because one defect shape kept recurring on the first
-consuming target, and every instance passed every local test.
+Verify identifiers when work crosses a boundary. The Validator and Orchestrator inspect
+the actual records and behavior because internally consistent components can still disagree
+with one another.
 
 The founder's direction, verbatim (2026-10-14):
 
@@ -39,8 +39,8 @@ configuration and not in the live one.
 
 ## The register
 
-Each run carries `artifacts/boundary-register.json` (format `boundary-register/1`, shared with
-Pact and Constrain). One entry per boundary identifier:
+For work that benefits from a structured inventory, `harness/boundary_register.py` accepts
+`boundary-register/1` data. Each entry describes one boundary identifier:
 
 ```json
 {
@@ -73,7 +73,7 @@ Pact and Constrain). One entry per boundary identifier:
   The subject must not occur in any denying record.
 - **Records** are the only acceptable source of a value. A `file` record cites a line in the
   target checkout (`root: target`, the default) or in the run (`root: run`, for example a line
-  of the signed Architecture Specification that decides a literal not yet written). An
+  of the architecture guidance that specifies a literal not yet written). An
   `observation` record is the saved output of a live query, with the exact command and the
   time. Every record carries the SHA-256 of the whole file.
 - A side with no record is **UNVERIFIED** and blocks. A placeholder value (`TODO`, `TBD`, `<project>`,
@@ -92,17 +92,11 @@ cited line that lacks the literal, a literal found only inside a longer name (`s
 inside a longer one: `foo.bar` inside `foo.bar.baz`), parties that disagree (naming the near-miss when they differ only in case
 or separators), and a subject present in a record that must exclude it.
 
-| Where | What it refuses |
-|---|---|
-| Phase A, `phase1_gate.sh` check H | Lanes launch only on a register that verifies against the base checkout. Every current run (one whose ignition wrote the agreement contract) must carry one. |
-| Orchestrator `pre_dispatch` and `pre_verdict` checkpoints | The checkpoint is refused before the Orchestrator is asked, so no dispatch and no verdict crosses an unverified boundary. |
-| Endgame | Target records re-resolve against the candidate commit. A cited file may change; a registered literal that the candidate dropped or renamed is drift and turns the verdict red. |
-
 The verifier proves the registered literals agree with their records. It cannot prove the
 register lists every boundary the system crosses. That is a judgment surface, and two roles own
 it:
 
-- **The Validator** compiles the register in Phase A from the Architecture Specification's
+- **The Validator** can compile the register from the architecture guidance's
   trust and integration boundaries and from live observation of the substrate the run touches,
   and keeps it current as lanes surface new identifiers.
 - **The Orchestrator** watches every lane for identifiers the register lacks (`§1`,
@@ -114,7 +108,7 @@ it:
 ## Rules for each role
 
 1. **Never write a cross-boundary literal from memory.** Look it up in the register. If it is
-   not there, stop and ask; the Validator records it with a record or rules it out.
+   not there, obtain evidence; the Validator records the verified value or resolves the gap.
 2. **Presumed access is a question, not a fact.** "The account already has access" requires an
    observation of the policy in force. A refusal is evidence; a status below 500 is not health.
 3. **Isolation is proven from the live policy.** A declared per-service grant does not prove

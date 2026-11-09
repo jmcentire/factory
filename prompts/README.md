@@ -29,9 +29,9 @@ them before dispatch; either is conforming.
 
 | File | Role |
 |---|---|
-| `validate.md` | Validator — owns the human relationship, the signed artifacts, running the tests, and the verdict |
-| `engineer.md` | Coder — the implementation, against the signed specification |
-| `test.md` | Tester — the tests, against the signed specification; never reads the implementation |
+| `validate.md` | Validator — owns the human relationship, the task inputs, running the tests, and the verdict |
+| `engineer.md` | Coder — the implementation, against the requested behavior |
+| `test.md` | Tester — the tests, against the requested behavior; never reads the implementation |
 | `build.md` | `/build` — the single-agent research-plan-build-ship pipeline; collapsed roles, so Cosmetic and small Standard work only |
 | `orchestrate.md` | Orchestrator-agent — the advisory runner seat beside the enforcing dispatcher scripts |
 | `code-review.md` | The code-review standard every reviewing agent binds to |

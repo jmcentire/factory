@@ -488,5 +488,383 @@
   "owner": "human:founder",
   "expires": "2026-11-30",
   "justification_digest": "sha256:30483f9b09cf025648592df068f57a0ebc989bc4f5b0b0bb3ba8dbc0f1309e16"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/broker.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/broker.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:89a739cd203ca13cb5a2374e66500b71ae3ec1e293b61e6980506333b306ce26"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/orchestrator_projection.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/orchestrator_projection.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:19d8971e5cd886565dd62994b0bfb105eb523610411358643ae6cab257e96b0d"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/project_init.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:8941ddd107044814546c1462cb6b90b0b5422144aad6a7ca69f66e91657e6e9d"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/projection_bundle.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/projection_bundle.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:d420dcba4f0334f18dd93a7bfd886c1cb2eefcbd1e17468f654f2fcb3602a240"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/runner.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:ff9000e4f4a2bbb953ef5b7f3b9e1e13ebfe742b647c49d93077acd38b89129d"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/runner_isolation.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner_isolation.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:321242519a7d79f118b77c5ffdc6d2bc40c4843d49dd6c2312199641c6290665"
+ },
+ {
+  "finding": "unreachable-module:factory_runtime/state_qualification.py:-",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_qualification.py remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:fa11fc0099acfc4e6bfdcddfe2da562e42663050f599b287a88e14650db89e01"
+ },
+ {
+  "finding": "zero-caller-export:factory_core/directive_authority.py:may_supersede",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_core/directive_authority.py::may_supersede remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:61fde6cd9e144ae99f4959fe1e99776617a8a0427b14c90c1e65b432c4858a99"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/authority.py:require_operator_owned_trust_root",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/authority.py::require_operator_owned_trust_root remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:1bbdd618ffa7d5e67d59cd1689cb5ef61ff9cb29fd2275d6f2d2e7781f44f882"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:TypedOperationBroker",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/broker.py::TypedOperationBroker remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:e1ea5634d9a1b344814793b6a1c04ea5f32055caa1a0752887ec7ad7d06c9229"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/broker.py:load_broker_registry",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/broker.py::load_broker_registry remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:096a0fd95531d255cd9dff410820d0a73f12de8497b18fa5079963f16cd4c4c1"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/ci_evidence.py:retain_ci_output",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/ci_evidence.py::retain_ci_output remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:cae635a8955c082d4fd622e097d1379b1ec53c935ac408e70b51ee1a4e8584b1"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:InstructionControlError",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::InstructionControlError remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:85ae2d41dc62176b66cdb5e05e176e6cee313d7dd895a76f01c37165aa453f3f"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:canonical_document_bytes",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::canonical_document_bytes remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:e1b44a90a5e9675d9638ec702de60ddcaeacde2c6027ba214367407728341b30"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:derive_effective_directive_contract",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::derive_effective_directive_contract remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:45774c5df2bd7a8c84acae8b7c751d06f61dc50f0b58e051540e9071a0c48cca"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:validate_directive_readback",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::validate_directive_readback remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:a04ea8a7a886cb758f93e1077e0f34549ab771426697354c12bc2629b483060b"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:validate_directive_sources",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::validate_directive_sources remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:f6e0af1ae02a6650c69d948e8bbcf573f9317f738a560e7c8cb164a29acd57d1"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:validate_lane_dispatch",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::validate_lane_dispatch remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:8dd519f0c0dea1eb4819a7d7f9fac0d8b0b5805a420ba82a9aa625c30b4c4627"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:verify_effective_directive_contract",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::verify_effective_directive_contract remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:6500817b0f371d189409ef4609f49890f9171313f0ce1f72f4b9a7e19897dc3e"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/instruction_control.py:verify_role_contract",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/instruction_control.py::verify_role_contract remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:b920cf822397b3ff997210e8e4290c02e3ae800e4c00e0f72244c1124b2df332"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/lanes.py:IsolationBackend",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/lanes.py::IsolationBackend remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:d5faf5aaa7e4415f387092e3d7e8beb4c40bb551d1ec4afa3b79364aebba21f5"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/orchestrator.py:FactoryOrchestrator",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/orchestrator.py::FactoryOrchestrator remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:0f5f76729d691b3816f277db6f58441f891bc4b48299bafacd3332d45a7f4d25"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/orchestrator.py:OrchestrationError",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/orchestrator.py::OrchestrationError remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:e1adcb0c9757594f21993f0e6c0cf9d9023474cf56c274a7ea62250c41a99d51"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/orchestrator_projection.py:build_orchestrator_projection",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/orchestrator_projection.py::build_orchestrator_projection remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:3c8673b73847b24d0e5cbafc32f85e17e0d051c4b007c9d2dd34d2d87fc34952"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:ProjectInitError",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::ProjectInitError remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:23d51104267bbb16387ec835196470a0a1a5b0946b52994ae6617afe6626b074"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:ProjectKeys",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::ProjectKeys remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:7d63197f676058500d223b848a6aed1e8ff4be81fd9a281ce38619aefbb6db37"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:init_project",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::init_project remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:1cfba2693bc7e9724edb5f7647af6a74426f32411cacdd0de514b205513878b8"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:load_project",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::load_project remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:c791330269df4ec8d2e949f831e4b4d7608c6a359f4c272a2f4439de0115986a"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:record_human_ruling",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::record_human_ruling remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:db4453b99264bd164e85e91f19c9efd4503c8108c2c8a3eeb831e4876c427b4a"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/project_init.py:record_human_statement",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/project_init.py::record_human_statement remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:0b77c925bbb6e55926281a89700b73eb0a1909534905365c0554d01f773aa2d7"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/projection_bundle.py:bundle_runner_projection",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/projection_bundle.py::bundle_runner_projection remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:f89444d2be0ec1a3c6beecfaadfd65b9037f56e8df1c0434a1c4b1badf3945d2"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/promotion_gate.py:decide_document",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/promotion_gate.py::decide_document remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:2bd237f6b0084bf63b2d4b64791c8bb8f2939969c5d921a97f74fbfb10d5d130"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/promotion_gate.py:render",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/promotion_gate.py::render remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:ea4aa3dd8a5f41e8182e8aa9f4f38ccf39784d740b2dd39209f580aa81f05e1e"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair_ceremony.py:apply_chain_repair",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/repair_ceremony.py::apply_chain_repair remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:296b5a218c9e3979a01333c80c477ea3e8e1eacffb212546ec91d47465184f2b"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/repair_ceremony.py:apply_ledger_unlock",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/repair_ceremony.py::apply_ledger_unlock remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:2e456725d83e66594dcf8d50e699e3e04b23831d24c5036dccbc58fd11550681"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/resume.py:derive_resume_checkpoint",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/resume.py::derive_resume_checkpoint remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:9ddf39dbc76cc57cee10898e173f599a4372983a95f78e4f8ae578ac07130c47"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:HardenedModelRunner",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::HardenedModelRunner remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:3fe61ba13eb290787b4a609b7bc6c933382b13d4f2a6d716a0fad85901fdcf70"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:NamedSecretStore",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::NamedSecretStore remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:4818f418f9f05b497e5c9d98732484c7fc50555c9abea453552144fa1782678d"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:NetworkedRunnerBackend",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::NetworkedRunnerBackend remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:2909fb559e501ce82282a649ca342502b4cd568397db0927c3decb0f4902ada9"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerError",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerError remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:b38be153a78bdf4693f7e3ea94493ab5721731a45bf7e1a4bcb7cd99e71c8e4e"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerInvocationError",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerInvocationError remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:e41d570afe0c525791779c5b9ccb0180e028ca9a21746cef2e11eb1704cd6f23"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerLimits",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerLimits remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:c6a080a02a874a91a6ad1789637e0d8c72be8ef7b675e17fa7f2a9532a486fac"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerManifest",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerManifest remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:a7f4c850f9dfe8242a2894075ff841e33643361996cfb349118271bbd3471ac8"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerProcessResult",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerProcessResult remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:c853b1290493833ad53d3fc83d3d5f7c83dd0f36215c26b28319525e44c7ee46"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner.py:RunnerQualification",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner.py::RunnerQualification remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:b68d89f0523477ad98c32b1739488c651eaac07d66f4252e889174f479154628"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/runner_isolation.py:MacOSNetworkedRunner",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/runner_isolation.py::MacOSNetworkedRunner remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:f393aabb4278bfcfb45d64e935c7a274560adc77b1c893dbdb0d2abc12ba09ee"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:dependency_rule",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_admission.py::dependency_rule remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:5ba498beea2fd5b5685cb246d87b38991063538f6e69d36ec583fcbe4d052890"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:derive_state_capsule",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_admission.py::derive_state_capsule remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:c2065e82b6f04f0d1c27cfcc2532a503158380665d6d4ecfd627764877d1dc13"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:profile_digest",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_admission.py::profile_digest remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:3e76c34425457bb24f20b59ba64f064908c02c7dc6a00ea9e16381909c988993"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:profile_document",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_admission.py::profile_document remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:6e85dc785df964f03ccf44bf773b376b047a39ac00cb84f79af4c2ad1ed24845"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_admission.py:verify_state_capsule",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_admission.py::verify_state_capsule remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:4d7d98edb1496be6ec580ce21caf0b0b102c8076dbaecfa51cf250095973e5ae"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:execute_state_qualification_observations",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_qualification.py::execute_state_qualification_observations remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:dcb5089a313f29e1c9ced4264587be72db7e924eebc66d93b4f619515896734e"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:qualify_state_observations",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_qualification.py::qualify_state_observations remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:d9a289ea0294ebf960a804e55086bc925c97612282178e8f739e1300148e377a"
+ },
+ {
+  "finding": "zero-caller-export:factory_runtime/state_qualification.py:verify_state_qualification_report",
+  "justification": "2026-11-09 removal of obsolete signed-workflow CLI and directive ledger: factory_runtime/state_qualification.py::verify_state_qualification_report remains an import-only historical API for existing record/library consumers and its regression tests. It is deliberately unreachable from ordinary task execution; restoring a ceremony command to make it reachable would violate the requested removal.",
+  "owner": "Factory maintainers",
+  "expires": "2027-02-09",
+  "justification_digest": "sha256:da9d1bd99678b8850cc294d9c5abf8c46aad0fa03a5e6c8b77b40923143c83ed"
  }
 ]

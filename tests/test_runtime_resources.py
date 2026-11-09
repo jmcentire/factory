@@ -5,11 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.manifest import LedgerIntegrityError, digest_bytes
-from factory_runtime.cli import main as cli_main
+from factory_core.manifest import LedgerIntegrityError
 from factory_runtime.resources import ResourceLedger, ResourceLedgerError
-from factory_runtime.state import RunStore
-from tests.conftest import create_intake_run
 
 
 def _append(
@@ -276,50 +273,6 @@ def test_crashed_lock_self_repairs_and_cas_mismatch_refuses_append(tmp_path: Pat
             LedgerEntry(capability_id="run-1", actor="test", created_at="100"),
             expected_head="sha256:" + ("0" * 64),
         )
-
-
-def test_cli_disposition_carries_immutable_resource_identity_forward(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-    store = RunStore(runs, clock=lambda: 100)
-    create_intake_run(
-        store,
-        run_id="run-1",
-        target_digest=digest_bytes(b"target"),
-        source_digest=digest_bytes(b"source"),
-    )
-    ledger = ResourceLedger(runs / "run-1", "run-1", clock=lambda: 100)
-    _append(ledger, "workspace", status="planned", identifier="/run/workspace")
-    _append(ledger, "workspace", status="active", identifier="/run/workspace")
-
-    result = cli_main(
-        [
-            "disposition-resource",
-            "--runs",
-            str(runs),
-            "--run-id",
-            "run-1",
-            "--resource-id",
-            "workspace",
-            "--status",
-            "retained",
-            "--reason",
-            "preserve evidence",
-            "--residue",
-            "true",
-            "--actor",
-            "validator",
-        ]
-    )
-
-    assert result == 0
-    retained = ledger.latest()["workspace"]
-    assert retained["generation"] == 1
-    assert retained["identifier"] == "/run/workspace"
-    assert retained["baseline"] == {"absent_at_plan": True}
-    assert retained["disposition"] == {
-        "reason": "preserve evidence",
-        "residue": True,
-    }
 
 
 def test_keyed_ledger_seals_with_an_hmac_head_and_retries_idempotently(

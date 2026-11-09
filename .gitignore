@@ -28,7 +28,7 @@ htmlcov/
 .idea/
 .vscode/
 
-# Harness ephemeral state (.factory/schedule.registry and reconcile.d/ ARE tracked)
+# Harness ephemeral state
 .factory/receipts/
 .factory/HALT
 .factory/grounded
@@ -39,6 +39,6 @@ htmlcov/
 .factory/spend/
 .factory/runs/
 
-# The directive ledger is its own hardware-signed repo; only its README travels here
+# Task-local directive records; only the README travels here
 DIRECTIVES/*
 !DIRECTIVES/README.md

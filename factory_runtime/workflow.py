@@ -1,11 +1,7 @@
-"""Two-stage target authority, authorized-change intake, and phase ratification.
+"""Library operations for retained signed-runtime data.
 
-Authority is what the human said (docs/standards/AUTHORITY.md H1), never a ticket, a branch
-or an agent's summary. A canonical request enters only with a subject-bound human receipt, which
-the host records from the human's own message (``factory record-statement``); the human signs
-nothing. Each phase artifact then enters only
-with distinct human and Validator receipts over the exact artifact digest. Receipt nonces are
-consumed in the authoritative run ledger so replay is detectable when the run is re-derived.
+Subject-bound receipts and consumed nonces preserve the integrity of this data format.
+The ordinary task runner uses run_record and does not call these operations.
 """
 
 from __future__ import annotations

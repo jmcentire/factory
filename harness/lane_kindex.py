@@ -289,7 +289,7 @@ def prepare(
                 imported = created(load(["import", str(importable), "--project-path", str(repo)],
                                         source))
             # The run's shared seed: the vital context both lanes may read (research, standing
-            # constraints, ratified decisions), the same file for both. Never implementation or
+            # constraints, recorded decisions), the same file for both. Never implementation or
             # tests.
             if seed is not None and seeded is not None:
                 tagged = _tagged_seed(seed, home / "lane-seed.tagged.jsonl")

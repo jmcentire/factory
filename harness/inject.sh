@@ -61,7 +61,7 @@ fi
 # #80), while `assert balance == 31337` went through. There is no ambient
 # override: an environment variable is not authority, and a bypass a signature
 # never covered is how a guard becomes theater. A genuine false positive is a
-# defect in the filter pattern, repaired through a ratified change — never
+# defect in the filter pattern, repaired through a authorized change — never
 # stepped around at delivery time.
 W='(^|[^A-Za-z0-9_])'
 LEAK_PATTERN="${W}test_[a-z0-9_]+|tests?/[A-Za-z0-9_./-]*\.(py|ts|tsx|js|jsx|mjs|go|rs|rb|java|kt)($|[^A-Za-z0-9_])"

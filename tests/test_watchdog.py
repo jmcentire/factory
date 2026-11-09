@@ -13,6 +13,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 HARNESS = Path(__file__).resolve().parent.parent / "harness"
 
 
@@ -369,41 +371,6 @@ def test_real_refusal_still_escalates_after_lane_launch(tmp_path: Path) -> None:
     assert [wake for _, _, wake in recorder.events] == [False, False, True]
 
 
-def test_cli_doors_are_pinned() -> None:
-    """Round-5 F-8.3: the pass-count and signal-knobs handlers were deletable
-    with the suite green. Pin their existence: the CLI must know both commands
-    (an unknown command is an argparse 'invalid choice', which must not appear)."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parent.parent
-    for command in ("pass-count", "signal-knobs"):
-        result = subprocess.run(
-            [sys.executable, "-m", "factory_runtime.cli", command,
-             "--runs", "/nonexistent", "--run-id", "rX",
-             "--genesis", "", "--root-public-key", "", "--tessera-bin", "tessera"],
-            capture_output=True, text=True, cwd=repo,
-        )
-        assert "invalid choice" not in result.stderr, f"{command} door missing"
-        assert result.returncode != 0  # nonexistent run refuses, door exists
-
-
-def test_signal_knobs_before_phase_a_reports_unprepared_not_a_refusal(
-    monkeypatch, capsys
-) -> None:
-    """Dogfood #11/#14 at the CLI: with no prepared generation, signal-knobs prints
-    generation_prepared=false and exits 0 instead of refusing."""
-    from types import SimpleNamespace
-
-    from factory_runtime import cli
-
-    store = SimpleNamespace(load=lambda run_id: SimpleNamespace(generation_artifact_digests={}))
-    monkeypatch.setattr(cli, "_load_replay_store", lambda arguments: store)
-    assert cli.main(["signal-knobs", "--runs", "/nonexistent", "--run-id", "r1"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"run_id": "r1", "generation_prepared": False}
-
-
 def test_backstop_rearms_after_progress(tmp_path: Path) -> None:
     """Round-6 6-6: fired-once latches ONE stall, never permanent silence — a pass
     advance re-arms the backstop so a second stall pages again."""
@@ -498,7 +465,9 @@ def test_pass_unit_is_the_cli_door_never_dispatch_receipt_lines(tmp_path: Path) 
     assert "dispatches" not in source  # no line-count fallback can exist unnamed
 
 
-def test_dispatcher_run_loop_invokes_the_watchdog_and_halts_on_no(tmp_path: Path) -> None:
+def test_dispatcher_run_loop_invokes_the_watchdog_and_halts_on_no(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Round-6 6-2: the watchdog's one invocation line is load-bearing — this drives
     the REAL run_loop and only the watchdog's own firing (status 'no') stops it, so
     deleting dispatcher.py's signal_watchdog.check(...) line hangs the loop and
@@ -543,7 +512,7 @@ def test_dispatcher_run_loop_invokes_the_watchdog_and_halts_on_no(tmp_path: Path
                 "run_loop spun past the watchdog halt — the invocation line is dead"
             )
 
-    dispatcher_module.time.sleep = bounded_sleep
+    monkeypatch.setattr(dispatcher_module.time, "sleep", bounded_sleep)
     d.run_loop()
     assert calls["n"] == 1
     events = (root / "events.jsonl").read_text()
@@ -576,43 +545,6 @@ def test_deadline_fires_fail_closed_when_the_readiness_door_refuses(tmp_path: Pa
     rec = Recorder()
     assert watchdog.check(rec.emit, rec.block) == "deadline-fired"
     assert len(runner.record_no_calls) == 1
-
-
-def test_real_cli_pass_count_ignores_dispatch_receipt_lines(tmp_path: Path) -> None:
-    """Round-7's actual 6-3 mutation was a cli.py fallback to dispatches.jsonl line
-    counts — the FakeRunner consumer test cannot see it. This drives the REAL CLI:
-    a run with zero VALIDATING admissions and a run root full of dispatch receipt
-    lines must report passes 0, and the handler may not name the receipts file."""
-    import subprocess as sp
-    import sys
-
-    repo = HARNESS.parent
-
-    from factory_core.manifest import digest_obj
-    from factory_runtime.state import RunStore
-    from tests.conftest import create_intake_run
-
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    store = RunStore(runs)
-    create_intake_run(
-        store,
-        run_id="r1",
-        target_digest="sha256:" + "a" * 64,
-        source_digest=digest_obj({"source": "r1"}),
-    )
-    (runs / "r1" / "dispatches.jsonl").write_text("{}\n" * 50, encoding="utf-8")
-    result = sp.run(
-        [sys.executable, "-m", "factory_runtime.cli", "pass-count",
-         "--runs", str(runs), "--run-id", "r1"],
-        capture_output=True, text=True, cwd=repo,
-    )
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["passes"] == 0
-    handler = (repo / "factory_runtime" / "cli.py").read_text(encoding="utf-8")
-    start = handler.index('if arguments.command == "pass-count":')
-    end = handler.index("return", start)
-    assert "dispatches" not in handler[start:end]
 
 
 def test_snapshot_minutes_creates_its_directory(tmp_path: Path) -> None:

@@ -106,8 +106,8 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
             lane="coder",
             message_kind="spec-answer",
             text="Yes.",
-            basis="ratified requirement R-4",
-            authority="ratified-spec",
+            basis="task requirement R-4",
+            authority="task-specification",
             question_id=str(question["question_id"]),
         )
 
@@ -117,8 +117,8 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
         lane="tester",
         message_kind="spec-answer",
         text="Yes.",
-        basis="ratified requirement R-4",
-        authority="ratified-spec",
+        basis="task requirement R-4",
+        authority="task-specification",
         question_id=str(question["question_id"]),
     )
     with pytest.raises(LaneDialogueError, match="only one planned specification answer"):
@@ -129,7 +129,7 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
             message_kind="spec-answer",
             text="No.",
             basis="a conflicting answer planned before delivery",
-            authority="ratified-spec",
+            authority="task-specification",
             question_id=str(question["question_id"]),
         )
     record_delivery(
@@ -146,7 +146,7 @@ def test_answer_cannot_cross_to_the_other_lane_or_be_reanswered(tmp_path: Path) 
             message_kind="spec-answer",
             text="No.",
             basis="a conflicting guess",
-            authority="ratified-spec",
+            authority="task-specification",
             question_id=str(question["question_id"]),
         )
 
@@ -158,10 +158,10 @@ def test_a_parallel_instance_question_binds_only_that_instance(tmp_path: Path) -
     assert pending_questions(root, "tester") == []
     with pytest.raises(LaneDialogueError):
         plan_message(root, sender="validator", lane="tester", message_kind="spec-answer",
-                     text="Yes.", basis="R-9", authority="ratified-spec",
+                     text="Yes.", basis="R-9", authority="task-specification",
                      question_id=str(question["question_id"]))
     plan_message(root, sender="validator", lane="tester-b", message_kind="spec-answer",
-                 text="Yes.", basis="R-9", authority="ratified-spec",
+                 text="Yes.", basis="R-9", authority="task-specification",
                  question_id=str(question["question_id"]))
     with pytest.raises(LaneDialogueError):
         record_question(root, "validator", "not a lane")
@@ -174,7 +174,7 @@ def test_progress_reviews_come_only_from_the_validator_and_wrap_ups_only_from_th
     review = plan_message(
         root, sender="validator", lane="coder", message_kind="progress-review",
         text="FACTORY_REVIEW verdict=ON_TRACK\nR-1 and R-2 hold.", basis="progress review 1",
-        authority="ratified-spec",
+        authority="task-specification",
     )
     wrap = plan_message(
         root, sender="watchdog", lane="coder", message_kind="wrap-up",
@@ -183,7 +183,7 @@ def test_progress_reviews_come_only_from_the_validator_and_wrap_ups_only_from_th
     )
     assert review["message_kind"] == "progress-review" and wrap["sender"] == "watchdog"
     for sender, kind, authority in (
-        ("orchestrator", "progress-review", "ratified-spec"),
+        ("orchestrator", "progress-review", "task-specification"),
         ("validator", "progress-review", "human-answer"),
         ("validator", "wrap-up", "runtime-protocol"),
         ("watchdog", "status-probe", "runtime-protocol"),

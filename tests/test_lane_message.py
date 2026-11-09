@@ -115,7 +115,7 @@ def test_an_answer_past_the_inline_ceiling_is_delivered_as_a_digest_pinned_file(
     delivered = answer(
         operator, root, env, "tester",
         "--question-id", str(question["question_id"]), "--answer-file", str(reply),
-        "--basis", "ratified requirement R-9", "--authority", "ratified-spec",
+        "--basis", "task requirement R-9", "--authority", "task-specification",
     )
     assert delivered.returncode == 0, delivered.stdout + delivered.stderr
     digest = hashlib.sha256(body.encode()).hexdigest()
@@ -138,7 +138,7 @@ def test_a_large_coder_answer_is_leak_guarded_on_its_file_bytes(tmp_path: Path) 
     refused = answer(
         operator, root, env, "coder",
         "--question-id", str(question["question_id"]), "--answer-file", str(reply),
-        "--basis", "ratified requirement R-2", "--authority", "ratified-spec",
+        "--basis", "task requirement R-2", "--authority", "task-specification",
     )
     assert refused.returncode == 80, refused.stdout + refused.stderr
     assert not (root / "tmux-lanes" / "coder-inputs").exists()
@@ -194,7 +194,7 @@ def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path
     reply.write_text("Yes.\n", encoding="utf-8")
     args = (
         "--question-id", str(question["question_id"]), "--answer-file", str(reply),
-        "--basis", "ratified requirement R-4", "--authority", "ratified-spec",
+        "--basis", "task requirement R-4", "--authority", "task-specification",
     )
 
     busy = answer(operator, root, env, "tester", *args)
@@ -264,7 +264,8 @@ def test_a_progress_review_resumes_the_coders_own_thread(tmp_path: Path) -> None
                         "--verdict", "redirect", "--review-file", str(review))
     assert delivered.returncode == 0, delivered.stdout + delivered.stderr
     planned = read_chain(root / "dialogue" / "journal.jsonl")[0]
-    assert planned["message_kind"] == "progress-review" and planned["authority"] == "ratified-spec"
+    assert planned["message_kind"] == "progress-review"
+    assert planned["authority"] == "task-specification"
     text = planned["text"]
     assert text.startswith("FACTORY_REVIEW verdict=REDIRECT\n")
     assert "R-3: checkout of an empty cart" in text

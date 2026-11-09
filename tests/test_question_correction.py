@@ -60,7 +60,7 @@ def test_correction_preserves_history_and_real_question_without_fake_delivery(tm
     assert len(journal.read_text().splitlines()) == 3
     with pytest.raises(LaneDialogueError, match='corrected'):
         plan_message(root, sender='validator', lane='coder', message_kind='spec-answer',
-                     text='No invented answer', basis='fixture', authority='ratified-spec',
+                     text='No invented answer', basis='fixture', authority='task-specification',
                      question_id=q['question_id'])
 
 
@@ -102,7 +102,8 @@ def test_correction_refuses_unproven_or_genuine_question(tmp_path, defect):
         stream.write_text(stream.read_text() + '{}\n')
     elif defect == 'planned-answer':
         plan_message(root, sender='validator', lane='coder', message_kind='spec-answer',
-                     text='Retain planned semantics', basis='fixture', authority='ratified-spec',
+                     text='Retain planned semantics', basis='fixture',
+                     authority='task-specification',
                      question_id=q['question_id'])
     before = (root / 'dialogue/journal.jsonl').read_bytes()
     with pytest.raises((LaneDialogueError, OSError)):

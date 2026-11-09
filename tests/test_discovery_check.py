@@ -222,11 +222,10 @@ def test_a_module_whose_tests_are_all_ignored_is_not_discovered(
 # --- endgame's requirement: no verdict without a receipt for the exact candidate ----------
 
 
-def _ratified(tmp_path: Path, *lines: str) -> Path:
+def _retained_strategy(tmp_path: Path, *lines: str) -> Path:
     artifacts = tmp_path / "run" / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     strategy = _strategy(artifacts, *lines)
-    (artifacts / "testing-strategy.md.digest").write_text("ratified\n")
     return strategy
 
 
@@ -239,7 +238,7 @@ def test_a_verdict_needs_a_receipt_for_the_exact_candidate_strategy_and_freeze(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root, (tree, candidate) = _frozen_tester(tmp_path), _integrated(tmp_path)
-    strategy = _ratified(tmp_path, "test-modules: tests/*_test.ts")
+    strategy = _retained_strategy(tmp_path, "test-modules: tests/*_test.ts")
     found = _inventory(("tests/export_test.ts", "exports a CSV"))
 
     assert _require(root, candidate, strategy) == 70
@@ -263,15 +262,14 @@ def test_a_verdict_needs_a_receipt_for_the_exact_candidate_strategy_and_freeze(
     assert "freeze_sha256" in capsys.readouterr().err
 
 
-def test_a_verdict_needs_the_strategy_ratified_and_a_freeze_when_it_declares_modules(
+def test_discovery_requires_frozen_tests_but_no_ratification(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root, (tree, candidate) = _frozen_tester(tmp_path), _integrated(tmp_path)
-    strategy = _ratified(tmp_path, "test-modules: tests/*_test.ts")
+    strategy = _retained_strategy(tmp_path, "test-modules: tests/*_test.ts")
     assert _check(root, tree, _inventory(("tests/export_test.ts", "x")), strategy=strategy) == 0
-    (strategy.parent / "testing-strategy.md.digest").unlink()
-    assert _require(root, candidate, strategy) == 70
-    assert "not ratified" in capsys.readouterr().err
+    assert not (strategy.parent / "testing-strategy.md.digest").exists()
+    assert _require(root, candidate, strategy) == 0
 
     (root / "tmux-lanes" / "tester-launch.jsonl").unlink()
     assert _require(root, candidate, strategy) == 70

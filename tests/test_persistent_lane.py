@@ -173,7 +173,7 @@ def native_lane(tmp_path, monkeypatch):
                 message_kind=kind,
                 text=text,
                 basis="native protocol regression",
-                authority="ratified-spec" if kind == "progress-review" else "runtime-protocol",
+                authority="task-specification" if kind == "progress-review" else "runtime-protocol",
             )["message_id"]
 
         def send(self, identifier, thread=THREAD, *, defer=False):

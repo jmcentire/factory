@@ -33,7 +33,74 @@ from harness.run_guidance import (
     verify_evidence,
     verify_plan,
 )
-from tests.test_harness_scripts import _write_closed_semantic_union
+from harness.semantic_union import (
+    EXTRACTION_SCHEMA,
+    RULINGS_SCHEMA,
+    derive_observation_id,
+    update_spec,
+)
+
+
+def _write_closed_semantic_union(artifacts: Path, spec: Path) -> None:
+    evidence = artifacts / "semantic-evidence"
+    for root in (evidence / "sources", evidence / "extractions"):
+        for kind in ("planning-pass", "lane-trace", "adversarial-review"):
+            (root / kind).mkdir(parents=True, exist_ok=True)
+    source = b"planning pass surfaced the explicit-root resolution behavior\n"
+    source_digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    source_id = "phase-a-planning"
+    (evidence / "sources" / "planning-pass" / f"{source_id}.source").write_bytes(source)
+    question = "Must callers be able to bind an explicit configuration root?"
+    scope = "R1.1 configuration resolution"
+    observation_id = derive_observation_id(
+        source_kind="planning-pass",
+        source_id=source_id,
+        source_digest=source_digest,
+        start=0,
+        end=len(source),
+        scope=scope,
+        question=question,
+    )
+    for suffix in ("a", "b"):
+        config = f"config-{suffix}".encode()
+        extraction = {
+            "schema_version": EXTRACTION_SCHEMA,
+            "source_kind": "planning-pass",
+            "source_id": source_id,
+            "source_sha256": source_digest,
+            "extractor": {
+                "id": f"planner-{suffix}",
+                "version": "fixture-v1",
+                "configuration_digest": "sha256:" + hashlib.sha256(config).hexdigest(),
+            },
+            "items": [
+                {
+                    "start": 0,
+                    "end": len(source),
+                    "scope": scope,
+                    "question": question,
+                }
+            ],
+        }
+        extraction_path = evidence / "extractions" / "planning-pass" / source_id / f"{suffix}.json"
+        extraction_path.parent.mkdir(parents=True, exist_ok=True)
+        extraction_path.write_text(json.dumps(extraction) + "\n", encoding="utf-8")
+    rulings = {
+        "schema_version": RULINGS_SCHEMA,
+        "items": [
+            {
+                "observation_id": observation_id,
+                "status": "closed",
+                "disposition": "resolved",
+                "ruling": "Yes; callers receive a documented explicit-root binding.",
+                "authority_basis": "Human-ratified Product Specification requirement R1.1.",
+                "owner": None,
+                "next_action": None,
+            }
+        ],
+    }
+    (evidence / "rulings.json").write_text(json.dumps(rulings) + "\n", encoding="utf-8")
+    update_spec(artifacts, spec)
 
 
 def canonical(value: object) -> bytes:
