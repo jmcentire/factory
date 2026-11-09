@@ -34,6 +34,16 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
     result and fails visibly; a queued notice does not attest that review happened.
     """
     result["acceptance"] = "not-evaluated"
+    if "candidate" in result:
+        _, task = load(root.parent, result["run"])
+        try:
+            result["builder_provenance"] = _record.check_builder(
+                root, task, Path(result["repository"]), result["candidate"]["commit"])
+        except (ValueError, OSError, RuntimeError) as error:
+            result["builder_provenance"] = dict(status="unknown", findings=[str(error)])
+    provenance = result.setdefault("builder_provenance", dict(status="unknown", findings=[]))
+    provenance.setdefault("pr_verification", "not-checked")
+    provenance["system_one"] = _record.system_one_review(provenance)
     path = result_root / "result.json"
     write_new(path, (json.dumps(result, indent=2) + "\n").encode())
     candidate = result.get("candidate", {}).get("commit", result["requested_commit"])
@@ -50,7 +60,13 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
         "Validator, including architecture, maintainability and proportionate operability gaps. "
         "Drop unproductive arguments immediately; escalate persistent corrections or disputed "
         "importance after three to four substantive rounds without requiring consensus. "
-        "This notice being queued does not mean a review occurred."
+        "This notice being queued does not mean a review occurred. "
+        f"Builder provenance: {provenance['status']}. "
+        f"PR verification: {provenance['pr_verification']}. "
+        f"System One: {provenance['system_one']['status']} "
+        f"({provenance['system_one'].get('reason', 'see retained observation')}). "
+        f"Retained builder: {json.dumps(provenance.get('expected', {}).get('identity', {}))}. "
+        "Check the actual PR head/body with run_record.py provenance before publication."
     )
     try:
         _record.message(root, "orchestrator", "host", notice)
@@ -195,6 +211,10 @@ def main() -> int:
                   f"{candidate['lfs_pointers_left']} pointer file(s) remain")
         print(f"{'PASS' if code == 0 else 'FAIL'}: checks only; "
               f"product acceptance not evaluated; {result}/result.json")
+        provenance = evidence["builder_provenance"]
+        print(f"PR verification: {provenance['pr_verification']}; "
+              f"System One: {provenance['system_one']['status']} "
+              f"({provenance['system_one'].get('reason', 'see retained observation')}).")
         print("Product acceptance: not evaluated. Orchestrator review notice queued.")
         return 0 if code == 0 else 1
     except (ValueError, OSError, RuntimeError) as error:

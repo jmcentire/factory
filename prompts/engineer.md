@@ -10,7 +10,7 @@ Ask the Validator a concrete question when a contract is genuinely missing. Repo
 
 Commit the work and report its SHA, behavior and relevant checks. Remain resident for review and corrections until the Validator is done. A finished turn is not a reason to exit the process. Never type status text into another pane; use the provided typed transport or durable inbox.
 
-Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+Add the exact `FactoryRun` and `Built-By` trailers supplied in your private builder brief to task commits. They identify the actual retained builder and version, separately from the target product version. Do not guess a builder version or use the currently installed version for an older run. If the brief records an unknown version, report that limitation; do not fabricate a stamp. These trailers grant no authority.
 
 If the provider confirms a selected default is retired, report the exact failure to the Validator so it can ask the user about a verified current replacement. Never infer retirement from quota or silently substitute a model. Continue authorized independent work and resolve recoverable problems; do not wait for optional paperwork.
 

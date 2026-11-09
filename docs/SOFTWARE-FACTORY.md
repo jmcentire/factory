@@ -176,3 +176,48 @@ retention matters. Unknown ownership, live processes and linked Git stores refus
 Use `factory version --json` with the new run's retained `factory_version` when
 investigating an issue. Current installation identity is not proof of the version
 that produced an older run. See README's storage section for limits and restoration.
+
+### Builder attribution on generated artifacts
+
+Run creation retains the builder's name/version/revision/dirty state in `harness.json` under
+`factory_version`. `run_record.py provenance --runs RUNS --run RUN` renders commit trailers and
+`PR built by NAME vVERSION` from that record, not from the target package or current installation.
+The host supplies only that identity to each author's private brief. Older Factory records with
+version but no name imply Factory; a missing version remains unknown. Direct work without a
+Factory run must not acquire Factory or Chiron attribution retrospectively.
+
+Endgame records check actual candidate-range commit messages after the retained target or
+author projection bases. Upstream commits merged after the pin also appear in this range;
+review their original attribution separately and never relabel imported history as Factory work. The Validator checks actual GitHub metadata with
+`run_record.py provenance --runs RUNS --run RUN --repo REPO --commit SHA --pr URL` after a PR
+update and before merge. That read-only check records the exact head/body and queues findings to
+the Orchestrator, who independently reviews them. Observations apply to that snapshot; later
+changes require another check. Missing or conflicting stamps are review findings; test-command
+outcomes stay separate. Identity consistency does not establish cryptographic authorship.
+Published commits are preserved.
+
+Each endgame or explicit provenance checkpoint attempts one bounded System One observation through
+the existing Jev client. Only retained builder name/version, exact candidate ID, observed
+attribution lines, PR head and verification coverage are sent; source code and PR prose are
+excluded. The same result file retains the exact payload/digest, pinned model and observed
+results or a fixed unavailability reason. There is no background worker, automatic retry or
+new acceptance gate. A crash before persistence can lose an observation; no exactly-once claim
+is made. `TYPESAFE_API_KEY` and the existing `JMC_JEV_API_KEY` alias are supported in the invoking
+environment; absent credentials or provider failures are reported as unavailable. Resident
+coordinator environments intentionally omit these keys. With explicit user authorization,
+`FACTORY_SYSTEM_ONE_PROFILE=1` on the Factory invocation passes only that non-secret flag to
+coordinators. If no direct provider key is present, the existing short-lived HTTP child sources
+`~/.profile` with startup output suppressed and profile input disconnected from the request.
+It selects only the System One key, clears unrelated environment variables, and returns only
+validated model/probability fields; no credential returns to the coordinator or enters author
+or candidate environments. The eight-second request deadline includes profile loading, followed
+by at most one second of cleanup of this invocation's own process group. An unreadable profile
+or missing key is explicit unavailability. The default remains no profile loading; no broker,
+worker, profile edit or machine-wide setting is introduced. Candidate test commands do not
+inherit either the provider key or this flag.
+
+Endgame checks commits, so its PR coverage is explicitly `not-checked`. The PR command records
+`checked` only when it compares the fetched snapshot; that means inspected, not necessarily
+consistent. Skipping the PR command leaves that coverage gap visible even if tests pass or
+System One reports a low mismatch probability. The Orchestrator reviews actual artifact
+findings, PR coverage and the separate provider observation; none implies product acceptance.

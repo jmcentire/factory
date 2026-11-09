@@ -692,9 +692,9 @@ PY
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
-  PROMPT_DIGEST=$("$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+  PROMPT_DIGEST=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
-    "$REPOSITORY" "$BRIEF_MANIFEST" <<'PY'
+    "$REPOSITORY" "$BRIEF_MANIFEST" "$ROOT" "$D" <<'PY'
 import hashlib, json, os, pathlib, sys
 
 source, destination = map(pathlib.Path, sys.argv[1:3])
@@ -755,6 +755,13 @@ if standard:
     inputs.append(("testing-standard.md", "the testing standard, the Tester doctrine and this "
                    "run's testing strategy", pathlib.Path(standard).read_bytes()))
 inputs.append(("task.txt", "the verbatim lane task", task))
+sys.path.insert(0, sys.argv[15])  # Trusted harness, never a target-owned namespace package.
+from run_record import builder_attribution, read_json
+attribution = builder_attribution(read_json(pathlib.Path(sys.argv[14]) / "harness.json"))
+identity = ("Use these exact trailers on task commits:\n" + attribution["commit_trailers"]
+            + "\nRetained builder identity: " + json.dumps(attribution["identity"])
+            + "\nIf the version is unknown, report it; never infer it from the target or current install.\n")
+inputs.append(("builder.txt", "this run's retained builder attribution", identity.encode()))
 for name, what, body in inputs:
     target = brief_dir / name
     out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),

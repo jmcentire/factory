@@ -1,4 +1,14 @@
-# Optional Jev observations
+# System One observations
+
+Artifact attribution uses one synchronous, metadata-only call at each existing endgame or
+explicit PR verification checkpoint. Its result is retained alongside deterministic findings,
+PR coverage and test outcomes, as described in
+[SOFTWARE-FACTORY.md](../SOFTWARE-FACTORY.md#builder-attribution-on-generated-artifacts).
+Unavailable credentials or service responses stay unavailable; an omitted PR check stays
+not-checked. This path does not launch an activity worker or impose a release gate.
+
+The legacy activity screen below is separate. Its retained dispatcher loop is not invoked by
+ordinary `dispatcher --observe` startup; it is not the artifact-verification entry point.
 
 The Jev screen supplies bounded semantic observations to a resident Orchestrator.
 Use it only when explicitly selected and authorized to send the relevant activity to

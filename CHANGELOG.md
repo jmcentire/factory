@@ -3,6 +3,28 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.29] - 2026-11-09
+
+### Changed
+
+- Generated commit and PR builder stamps now come from the run's retained Factory identity,
+  independently of the target product version or a later installation. Missing identity stays
+  unknown; direct work is not retrospectively attributed to Factory or Chiron.
+- Endgame checks actual commit trailers. The explicit PR provenance command checks GitHub's
+  current body and exact head, retains its evidence and notifies the Orchestrator. Skipped PR
+  verification remains visible and is separate from test outcomes and acceptance.
+- Existing checkpoints make a bounded System One observation of attribution metadata. Provider
+  unavailability remains explicit. An authorized opt-in permits only the short-lived HTTP child
+  to source the user's profile; provider credentials never reach coordinator or author lanes.
+- Test execution removes provider credentials and the profile opt-in from its environment.
+
+### Rollout
+
+- Existing runs and their pinned installations remain unchanged. New runs retain builder name
+  and version. Attribution consistency is not cryptographic proof of authorship.
+- System One is an observation, not a new release gate or background worker. Design contribution
+  for this change is engineering architecture review; no separate Design role is introduced.
+
 ## [0.8.28] - 2026-11-09
 
 ### Fixed

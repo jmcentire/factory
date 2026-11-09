@@ -981,7 +981,8 @@ def observe(root: pathlib.Path, previous: dict) -> dict:
                   *(root / "tmux-lanes").glob("*-lane.log"),
                   *(root / "tmux-lanes").glob("*-exits.jsonl"),
                   *(root / "tmux-lanes").glob("*-launch.jsonl"),
-                  root / "validator" / "inbox.jsonl", root / "orchestrator" / "inbox.jsonl"]
+                  root / "validator" / "inbox.jsonl", root / "orchestrator" / "inbox.jsonl",
+                  *(root / "provenance").glob("*.json")]
     entries, cursors = [], dict(previous)
     for path in sorted(set(candidates)):
         if path.name == "orchestrator-lane.log":

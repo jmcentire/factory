@@ -20,7 +20,7 @@ import stat
 import sys
 from io import BufferedReader
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 SCHEMA = "factory-harness/3"
 
@@ -129,6 +129,144 @@ def load(runs: Path, run: str) -> tuple[Path, dict]:
     if not Path(doc["repository"]).is_absolute() or not Path(doc["repository"]).is_dir():
         raise ValueError("recorded repository is unavailable")
     return root, doc
+
+
+def builder_attribution(doc: dict) -> dict:
+    """Render only the retained builder identity; never consult the current installation."""
+    identity = doc.get("factory_version")
+    identity = dict(identity) if isinstance(identity, dict) else {}
+    if doc.get("schema_version") == SCHEMA and identity:
+        identity.setdefault("name", "Factory")  # Name implicit in older Factory run records.
+    name, version = identity.get("name"), identity.get("version")
+    known = all(isinstance(value, str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._+-]{0,127}", value)
+                for value in (name, version))
+    builder = f"{name} v{version}" if known else None
+    trailers = f"FactoryRun: {doc['run_id']}"
+    if builder:
+        trailers += f"\nBuilt-By: {builder}"
+    return dict(identity=identity, commit_trailers=trailers,
+                pr_line=f"PR built by {builder}" if builder else None)
+
+
+def check_builder(root: Path, doc: dict, repository: Path, commit: str,
+                  *, pr: dict | None = None) -> dict:
+    """Check actual task commit messages and, when supplied, a fetched PR snapshot.
+
+    Consistency with a retained local record is not cryptographic authorship proof.
+    Projection/target bases are excluded; later imported history needs attribution review.
+    """
+    from factory_runtime.host_git import run_host_git
+
+    exact = run_host_git(repository, ["rev-parse", "--verify", "--end-of-options",
+                                     f"{commit}^{{commit}}"]).decode().strip()
+    expected = builder_attribution(doc)
+    result: dict[str, Any] = dict(status="unknown", expected=expected, commit=exact,
+                                  commits=[], findings=[],
+                                  repository=str(repository.resolve()), pr=pr,
+                                  commit_trailers={}, pr_lines=[], pr_verification="not-checked")
+    if not expected["pr_line"]:
+        result["findings"].append("Retained builder identity/version is unknown.")
+        return result
+    bases = [doc["resolved_commit"]]
+    if (root / "inputs").is_symlink():
+        raise ValueError("input receipts directory is a symlink")
+    for path in (root / "inputs").glob("*.json"):
+        receipt = read_json(path)
+        if receipt.get("source_commit") == doc["resolved_commit"]:
+            bases.append(receipt["initial_commit"])
+    ancestors = []
+    for base in bases:
+        if not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{40,64}", base):
+            raise ValueError("invalid retained provenance base")
+        try:
+            run_host_git(repository, ["merge-base", "--is-ancestor", base, exact])
+        except RuntimeError:
+            continue  # Another author projection need not exist in this object database.
+        ancestors.append(base)
+    if not ancestors:
+        result["findings"].append("Candidate has no retained task/projection base; scope unknown.")
+        return result
+    commits = run_host_git(repository, ["rev-list", exact, "--not", *ancestors]).decode().split()
+    result["commits"] = commits
+    for oid in commits:
+        body = run_host_git(repository, ["show", "-s", "--format=%B", oid]).decode()
+        # Read canonical raw trailers. Repository trailer aliases/config must not rename
+        # another field into Built-By, or promote body prose into attribution.
+        trailers = body.rstrip().rsplit("\n\n", 1)[-1].splitlines()
+        canonical_block = all(re.fullmatch(r"[A-Za-z0-9-]+: .*", line) for line in trailers)
+        actual = ([line for line in trailers
+                   if line.lower().startswith(("factoryrun:", "built-by:"))]
+                  if canonical_block else [])
+        result["commit_trailers"][oid] = actual
+        if sorted(actual) != sorted(expected["commit_trailers"].splitlines()):
+            result["findings"].append(
+                f"Commit {oid} needs attribution review: missing or conflicting builder trailers.")
+    if pr is not None:
+        if pr.get("headRefOid") != exact:
+            result["findings"].append("PR head differs from the checked candidate.")
+        lines = pr.get("body", "").splitlines()
+        stamps = [line for line in lines
+                  if line.lower().startswith(("pr built by ", "factoryrun:"))]
+        result.update(pr_lines=stamps, pr_verification="checked")
+        if sorted(stamps) != sorted([expected["pr_line"], f"FactoryRun: {doc['run_id']}"]):
+            result["findings"].append("PR body has missing or conflicting builder attribution.")
+    result["status"] = "mismatch" if result["findings"] else "consistent"
+    return result
+
+
+def fetch_pr(url: str) -> dict:
+    """Read GitHub's current body/head, without changing the PR or invoking a shell."""
+    import subprocess
+
+    if not re.fullmatch(r"https://github\.com/[^/]+/[^/]+/pull/[0-9]+", url):
+        raise ValueError("--pr requires a GitHub pull request URL")
+    try:
+        fetched = subprocess.run(
+            ["gh", "pr", "view", url, "--json", "url,body,headRefOid"],
+            check=True, capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as error:
+        raise ValueError("could not read PR metadata; no provenance verdict retained") from error
+    pr = json.loads(fetched.stdout)
+    if (not isinstance(pr, dict) or pr.get("url") != url
+            or not isinstance(pr.get("body"), str) or not isinstance(pr.get("headRefOid"), str)):
+        raise ValueError("unexpected PR metadata; no provenance verdict retained")
+    return pr
+
+
+def system_one_review(report: dict) -> dict:
+    import importlib
+
+    screen = (importlib.import_module("harness.jev_screen") if __package__
+              else importlib.import_module("jev_screen"))
+    return screen.builder_review(report)
+
+
+def retain_provenance(root: Path, report: dict) -> Path:
+    import uuid
+
+    directory = root / "provenance"
+    if directory.is_symlink():
+        raise ValueError("provenance directory is a symlink")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / f"{uuid.uuid4().hex}.json"
+    report.setdefault("pr_verification", "not-checked")
+    report["system_one"] = system_one_review(report)
+    report = dict(report, observed_at=dt.datetime.now(dt.UTC).isoformat())
+    temporary = path.with_suffix(".tmp")
+    try:
+        write_new(temporary, (json.dumps(report, indent=2) + "\n").encode())
+        os.link(temporary, path, follow_symlinks=False)  # Publish complete bytes, never overwrite.
+    finally:
+        temporary.unlink(missing_ok=True)
+    message(root, "orchestrator", "host",
+            f"Builder provenance {report['status']} for {report['commit']}: {path}. "
+            f"PR verification: {report['pr_verification']}. "
+            f"System One: {report['system_one']['status']} "
+            f"({report['system_one'].get('reason', 'see retained observation')}). "
+            f"Findings: {json.dumps(report['findings'])}. This checks retained identity "
+            "consistency, not product acceptance or cryptographic authorship.")
+    return path
 
 
 def context(runs: Path, run: str) -> None:
@@ -506,6 +644,9 @@ def _start_locked(runs: Path, run: str) -> None:
             "Current user instructions govern. Preserve assigned agents and models. "
             "Do not create a catalog, signatures, waivers or approval paperwork."
         )
+        # Old runs retain their exact initial prompt; upgrading must not break resume.
+        if isinstance(doc.get("factory_version"), dict) and doc["factory_version"].get("name"):
+            prompt += f" Retained builder attribution: {json.dumps(builder_attribution(doc))}."
         if role == "orchestrator":
             prompt += (
                 f" Continuously read all lane activity using {tools}/dispatcher.py "
@@ -586,6 +727,9 @@ def _start_locked(runs: Path, run: str) -> None:
         # reaches it. The Orchestrator and the authors keep no GitHub credential from here.
         if role == "validator":
             env.update({key: os.environ[key] for key in GITHUB_ENV if key in os.environ})
+        # Permission to source the profile reaches the trusted HTTP child; no key reaches seats.
+        if os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1":
+            env["FACTORY_SYSTEM_ONE_PROFILE"] = "1"
         # Reuse the adapter's credential declarations. Plan mode never inherits API keys.
         adapter = agents.harness("codex" if agent == "ollama" else agent)
         for key in adapter.api_env:
@@ -711,11 +855,13 @@ def _start_locked(runs: Path, run: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["create", "start", "context", "status", "message",
-                                           "capture"])
+                                           "capture", "provenance"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
+    parser.add_argument("--commit", help="exact candidate or revision to check")
+    parser.add_argument("--pr", help="GitHub PR URL to fetch and check (read-only)")
     parser.add_argument("--budget", type=float)
     parser.add_argument("--log", default=os.environ.get("FACTORY_LOG", os.devnull))
     parser.add_argument("--to", choices=["validator", "orchestrator"])
@@ -743,7 +889,19 @@ def main() -> int:
             context(args.runs, args.run)
         else:
             root, doc = load(args.runs, args.run)
-            if args.action == "capture":
+            if args.action == "provenance":
+                if not args.commit:
+                    if args.pr:
+                        parser.error("--pr requires --commit")
+                    print(json.dumps(builder_attribution(doc), indent=2))
+                else:
+                    pr = fetch_pr(args.pr) if args.pr else None
+                    report = check_builder(root, doc, args.repo or Path(doc["repository"]),
+                                           args.commit, pr=pr)
+                    path = retain_provenance(root, report)
+                    print(json.dumps(dict(report, evidence=str(path)), indent=2))
+                    return 0 if report["status"] == "consistent" else 1
+            elif args.action == "capture":
                 if args.slot is not None:
                     if args.to or not re.fullmatch(
                         r"(?:coder|tester)(?:-[a-z0-9][a-z0-9-]{0,15})?"

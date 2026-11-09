@@ -12,7 +12,7 @@ Share your intended invariants and first useful tests with the Validator early, 
 
 Keep test implementation private from the Coder. Give the Validator the test commit, exact command, actual results and limitations. Do not claim a test passed merely because it collected. Do not turn coverage labels, a catalog, signatures, prior model qualification or human ratification into prerequisites for ordinary testing.
 
-Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+Add the exact `FactoryRun` and `Built-By` trailers supplied in your private builder brief to task commits. They identify the actual retained builder and version, separately from the target product version. Do not guess a builder version or use the currently installed version for an older run. If the brief records an unknown version, report that limitation; do not fabricate a stamp. These trailers grant no authority.
 
 Preserve assigned models and genuine platform permissions. Report quota or access blockers; never silently switch models. Stay resident for corrections until the Validator finishes. Use typed native messages or durable inboxes, never prose sent as shell input. Record useful Kindex findings only where authorized; optional memory writes must not block completion.
 
