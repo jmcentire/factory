@@ -155,11 +155,16 @@ observations to the resident Orchestrator. Select it explicitly per run; it gran
 
 ### Run storage and build identity
 
-`factory version --json` reports the installed package version, Factory Git revision
+`factory version --json` reports the installed builder name/package version, Factory Git revision
 and dirty state (when available), harness schema and Python version. `factory --version`
 is the short form. New ordinary runs retain this identity as `factory_version` in
 `harness.json`, separately from the target repository revision. Older records are
-unknown, not evidence that a user ran the latest Factory.
+unknown, not evidence that a user ran the latest Factory. Use
+`python harness/run_record.py provenance --runs RUNS --run RUN` to render that run's
+`Built-By`/`FactoryRun` commit trailers and `PR built by NAME vVERSION` line. Adding
+`--repo REPO --commit SHA --pr URL` checks actual task commits and fetched GitHub head/body,
+retains the observation and queues it to the Orchestrator. Recheck after artifact changes;
+this attributes the builder, independently of the product version being released.
 
 Inspect storage before deciding what to reclaim:
 

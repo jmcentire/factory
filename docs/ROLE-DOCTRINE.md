@@ -60,7 +60,7 @@ Coordination messages belong in durable inboxes or typed native agent channels. 
 
 For `tmux_lane_message.sh`, exit 75 means busy and not delivered; exit 77 means refused and not delivered. Diagnose the cause and correct it before retrying; never report a refused message as received. If you need a user answer outside an interactive conversation they can see, route the concrete question to the initiating conversation or an authorized communication channel, not an unseen in-window question dialog.
 
-For authorized pull requests, include `FactoryRun: <task id or run id>` in the body and preserve that trailer in task commits. Use the actual task or run identifier; this is searchable provenance, not a signature, approval or acceptance gate.
+For authorized pull requests, obtain the attribution from `python harness/run_record.py provenance --runs RUNS --run RUN`. Preserve its exact `FactoryRun` and `Built-By` trailers on task commits and add its `pr_line` (for example, `PR built by Factory v0.8.28`) plus `FactoryRun: RUN` as standalone lines in the PR body. The example is not the source of identity: use this run's retained `factory_version`, never the target product version or freshly installed build. Missing retained identity stays unknown. After creating or updating the authorized PR, run `python harness/run_record.py provenance --runs RUNS --run RUN --repo CANDIDATE_REPO --commit SHA --pr URL` to read and check the actual head/body and task commits. Recheck after head/body changes and before merge; share findings with the Orchestrator. Fix inaccurate metadata within existing authorization; do not rewrite published history or invent approval paperwork. A consistent stamp is attribution evidence, not product acceptance or proof of authorship.
 
 Keep genuine boundaries: platform permissions, credentials, chosen billing mode, separate author inputs, safe Git reads after agent handoff, exact process/session identity, and explicit test-only tmux sockets in tests. Honor the user's selected native permission mode. When they request yolo/skip permissions and no sandbox, launch the supported CLI that way; do not add a Factory confirmation for ordinary work already authorized. An authorized lane folder may be trusted without asking the user again. A real external denial still applies and must not be bypassed. Do not mutate or shut down unrelated sessions.
 
@@ -82,7 +82,7 @@ Ask the Validator a concrete question when a contract is genuinely missing. Repo
 
 Commit the work and report its SHA, behavior and relevant checks. Remain resident for review and corrections until the Validator is done. A finished turn is not a reason to exit the process. Never type status text into another pane; use the provided typed transport or durable inbox.
 
-Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+Add the exact `FactoryRun` and `Built-By` trailers supplied in your private builder brief to task commits. They identify the actual retained builder and version, separately from the target product version. Do not guess a builder version or use the currently installed version for an older run. If the brief records an unknown version, report that limitation; do not fabricate a stamp. These trailers grant no authority.
 
 If the provider confirms a selected default is retired, report the exact failure to the Validator so it can ask the user about a verified current replacement. Never infer retirement from quota or silently substitute a model. Continue authorized independent work and resolve recoverable problems; do not wait for optional paperwork.
 
@@ -104,7 +104,7 @@ Share your intended invariants and first useful tests with the Validator early, 
 
 Keep test implementation private from the Coder. Give the Validator the test commit, exact command, actual results and limitations. Do not claim a test passed merely because it collected. Do not turn coverage labels, a catalog, signatures, prior model qualification or human ratification into prerequisites for ordinary testing.
 
-Add `FactoryRun: <task id or run id>` as a trailer on task commits so their provenance remains searchable. Use the actual identifier supplied with the task; the trailer grants no authority.
+Add the exact `FactoryRun` and `Built-By` trailers supplied in your private builder brief to task commits. They identify the actual retained builder and version, separately from the target product version. Do not guess a builder version or use the currently installed version for an older run. If the brief records an unknown version, report that limitation; do not fabricate a stamp. These trailers grant no authority.
 
 Preserve assigned models and genuine platform permissions. Report quota or access blockers; never silently switch models. Stay resident for corrections until the Validator finishes. Use typed native messages or durable inboxes, never prose sent as shell input. Record useful Kindex findings only where authorized; optional memory writes must not block completion.
 

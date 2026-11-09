@@ -13,7 +13,7 @@ from factory_core import __version__
 def build_identity() -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     result: dict[str, Any] = {
-        "version": __version__, "revision": None, "dirty": None,
+        "name": "Factory", "version": __version__, "revision": None, "dirty": None,
         "harness_schema": "factory-harness/3", "python": sys.version.split()[0],
     }
     if not (root / "pyproject.toml").is_file() or not (root / ".git").exists():

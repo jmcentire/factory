@@ -176,3 +176,23 @@ retention matters. Unknown ownership, live processes and linked Git stores refus
 Use `factory version --json` with the new run's retained `factory_version` when
 investigating an issue. Current installation identity is not proof of the version
 that produced an older run. See README's storage section for limits and restoration.
+
+### Builder attribution on generated artifacts
+
+Run creation retains the builder's name/version/revision/dirty state in `harness.json` under
+`factory_version`. `run_record.py provenance --runs RUNS --run RUN` renders commit trailers and
+`PR built by NAME vVERSION` from that record, not from the target package or current installation.
+The host supplies only that identity to each author's private brief. Older Factory records with
+version but no name imply Factory; a missing version remains unknown. Direct work without a
+Factory run must not acquire Factory or Chiron attribution retrospectively.
+
+Endgame records check actual candidate-range commit messages after the retained target or
+author projection bases. Upstream commits merged after the pin also appear in this range;
+review their original attribution separately and never relabel imported history as Factory work. The Validator checks actual GitHub metadata with
+`run_record.py provenance --runs RUNS --run RUN --repo REPO --commit SHA --pr URL` after a PR
+update and before merge. That read-only check records the exact head/body and queues findings to
+the Orchestrator, who independently reviews them. Observations apply to that snapshot; later
+changes require another check. Missing or conflicting stamps are review findings; test-command
+outcomes stay separate. Identity consistency does not establish cryptographic authorship.
+Published commits are preserved. System One's bounded worker is a separate, currently unmerged integration;
+ordinary mainline observation exposes the retained reports without claiming System One ran.
