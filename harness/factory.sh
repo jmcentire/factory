@@ -13,7 +13,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS="${2:?runs path required}"; shift 2 ;;
     --repo) REPO="${2:?repository required}"; shift 2 ;;
-    --log|--budget) EXTRA+=("$1" "${2:?value required}"); shift 2 ;;
+    --log|--budget|--jev-screen|--jev-screen-calls) EXTRA+=("$1" "${2:?value required}"); shift 2 ;;
     *) echo "factory: unknown argument: $1" >&2; exit 64 ;;
   esac
 done

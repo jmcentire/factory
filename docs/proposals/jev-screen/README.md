@@ -1,8 +1,9 @@
 # jev rules screen — a supplement to the resident Orchestrator (proposal)
 
-Status: the msg-r2 rules are wired into the resident dispatcher as an opt-in screen
-(2026-10-09). See [runtime operation](../../practices/jev-runtime.md). The older batch0
-evaluations below remain prototype evidence, not runtime qualification.
+Status: historical proposal and prototype evidence. The normal workflow now uses a
+bounded host advisory worker with a current rule subset, not the legacy dispatcher
+assessment protocol described below. See [runtime operation](../../practices/jev-runtime.md).
+These evaluations are not runtime qualification.
 
 ## What it is for
 

@@ -16,6 +16,13 @@ import pytest
 from harness import run_record
 
 
+@pytest.fixture(autouse=True)
+def advisory_disabled(monkeypatch):
+    # These cases isolate ordinary coordinator behavior. Dedicated advisory tests
+    # cover enabled startup; the operator's real credentials must not change scope.
+    monkeypatch.setenv("FACTORY_JEV_SCREEN", "off")
+
+
 @pytest.fixture
 def launch(tmp_path, monkeypatch):
     repository = tmp_path / "source with spaces"
@@ -412,7 +419,7 @@ def test_question_is_durable_without_an_external_channel(launch, monkeypatch):
 
 
 @pytest.mark.parametrize("option,value", [
-    ("--engagement", "autonomous"), ("--engagement", "semi"), ("--jev-screen-calls", "2"),
+    ("--engagement", "autonomous"), ("--engagement", "semi"),
 ])
 def test_retired_startup_options_fail_explicitly_without_mutation(launch, option, value):
     root, repository, binary, _, _, _ = launch

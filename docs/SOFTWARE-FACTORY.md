@@ -84,6 +84,16 @@ Classify risk by behavior and reachable side effects. Critical behavior needs ad
 
 The classification includes the surfaces reached by side effects. The Validator assigns it per component and reachable surface. An acceptance claim needs cited evidence; an unchecked item remains a visible gap. Review the exact frozen candidate, not a moving working tree.
 
+### Proportionate validation and evidence reuse
+
+Choose checks for the behavior and reachable risks of the actual delta, not for the fact that a commit was made or pushed. Reviewing an exact candidate does not require rerunning every suite on that candidate. Reuse trustworthy prior evidence for unaffected claims when inspection of the complete diff and relevant inputs establishes that it still applies. Run the smallest useful additional checks for changed or uncertain claims; broaden them when the consequences justify it.
+
+A verified nonbehavioral comment-only edit can use semantic diff review plus the prior passing results, without a full suite. Do not classify it from filenames, a line-prefix regex, or the author's assertion alone. Inspect both versions in their language and tooling context: comments may carry compiler/linter directives, code-generation markers, documentation examples, or other consumed input. Block-comment boundaries, line continuations and other lexical effects may change executable code. Use a targeted parse/compile check when syntax or lexical scope is in question, and exercise affected tooling when comments are its input. Documentation and agent-instruction edits can change intended or generated behavior and need semantic review; they are not automatically inert.
+
+Keep the evidence chain explicit in the existing verdict: the exact accepted candidate, the tested baseline commit and retained results, the complete baseline-to-candidate diff reviewed, why each reused result remains relevant (including dependencies, configuration and environment), additional checks actually run, and remaining gaps. Never relabel a baseline run as execution on the new commit. Missing, failed or incompatible prior evidence cannot be inherited as a pass. This is judgment recorded in the normal review, not a new approval artifact, comment detector or blanket exemption.
+
+Applicable target instructions still govern. If a target explicitly mandates a full rerun after every push, resolve that conflict against the user's current authorization; Factory guidance alone does not silently override the target rule. Identify the conflicting rule and the narrow change needed rather than repeatedly performing work with no evidentiary value.
+
 For a repair, reproduce the defect in a disposable environment when possible and retain the failing result. Test the intended success path, the reported failure, and meaningful regressions. A test that was already green does not prove that it catches the defect. If reproduction is unavailable, state what remains unproven. Tests should derive from expected behavior, not mirror implementation branches. Critical deterministic guarantees need deterministic evidence; repeating a flaky check until green is not qualification.
 
 The negative control demonstrates the defect on the broken baseline; the positive control protects behavior that already works. A previously passing control that fails after a change is a regression to investigate, not evidence that the new test forced the fix. Suspected over-constraint is a concrete contract question for the Validator. Preserve the original failure and answer rather than silently adjusting expected results.
@@ -166,3 +176,7 @@ retention matters. Unknown ownership, live processes and linked Git stores refus
 Use `factory version --json` with the new run's retained `factory_version` when
 investigating an issue. Current installation identity is not proof of the version
 that produced an older run. See README's storage section for limits and restoration.
+
+### System One advisory observations
+
+New runs may use the bounded host worker described in [System One runtime](practices/jev-runtime.md). `--jev-screen auto|on|off` controls selection and `--jev-screen-calls N` bounds calls. Existing runs are unchanged. The worker queues evidence to the Orchestrator, never controls authors or replaces actual review. Normal observation does not wait for the provider.
