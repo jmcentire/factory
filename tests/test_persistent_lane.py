@@ -86,6 +86,9 @@ for line in sys.stdin:
         emit({"type": "result", "session_id": session, "result": "received literally"})
     else:
         emit({"event": "result", "result": {"conversation_id": session, "status": "SUCCESS"}})
+    if text == "BACKGROUND_WAKE":
+        time.sleep(.3)
+        emit({"type": "result", "session_id": session, "result": "background task finished"})
 """
 
 
@@ -255,6 +258,20 @@ def test_enqueue_and_success_result_never_fabricate_native_ack(native_lane, agen
     eventually(lambda: lane.raw()["turns"] == 3)
     assert lane.send(no_ack)["state"] == "pending"
     assert [r["text"] for r in lane.received()].count("NO_ACK") == 1
+
+
+def test_self_started_turn_while_idle_keeps_lane_usable(native_lane):
+    # Claude Code starts its own turn when a background task finishes; no message was delivered.
+    lane = native_lane("claude")
+    wake = lane.plan("BACKGROUND_WAKE")
+    lane.send(wake)
+    eventually(lambda: lane.raw()["turns"] == 2)
+    time.sleep(.6)
+    assert not lane.errors and lane.raw()["phase"] == "idle" and lane.raw()["turns"] == 2
+    after = lane.plan("after the wake")
+    lane.send(after)
+    eventually(lambda: lane.raw()["turns"] == 3)
+    assert lane.send(after)["state"] == "acknowledged"
 
 
 def test_wrong_session_and_stale_receipt_refuse_native_input(native_lane):
