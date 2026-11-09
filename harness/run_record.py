@@ -163,7 +163,8 @@ def check_builder(root: Path, doc: dict, repository: Path, commit: str,
     expected = builder_attribution(doc)
     result: dict[str, Any] = dict(status="unknown", expected=expected, commit=exact,
                                   commits=[], findings=[],
-                                  repository=str(repository.resolve()), pr=pr)
+                                  repository=str(repository.resolve()), pr=pr,
+                                  commit_trailers={}, pr_lines=[], pr_verification="not-checked")
     if not expected["pr_line"]:
         result["findings"].append("Retained builder identity/version is unknown.")
         return result
@@ -197,6 +198,7 @@ def check_builder(root: Path, doc: dict, repository: Path, commit: str,
         actual = ([line for line in trailers
                    if line.lower().startswith(("factoryrun:", "built-by:"))]
                   if canonical_block else [])
+        result["commit_trailers"][oid] = actual
         if sorted(actual) != sorted(expected["commit_trailers"].splitlines()):
             result["findings"].append(
                 f"Commit {oid} needs attribution review: missing or conflicting builder trailers.")
@@ -206,6 +208,7 @@ def check_builder(root: Path, doc: dict, repository: Path, commit: str,
         lines = pr.get("body", "").splitlines()
         stamps = [line for line in lines
                   if line.lower().startswith(("pr built by ", "factoryrun:"))]
+        result.update(pr_lines=stamps, pr_verification="checked")
         if sorted(stamps) != sorted([expected["pr_line"], f"FactoryRun: {doc['run_id']}"]):
             result["findings"].append("PR body has missing or conflicting builder attribution.")
     result["status"] = "mismatch" if result["findings"] else "consistent"
@@ -231,6 +234,14 @@ def fetch_pr(url: str) -> dict:
     return pr
 
 
+def system_one_review(report: dict) -> dict:
+    import importlib
+
+    screen = (importlib.import_module("harness.jev_screen") if __package__
+              else importlib.import_module("jev_screen"))
+    return screen.builder_review(report)
+
+
 def retain_provenance(root: Path, report: dict) -> Path:
     import uuid
 
@@ -239,6 +250,8 @@ def retain_provenance(root: Path, report: dict) -> Path:
         raise ValueError("provenance directory is a symlink")
     directory.mkdir(mode=0o700, exist_ok=True)
     path = directory / f"{uuid.uuid4().hex}.json"
+    report.setdefault("pr_verification", "not-checked")
+    report["system_one"] = system_one_review(report)
     report = dict(report, observed_at=dt.datetime.now(dt.UTC).isoformat())
     temporary = path.with_suffix(".tmp")
     try:
@@ -248,6 +261,9 @@ def retain_provenance(root: Path, report: dict) -> Path:
         temporary.unlink(missing_ok=True)
     message(root, "orchestrator", "host",
             f"Builder provenance {report['status']} for {report['commit']}: {path}. "
+            f"PR verification: {report['pr_verification']}. "
+            f"System One: {report['system_one']['status']} "
+            f"({report['system_one'].get('reason', 'see retained observation')}). "
             f"Findings: {json.dumps(report['findings'])}. This checks retained identity "
             "consistency, not product acceptance or cryptographic authorship.")
     return path

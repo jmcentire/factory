@@ -163,7 +163,11 @@ unknown, not evidence that a user ran the latest Factory. Use
 `python harness/run_record.py provenance --runs RUNS --run RUN` to render that run's
 `Built-By`/`FactoryRun` commit trailers and `PR built by NAME vVERSION` line. Adding
 `--repo REPO --commit SHA --pr URL` checks actual task commits and fetched GitHub head/body,
-retains the observation and queues it to the Orchestrator. Recheck after artifact changes;
+retains the observation and queues it to the Orchestrator. Endgame and PR checks each invoke
+one bounded System One observation through the existing client, with attribution metadata only.
+Commit-only checks explicitly report `pr_verification: not-checked`; provider failures report
+`system_one.status: unavailable`. Neither changes test results or product acceptance.
+Recheck after artifact changes;
 this attributes the builder, independently of the product version being released.
 
 Inspect storage before deciding what to reclaim:

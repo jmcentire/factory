@@ -238,13 +238,16 @@ def test_pane_text_cannot_impersonate_a_contract_and_linked_evidence_is_unavaila
         screen.read_evidence(root, "../outside.txt")
 
 
-def test_input_bound_and_total_http_deadline(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("api_key_name", ["TYPESAFE_API_KEY", "JMC_JEV_API_KEY"])
+def test_input_bound_and_total_http_deadline(tmp_path, monkeypatch, api_key_name) -> None:
+    for name in ("TYPESAFE_API_KEY", "JMC_JEV_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     root = setup(tmp_path)
     activity(root, "a" * 2000)
     monkeypatch.setattr(screen, "MAX_INPUT", 100)
     screen.screen_pending(root, lambda _: pytest.fail("oversized call"))
     assert receipts(root)[0]["body"]["results"]["model_unqualified"]["reason"] == "input-ceiling"
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only-not-a-real-key")
+    monkeypatch.setenv(api_key_name, "test-only-not-a-real-key")
 
     def deadline(args, **kwargs):
         assert not kwargs.get("shell") and args[0] == screen.sys.executable

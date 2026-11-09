@@ -194,5 +194,23 @@ update and before merge. That read-only check records the exact head/body and qu
 the Orchestrator, who independently reviews them. Observations apply to that snapshot; later
 changes require another check. Missing or conflicting stamps are review findings; test-command
 outcomes stay separate. Identity consistency does not establish cryptographic authorship.
-Published commits are preserved. System One's bounded worker is a separate, currently unmerged integration;
-ordinary mainline observation exposes the retained reports without claiming System One ran.
+Published commits are preserved.
+
+Each endgame or explicit provenance checkpoint attempts one bounded System One observation through
+the existing Jev client. Only retained builder name/version, exact candidate ID, observed
+attribution lines, PR head and verification coverage are sent; source code and PR prose are
+excluded. The same result file retains the exact payload/digest, pinned model and observed
+results or a fixed unavailability reason. There is no background worker, automatic retry or
+new acceptance gate. A crash before persistence can lose an observation; no exactly-once claim
+is made. `TYPESAFE_API_KEY` and the existing `JMC_JEV_API_KEY` alias are supported in the invoking
+environment; absent credentials or provider failures are reported as unavailable. Resident
+coordinator environments intentionally omit these keys, so their checkpoints report `missing-key`
+unless an explicitly authorized invoking environment supplies one. The existing `with_secret.py`
+utility can supply a configured secret to one host command; no new secret source or broker is
+created here. Candidate test commands do not inherit the provider key.
+
+Endgame checks commits, so its PR coverage is explicitly `not-checked`. The PR command records
+`checked` only when it compares the fetched snapshot; that means inspected, not necessarily
+consistent. Skipping the PR command leaves that coverage gap visible even if tests pass or
+System One reports a low mismatch probability. The Orchestrator reviews actual artifact
+findings, PR coverage and the separate provider observation; none implies product acceptance.
