@@ -15,6 +15,7 @@ the persistent-lanes-at-small-scale question over iterations.
 import argparse
 import datetime
 import json
+import os
 import pathlib
 import sys
 from typing import Any
@@ -42,7 +43,9 @@ def lane_usage(workspace: pathlib.Path, agent: str) -> dict[str, Any]:
             "source": None,
         }
     slug = str(workspace.resolve()).replace("/", "-")
-    projects = pathlib.Path.home() / ".claude" / "projects" / slug
+    profile = os.environ.get("CLAUDE_CONFIG_DIR")
+    claude = pathlib.Path(profile) if profile else pathlib.Path.home() / ".claude"
+    projects = claude / "projects" / slug
     if not projects.is_dir():
         return {"tokens": "UNDERIVED (no session log found)", "source": None}
     tokens = 0

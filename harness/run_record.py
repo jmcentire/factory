@@ -488,13 +488,15 @@ def trust_claude_folders(home: Path, folders: list[Path], *, wait: float = 5.0) 
 
     An interactive seat otherwise opens on "trust this folder?" with "No, exit" selected and sits
     idle until someone answers it in the pane. Writes ``projects[<path>].hasTrustDialogAccepted``
-    in ``~/.claude.json`` under Claude Code's own lock, keeping every other key; the first change
+    in Claude Code's ``.claude.json`` (``$CLAUDE_CONFIG_DIR/.claude.json`` under a profile, else
+    ``~/.claude.json``) under Claude Code's own lock, keeping every other key; the first change
     keeps the prior file as ``.claude.json.factory-backup``. Raises OSError/ValueError without
     writing when the file cannot be safely updated; the caller reports it and launches anyway.
     """
     import time
 
-    config = home / ".claude.json"
+    profile = os.environ.get("CLAUDE_CONFIG_DIR")
+    config = (Path(profile) if profile else home) / ".claude.json"
     lock = Path(f"{config}.lock")
     real = config.resolve()  # a dotfile-managed symlink keeps pointing at the updated file
     keys = [str(folder.resolve()) for folder in folders]
@@ -719,8 +721,9 @@ def _start_locked(runs: Path, run: str) -> None:
         env = {
             key: os.environ[key]
             # TMUX_TMPDIR places the run's tmux socket; a seat without it reaches another server.
+            # CLAUDE_CONFIG_DIR and CODEX_HOME are the operator's agent profiles.
             for key in ("HOME", "USER", "PATH", "TMPDIR", "TMUX_TMPDIR", "TERM", "SHELL", "LANG",
-                        "CODEX_HOME")
+                        "CODEX_HOME", "CLAUDE_CONFIG_DIR")
             if key in os.environ
         }
         # The Validator opens authorized pull requests; gh auth held only in the environment
