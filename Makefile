@@ -152,7 +152,7 @@ show-python: ## report which interpreter the gates will use, and why
 	@echo "venv managed  = $(if $(strip $(VENV_PREREQ)),yes ($(VENV)),no)"
 
 test: check-python ## run the pytest suite
-	$(PY) -m pytest tests/
+	env -u TYPESAFE_API_KEY -u JMC_JEV_API_KEY -u FACTORY_SYSTEM_ONE_PROFILE $(PY) -m pytest tests/
 
 test-isolation: check-python ## prove enforced Coder/Tester separation on macOS
 	@$(PY) -c 'import platform, sys; sys.exit(0 if platform.system() == "Darwin" else 1)' || \
