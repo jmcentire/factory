@@ -8,7 +8,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
 USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-probe> [options]
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
-                  [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
+                  [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
                   [--persistent (Claude or Antigravity native stream input)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
@@ -125,8 +125,8 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
 case "$ACTION:$AGENT" in launch:claude|launch:agy) PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;; esac
-case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
-  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent" >&2; exit 64 ;;
+case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode) ;;
+  *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode" >&2; exit 64 ;;
 esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in launch:claude|launch:agy) ;;
@@ -136,8 +136,9 @@ fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
   *) echo "tmux-lane: --effort must be minimal|low|medium|high|xhigh|max" >&2; exit 64 ;;
 esac
-# cursor-agent names the effort in the model (grok-4.7-xhigh); codex-ollama's is the model's own.
-case "$AGENT" in cursor-agent|codex-ollama)
+# cursor-agent names the effort in the model (grok-4.7-xhigh), opencode as its #variant;
+# codex-ollama's is the model's own.
+case "$AGENT" in cursor-agent|codex-ollama|opencode)
   [ -z "$EFFORT" ] || { echo "tmux-lane: $AGENT takes its effort from the model name or config, not --effort" >&2; exit 64; } ;;
 esac
 [ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z0-9][a-z0-9-]{0,15}$ ]] || {
@@ -613,7 +614,7 @@ PY
           refuse 70 "cursor-agent CLI contract lacks $REQUIRED ($AGENT_VERSION)"
       done
       CLI_CONTRACT="cursor-agent-stream-resume-v1" ;;
-    claude|claude-ollama|agy|muse|prime-agent)
+    claude|claude-ollama|agy|muse|prime-agent|opencode)
       # A registry harness (harness/agents.py): the registry builds its headless turn.
       AGENT_VERSION=$("$AGENT_EXECUTABLE" --version 2>/dev/null | head -1) || \
         refuse 70 "$AGENT CLI is not runnable"
@@ -1057,7 +1058,7 @@ PY
       printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config %s %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
-    cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
+    cursor-agent|claude|claude-ollama|agy|muse|prime-agent|opencode)
       # A registry harness (harness/agents.py). Its private configuration (the lane's scoped
       # Kindex and none of the operator's MCP servers, rules or hooks) and its variables are
       # built under the slot's agent home; the variables reach the lane through an owner-only

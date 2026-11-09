@@ -60,7 +60,7 @@ If a provider reports a model retired, the Validator checks that provider's curr
 |---|---|---|
 | Validator | `codex` (default), `claude`, `agy`, `prime-agent`, `ollama` (Codex on a local Ollama model) | `FACTORY_VALIDATOR_AGENT`, `FACTORY_VALIDATOR_MODEL` (`FACTORY_VALIDATOR_OLLAMA_MODEL`, required for `ollama`) |
 | Orchestrator | `agy` (default), `codex`, `claude`, `prime-agent` | `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_ORCHESTRATOR_MODEL` |
-| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`), `claude`, `agy`, `prime-agent` | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
+| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`), `claude`, `agy`, `prime-agent`, `opencode` (`opencode run --standalone`, metered: the model is `provider/model#variant`) | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
 
 `harness/agents.py` is the registry behind `claude`, `agy` and `prime-agent`: each entry states
 how the harness takes a headless turn, a model, an effort and a session to resume, and which

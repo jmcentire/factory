@@ -12,7 +12,8 @@ per-vendor branches, and a new harness is one entry.
 
 Each model runs in its own vendor's harness where one exists (it was trained there): Claude in
 Claude Code, GPT in Codex, Gemini in Antigravity, Muse in Muse Code, Grok in Cursor's agent CLI,
-and GLM in Claude Code pointed at the local Ollama server (``ollama launch claude``'s shape).
+GLM in Claude Code pointed at the local Ollama server (``ollama launch claude``'s shape), and the
+open models OpenRouter and OpenCode Zen serve (DeepSeek among them) in OpenCode.
 
 Billing (founder direction, 2026-10-16): a seat runs on the operator's signed-in plan, never on a
 per-use API key, unless the operator launches it metered. ``api_env`` names the variables that
@@ -46,6 +47,13 @@ TURN_RECORD = "factory-lane-turn/1"
 # The address Ollama serves its Anthropic-compatible Messages API on; claude-ollama talks to
 # nothing else, so no Anthropic key can leave the machine through it.
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+# A retained session id, the one a lane message resumes by. Most harnesses (Codex, Claude Code,
+# cursor-agent, agy, muse) name a session by UUID; OpenCode names it ses_<base62>. The id travels
+# as one argv element, so the grammar admits nothing a shell or CLI parser could act on.
+SESSION_ID = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|ses_[0-9A-Za-z]{20,64})$"
+)
 
 
 @dataclass(frozen=True)
@@ -585,6 +593,106 @@ class CursorAgent(Harness):
         return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
 
 
+class OpenCode(Harness):
+    """OpenCode (``opencode run``), for the models its providers serve (DeepSeek, Qwen and the
+    rest of OpenRouter or OpenCode Zen). The model is ``provider/model`` and names its effort as
+    a ``#variant``, so the factory passes no separate effort.
+
+    Every turn runs ``--standalone``: without it ``opencode run`` hands the turn to the
+    operator's shared background service, which already loaded the operator's configuration and
+    ignores this lane's environment. Provider keys live in OpenCode's own ``auth.json``, so a
+    turn bills its provider per use: the harness has no plan path and its lanes are metered."""
+
+    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
+             last_message_file: str = "", max_turns: int = 400,
+             extra: Sequence[str] = ()) -> Turn:
+        if effort:
+            raise ValueError("opencode takes its effort as the model's #variant, not --effort")
+        argv = ["opencode", "run", "--standalone", "--format", "json", "--auto"]
+        argv += ["--model", model] if model else []
+        argv += ["--session", resume] if resume else []
+        argv += list(extra)
+        argv += ["--"]  # the prompt follows; a prompt that opens with "-" stays a message
+        return Turn(tuple(argv), "argv")
+
+    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
+        session, text, step, failure, cost = "", "", "", "", 0.0
+        tokens = {"input": 0, "cached": 0, "output": 0}
+        for line in stdout.splitlines():
+            event = _json_line(line)
+            if not event:
+                continue
+            session = session or self.session_in(line)
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            assert isinstance(part, dict)
+            kind = event.get("type")
+            if kind == "step_start":
+                step = ""
+            elif kind == "text":
+                step += str(part.get("text") or "")
+            elif kind == "error":
+                # A failed step or execution ends the turn; what it said is the outcome.
+                error = event.get("error") if isinstance(event.get("error"), dict) else {}
+                assert isinstance(error, dict)
+                failure = str(error.get("message") or error.get("name") or event.get("error"))
+            elif kind == "step_finish":
+                # A step that only called tools says nothing; the answer is the last one that spoke.
+                text = step or text
+                cost += float(str(part.get("cost") or 0.0))
+                used = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+                assert isinstance(used, dict)
+                cache = used.get("cache") if isinstance(used.get("cache"), dict) else {}
+                assert isinstance(cache, dict)
+                tokens["input"] += _int(used.get("input")) + _int(cache.get("write"))
+                tokens["cached"] += _int(cache.get("read"))
+                tokens["output"] += _int(used.get("output")) + _int(used.get("reasoning"))
+        if failure:
+            return Outcome(text=f"opencode error: {failure}", session=session, cost_usd=cost,
+                           tokens=tokens)
+        if not session:  # no turn ran: keep what it said (an error) for the operator
+            return Outcome(text=stdout.strip()[-20_000:], session="", cost_usd=0.0)
+        # A stream that ends inside a step that already spoke: that step is the latest answer.
+        return Outcome(text=step or text, session=session, cost_usd=cost, tokens=tokens)
+
+    def session_in(self, line: str) -> str:
+        event = _json_line(line)
+        session = event.get("sessionID")
+        if event.get("type") != "step_start" or not isinstance(session, str):
+            return ""
+        return session if SESSION_ID.fullmatch(session) else ""
+
+    def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
+                   operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
+        # OpenCode reads its global configuration (MCP servers, AGENTS.md rules, commands,
+        # plugins) from $XDG_CONFIG_HOME/opencode, and its session database, tool output and
+        # snapshots from $XDG_DATA_HOME/opencode; both default under HOME, as do the ~/.agents
+        # and ~/.claude skills it loads. The lane gets a HOME of its own, so a Coder and a
+        # Tester never share a session database. Its configuration names only the lane's
+        # Kindex, and the one piece of the operator's data it shares is the provider sign-in,
+        # auth.json, found where the operator's own opencode keeps it.
+        # OPENCODE_DISABLE_PROJECT_CONFIG stops OpenCode walking up from the repository to the
+        # filesystem root merging every opencode.json, .opencode, .claude and .agents it finds
+        # (and AGENTS.md rules), which could replace the lane's Kindex or add MCP servers. The
+        # lane's configuration is then only its own, as a codex lane's is with --ignore-rules.
+        private = home / "home"
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        operator_data = Path(environ.get("XDG_DATA_HOME") or operator_home / ".local" / "share")
+        auth = operator_data / "opencode" / "auth.json"
+        if auth.is_file():
+            _link(private / ".local" / "share" / "opencode" / "auth.json", auth)
+        servers: dict[str, object] = {}
+        if server is not None:
+            command, args, env = _server(server)
+            servers["kindex"] = {"type": "local", "command": [command, *args],
+                                 "environment": env, "disabled": False}
+        _write(private / ".config" / "opencode" / "opencode.json", json.dumps(
+            {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": servers}}))
+        return LaneSetup(env={"HOME": str(private),
+                              "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+                              "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+                              "OPENCODE_DISABLE_AUTOUPDATE": "1"})
+
+
 HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
@@ -598,6 +706,9 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False),
     "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",)),
+    "opencode": OpenCode("opencode", "opencode", (), True,
+                         api_env=("OPENCODE_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"),
+                         plan=False),
 }
 
 
@@ -689,6 +800,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
+    check = sub.add_parser("check-session", help="exit 0 when the id is a well-formed retained "
+                           "session id (SESSION_ID), 70 otherwise")
+    check.add_argument("session")
     describe = sub.add_parser("describe", help="resumable and plan, NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
@@ -732,6 +846,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="lane-setup's NUL-separated output")
     args = parser.parse_args(argv)
     try:
+        if args.command == "check-session":
+            return 0 if SESSION_ID.fullmatch(args.session) else 70
         if args.command == "turn-record":
             chosen = harness(args.agent)
             if args.persistent:
