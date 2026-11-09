@@ -54,6 +54,21 @@ model = "your-selected-model"
 
 Changing the agent explicitly drops a different agent's model/effort defaults unless those are also assigned. Resuming a conversation preserves its recorded selection.
 
+System One observations run at ordinary artifact and resident activity checkpoints. Without
+usable credentials they report unavailable and work continues. Explicit permission to source
+your profile can be configured in the same local file:
+
+```toml
+[system_one]
+profile = true
+```
+
+`FACTORY_SYSTEM_ONE_PROFILE=1` or `0` overrides that setting when creating a run. The run
+retains this non-secret choice for startup, resume and checkpoints; later ambient changes
+do not silently grant profile access. The default is false. Only the bounded HTTP child
+sources `~/.profile`; keys never reach coordinator, author or candidate environments.
+
+
 If a provider reports a model retired, the Validator checks that provider's current replacement guidance and asks whether to use the suggested replacement. It does not silently migrate models. Unknown names, authentication failures and exhausted quota are not proof of retirement. No static model allowlist or background availability polling is needed.
 
 | Role | Agents it can run | Naming a model (optional) |

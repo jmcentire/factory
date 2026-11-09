@@ -196,7 +196,7 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
             result["builder_provenance"] = dict(status="unknown", findings=[str(error)])
     provenance = result.setdefault("builder_provenance", dict(status="unknown", findings=[]))
     provenance.setdefault("pr_verification", "not-checked")
-    provenance["system_one"] = _record.system_one_review(provenance)
+    provenance["system_one"] = _record.system_one_review(provenance, root)
     path = result_root / "result.json"
     write_new(path, (json.dumps(result, indent=2) + "\n").encode())
     candidate = result.get("candidate", {}).get("commit", result["requested_commit"])
@@ -219,7 +219,9 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
         f"System One: {provenance['system_one']['status']} "
         f"({provenance['system_one'].get('reason', 'see retained observation')}). "
         f"Retained builder: {json.dumps(provenance.get('expected', {}).get('identity', {}))}. "
-        "Check the actual PR head/body with run_record.py provenance before publication."
+        "Check the actual PR head/body with run_record.py provenance before publication. "
+        "Send the Validator a concrete assessment citing this result, uncovered claims and "
+        "the next action (or why no correction is needed), using run_record.py message."
     )
     try:
         _record.message(root, "orchestrator", "host", notice)

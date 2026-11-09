@@ -1062,6 +1062,14 @@ def main() -> None:
     while True:
         result = observe(root, previous)
         if result["entries"] or time.monotonic() >= deadline:
+            from jev_screen import screen_observation
+
+            try:
+                result["system_one"] = screen_observation(root, result)
+            except (OSError, ValueError, RuntimeError):
+                # Advisory context/storage failures never suppress the observed activity.
+                # Raw exception/provider text may contain private inputs or credentials.
+                result["system_one"] = dict(status="unavailable", reason="screening-unavailable")
             print(json.dumps(result))
             return
         time.sleep(min(1, max(0, deadline - time.monotonic())))

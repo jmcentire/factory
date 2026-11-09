@@ -96,7 +96,88 @@ def read_evidence(root: pathlib.Path, relative: str) -> str:
         os.close(descriptor)
 
 
+def _retained_context(root: pathlib.Path, slot: str, prefix: str) -> dict[str, str]:
+    """Project bounded host records, never private paths, credentials or live-state claims."""
+    import re
+
+    def record(relative):
+        try:
+            value = json.loads(read_evidence(root, relative))
+            return value if isinstance(value, dict) else {}
+        except (OSError, UnicodeError, ValueError, ScreenError):
+            return {}
+
+    facts: dict[str, str] = {}
+    launches = []
+    if root.is_symlink():
+        return facts
+    # A limited overview can reveal extra observed seats without walking author repositories.
+    author_root = root / "tmux-lanes"
+    author_paths = [] if author_root.is_symlink() else author_root.glob("*-launch.jsonl")
+    paths = sorted({*root.glob("*-launch.jsonl"), *author_paths})
+    for path in paths[:16]:
+        name = path.name.removesuffix("-launch.jsonl")
+        if not re.fullmatch(
+                r"(?:validator|orchestrator|coder|tester)(?:[-.][A-Za-z0-9_-]+)*", name):
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            rows = [json.loads(line) for line in read_evidence(root, relative).splitlines()]
+        except (OSError, UnicodeError, ValueError, ScreenError):
+            continue
+        rows = [row for row in rows if isinstance(row, dict) and row.get("slot") == name
+                and isinstance(row.get("agent"), str)]
+        for row in rows[-4:]:
+            selected = {key: row[key] for key in (
+                "schema_version", "ts", "role", "slot", "status", "agent", "model",
+                "model_source", "instance", "round", "persistent", "metered",
+            ) if key in row and isinstance(row[key], (str, bool, int, float, type(None)))}
+            if isinstance(row.get("caps"), dict):
+                selected["caps"] = {key: row["caps"][key] for key in (
+                    "spend_cap_usd", "usd_per_hour", "wall_cap_s", "enforcement",
+                ) if key in row["caps"] and isinstance(
+                    row["caps"][key], (str, bool, int, float, type(None)))}
+            launches.append(dict(source=relative, **selected))
+    if launches:
+        facts["role_assignments"] = json.dumps(dict(
+            scope="Retained launch observations, not full user instructions or live state.",
+            files_considered=min(len(paths), 16), additional_files_omitted=len(paths) > 16,
+            records=launches,
+        ))
+    billing = [row for row in launches if row.get("slot") == slot
+               and ("metered" in row or "caps" in row)]
+    if billing:
+        facts["billing_context"] = json.dumps(dict(
+            scope="Recorded launch mode and limits; not current usage or new spend permission.",
+            records=billing,
+        ))
+    sessions = []
+    for suffix, keys in (
+        ("persistent.json", ("schema", "slot", "agent", "phase", "turns",
+                             "turn_started_at", "turn_completed_at")),
+        ("process.json", ("schema", "slot", "status")),
+    ):
+        relative = f"{prefix}{slot}-{suffix}"
+        row = record(relative)
+        if row.get("slot") != slot:
+            continue
+        selected = {key: row[key] for key in keys if key in row and isinstance(
+            row[key], (str, bool, int, float, type(None)))}
+        if suffix == "persistent.json" and isinstance(row.get("session_id"), str):
+            if row["session_id"]:
+                selected["session_digest"] = digest(row["session_id"])
+        sessions.append(dict(source=relative, **selected))
+    if sessions:
+        facts["session_context"] = json.dumps(dict(
+            scope="Retained session facts only; current liveness and resumability are unverified.",
+            records=sessions,
+        ))
+    return facts
+
+
 def project(root: pathlib.Path, activity: Mapping[str, Any]) -> dict[str, str]:
+    import re
+
     state: dict[str, str] = {}
     if activity["kind"] == "pane_delta":
         state = {
@@ -110,8 +191,33 @@ def project(root: pathlib.Path, activity: Mapping[str, Any]) -> dict[str, str]:
     handles = {
         "run_brief": "TASK.md",
         "testing_strategy": "artifacts/testing-strategy.md",
-        "register_excerpt": "artifacts/boundary-register.json",
     }
+    slot = activity["source"]
+    if re.fullmatch(r"(?:validator|orchestrator|coder|tester)(?:[-.][A-Za-z0-9_-]+)*", slot):
+        role = re.split(r"[-.]", slot, maxsplit=1)[0]
+        log_source = activity.get("log_source")
+        if log_source is None or log_source in {
+            f"{slot}-lane.log", f"tmux-lanes/{slot}-lane.log",
+        }:
+            prefix = ("tmux-lanes/" if log_source == f"tmux-lanes/{slot}-lane.log"
+                      or (log_source is None and role in {"coder", "tester"}) else "")
+            state.update(_retained_context(root, slot, prefix))
+            if role == "tester":
+                # These are host-retained copies. Never follow the manifest's absolute
+                # author-owned .git paths, nor relabel arbitrary lane output as test code.
+                brief = []
+                for suffix in ("task.txt", "prompt.txt"):
+                    relative = f"{prefix}{slot}-{suffix}"
+                    try:
+                        brief.append(dict(source=relative, text=read_evidence(root, relative)))
+                    except (OSError, UnicodeError, ScreenError):
+                        pass
+                if len(brief) == 2:
+                    state["brief"] = json.dumps(dict(
+                        scope="Retained author brief components; external attachments not read.",
+                        components=brief,
+                    ))
+            state["lane"] = role
     if activity["source"] == "validator" and activity["kind"] != "pane_delta":
         try:
             attachment = json.loads(activity["snapshot"])
@@ -155,11 +261,12 @@ def _profile_call(argv: list[str], env: dict[str, str], raw: bytes) -> subproces
     return subprocess.CompletedProcess(argv, child.returncode, output)
 
 
-def request(payload: dict[str, Any]) -> dict[str, Any]:
+def request(payload: dict[str, Any], *, profile: bool | None = None) -> dict[str, Any]:
     """Run one HTTP child under a total deadline; secrets never return to the caller."""
     credential_names = ("TYPESAFE_API_KEY", "JMC_JEV_API_KEY")
     direct_key = any(os.environ.get(name) for name in credential_names)
-    profile = os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1"
+    if profile is None:
+        profile = os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1"
     if not direct_key and not profile:
         raise ScreenError("missing-key")
     script = str(pathlib.Path(__file__).resolve())
@@ -278,6 +385,144 @@ def builder_review(report: dict, call=None) -> dict:
             reason = "provider-unavailable"
         return dict(observation, reason=reason)
     return dict(observation, status="observed", results=results)
+
+
+def _inbox_attachments(root: pathlib.Path, entry: dict) -> list[str]:
+    """Recover bounded JSONL records completed by this chunk, including split messages."""
+    limit = 1024 * 1024  # Same message bound as the existing native inbox transport.
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        directory = os.open("orchestrator", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=parent)
+        try:
+            descriptor = os.open("inbox.jsonl", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+        finally:
+            os.close(directory)
+    finally:
+        os.close(parent)
+    messages = []
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ScreenError("inbox evidence is not regular")
+        start, end = entry["start"], entry["end"]
+        seek = max(0, start - limit)
+        stream.seek(seek)
+        if seek:
+            if not stream.readline(limit + 1).endswith(b"\n"):
+                return []  # The overlapping row exceeds the bounded message size.
+        while stream.tell() < end:
+            raw = stream.readline(limit + 1)
+            if not raw:
+                break
+            if stream.tell() <= start:
+                continue
+            if len(raw) > limit:
+                break
+            if not raw.endswith(b"\n") or stream.tell() > end:
+                continue  # Incomplete rows are examined once a later chunk completes them.
+            try:
+                row = json.loads(raw)
+                attachment = json.loads(row["text"])
+                if row["sender"] == "validator" and set(attachment) == {"jev_evidence"}:
+                    messages.append(row["text"])
+            except (ValueError, TypeError, KeyError):
+                continue
+    return messages
+
+
+def screen_observation(root: pathlib.Path, observation: dict, call=None) -> dict:
+    """One advisory call for new observed lane output; replay the exact batch's receipt.
+
+    This is called by the resident observer, not a worker. Missing context stays visible;
+    neither scores nor cached receipts control agents or establish completed human review.
+    """
+    from run_record import profile_for_run, read_json, write_new
+
+    activities = []
+    for entry in observation["entries"]:
+        if entry["source"].endswith("-lane.log") and entry["text"].strip():
+            role = pathlib.Path(entry["source"]).name.removesuffix("-lane.log")
+            activities.append((entry, dict(kind="pane_delta", source=role,
+                                            snapshot=entry["text"], log_source=entry["source"])))
+        elif entry["source"] == "orchestrator/inbox.jsonl":
+            # Existing Validator messages may carry explicit retained evidence handles.
+            # Ignore ordinary notices, own observations and incomplete JSON fragments.
+            for text in _inbox_attachments(root, entry):
+                activities.append((entry, dict(kind="pre_verdict", source="validator",
+                                               snapshot=text)))
+    if not activities:
+        return dict(status="unavailable", reason=("no-screenable-activity"
+                    if observation["entries"] else "no-new-activity"), results={}, coverage={})
+    doc = read_json(root / "harness.json")
+    profile = profile_for_run(doc)
+    states = []
+    for entry, activity in activities:
+        state = project(root, activity)
+        state.update(source=entry["source"], speaker=activity["source"])
+        if "run_brief" in state:
+            state["founder_verbatim"] = state["run_brief"]
+        states.append(state)
+    coverage = {rid: {
+        "covered": [s["source"] for s in states if all(f in s for f in rule["fields"])],
+        "uncovered": [s["source"] for s in states if not all(f in s for f in rule["fields"])],
+    } for rid, rule in RULES.items()}
+    questions = {rid: {**rule["rule"], "instructions": {
+        **rule["rule"]["instructions"],
+        "scope": "Inspect each state.observations entry separately, only when it contains "
+                 f"all required fields {rule['fields']}. Is the failure shown in any such "
+                 "entry? Do not combine different roles' claims or infer missing context.",
+    }} for rid, rule in RULES.items() if coverage[rid]["covered"]}
+    payload = dict(model=MODEL_ID, state=dict(observations=states), questions=questions)
+    key = digest(dict(entries=[{k: row[k] for k in ("source", "start", "end", "sha256")}
+                               for row, _ in activities], payload=payload, profile=profile))[7:]
+    directory = root / "orchestrator" / "system-one"
+    if (root / "orchestrator").is_symlink() or directory.is_symlink():
+        raise ValueError("System One observation directory is a symlink")
+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path = directory / f"{key}.json"
+    result: dict[str, Any] = dict(status="unavailable", reason="interrupted-call", model=MODEL_ID,
+                  input=payload, input_digest=digest(payload), coverage=coverage,
+                  evidence=str(path), results={
+                      rid: dict(band="unavailable", reason="missing-evidence")
+                      for rid in RULES if rid not in questions})
+    # Publish a complete reservation before HTTP. Concurrent observers read the receipt,
+    # never submit the same batch twice; interrupted observations remain unavailable.
+    import uuid
+
+    reservation = directory / f".{uuid.uuid4().hex}.tmp"
+    try:
+        write_new(reservation, canonical(result))
+        os.link(reservation, path, follow_symlinks=False)
+    except FileExistsError:
+        return read_json(path)
+    finally:
+        reservation.unlink(missing_ok=True)
+    reason = None
+    if not questions:
+        reason = "missing-evidence"
+    elif len(canonical(payload)) > MAX_INPUT:
+        reason = "input-ceiling"
+    else:
+        try:
+            result["results"].update(evaluate(
+                payload, call or (lambda value: request(value, profile=profile))))
+        except (OSError, ValueError, RuntimeError) as error:
+            reason = (str(error) if isinstance(error, ScreenError) and str(error) in {
+                "missing-key", "profile-unavailable", "deadline", "provider-unavailable",
+                "invalid-response", "model-or-answer-mismatch", "answer-set-mismatch",
+                "invalid-probability"} else "provider-unavailable")
+    if reason:
+        result["reason"] = reason
+        result["results"].update({rid: dict(band="unavailable", reason=reason)
+                                  for rid in questions})
+    else:
+        result.update(status="observed")
+        result.pop("reason")
+    temporary = path.with_suffix(".tmp")
+    write_new(temporary, canonical(result))
+    os.replace(temporary, path)
+    return result
 
 
 def _journal(rows: list[dict[str, Any]]) -> tuple[dict[int, dict], dict[int, dict]]:

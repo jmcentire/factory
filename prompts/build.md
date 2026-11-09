@@ -420,6 +420,15 @@ EOF
 ```
 
 ### Push and PR
+When this build belongs to a Factory run, use that run's retained builder attribution and
+`run_record.py pr --runs RUNS --run RUN --repo REPO --commit SHA --operation create --github-repo OWNER/REPO
+--head BRANCH --title TITLE --body-file BODY` for the authorized PR. Use `--operation edit
+--pr URL --body-file BODY` for later edits; both check the actual GitHub result. Recheck
+with `run_record.py provenance ... --pr URL` after a separate push changes its head.
+A completed PR mutation with failed verification must not be retried as another creation.
+The direct command below is for work outside a Factory run: identify the actual builder,
+leave an unknown version unknown, and do not invent FactoryRun or claim resident review.
+
 ```bash
 git push -u origin <branch-name>
 gh pr create --title "<title>" --body "$(cat <<'EOF'

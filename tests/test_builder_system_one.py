@@ -17,7 +17,7 @@ from tests.test_builder_provenance import builder_run as builder_run
 
 @pytest.fixture(autouse=True)
 def no_ambient_provider_keys(monkeypatch):
-    for name in ("TYPESAFE_API_KEY", "JMC_JEV_API_KEY"):
+    for name in ("TYPESAFE_API_KEY", "JMC_JEV_API_KEY", "FACTORY_SYSTEM_ONE_PROFILE"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -71,8 +71,8 @@ def test_endgame_automatically_reviews_once_without_verifying_absent_pr_or_chang
     runs, root, repo, _ = builder_run
     candidate = commit(repo, "Task implementation without attribution")
     calls = []
-    monkeypatch.setattr(jev_screen, "request", lambda payload: (calls.append(payload),
-                                                               response(payload))[1])
+    monkeypatch.setattr(jev_screen, "request", lambda payload, **kwargs:
+                        (calls.append(payload), response(payload))[1])
     for count, exit_code in enumerate((0, 7), start=1):
         code, attempt = validate_candidate.validate(
             runs, "task", repo, candidate,
@@ -100,7 +100,7 @@ def test_retained_checkpoint_records_checked_pr_and_safe_provider_failure(builde
     report = run_record.check_builder(root, doc, repo, candidate, pr=pr)
     calls = []
 
-    def unavailable(payload):
+    def unavailable(payload, **kwargs):
         calls.append(payload)
         raise RuntimeError("SECRET_PROVIDER_EXCEPTION_DO_NOT_RETAIN")
 
