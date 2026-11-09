@@ -14,6 +14,7 @@ import json
 import math
 import os
 import pathlib
+import signal
 import stat
 import subprocess
 import sys
@@ -134,21 +135,64 @@ def project(root: pathlib.Path, activity: Mapping[str, Any]) -> dict[str, str]:
     return {k: v for k, v in state.items() if v.strip()}
 
 
-def request(payload: dict[str, Any]) -> dict[str, Any]:
-    """Run one HTTP call under a total deadline, never via a shell."""
-    if not (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JMC_JEV_API_KEY")):
-        raise ScreenError("missing-key")
+def _profile_call(argv: list[str], env: dict[str, str], raw: bytes) -> subprocess.CompletedProcess:
+    # Profile commands can spawn children holding the response pipe. Own this new group
+    # so timeout cleanup cannot signal another run, and never wait indefinitely on its pipe.
+    child = subprocess.Popen(argv, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
     try:
-        result = subprocess.run(
-            [sys.executable, str(pathlib.Path(__file__).resolve()), "--request"],
-            input=canonical(payload),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=TIMEOUT,
-            check=False,
-        )
+        output, _ = child.communicate(raw, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for stream in (child.stdin, child.stdout):
+            if stream is not None:
+                stream.close()
+        child.wait(timeout=1)  # Bounded cleanup after the request deadline.
+        raise ScreenError("deadline") from None
+    return subprocess.CompletedProcess(argv, child.returncode, output)
+
+
+def request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run one HTTP child under a total deadline; secrets never return to the caller."""
+    credential_names = ("TYPESAFE_API_KEY", "JMC_JEV_API_KEY")
+    direct_key = any(os.environ.get(name) for name in credential_names)
+    profile = os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1"
+    if not direct_key and not profile:
+        raise ScreenError("missing-key")
+    script = str(pathlib.Path(__file__).resolve())
+    argv = [sys.executable, "-I", script, "--request"]
+    env = {name: os.environ[name] for name in
+           ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "TMPDIR", *credential_names)
+           if name in os.environ}
+    if not direct_key and profile:
+        # Source the explicitly authorized fixed profile only in this short-lived child.
+        # Keep its noise/traps off the response pipe; preserve payload stdin for HTTP.
+        wrapper = """
+readonly factory_http_python="$1" factory_http_script="$2"
+exec 3>&1 >/dev/null 2>&1
+[ -r "$HOME/.profile" ] || exit 77
+. "$HOME/.profile" </dev/null
+set +x +v
+trap - DEBUG RETURN ERR EXIT
+builtin exec "$factory_http_python" -I "$factory_http_script" --request >&3 3>&-
+"""
+        argv = ["/bin/bash", "--noprofile", "--norc", "-c", wrapper,
+                "factory-system-one-profile", sys.executable, script]
+    try:
+        if not direct_key and profile:
+            result = _profile_call(argv, env, canonical(payload))
+        else:
+            result = subprocess.run(
+                argv, env=env, input=canonical(payload), stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=TIMEOUT, check=False,
+            )
     except subprocess.TimeoutExpired:
         raise ScreenError("deadline") from None
+    if result.returncode in {77, 78}:
+        raise ScreenError("profile-unavailable" if result.returncode == 77 else "missing-key")
     if result.returncode or len(result.stdout) > MAX_RESPONSE:
         raise ScreenError("provider-unavailable")
     try:
@@ -228,8 +272,9 @@ def builder_review(report: dict, call=None) -> dict:
         results = evaluate(payload, call or request)
     except (OSError, ValueError, RuntimeError) as error:
         reason = str(error) if isinstance(error, ScreenError) else "provider-unavailable"
-        if reason not in {"missing-key", "deadline", "provider-unavailable", "invalid-response",
-                          "model-or-answer-mismatch", "answer-set-mismatch", "invalid-probability"}:
+        if reason not in {"missing-key", "profile-unavailable", "deadline",
+                          "provider-unavailable", "invalid-response", "model-or-answer-mismatch",
+                          "answer-set-mismatch", "invalid-probability"}:
             reason = "provider-unavailable"
         return dict(observation, reason=reason)
     return dict(observation, status="observed", results=results)
@@ -483,6 +528,11 @@ def validate_review(
 
 
 def _http_request() -> None:
+    key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JMC_JEV_API_KEY")
+    os.environ.clear()  # Only this HTTP child held profile exports; none reach other processes.
+    if not key:
+        raise ScreenError("missing-key")
+
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args: Any, **kwargs: Any) -> None:
             return None
@@ -494,8 +544,7 @@ def _http_request() -> None:
         ENDPOINT,
         data=raw,
         headers={
-            "Authorization": "Bearer " + (os.environ.get("TYPESAFE_API_KEY")
-                                           or os.environ["JMC_JEV_API_KEY"]),
+            "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
         },
     )
@@ -503,7 +552,12 @@ def _http_request() -> None:
         data = response.read(MAX_RESPONSE + 1)
     if len(data) > MAX_RESPONSE:
         raise ScreenError("response ceiling")
-    sys.stdout.buffer.write(data)
+    payload, response = json.loads(raw), json.loads(data)
+    results = evaluate(payload, lambda _: response)
+    # Never forward raw provider bodies: even reflected credentials/extra fields stay here.
+    clean = {"model": MODEL_ID, "answers": {
+        rid: {"type": "noul", "noul": result["probability"]} for rid, result in results.items()}}
+    sys.stdout.buffer.write(canonical(clean))
 
 
 if __name__ == "__main__":
@@ -511,6 +565,8 @@ if __name__ == "__main__":
         if sys.argv[1:] != ["--request"]:
             raise ScreenError("this entry point is the bounded HTTP worker")
         _http_request()
+    except ScreenError as error:
+        sys.exit(78 if str(error) == "missing-key" else 70)
     except Exception:
         # Never expose a key, provider body or reflected lane content on stderr.
         sys.exit(70)

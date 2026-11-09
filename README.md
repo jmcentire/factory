@@ -165,6 +165,9 @@ unknown, not evidence that a user ran the latest Factory. Use
 `--repo REPO --commit SHA --pr URL` checks actual task commits and fetched GitHub head/body,
 retains the observation and queues it to the Orchestrator. Endgame and PR checks each invoke
 one bounded System One observation through the existing client, with attribution metadata only.
+For an explicitly authorized profile-backed check, set `FACTORY_SYSTEM_ONE_PROFILE=1` on the
+Factory invocation. Coordinators receive only this flag. When no direct provider key is present,
+the short-lived HTTP child sources `~/.profile` silently; no key is returned to the coordinator.
 Commit-only checks explicitly report `pr_verification: not-checked`; provider failures report
 `system_one.status: unavailable`. Neither changes test results or product acceptance.
 Recheck after artifact changes;

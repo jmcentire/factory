@@ -204,10 +204,17 @@ results or a fixed unavailability reason. There is no background worker, automat
 new acceptance gate. A crash before persistence can lose an observation; no exactly-once claim
 is made. `TYPESAFE_API_KEY` and the existing `JMC_JEV_API_KEY` alias are supported in the invoking
 environment; absent credentials or provider failures are reported as unavailable. Resident
-coordinator environments intentionally omit these keys, so their checkpoints report `missing-key`
-unless an explicitly authorized invoking environment supplies one. The existing `with_secret.py`
-utility can supply a configured secret to one host command; no new secret source or broker is
-created here. Candidate test commands do not inherit the provider key.
+coordinator environments intentionally omit these keys. With explicit user authorization,
+`FACTORY_SYSTEM_ONE_PROFILE=1` on the Factory invocation passes only that non-secret flag to
+coordinators. If no direct provider key is present, the existing short-lived HTTP child sources
+`~/.profile` with startup output suppressed and profile input disconnected from the request.
+It selects only the System One key, clears unrelated environment variables, and returns only
+validated model/probability fields; no credential returns to the coordinator or enters author
+or candidate environments. The eight-second request deadline includes profile loading, followed
+by at most one second of cleanup of this invocation's own process group. An unreadable profile
+or missing key is explicit unavailability. The default remains no profile loading; no broker,
+worker, profile edit or machine-wide setting is introduced. Candidate test commands do not
+inherit either the provider key or this flag.
 
 Endgame checks commits, so its PR coverage is explicitly `not-checked`. The PR command records
 `checked` only when it compares the fetched snapshot; that means inspected, not necessarily

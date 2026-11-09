@@ -727,6 +727,9 @@ def _start_locked(runs: Path, run: str) -> None:
         # reaches it. The Orchestrator and the authors keep no GitHub credential from here.
         if role == "validator":
             env.update({key: os.environ[key] for key in GITHUB_ENV if key in os.environ})
+        # Permission to source the profile reaches the trusted HTTP child; no key reaches seats.
+        if os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1":
+            env["FACTORY_SYSTEM_ONE_PROFILE"] = "1"
         # Reuse the adapter's credential declarations. Plan mode never inherits API keys.
         adapter = agents.harness("codex" if agent == "ollama" else agent)
         for key in adapter.api_env:
