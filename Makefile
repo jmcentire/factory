@@ -120,7 +120,9 @@ endif
 # in place and prints the exact fix for whatever is not. The installer never overwrites or
 # removes a file it did not write (scripts/install.py states the rule).
 BINDIR ?= $(HOME)/.local/bin
-CLAUDE_COMMANDS_DIR ?= $(HOME)/.claude/commands
+# Claude Code's profile (a nonempty CLAUDE_CONFIG_DIR) holds its commands; an explicit
+# CLAUDE_COMMANDS_DIR still wins.
+CLAUDE_COMMANDS_DIR ?= $(if $(strip $(CLAUDE_CONFIG_DIR)),$(CLAUDE_CONFIG_DIR),$(HOME)/.claude)/commands
 INSTALL_ARGS = --bindir "$(BINDIR)" --commands-dir "$(CLAUDE_COMMANDS_DIR)"
 
 install: venv ## set up everything needed to use the factory, then run doctor

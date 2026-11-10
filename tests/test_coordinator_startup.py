@@ -603,6 +603,20 @@ def test_claude_seat_starts_with_its_folders_already_trusted(launch, monkeypatch
     assert config.stat().st_mtime_ns == after
 
 
+def test_a_claude_seat_uses_the_operators_claude_profile(launch, monkeypatch, tmp_path):
+    # A profile (CLAUDE_CONFIG_DIR) keeps Claude Code's .claude.json, sign-in and sessions out of
+    # ~/.claude. The seat must keep it, and its folder trust belongs in that profile's file.
+    root, repository, home, capture, execute = _claude_validator(launch, monkeypatch)
+    profile = tmp_path / "claude-work"
+    profile.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    calls = capture()
+    assert execute(calls, "validator")["env"]["CLAUDE_CONFIG_DIR"] == str(profile)
+    doc = json.loads((profile / ".claude.json").read_text())
+    assert doc["projects"][str(repository)] == {"hasTrustDialogAccepted": True}
+    assert not (home / ".claude.json").exists()
+
+
 def test_non_claude_seats_do_not_touch_claude_config(launch):
     _, _, _, capture, _, _ = launch
     capture()

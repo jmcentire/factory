@@ -2576,6 +2576,22 @@ def test_authority_claim_detection() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_postmortem_reads_claude_usage_from_the_operators_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness import postmortem
+
+    workspace = tmp_path / "lane"
+    workspace.mkdir()
+    profile = tmp_path / "claude-work"
+    sessions = profile / "projects" / str(workspace.resolve()).replace("/", "-")
+    sessions.mkdir(parents=True)
+    usage = {"message": {"usage": {"input_tokens": 30, "output_tokens": 12}}}
+    (sessions / "s.jsonl").write_text(json.dumps(usage) + "\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    assert postmortem.lane_usage(workspace, "claude")["tokens"] == 42
+
+
 def test_postmortem_refuses_to_invent(tmp_path: Path) -> None:
     root = tmp_path / "run"
     root.mkdir()

@@ -303,7 +303,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", default=str(ROOT), help="the factory checkout")
     parser.add_argument("--venv", default="", help="virtualenv (default: <root>/.venv)")
     parser.add_argument("--bindir", default="~/.local/bin", help="where the launcher goes")
-    parser.add_argument("--commands-dir", default="~/.claude/commands",
+    parser.add_argument("--commands-dir",
+                        default=os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude",
+                                             "commands"),
                         help="Claude Code user commands directory")
     arguments = parser.parse_args(argv)
     layout = _layout(arguments)
