@@ -583,44 +583,13 @@ PY
 
   QUALIFICATIONS="$FACTORY_RUNS_ROOT/lane-qualifications.jsonl"
 
-  # The agent's CLI contract, before anything is written.
-  case "$AGENT" in
-    codex|codex-ollama)
-      AGENT_VERSION=$(codex --version 2>/dev/null) || refuse 70 "codex CLI is not runnable"
-      CODEX_EXEC_HELP=$(codex exec --help 2>/dev/null) || exit 70
-      CODEX_QUEUE_HELP=$(codex queue --help 2>/dev/null) || exit 70
-      for REQUIRED in --ignore-user-config --ignore-rules --strict-config --json; do
-        printf '%s' "$CODEX_EXEC_HELP" | grep -q -- "$REQUIRED" || \
-          refuse 70 "codex CLI contract lacks $REQUIRED ($AGENT_VERSION)"
-      done
-      printf '%s' "$CODEX_QUEUE_HELP" | grep -q -- '--thread' || \
-        refuse 70 "codex CLI contract lacks queue --thread ($AGENT_VERSION)"
-      CLI_CONTRACT="codex-exec-json-plus-queue-resume-v1" ;;
-    codex-interactive)
-      AGENT_VERSION=$(codex --version 2>/dev/null) || refuse 70 "codex CLI is not runnable"
-      CODEX_HELP=$(codex --help 2>/dev/null) || exit 70
-      # --no-daemon keeps the TUI off the app-server daemon whose socket failure sent msg-r2's
-      # Coder to a login screen.
-      for REQUIRED in --no-daemon --no-alt-screen --strict-config; do
-        printf '%s' "$CODEX_HELP" | grep -q -- "$REQUIRED" || \
-          refuse 70 "codex CLI contract lacks $REQUIRED ($AGENT_VERSION)"
-      done
-      CLI_CONTRACT="codex-tui-no-daemon-v1" ;;
-    cursor-agent)
-      AGENT_VERSION=$(agent --version 2>/dev/null) || refuse 70 "cursor-agent CLI (agent) is not runnable"
-      AGENT_HELP=$(agent --help 2>/dev/null) || exit 70
-      for REQUIRED in --print --model --force --trust --workspace --output-format --resume --approve-mcps; do
-        printf '%s' "$AGENT_HELP" | grep -q -- "$REQUIRED" || \
-          refuse 70 "cursor-agent CLI contract lacks $REQUIRED ($AGENT_VERSION)"
-      done
-      CLI_CONTRACT="cursor-agent-stream-resume-v1" ;;
-    claude|claude-ollama|agy|muse|prime-agent)
-      # A registry harness (harness/agents.py): the registry builds its headless turn.
-      AGENT_VERSION=$("$AGENT_EXECUTABLE" --version 2>/dev/null | head -1) || \
-        refuse 70 "$AGENT CLI is not runnable"
-      CLI_CONTRACT="agent-registry-headless-v1"
-      [ "$PERSISTENT" != 1 ] || CLI_CONTRACT="agent-registry-persistent-stream-v1" ;;
-  esac
+  # The agent's CLI contract, before anything is written (harness/agent_contract.sh, which
+  # setup also runs to confirm or update an agent before a run).
+  CONTRACT_REPORT=$("$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
+    refuse 70 "$CONTRACT_REPORT" \
+      "update that executable (its own update command, brew or npm), or put a current one first on PATH"
+  CLI_CONTRACT=${CONTRACT_REPORT%%$'\n'*}
+  AGENT_VERSION=${CONTRACT_REPORT#*$'\n'}
 
   # Keep the testing standard. A concise strategy may be in the brief rather than a fixed file.
   STANDARD_RECEIPT='null'
