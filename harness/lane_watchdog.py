@@ -98,6 +98,8 @@ LANE_FINAL = frozenset({"done", "exited", "stalled", "capped", "superseded"})
 DEFAULT_READ_ALLOWANCE_S = 15 * 60
 DEFAULT_STALL_WINDOW_S = 20 * 60
 DEFAULT_POLL_S = 30
+# Wall-clock time beyond awake time between two checks is the machine asleep, not the lane idle.
+SLEEP_TOLERANCE_S = 60.0
 DEFAULT_REVIEW_WAIT_S = 15 * 60
 # A paused review or a wrap-up notice needs room to be useful: no review is taken this close to
 # the wrap-up, and an undelivered wrap-up ends the lane after this long.
@@ -444,8 +446,11 @@ class LaneWatch:
         echo: Callable[[str], None] = print,
         deliver: Callable[[list[str]], str] | None = None,
         processes: Callable[[], dict[int, dict[str, Any]] | None] = process_snapshot,
+        awake: Callable[[], float] | None = None,
     ) -> None:
         self.root = pathlib.Path(root)
+        # A clock that stops while the machine sleeps (time.monotonic); None counts wall time only.
+        self.awake = awake
         self.lanes = self.root / "tmux-lanes"
         self.slot = slot
         self.now = now
@@ -577,6 +582,11 @@ class LaneWatch:
         observed = self._observe_processes(launch, state)
         self._write_state(state)
         return observed and not state.get("surviving_processes") and self._pane_exited(launch)
+
+    def _native_turn(self) -> dict[str, Any]:
+        """A persistent lane's native turn state (persistent_lane.py), or {} for any other lane."""
+        path = self.lanes / f"{self.slot}-persistent.json"
+        return {} if path.is_symlink() else _load_json(path)
 
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
         """A turn this watcher ends can be continued: a session was retained (a Codex thread, or
@@ -823,6 +833,16 @@ class LaneWatch:
             state = self.arm()
         self._observe_processes(launch, state)
         current = self.now()
+        if self.awake is not None:
+            awake = self.awake()
+            if state.get("last_check") is not None and state.get("last_awake") is not None:
+                asleep = (current - float(state["last_check"])) - (
+                    awake - float(state["last_awake"]))
+                if asleep > SLEEP_TOLERANCE_S:
+                    # Neither work nor stall: caps and the stall clock both skip it.
+                    state["life_started"] = float(state["life_started"]) + asleep
+                    state["hold_ts"] = current
+            state["last_check"], state["last_awake"] = current, awake
         active = float(state["active_s_before"]) + max(0.0, current - float(state["life_started"]))
         watch = launch.get("watch") or {}
         caps = launch.get("caps") or {}
@@ -872,7 +892,11 @@ class LaneWatch:
         # commit or the last pending question, plus what a pause carried over from before it.
         last_commit = max((float(c["ts"]) for c in state["commits"]), default=0.0)
         anchor = float(state["life_started"]) + (0.0 if state.get("continued") else allowance)
-        clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0))
+        # A persistent lane's new native turn starts its own window (persistent_lane.py).
+        native = self._native_turn()
+        started = native.get("turn_started_at")
+        turn = float(started) if isinstance(started, (int, float)) else 0.0
+        clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0), turn)
         idle = current - clock + (float(state.get("stall_carry_s", 0.0)) if clock == anchor
                                   else 0.0)
 
@@ -905,7 +929,10 @@ class LaneWatch:
             return self._request_end(launch, state, "capped", "refusal-lane-cap",
                                      f"{reason}; {summary}")
 
-        if not pending and idle > window:
+        # A persistent lane that reported done and is idle at its input boundary is waiting for
+        # the Validator, not stalled. Once a new turn starts (phase working) it is watched again.
+        waiting = bool(state.get("completion_claim")) and native.get("phase") == "idle"
+        if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",
                 f"no commit for {idle / 60:.0f} min past its {allowance / 60:.0f} min "
@@ -1126,7 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"count": len(made), "latest": latest}, sort_keys=True))
         return 0
     try:
-        verdict = LaneWatch(root=arguments.root, slot=arguments.slot).run(
+        verdict = LaneWatch(root=arguments.root, slot=arguments.slot,
+                            awake=time.monotonic).run(
             new_life=arguments.new_life, log_offset=arguments.log_offset
         )
     except LaneWatchError as error:

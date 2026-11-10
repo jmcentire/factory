@@ -772,6 +772,57 @@ def test_watchdog_stops_a_lane_that_does_not_commit_and_wakes_the_operator(
     assert watched.at(9000) == "stalled" and watched.stops == ["r1:tester"]
 
 
+def test_a_lane_that_reported_done_is_waiting_not_stalled(tmp_path: Path) -> None:
+    # DIS-2032 (2026-11-09): a persistent Coder said it was done, then waited for the
+    # Validator; the stall window stopped it 22 minutes later and it could not be resumed.
+    watched = Watched(tmp_path)
+    _commit(watched.repo, T0 + 200, "a")
+    message = {"type": "item.completed",
+               "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps(message) + "\n")
+    native = watched.lanes / "tester-persistent.json"
+    native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
+    assert watched.at(300) == "watching"
+    assert watched.at(900 + 1200 + 3600) == "watching"
+    assert watched.stops == []
+
+
+def test_a_new_turn_after_done_is_watched_for_stalls_again(tmp_path: Path) -> None:
+    # Review of #104: the delivery of a new persistent turn does not re-arm the watcher, so the
+    # done claim must only hold while the native lane is idle at its input boundary.
+    watched = Watched(tmp_path)
+    _commit(watched.repo, T0 + 200, "a")
+    message = {"type": "item.completed",
+               "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps(message) + "\n")
+    native = watched.lanes / "tester-persistent.json"
+    native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
+    assert watched.at(3000) == "watching"
+    # The Validator sends new work; the lane is working again and commits nothing.
+    native.write_text(json.dumps({"phase": "working", "turn_started_at": T0 + 3000}))
+    assert watched.at(3000 + 1199) == "watching"  # the new turn has its own window
+    assert watched.at(3000 + 1201) == "stalled"
+    assert watched.stops == ["r1:tester"]
+
+
+def test_time_the_machine_slept_is_not_stall_time(tmp_path: Path) -> None:
+    # DIS-2032: a laptop slept 43 minutes and the Tester's watcher counted it as idle.
+    watched = Watched(tmp_path)
+    awake = Clock()
+    watched.watch.awake = awake
+    _commit(watched.repo, T0 + 600, "a")
+    awake.value = T0 + 1000
+    assert watched.at(1000) == "watching"
+    awake.value += 30  # 30 s awake, then an hour asleep
+    assert watched.at(1000 + 3600) == "watching"
+    assert watched.stops == []
+    # Awake time still counts: idle past the window after waking is a stall.
+    awake.value += 1201
+    assert watched.at(1000 + 3600 + 1201) == "stalled"
+
+
 def test_a_lane_waiting_on_its_own_question_is_not_stalled(tmp_path: Path) -> None:
     from harness.lane_dialogue import record_question
 

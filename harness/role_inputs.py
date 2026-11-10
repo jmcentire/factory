@@ -18,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from factory_runtime.host_git import materialize_commit, run_host_git
+from factory_runtime.host_git import HostGitError, materialize_commit, run_host_git
 from factory_runtime.kindex_workspace import NO_INDEX_MARKER, mark_no_index
 
 record = (importlib.import_module("harness.run_record") if __package__
@@ -155,7 +155,27 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     return result
 
 
-def verify(runs: Path, run: str, role: str, repository: Path) -> dict:
+def _launched(root: Path, role: str, repository: Path) -> bool:
+    """Whether the run's launch journals record an active launch of role in repository."""
+    lanes = root / "tmux-lanes"
+    if lanes.is_symlink() or not lanes.is_dir():
+        return False
+    for journal in sorted(lanes.glob(f"{role}*-launch.jsonl")):
+        if journal.is_symlink():
+            continue
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (isinstance(row, dict) and row.get("status") == "active"
+                    and row.get("role") == role
+                    and Path(str(row.get("repository", ""))).resolve() == repository.resolve()):
+                return True
+    return False
+
+
+def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool = False) -> dict:
     root, _ = record.load(runs, run)
     if (root / "inputs").is_symlink():
         raise ValueError("input receipts directory is a symlink")
@@ -163,6 +183,18 @@ def verify(runs: Path, run: str, role: str, repository: Path) -> dict:
     if receipt["role"] != role or Path(receipt["repository"]) != repository.resolve():
         raise ValueError("repository is not this role's prepared input projection")
     initial = run_host_git(repository, ["rev-parse", "HEAD"]).decode().strip()
+    if replacing:
+        # A replacement round continues a clone this role was launched in: its commits are the
+        # lane's work. Nothing launched there yet means a first launch, checked in full below.
+        if not _launched(root, role, repository):
+            raise ValueError("no recorded launch of this role in this repository to replace")
+        try:
+            run_host_git(repository, ["merge-base", "--is-ancestor", receipt["initial_commit"],
+                                      initial])
+        except HostGitError as error:
+            raise ValueError("role inputs are not descended from the prepared projection") \
+                from error
+        return receipt
     if initial != receipt["initial_commit"]:
         raise ValueError("role inputs changed before first launch")
     if tree_digest(repository) != receipt["tree_digest"]:
@@ -180,12 +212,14 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--include", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--replacing", action="store_true",
+                        help="a replacement round's clone: HEAD descends from the projection")
     args = parser.parse_args()
     try:
         if args.action == "prepare":
             result = prepare(args.runs, args.run, args.role, args.repo, args.include, args.exclude)
         else:
-            result = verify(args.runs, args.run, args.role, args.repo)
+            result = verify(args.runs, args.run, args.role, args.repo, replacing=args.replacing)
         print(json.dumps(result))
         return 0
     except (ValueError, OSError, RuntimeError) as error:

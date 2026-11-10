@@ -1,5 +1,6 @@
 """Input independence is about reachable bytes, not two different directory names."""
 
+import json
 import os
 import subprocess
 import sys
@@ -182,6 +183,67 @@ def test_launcher_refuses_full_clone_before_contacting_agent(tmp_path, inputs):
     env["FACTORY_PYTHON"] = sys.executable
     result = subprocess.run(["bash", str(tool), "task", "tester", "launch", "--runs", str(runs),
                              "--repo", str(source), "--prompt", str(brief)], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "prepared role projection" in result.stderr
+
+
+def _commit_all(repo, message):
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Lane", "-c",
+                    "user.email=lane@example.invalid", "commit", "-qm", message], check=True)
+
+
+def _record_launch(root, slot, role, repository):
+    lanes = root / "tmux-lanes"
+    lanes.mkdir(exist_ok=True)
+    row = {"schema_version": "factory-tmux-lane/1", "run_id": "task", "role": role, "slot": slot,
+           "lane": role, "repository": str(repository), "status": "active"}
+    with (lanes / f"{slot}-launch.jsonl").open("a") as journal:
+        journal.write(json.dumps(row) + "\n")
+
+
+def test_a_replacement_round_continues_the_clone_its_author_committed_in(tmp_path, inputs):
+    # DIS-2032 (2026-11-09): coder.r2 was refused because the Coder had committed, so the
+    # Validator wrote the remaining fixes itself.
+    _, runs, root = inputs
+    coder = tmp_path / "coder"
+    role_inputs.prepare(runs, "task", "coder", coder, [], ["tests"])
+    _record_launch(root, "coder", "coder", coder)
+    (coder / "src/app.py").write_text("the coder's work")
+    _commit_all(coder, "work")
+    with pytest.raises(ValueError, match="before first launch"):
+        role_inputs.verify(runs, "task", "coder", coder)
+    role_inputs.verify(runs, "task", "coder", coder, replacing=True)
+    subprocess.run(["git", "-C", str(coder), "checkout", "-q", "--orphan", "elsewhere"],
+                   check=True)
+    _commit_all(coder, "unrelated history")
+    with pytest.raises(ValueError, match="not descended"):
+        role_inputs.verify(runs, "task", "coder", coder, replacing=True)
+
+
+def test_replace_session_cannot_skip_the_first_launch_check(tmp_path, inputs):
+    # Review of #104: with no launch to replace, --replace-session admitted a Tester projection
+    # carrying an unrecorded implementation file.
+    _, runs, root = inputs
+    tester = tmp_path / "tester"
+    role_inputs.prepare(runs, "task", "tester", tester, ["api"], [])
+    (tester / "leaked.py").write_text("IMPLEMENTATION_SECRET")
+    with pytest.raises(ValueError, match="no recorded launch"):
+        role_inputs.verify(runs, "task", "tester", tester, replacing=True)
+    # A launch recorded for another role or another clone is not this one's.
+    _record_launch(root, "coder", "coder", tester)
+    _record_launch(root, "tester", "tester", tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="no recorded launch"):
+        role_inputs.verify(runs, "task", "tester", tester, replacing=True)
+    brief = tmp_path / "brief"
+    brief.write_text("Test public behavior")
+    tool = Path(__file__).resolve().parents[1] / "harness/tmux_lane.sh"
+    env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "LANG") if key in os.environ}
+    env["FACTORY_PYTHON"] = sys.executable
+    result = subprocess.run(["bash", str(tool), "task", "tester", "launch", "--runs", str(runs),
+                             "--repo", str(tester), "--prompt", str(brief), "--round", "r2",
+                             "--replace-session", "no prior session"], env=env,
                             capture_output=True, text=True)
     assert result.returncode != 0
     assert "prepared role projection" in result.stderr
