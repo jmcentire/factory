@@ -82,3 +82,22 @@ def test_every_harness_python_call_is_covered() -> None:
         if "exec python3" in text:
             uncovered.append(f"{script.name}: exec python3 bypasses the function")
     assert uncovered == []
+
+
+def test_agent_contract_looks_up_a_registry_agent_with_the_factory_python(tmp_path: Path) -> None:
+    """Review of #108: `agent_contract.sh claude` on a clean machine with a good Factory venv and
+    an unsuitable system python3 must describe the agent with the venv, not PATH's python3."""
+
+    root = _checkout(tmp_path, venv=True)
+    shutil.copytree(REPO / "harness", root / "harness", dirs_exist_ok=True)
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    claude = agents / "claude"
+    claude.write_text("#!/bin/sh\necho '9.9.9 (Claude Code)'\n", encoding="utf-8")
+    claude.chmod(0o755)
+    path = f"{_bad_python3(tmp_path)}:{agents}:/usr/bin:/bin"
+    env = {"PATH": path, "HOME": str(tmp_path), "PYTHONPATH": str(REPO)}
+    done = subprocess.run(["bash", str(root / "harness" / "agent_contract.sh"), "claude"],
+                          capture_output=True, text=True, env=env, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["agent-registry-headless-v1", "9.9.9 (Claude Code)"]

@@ -54,7 +54,10 @@ case "$AGENT" in
   claude|claude-ollama|agy|muse|prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
-      EXECUTABLE=$("${FACTORY_PYTHON:-python3}" "$D/lane_agent.py" describe --agent "$AGENT" \
+      # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.
+      # shellcheck source=harness/factory_python.sh
+      source "$D/factory_python.sh"
+      EXECUTABLE=$("$FACTORY_PYTHON" "$D/lane_agent.py" describe --agent "$AGENT" \
         | { IFS= read -r -d '' first; printf '%s' "$first"; }) || EXECUTABLE=""
       [ -n "$EXECUTABLE" ] || fail "$AGENT: lane_agent.py describe named no executable"
     fi
