@@ -583,6 +583,11 @@ class LaneWatch:
         self._write_state(state)
         return observed and not state.get("surviving_processes") and self._pane_exited(launch)
 
+    def _native_turn(self) -> dict[str, Any]:
+        """A persistent lane's native turn state (persistent_lane.py), or {} for any other lane."""
+        path = self.lanes / f"{self.slot}-persistent.json"
+        return {} if path.is_symlink() else _load_json(path)
+
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
         """A turn this watcher ends can be continued: a session was retained (a Codex thread, or
         a registry harness's session), and the launch recorded where the runs live and the
@@ -887,7 +892,11 @@ class LaneWatch:
         # commit or the last pending question, plus what a pause carried over from before it.
         last_commit = max((float(c["ts"]) for c in state["commits"]), default=0.0)
         anchor = float(state["life_started"]) + (0.0 if state.get("continued") else allowance)
-        clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0))
+        # A persistent lane's new native turn starts its own window (persistent_lane.py).
+        native = self._native_turn()
+        started = native.get("turn_started_at")
+        turn = float(started) if isinstance(started, (int, float)) else 0.0
+        clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0), turn)
         idle = current - clock + (float(state.get("stall_carry_s", 0.0)) if clock == anchor
                                   else 0.0)
 
@@ -920,8 +929,10 @@ class LaneWatch:
             return self._request_end(launch, state, "capped", "refusal-lane-cap",
                                      f"{reason}; {summary}")
 
-        # A lane that reported done is waiting for the Validator, not stalled; a new turn re-arms.
-        if not pending and not state.get("completion_claim") and idle > window:
+        # A persistent lane that reported done and is idle at its input boundary is waiting for
+        # the Validator, not stalled. Once a new turn starts (phase working) it is watched again.
+        waiting = bool(state.get("completion_claim")) and native.get("phase") == "idle"
+        if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",
                 f"no commit for {idle / 60:.0f} min past its {allowance / 60:.0f} min "

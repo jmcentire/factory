@@ -155,6 +155,26 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     return result
 
 
+def _launched(root: Path, role: str, repository: Path) -> bool:
+    """Whether the run's launch journals record an active launch of role in repository."""
+    lanes = root / "tmux-lanes"
+    if lanes.is_symlink() or not lanes.is_dir():
+        return False
+    for journal in sorted(lanes.glob(f"{role}*-launch.jsonl")):
+        if journal.is_symlink():
+            continue
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (isinstance(row, dict) and row.get("status") == "active"
+                    and row.get("role") == role
+                    and Path(str(row.get("repository", ""))).resolve() == repository.resolve()):
+                return True
+    return False
+
+
 def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool = False) -> dict:
     root, _ = record.load(runs, run)
     if (root / "inputs").is_symlink():
@@ -164,7 +184,10 @@ def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool
         raise ValueError("repository is not this role's prepared input projection")
     initial = run_host_git(repository, ["rev-parse", "HEAD"]).decode().strip()
     if replacing:
-        # A replacement round continues the lane's own clone: its commits are the lane's work.
+        # A replacement round continues a clone this role was launched in: its commits are the
+        # lane's work. Nothing launched there yet means a first launch, checked in full below.
+        if not _launched(root, role, repository):
+            raise ValueError("no recorded launch of this role in this repository to replace")
         try:
             run_host_git(repository, ["merge-base", "--is-ancestor", receipt["initial_commit"],
                                       initial])

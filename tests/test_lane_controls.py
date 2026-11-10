@@ -781,9 +781,30 @@ def test_a_lane_that_reported_done_is_waiting_not_stalled(tmp_path: Path) -> Non
                "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
     with watched.log.open("a") as stream:
         stream.write(json.dumps(message) + "\n")
+    native = watched.lanes / "tester-persistent.json"
+    native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
     assert watched.at(300) == "watching"
     assert watched.at(900 + 1200 + 3600) == "watching"
     assert watched.stops == []
+
+
+def test_a_new_turn_after_done_is_watched_for_stalls_again(tmp_path: Path) -> None:
+    # Review of #104: the delivery of a new persistent turn does not re-arm the watcher, so the
+    # done claim must only hold while the native lane is idle at its input boundary.
+    watched = Watched(tmp_path)
+    _commit(watched.repo, T0 + 200, "a")
+    message = {"type": "item.completed",
+               "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
+    with watched.log.open("a") as stream:
+        stream.write(json.dumps(message) + "\n")
+    native = watched.lanes / "tester-persistent.json"
+    native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
+    assert watched.at(3000) == "watching"
+    # The Validator sends new work; the lane is working again and commits nothing.
+    native.write_text(json.dumps({"phase": "working", "turn_started_at": T0 + 3000}))
+    assert watched.at(3000 + 1199) == "watching"  # the new turn has its own window
+    assert watched.at(3000 + 1201) == "stalled"
+    assert watched.stops == ["r1:tester"]
 
 
 def test_time_the_machine_slept_is_not_stall_time(tmp_path: Path) -> None:
