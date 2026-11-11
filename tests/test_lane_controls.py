@@ -559,13 +559,14 @@ def test_claude_sign_in_is_checked_in_the_operators_profile(tmp_path: Path) -> N
     _stub(lanes.stub, "claude", (
         'if [ "${1:-}" = auth ]; then\n'
         f'  if [ "${{CLAUDE_CONFIG_DIR:-}}" = "{profile}" ]; then\n'
-        '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'; else echo \'{"loggedIn": false}\'; fi\n'
+        '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'\n'
+        "  else echo '{\"loggedIn\": false}'; fi\n"
         '  exit 0\nfi\n'
         "exit 0\n"
     ))
     launched = lanes.lane("coder", "--agent", "claude", "--model", "claude-opus-5-5",
                           env={"CLAUDE_CONFIG_DIR": str(profile)})
-    assert "Claude Code is not signed in" not in launched.stderr, launched.stderr
+    assert launched.returncode == 0, launched.stdout + launched.stderr
 
 
 def test_signed_out_cursor_agent_is_refused(tmp_path: Path) -> None:
