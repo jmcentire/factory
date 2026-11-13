@@ -596,29 +596,38 @@ class CursorAgent(Harness):
 
 # What stands between each remaining provider and the Claude arrangement (its own
 # interactive program, the operator's configuration intact, the lane Kindex added beside it,
-# and receipt reported by the program itself). Read from each CLI's own help on 2026-11-13;
-# none of it has been run against a live session. Until a blocker is cleared, that
+# and receipt reported by the program itself). "Established" below means read from the named
+# source on 2026-11-13; none of it has been run in a lane. Until a blocker is cleared, that
 # provider's lanes keep the print-mode start and private configuration below: converting
 # without these would cost the lane its Kindex and any way to send it a message, which is
 # worse than the defect.
-_NEEDS_REPORTS = (
-    "no qualified interface by which its interactive program reports that it started, "
-    "received a prompt or stopped, so nothing could be typed to it safely or confirmed")
+_TO_SHOW = (
+    " To clear: one live interactive session showing a start report, a report carrying a "
+    "typed prompt, a stop report, and the lane Kindex loading from the mechanism named.")
 _BLOCKERS = {
-    "agy": "Antigravity: " + _NEEDS_REPORTS + " (project hooks in .agents/hooks.json exist; "
-           "their events are unqualified). No session- or project-scoped MCP option: `agy mcp "
-           "add` writes the operator's configuration, and whether --settings accepts MCP "
-           "servers is unqualified, so the lane Kindex needs the private HOME.",
-    "cursor-agent": "Cursor: " + _NEEDS_REPORTS + " (project hooks in .cursor/hooks.json "
-                    "exist; their events are unqualified). The lane Kindex could move to the "
-                    "supported project file .cursor/mcp.json in the lane's clone once a target "
-                    "that already has that file is handled.",
-    "muse": "Muse: " + _NEEDS_REPORTS + " (project hooks in .muse/hooks.json exist; their "
-            "events are unqualified). The lane Kindex could move to the supported project file "
-            "<repository>/.mcp.json or a per-run `-c` setting; its sign-in has no status "
-            "command, so the preflight still reads whether a sign-in is stored.",
+    "agy": "Antigravity. Established (its own `agy changelog`): hooks.json events "
+           "SessionStart, PreInvocation (input carries lastUserInput), Stop (input carries "
+           "continuation_active); hook input carries hookEventName and cwd; follow-up "
+           "messages are queued until the turn ends by default; plugins may bundle MCP "
+           "servers and a workspace may list plugins in .agents/plugins.json. Not "
+           "established: that a project .agents/hooks.json and a workspace plugin load "
+           "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
+    "cursor-agent": "Cursor. Established (cursor.com/docs/agent/hooks, cursor.com/docs/cli/"
+                    "mcp): project <root>/.cursor/hooks.json runs beside user hooks; events "
+                    "sessionStart (session_id), beforeSubmitPrompt, stop (status, "
+                    "loop_count), sessionEnd; the CLI uses the editor's project MCP "
+                    "configuration. Not established: that beforeSubmitPrompt carries the "
+                    "prompt text, and that these hooks fire in the interactive CLI. A target "
+                    "that already has .cursor/ files is unhandled." + _TO_SHOW,
+    "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
+            "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
+            "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
+            "is trusted); project MCP file <repository>/.mcp.json. Not established: whether "
+            "`-c hooks=` adds to or replaces the operator's hooks (clashing keys refuse the "
+            "run), and the userPromptSubmit payload. Its sign-in has no status command, so "
+            "the preflight still reads whether a sign-in is stored." + _TO_SHOW,
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
-                   "program and any report or MCP interface are unqualified.",
+                   "program and any report or MCP interface are unassessed.",
 }
 
 HARNESSES: Mapping[str, Harness] = {

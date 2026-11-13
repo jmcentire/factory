@@ -139,12 +139,12 @@ Antigravity, Cursor, Muse and Prime lanes still start in print mode with a priva
 configuration. Each launch records and prints `native_blocker`. They are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:
 
-| Provider | Receipt and readiness | Lane Kindex without a private HOME |
+| Provider | Established, and from where | Not established |
 |---|---|---|
-| Antigravity | Unqualified. Project hooks (`.agents/hooks.json`) exist; their events are not established. | None found: `agy mcp add` writes the operator's configuration; whether `--settings` takes MCP servers is not established. |
-| Cursor | Unqualified. Project hooks (`.cursor/hooks.json`) exist; their events are not established. | Supported project file `.cursor/mcp.json` in the lane's clone; a target that already has that file is unhandled. |
-| Muse | Unqualified. Project hooks (`.muse/hooks.json`) exist; their events are not established. | Supported project file `<repository>/.mcp.json`, or a per-run `-c` setting; neither is qualified. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
-| Prime | Not assessed: the program is not installed where this was written. | Not assessed. |
+| Antigravity | From its own `agy changelog`: hooks.json events `SessionStart`, `PreInvocation` (input carries `lastUserInput`), `Stop` (input carries `continuation_active`); follow-up messages queue until the turn ends by default; plugins may bundle MCP servers and a workspace may list plugins in `.agents/plugins.json`. | That a project `.agents/hooks.json` and a workspace plugin load without an edit to the operator's configuration or a trust prompt. `agy mcp add` writes the operator's configuration and is not an option. |
+| Cursor | From cursor.com/docs/agent/hooks and /docs/cli/mcp: project `.cursor/hooks.json` runs beside user hooks; events `sessionStart` (`session_id`), `beforeSubmitPrompt`, `stop` (`status`, `loop_count`), `sessionEnd`; the CLI uses the editor's project MCP configuration. | That `beforeSubmitPrompt` carries the prompt text, and that these hooks fire in the interactive CLI. A target that already has `.cursor/` files is unhandled. |
+| Muse | Probed live on muse 1.4.6 (2026-10-12) and from its help: events `sessionStart`, `userPromptSubmit`, `stop`, `notification`, `sessionEnd`; hooks by per-run `-c hooks=<json>` or project `.muse/hooks.json` (off until the workspace is trusted); project MCP file `<repository>/.mcp.json`. | Whether `-c hooks=` adds to or replaces the operator's hooks, and the `userPromptSubmit` payload. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
+| Prime | Nothing: the program is not installed where this was written. | Everything. |
 
 To clear a row, a live session of that program must show: a report when the session is
 ready for input, a report carrying a submitted prompt, a report when it stops, and the
