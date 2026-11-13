@@ -228,6 +228,15 @@ if [ "$ACTION" != "freeze" ]; then
        case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
        case "$DESCRIBED" in *metered-only*) METERED=true ;; esac ;;
   esac
+  # Whether this lane's memory is its own, and what (if anything) keeps this provider from
+  # running as its own interactive program with the operator's configuration: both come from
+  # the registry, are recorded in the launch and are said aloud when the lane starts.
+  case "$AGENT" in codex|codex-interactive|codex-ollama) REGISTRY_AGENT=codex ;; *) REGISTRY_AGENT="$AGENT" ;; esac
+  exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$REGISTRY_AGENT")
+  { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
+    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4; } || exit 70
+  exec 4<&-
+  MEMORY_ISOLATION=${MEMORY_ISOLATION#memory:}
   if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
     echo "tmux-lane: claude-ollama needs --model (an Ollama model, e.g. glm-5.3:cloud)" >&2; exit 64
   fi
@@ -854,7 +863,7 @@ PY
   fi
   DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
     --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
-  PLANNED=$(LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -940,6 +949,12 @@ print(json.dumps({
     "tmux_target": f"{run}:{lane}",
     "watch_target": f"{run}:watch-{lane}",
     "kindex": json.loads(kindex),
+    # "lane-only": the lane sees its scoped Kindex and none of the operator's MCP servers.
+    # "beside-operator": the operator's settings and servers are intact and the lane's Kindex
+    # is added beside them, so memory is not a boundary between the lanes.
+    "memory_isolation": os.environ["LANE_MEMORY_ISOLATION"],
+    # Why this provider still runs in print mode with a private configuration, or null.
+    "native_blocker": os.environ["LANE_NATIVE_BLOCKER"] or None,
     "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
@@ -1178,6 +1193,10 @@ PY
   fi
   append_event "$(mark active)"
   echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT"
+  if [ "$MEMORY_ISOLATION" = beside-operator ]; then
+    echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
+  fi
+  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
   echo "tmux-lane: wakes land in $TMUX_ROOT/wake.jsonl and $ROOT/events.jsonl"
   echo "tmux-lane: the entire repository is now agent-owned; do not run host Git there"

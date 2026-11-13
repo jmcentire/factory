@@ -93,6 +93,17 @@ class Harness:
     resumable: bool
     api_env: tuple[str, ...] = ()  # variables that switch the harness to per-use API billing
     plan: bool = True  # the harness has a signed-in plan path
+    # Whether a lane's memory is its own. "lane-only": the lane sees its scoped Kindex and no
+    # MCP server of the operator's (a private configuration; the operator's settings are not
+    # loaded). "beside-operator": the operator's settings and MCP servers are intact and the
+    # lane's Kindex is added beside them, so any memory server the operator configured is
+    # visible to the lane too. Independence of Coder and Tester then rests on their separate
+    # inputs and clones, not on memory, and a launch says so.
+    memory: str = "lane-only"
+    # Why this provider's lanes are not yet its own interactive program with the operator's
+    # configuration intact; "" when they are. Stated where the registry is read, so the
+    # limit is a recorded blocker and never a silent difference.
+    native_blocker: str = ""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
@@ -583,19 +594,53 @@ class CursorAgent(Harness):
         return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
 
 
+# What stands between each remaining provider and the Claude arrangement (its own
+# interactive program, the operator's configuration intact, the lane Kindex added beside it,
+# and receipt reported by the program itself). Read from each CLI's own help on 2026-11-13;
+# none of it has been run against a live session. Until a blocker is cleared, that
+# provider's lanes keep the print-mode start and private configuration below: converting
+# without these would cost the lane its Kindex and any way to send it a message, which is
+# worse than the defect.
+_NEEDS_REPORTS = (
+    "no qualified interface by which its interactive program reports that it started, "
+    "received a prompt or stopped, so nothing could be typed to it safely or confirmed")
+_BLOCKERS = {
+    "agy": "Antigravity: " + _NEEDS_REPORTS + " (project hooks in .agents/hooks.json exist; "
+           "their events are unqualified). No session- or project-scoped MCP option: `agy mcp "
+           "add` writes the operator's configuration, and whether --settings accepts MCP "
+           "servers is unqualified, so the lane Kindex needs the private HOME.",
+    "cursor-agent": "Cursor: " + _NEEDS_REPORTS + " (project hooks in .cursor/hooks.json "
+                    "exist; their events are unqualified). The lane Kindex could move to the "
+                    "supported project file .cursor/mcp.json in the lane's clone once a target "
+                    "that already has that file is handled.",
+    "muse": "Muse: " + _NEEDS_REPORTS + " (project hooks in .muse/hooks.json exist; their "
+            "events are unqualified). The lane Kindex could move to the supported project file "
+            "<repository>/.mcp.json or a per-run `-c` setting; its sign-in has no status "
+            "command, so the preflight still reads whether a sign-in is stored.",
+    "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
+                   "program and any report or MCP interface are unqualified.",
+}
+
 HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-                                  "CLAUDE_CODE_USE_VERTEX")),
-    "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True),
-    "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",)),
+                                  "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator"),
+    "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
+                                  memory="beside-operator"),
+    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration.
+    "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
+                   memory="beside-operator"),
     "agy": Antigravity("agy", "agy", (), True,
-                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY")),
-    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",)),
+                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
+                       native_blocker=_BLOCKERS["agy"]),
+    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",),
+                 native_blocker=_BLOCKERS["muse"]),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
-                              api_env=("OPENROUTER_API_KEY",), plan=False),
-    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",)),
+                              api_env=("OPENROUTER_API_KEY",), plan=False,
+                              native_blocker=_BLOCKERS["prime-agent"]),
+    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
+                                native_blocker=_BLOCKERS["cursor-agent"]),
 }
 
 
@@ -687,7 +732,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
-    describe = sub.add_parser("describe", help="resumable and plan, NUL-separated")
+    describe = sub.add_parser("describe", help="resumable, plan, memory isolation and the "
+                              "native blocker (or empty), NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
     turn.add_argument("--agent", required=True)
@@ -758,7 +804,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "describe":
             chosen = harness(args.agent)
             sys.stdout.write(f"{'resumable' if chosen.resumable else 'single'}\0"
-                             f"{'plan' if chosen.plan else 'metered-only'}\0")
+                             f"{'plan' if chosen.plan else 'metered-only'}\0"
+                             f"memory:{chosen.memory}\0{chosen.native_blocker}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":

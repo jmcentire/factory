@@ -24,6 +24,8 @@ public API is still pre-1.0.
   Claude Code queues input it receives while working. Delivery records survive a wrapper
   restart; an unreadable or foreign record stops the start; nothing typed once is typed
   again. `run_record.py status` lists coordinator seats.
+- `/build` describes a working sequence scaled to the task and a completion check that is a
+  report, not a gate; committing, pushing, merging and releasing are done only when asked.
 - Codex lanes load the operator's whole Codex configuration: `--ignore-user-config`,
   `--ignore-rules`, `--strict-config` and `--disable apps` are gone from launch and resume,
   and the code that disabled every MCP server but the lane's Kindex is deleted.
@@ -44,8 +46,14 @@ public API is still pre-1.0.
   native session with `--replace-session`. The operator's MCP servers are now visible to
   Claude author lanes beside the lane's own Kindex; input separation rests on the role
   projections, separate clones and the lane protocol.
-- Not yet converted: Antigravity (`--print` stream, private HOME), Codex (`exec`), Cursor
-  (`-p`, private HOME), Muse (`exec`, private settings) and Prime (`--print`).
+- A lane launch records and prints `memory_isolation`. For Claude and Codex lanes it is
+  `beside-operator`: the operator's MCP servers are visible beside the lane's Kindex, so
+  independence rests on the separate inputs and clones, not on memory.
+- Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
+  "Providers not yet native"): Antigravity, Cursor, Muse and Prime still start in print mode
+  with a private configuration, because no qualified interface lets their interactive
+  programs report readiness or receipt, and converting now would cost the lane its Kindex
+  and any way to message it. Codex still runs `codex exec`.
 
 ## [0.8.29] - 2026-11-09
 

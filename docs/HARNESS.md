@@ -122,6 +122,36 @@ started through the operator's launcher on a terminal the lane wrapper owns
 - **Interrupt** is refused for these sessions: Claude Code runs no stop hook for an
   interrupted turn, so the harness could not tell a stopped turn from a running one.
 
+### Memory isolation, said plainly
+
+A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
+scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude and Codex
+lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
+added beside them: any memory server the operator configured is visible to the lane, so
+Coder and Tester independence rests on their separate inputs and clones, not on memory.
+That is the consequence of not suppressing the operator's configuration, and it is the
+operator's to weigh.
+
+### Providers not yet native, and exactly why
+
+Codex lanes load the operator's whole Codex configuration but still run `codex exec`.
+Antigravity, Cursor, Muse and Prime lanes still start in print mode with a private
+configuration. Each launch records and prints `native_blocker`. They are not converted
+because doing so today would cost the lane its Kindex and any way to send it a message:
+
+| Provider | Receipt and readiness | Lane Kindex without a private HOME |
+|---|---|---|
+| Antigravity | Unqualified. Project hooks (`.agents/hooks.json`) exist; their events are not established. | None found: `agy mcp add` writes the operator's configuration; whether `--settings` takes MCP servers is not established. |
+| Cursor | Unqualified. Project hooks (`.cursor/hooks.json`) exist; their events are not established. | Supported project file `.cursor/mcp.json` in the lane's clone; a target that already has that file is unhandled. |
+| Muse | Unqualified. Project hooks (`.muse/hooks.json`) exist; their events are not established. | Supported project file `<repository>/.mcp.json`, or a per-run `-c` setting; neither is qualified. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
+| Prime | Not assessed: the program is not installed where this was written. | Not assessed. |
+
+To clear a row, a live session of that program must show: a report when the session is
+ready for input, a report carrying a submitted prompt, a report when it stops, and the
+lane's Kindex loading from the additive mechanism named. Nothing is typed into a program
+that cannot say it is ready, because the keys could answer a sign-in, trust or permission
+question instead.
+
 ## Messages and oversight
 
 `harness/inject.sh` places coordinator messages in durable file inboxes. It cannot send
