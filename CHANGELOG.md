@@ -3,7 +3,7 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
-## Unreleased
+## [0.8.30] - 2026-11-13
 
 ### Changed
 
