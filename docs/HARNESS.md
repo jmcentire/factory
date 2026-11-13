@@ -62,6 +62,56 @@ Every role retrieves relevant Kindex context when authorized. Author memory rema
 private, with curated common context; a shared live graph must not leak one author's
 work to the other. Retrieval receipts are not an execution prerequisite.
 
+### Claude Code is the operator's own interactive session
+
+Claude Code is never run in print mode (`-p`), never billed to an API key, never has its
+own state files read or rewritten, and never has the operator's settings, hooks, plugins,
+`CLAUDE.md` or MCP servers suppressed. A Claude seat or lane is the interactive program,
+started through the operator's launcher on a terminal the lane wrapper owns
+(`harness/native_session.py`) and shown in its tmux window, where the operator can use it.
+
+- **Launcher.** `FACTORY_CLAUDE_LAUNCHER` names the command. Unset, it is `cl` when the
+  operator's login shell defines it, otherwise the `claude` executable. A shell function is
+  run by the login shell (`$SHELL -l -c`), which sources the operator's profile itself. The
+  API-billing variables are unset immediately before the launcher runs; none is ever set.
+- **What is added.** `--name=<run>-<slot>`, `--session-id <uuid>` (or `--resume <uuid>` to
+  continue), `--settings <file>` carrying four observation hooks beside the operator's own,
+  the assigned `--model`/`--effort` if any, the lane's Kindex by `--mcp-config`, and the
+  run root by `--add-dir` for coordinators. The permission mode is what it was before
+  (author lanes bypass, coordinators default unless `FACTORY_LANE_SANDBOX=off`) and is left
+  out entirely when the launcher is the operator's own function, which makes that choice.
+- **Messages** are typed into that terminal, to the exact process the wrapper started, one
+  outstanding at a time, each followed by a typed mark `[factory-message:<id>]`. A state
+  names only what was observed: `queued` (accepted, not one byte typed), `submitted` (typing
+  began; unconfirmed), `observed` (the session's own prompt hook reported a prompt carrying
+  the mark), `acknowledged` (a stop report followed that prompt with no other prompt
+  between), `unknown` (typed, and its outcome can no longer be observed). `busy` means it
+  was not accepted. Asking again reports the state and never types a message twice, across
+  wrapper restarts too.
+- **What the hooks can establish.** They are observation hooks added beside the operator's
+  own, which run in parallel and may reject a prompt or make the session continue past a
+  stop. A prompt report therefore means the prompt reached the session, not that it was
+  accepted, and a stop report means the session reported ending a response, not that the
+  work is complete or successful. `phase` names the last report: `starting`, `started`,
+  `prompt-observed`, `stop-reported`. A folder-trust or sign-in question keeps the seat at
+  `starting` with its first message `queued`; answer it in the window. Nothing is inferred
+  from the screen, from silence or from elapsed time, and nothing is typed into a session
+  that has not reported starting.
+- **Limits.** If an operator hook makes the session continue past a stop, `stop-reported`
+  is early; a message typed then waits in Claude Code's own queue as `submitted`. How Claude
+  Code reports pasted text is its own business, so a report is matched by the typed mark,
+  and `text_match` says whether the reported text was also byte-identical (`exact`) or only
+  carried the mark (`token`).
+- **Status.** `python harness/run_record.py --runs R --run ID status` lists each coordinator
+  seat under `seats`. `python harness/persistent_lane.py status --root RUN_ROOT --slot SLOT`
+  prints one live session, and exits 70 with the reason once its process has ended; the
+  retained record then holds `phase: exited`.
+- **Resume.** A session that reported starting keeps its id in `<slot>-session-id`
+  (`-thread-id` for authors). Starting the seat again continues that conversation with
+  `--resume`, interactively.
+- **Interrupt** is refused for these sessions: the program reports nothing back for an
+  interrupted turn, so the harness could not tell a stopped turn from a running one.
+
 ## Messages and oversight
 
 `harness/inject.sh` places coordinator messages in durable file inboxes. It cannot send

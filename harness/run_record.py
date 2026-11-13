@@ -479,105 +479,42 @@ def last_lane_line(log: Path) -> str:
 
 # gh reads these before its own keyring; a user signed in only through them keeps that sign-in.
 GITHUB_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
-# Claude Code's own config lock (proper-lockfile: a directory, stale after 10 s unrefreshed).
-CLAUDE_LOCK_STALE_SECONDS = 10.0
+def seat_status(root: Path, role: str) -> dict[str, Any]:
+    """What a coordinator seat's native session has itself reported, and nothing inferred.
 
-
-def trust_claude_folders(home: Path, folders: list[Path], *, wait: float = 5.0) -> None:
-    """Record folder trust for the run's authorized folders before a Claude Code seat starts.
-
-    An interactive seat otherwise opens on "trust this folder?" with "No, exit" selected and sits
-    idle until someone answers it in the pane. Writes ``projects[<path>].hasTrustDialogAccepted``
-    in Claude Code's ``.claude.json`` (``$CLAUDE_CONFIG_DIR/.claude.json`` under a profile, else
-    ``~/.claude.json``) under Claude Code's own lock, keeping every other key; the first change
-    keeps the prior file as ``.claude.json.factory-backup``. Raises OSError/ValueError without
-    writing when the file cannot be safely updated; the caller reports it and launches anyway.
+    ``phase`` names the session's last report: ``starting`` until it reports that it started
+    (it may be showing the operator a folder-trust or sign-in question), then ``started``,
+    ``prompt-observed`` and ``stop-reported``. The operator's own hooks may reject a prompt or
+    continue past a stop, so neither report is called acceptance or completion. A delivery is
+    ``queued``, ``submitted``, ``observed``, ``acknowledged`` or ``unknown``
+    (``persistent_lane.OUTSTANDING``); only ``acknowledged`` is evidence the session took it.
     """
-    import time
+    import importlib
 
-    profile = os.environ.get("CLAUDE_CONFIG_DIR")
-    config = (Path(profile) if profile else home) / ".claude.json"
-    lock = Path(f"{config}.lock")
-    real = config.resolve()  # a dotfile-managed symlink keeps pointing at the updated file
-    keys = [str(folder.resolve()) for folder in folders]
-    for _ in range(3):
-        deadline = time.monotonic() + wait
-        while True:
-            try:
-                lock.mkdir()
-                break
-            except FileExistsError:
-                try:
-                    stale = time.time() - lock.stat().st_mtime > CLAUDE_LOCK_STALE_SECONDS
-                except FileNotFoundError:
-                    continue
-                if stale:
-                    print(f"factory: removing stale lock {lock}", file=sys.stderr)
-                    try:
-                        lock.rmdir()
-                    except FileNotFoundError:
-                        pass
-                    continue
-                if time.monotonic() > deadline:
-                    raise OSError(f"{lock} is held") from None
-                time.sleep(0.05)
-        try:
-            try:
-                before = os.stat(real)
-                original = real.read_bytes()
-                doc = json.loads(original)
-            except FileNotFoundError:
-                before, original, doc = None, None, {}
-            except json.JSONDecodeError as error:
-                raise ValueError(f"{real} is not valid JSON") from error
-            projects = doc.setdefault("projects", {}) if isinstance(doc, dict) else None
-            if not isinstance(projects, dict):
-                raise ValueError(f"{real} has an unexpected shape")
-            if all(isinstance(projects.get(key), dict)
-                   and projects[key].get("hasTrustDialogAccepted") is True for key in keys):
-                return
-            for key in keys:
-                entry = projects.setdefault(key, {})
-                if not isinstance(entry, dict):
-                    raise ValueError(f"{real} has an unexpected entry for {key}")
-                entry["hasTrustDialogAccepted"] = True
-            if original is not None:
-                try:
-                    write_new(Path(f"{real}.factory-backup"), original)
-                except FileExistsError:
-                    pass
-            temporary = real.with_name(f".{real.name}.factory-{secrets.token_hex(6)}")
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         stat.S_IMODE(before.st_mode) if before else 0o600)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                    json.dump(doc, stream, indent=2, ensure_ascii=False)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                # A writer that skipped the lock changed it under us: start over from its bytes.
-                try:
-                    now = os.stat(real)
-                    changed = before is None or (now.st_ino, now.st_size, now.st_mtime_ns) != (
-                        before.st_ino, before.st_size, before.st_mtime_ns)
-                except FileNotFoundError:
-                    changed = before is not None
-                if changed:
-                    continue
-                os.replace(temporary, real)
-            finally:
-                temporary.unlink(missing_ok=True)
-            directory = os.open(real.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-            return
-        finally:
-            try:
-                lock.rmdir()
-            except FileNotFoundError:
-                pass
-    raise OSError(f"{real} kept changing during the update")
+    if not (root / f"{role}-persistent.json").exists():
+        return {"native": False,
+                "detail": "this seat has no resident native session record"}
+    lane = (importlib.import_module("harness.persistent_lane") if __package__
+            else importlib.import_module("persistent_lane"))
+    try:
+        seen = lane.inspect(root, role)
+    except (OSError, ValueError, KeyError) as error:
+        return {"native": True, "process_state": "unavailable", "detail": str(error)}
+    return {
+        "native": True,
+        "transport": seen.get("transport", "stream"),
+        "launcher": seen.get("launcher"),
+        "session_id": seen.get("session_id"),
+        "session_started": seen.get("session_started"),
+        "phase": seen.get("phase"),
+        "last_native_event": seen.get("last_native_event"),
+        "prompt_reports": seen.get("prompt_reports"),
+        "stop_reports": seen.get("stop_reports", seen.get("turns")),
+        "process_state": seen.get("process_state"),
+        "worker": seen.get("worker"),
+        "deliveries": {key: value.get("state")
+                       for key, value in (seen.get("deliveries") or {}).items()},
+    }
 
 
 def start(runs: Path, run: str) -> None:
@@ -669,13 +606,9 @@ def _start_locked(runs: Path, run: str) -> None:
                             or stream.read(len(prompt.encode()) + 1) != prompt.encode()):
                         raise ValueError("retained kickoff brief changed") from None
             continue
-        if agent == "claude":
-            try:
-                trust_claude_folders(Path(os.environ["HOME"]), [Path(doc["repository"]), root])
-            except (KeyError, OSError, ValueError) as error:
-                print(f"factory: warning: could not pre-trust the {role}'s folders for Claude "
-                      f"Code ({error}); accept its folder-trust prompt in the {role} window",
-                      file=sys.stderr)
+        # Claude Code's own files are never read or written here. A folder it has not seen asks
+        # its trust question in the seat's window, for the operator to answer; until the session
+        # reports that it started, the seat's status is "starting" and nothing is typed into it.
         native_stream = agent in {"claude", "agy"}
         if native_stream:
             extra = ["--add-dir", str(root)]
@@ -721,9 +654,10 @@ def _start_locked(runs: Path, run: str) -> None:
         env = {
             key: os.environ[key]
             # TMUX_TMPDIR places the run's tmux socket; a seat without it reaches another server.
-            # CLAUDE_CONFIG_DIR and CODEX_HOME are the operator's agent profiles.
+            # CLAUDE_CONFIG_DIR and CODEX_HOME are the operator's agent profiles, and
+            # FACTORY_CLAUDE_LAUNCHER the command they start Claude Code with.
             for key in ("HOME", "USER", "PATH", "TMPDIR", "TMUX_TMPDIR", "TERM", "SHELL", "LANG",
-                        "CODEX_HOME", "CLAUDE_CONFIG_DIR")
+                        "CODEX_HOME", "CLAUDE_CONFIG_DIR", "FACTORY_CLAUDE_LAUNCHER")
             if key in os.environ
         }
         # The Validator opens authorized pull requests; gh auth held only in the environment
@@ -924,6 +858,8 @@ def main() -> int:
                 doc["validation"] = [
                     read_json(p) for p in sorted(root.glob("validation/*/result.json"))
                 ]
+                doc["seats"] = {role: seat_status(root, role)
+                                for role in ("validator", "orchestrator")}
                 print(json.dumps(doc, indent=2))
         return 0
     except (ValueError, OSError, RuntimeError) as error:

@@ -2,13 +2,19 @@
 """agents — one registry of the agent harnesses a Factory seat can run, so any harness can hold
 any seat.
 
-The factory names no model and no vendor. What it needs from a harness is a shape: how to start a
-headless turn in a working directory with a named model and reasoning effort, how to hand it the
-prompt, how to resume the same session for the next turn, which variables it reads, how to give a
-lane its own scoped Kindex and nothing of the operator's, and how to read the final message,
-session id and cost back out of its output. Each harness is data here; launchers
-(``tmux_lane.sh``, ``factory.sh``, ``tmux_lane_message.sh``) ask the registry instead of carrying
-per-vendor branches, and a new harness is one entry.
+The factory names no model and no vendor. What it needs from a harness is a shape: how to start
+it in a working directory with a named model and reasoning effort, how to hand it the prompt, how
+to resume the same session, which variables it reads, how to give a lane its own scoped Kindex,
+and how to read the final message, session id and cost back out of its output.
+
+Claude Code is never a headless turn (founder, 2026-11-13). Its entry builds the arguments of
+the operator's own interactive session, which ``native_session.py`` hosts on a terminal: no
+print mode, no API key, and nothing that replaces or discards the operator's settings, hooks,
+plugins or MCP servers. The lane's scoped Kindex is added beside them.
+
+Each harness is data here; launchers (``tmux_lane.sh``, ``factory.sh``,
+``tmux_lane_message.sh``) ask the registry instead of carrying per-vendor branches, and a new
+harness is one entry.
 
 Each model runs in its own vendor's harness where one exists (it was trained there): Claude in
 Claude Code, GPT in Codex, Gemini in Antigravity, Muse in Muse Code, Grok in Cursor's agent CLI,
@@ -56,7 +62,9 @@ class Turn:
     """
 
     argv: tuple[str, ...]
-    prompt_via: str  # "stdin" | "argv" (appended as the last argument)
+    # "stdin" | "argv" (appended as the last argument) | "terminal" (typed into the native
+    # interactive session by the wrapper that owns its terminal; never an argument)
+    prompt_via: str
     last_message_file: str = ""
 
 
@@ -93,21 +101,20 @@ class Harness:
 
     def persistent_turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
                         extra: Sequence[str] = ()) -> Turn:
-        """Keep one native process alive for successive structured stdin messages.
+        """Keep one native process alive for successive messages.
 
-        Reuse the ordinary invocation so model defaults, resume, permissions and private
-        lane configuration remain identical. Other harnesses need their own qualified
-        stream-input protocol before they can opt into this transport.
+        Claude Code's is its interactive session, unchanged (``prompt_via`` is ``terminal``).
+        Agy's is structured stdin. Other harnesses need their own qualified transport before
+        they can opt in.
         """
 
-        if self.name not in ("claude", "agy"):
-            raise ValueError(f"{self.name} does not support persistent stream input")
+        if self.name not in ("claude", "claude-ollama", "agy"):
+            raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
-        if self.name == "claude":
-            argv = (*built.argv, "--input-format", "stream-json", "--replay-user-messages")
-        else:
-            # agy's --print requires a value even when input arrives through the stream.
-            argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
+        if built.prompt_via == "terminal":
+            return built
+        # agy's --print requires a value even when input arrives through the stream.
+        argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
         return Turn(argv, "stdin")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
@@ -153,13 +160,10 @@ class Harness:
 def persistent_input(agent_name: str, text: str, message_id: str) -> dict[str, object]:
     """Encode literal user text; callers serialize each frame as one JSON line.
 
-    Claude replays the supplied UUID as its acknowledgement. Agy does not acknowledge
-    an input ID, so its caller must allow only one in-flight message at a time.
+    Agy does not acknowledge an input ID, so its caller must allow only one in-flight
+    message at a time. Claude Code has no stream frame: its input is typed into its terminal.
     """
 
-    if agent_name == "claude":
-        return {"type": "user", "message": {"role": "user", "content": text},
-                "uuid": message_id}
     if agent_name == "agy":
         return {"event": "user", "message": {"content": text}}
     raise ValueError(f"{agent_name} does not support persistent stream input")
@@ -242,13 +246,16 @@ class ClaudeCode(Harness):
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["claude", "-p", "--output-format", "stream-json", "--verbose",
-                "--permission-mode", "bypassPermissions", "--max-turns", str(max_turns)]
+        # The interactive program and nothing that changes what it is: the permission mode
+        # author lanes have always run with, the operator's assigned model and effort when
+        # they named one, and the conversation to continue. ``max_turns`` bounds print mode
+        # only and has no meaning here.
+        argv = ["claude", "--permission-mode", "bypassPermissions"]
         argv += ["--model", model] if model else []
         argv += ["--effort", effort] if effort else []
         argv += ["--resume", resume] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
+        return Turn(tuple(argv), "terminal")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         doc = _last_json(stdout)
@@ -278,27 +285,17 @@ class ClaudeCode(Harness):
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # Claude Code keeps its plan sign-in in the keychain under a name derived from its config
-        # directory, so the directory stays the operator's. User settings, hooks, plugins and the
-        # operator's CLAUDE.md stay out (--setting-sources), and so does every MCP server but the
-        # lane's (--strict-mcp-config).
+        # The operator's configuration directory, settings, hooks, plugins, CLAUDE.md and MCP
+        # servers all stay exactly as they are. The lane's scoped Kindex is added beside them.
         config = _write(home / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(argv=("--mcp-config", str(config), "--strict-mcp-config",
-                               "--setting-sources", "project,local"))
+        return LaneSetup(argv=("--mcp-config", str(config)))
 
 
 class ClaudeOllama(ClaudeCode):
     """Claude Code on a model the local Ollama server serves (GLM and other open models), the way
-    ``ollama launch claude`` runs it. ``--bare`` keeps the operator's keychain, hooks, plugins and
-    CLAUDE.md out, and makes the harness take its key from the environment, which here is a fixed
-    placeholder valid only against the loopback Ollama server. Billing is the Ollama plan."""
-
-    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
-             last_message_file: str = "", max_turns: int = 400,
-             extra: Sequence[str] = ()) -> Turn:
-        built = super().turn(model=model, effort=effort, cwd=cwd, resume=resume,
-                             max_turns=max_turns, extra=extra)
-        return Turn(built.argv[:2] + ("--bare",) + built.argv[2:], built.prompt_via)
+    ``ollama launch claude`` runs it: the same interactive program, pointed at the loopback
+    server by ``ANTHROPIC_BASE_URL`` with Ollama's fixed bearer word. No Anthropic API key is
+    set or read, and nothing can leave the machine through it. Billing is the Ollama plan."""
 
     def billing_in(self, line: str) -> str:
         return ""  # always the loopback Ollama server: lane_setup fixes the base URL
@@ -306,15 +303,16 @@ class ClaudeOllama(ClaudeCode):
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
         config = _write(home / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(env=self.seat_env(model),
-                         argv=("--mcp-config", str(config), "--strict-mcp-config"))
+        return LaneSetup(env=self.seat_env(model), argv=("--mcp-config", str(config)))
 
     def seat_env(self, model: str) -> Mapping[str, str]:
         if not model:
             raise ValueError("claude-ollama needs a model (an Ollama model, e.g. glm-5.3:cloud)")
         return {
                 "ANTHROPIC_BASE_URL": OLLAMA_BASE_URL,
-                "ANTHROPIC_API_KEY": "ollama",
+                # Ollama's bearer word for its loopback server. Never the API key variable:
+                # that one is not set for Claude Code under any launch.
+                "ANTHROPIC_AUTH_TOKEN": "ollama",
                 # Claude Code's own background calls name a Claude tier; route each to the model.
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": model,

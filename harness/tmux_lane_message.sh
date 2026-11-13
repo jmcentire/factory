@@ -96,13 +96,18 @@ active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or type(active[0].get("persistent", False)) is not bool:
     raise SystemExit("lane-message: retained launch transport is missing or malformed")
 persistent = active[0].get("persistent", False)
+if active[0].get("agent") in {"claude", "claude-ollama"} and not persistent:
+    raise SystemExit(
+        "lane-message: this Claude lane was launched in print mode by an earlier Factory, and "
+        "print mode is never used; start its native session with tmux_lane.sh launch "
+        "--replace-session '<why>'")
 if persistent:
     if turn.is_symlink() or not turn.is_file():
         raise SystemExit("lane-message: missing persistent turn record")
     record = json.loads(turn.read_text())
     if (record.get("schema_version") != "factory-lane-turn/1"
             or record.get("agent") != active[0].get("agent")
-            or record.get("agent") not in {"claude", "agy"}
+            or record.get("agent") not in {"claude", "claude-ollama", "agy"}
             or record.get("persistent") is not True):
         raise SystemExit("lane-message: launch and turn transports disagree")
 elif turn.is_file() and not turn.is_symlink():
@@ -128,7 +133,15 @@ PY
     "$FACTORY_PYTHON" - "$NATIVE_STATE" "$RUN:$SLOT" <<'PY'
 import json, sys
 state = json.loads(sys.argv[1])
-idle = state.get("phase") == "idle" and state.get("process_state") == "running"
+if state.get("transport") == "native-terminal":
+    # Free for one more message: its last report is a start or a stop, and no earlier
+    # message is still unconfirmed. That is what was reported, not proof the turn is over.
+    unsettled = [d for d in (state.get("deliveries") or {}).values()
+                 if d.get("state") in ("queued", "submitted", "observed")]
+    idle = (state.get("phase") in ("started", "stop-reported") and not unsettled
+            and state.get("process_state") == "running")
+else:
+    idle = state.get("phase") == "idle" and state.get("process_state") == "running"
 print(f"lane-message: {sys.argv[2]} {'idle' if idle else 'busy or held'} (native persistent lane)")
 raise SystemExit(0 if idle else 75)
 PY
@@ -502,22 +515,30 @@ else:
 PY
 
 if [ "$PERSISTENT" = 1 ]; then
-  # The retained native process owns stdin. Never queue terminal text or replace its process;
-  # the driver verifies process/session identity and returns success only for a native ack.
+  # The retained native process owns its input. Never replace its process; the driver verifies
+  # process/session identity and returns success only for the native client's own
+  # acknowledgement. Asking again reports the same message's state and never sends it twice:
+  # queued (accepted, not sent), submitted (sent, unconfirmed) or busy are not delivery.
   DEFER_ARGS=()
   DELIVERY_RC=75
-  for ATTEMPT in 1 2 3 4 5; do
-    if "$FACTORY_PYTHON" "$D/persistent_lane.py" deliver --root "$ROOT" --slot "$SLOT" \
-      --message-id "$MESSAGE_ID" --thread "$THREAD_ID" ${DEFER_ARGS[@]+"${DEFER_ARGS[@]}"}; then
+  DELIVERY_STATE=""
+  for ATTEMPT in $(seq 1 60); do
+    if DELIVERY_STATE=$("$FACTORY_PYTHON" "$D/persistent_lane.py" deliver --root "$ROOT" --slot "$SLOT" \
+      --message-id "$MESSAGE_ID" --thread "$THREAD_ID" ${DEFER_ARGS[@]+"${DEFER_ARGS[@]}"}); then
       DELIVERY_RC=0
       break
     else
       DELIVERY_RC=$?
     fi
     [ "$DELIVERY_RC" = 75 ] || exit "$DELIVERY_RC"
-    [ "$ATTEMPT" = 5 ] || sleep 0.2
+    case "$DELIVERY_STATE" in *'"state": "busy"'*) [ "$ATTEMPT" -lt 5 ] || break ;; esac
+    [ "$ATTEMPT" = 60 ] || sleep 0.25
   done
-  [ "$DELIVERY_RC" = 0 ] || exit "$DELIVERY_RC"
+  [ -z "$DELIVERY_STATE" ] || printf '%s\n' "$DELIVERY_STATE"
+  if [ "$DELIVERY_RC" != 0 ]; then
+    echo "lane-message: $MESSAGE_ID is not acknowledged by $RUN:$SLOT, so it is not recorded as delivered here. Do not resend it: the same id is never sent twice, and a message the session has observed is recorded as delivered when the session next reports a stop. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+    exit "$DELIVERY_RC"
+  fi
   "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
     --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport persistent >/dev/null
   echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $AGENT persistent"

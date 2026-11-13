@@ -10,7 +10,8 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-pr
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
-                  [--persistent (Claude or Antigravity native stream input)]
+                  [--persistent (resident native session; always on for Claude, which runs
+                   as an interactive Claude Code session and never in print mode)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
                   [--wall-cap-minutes <min, metered lanes and qualify only>]
                   [--round <tag> --replace-session <why the session cannot resume>]
@@ -124,13 +125,18 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
 { IFS= read -r -d '' AGENT <&4 && IFS= read -r -d '' MODEL_ARG <&4 &&
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
-case "$ACTION:$AGENT" in launch:claude|launch:agy) PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;; esac
+# Claude Code is a resident native terminal session for every action: it has no print mode here.
+case "$ACTION:$AGENT" in
+  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy)
+    PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
+esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
   *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent" >&2; exit 64 ;;
 esac
 if [ "$PERSISTENT" = 1 ]; then
-  case "$ACTION:$AGENT" in launch:claude|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires launch with --agent claude or agy" >&2; exit 64 ;;
+  case "$ACTION:$AGENT" in
+    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama or (launch only) agy" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -207,7 +213,8 @@ if [ "$ACTION" != "freeze" ]; then
   { IFS= read -r -d '' AGENT_EXECUTABLE <&4 && IFS= read -r -d '' PROMPT_VIA <&4 &&
     IFS= read -r -d '' AGENT_TTY <&4 && IFS= read -r -d '' AGENT_METERED <&4; } || exit 70
   exec 4<&-
-  [ "$PERSISTENT" != 1 ] || PROMPT_VIA=stdin
+  # Agy's resident input is a stream on stdin; Claude Code's is typed into its own terminal.
+  [ "$PERSISTENT" != 1 ] || [ "$PROMPT_VIA" = terminal ] || PROMPT_VIA=stdin
   METERED=false
   if [ "$AGENT_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
     METERED=true
@@ -869,7 +876,8 @@ import datetime, json, os, pathlib, sys
 ) = sys.argv[1:43]
 model_config = sys.argv[43:]
 # One argv element holds at most 131071 bytes (MAX_ARG_STRLEN - 1); stdin has no such ceiling.
-prompt_limit = 131071 if prompt_via == "argv" else None
+# A native terminal session is typed at most 16384 bytes (native_session.TYPED_LIMIT).
+prompt_limit = {"argv": 131071, "terminal": 16384}.get(prompt_via)
 over_limit = prompt_limit is not None and int(prompt_bytes) > prompt_limit
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
@@ -1006,6 +1014,11 @@ PY
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
   ENV_PREFIX+="$SOCKET_ENV"
+  # The command the operator starts Claude Code with (harness/native_session.py).
+  if [ -n "${FACTORY_CLAUDE_LAUNCHER:-}" ]; then
+    printf -v LAUNCHER_ENV " FACTORY_CLAUDE_LAUNCHER=%q" "$FACTORY_CLAUDE_LAUNCHER"
+    ENV_PREFIX+="$LAUNCHER_ENV"
+  fi
   # Every lane process runs under lane_agent.py run: it tees output to the lane log and records
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
@@ -1013,6 +1026,12 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
+    case "$AGENT" in claude|claude-ollama)
+      # The session's own hook commands write its lifecycle journal here, so it is the lane's
+      # private runtime, which a kernel boundary leaves writable, not the host control tree.
+      printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
+      WRAP+="$NATIVE_WRAP" ;;
+    esac
   fi
   # Codex's trusted event/session driver stays outside the model boundary. Other clients
   # are direct children of lane_agent, which retains their process/exit evidence on the host.
@@ -1036,11 +1055,11 @@ PY
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
-      # A registry harness (harness/agents.py). Its private configuration (the lane's scoped
-      # Kindex and none of the operator's MCP servers, rules or hooks) and its variables are
-      # built under the slot's agent home; the variables reach the lane through an owner-only
-      # file the wrapper loads, never through this launch string. A plan lane admits no API key,
-      # and the wrapper stops it if the harness reports per-use billing anyway.
+      # A registry harness (harness/agents.py). Its lane configuration (the lane's scoped
+      # Kindex) and its variables are built under the slot's agent home; the variables reach the
+      # lane through an owner-only file the wrapper loads, never through this launch string. A
+      # plan lane admits no API key, and the wrapper stops it if the harness reports per-use
+      # billing anyway. Claude Code keeps every operator setting, hook, plugin and MCP server.
       BILLING=plan
       [ "$METERED" != true ] || BILLING=metered
       CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
@@ -1190,7 +1209,8 @@ PY
 ) || exit $?
 LAUNCH_MODE=${FREEZE_LAUNCH%%$'\n'*}
 REPOSITORY=${FREEZE_LAUNCH#*$'\n'}
-if [[ "$LAUNCH_MODE" = *:persistent ]]; then
+# A qualification probe is frozen once its process has ended (checked below), resident or not.
+if [ "$LAUNCH_MODE" = launch:persistent ]; then
   echo "tmux-lane: validate a resident author's committed SHA with endgame.sh; do not freeze its live working tree" >&2
   exit 64
 fi

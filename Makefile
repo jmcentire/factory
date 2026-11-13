@@ -194,7 +194,7 @@ lint: check-python ## ruff over core/runtime/scripts/tests and executable Python
 		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
 		harness/spawn.py harness/with_secret.py harness/run_record.py harness/validate_candidate.py \
-		harness/persistent_lane.py harness/inbox_wake.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
+		harness/persistent_lane.py harness/native_session.py harness/inbox_wake.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
 
 typecheck: check-python ## mypy over core/runtime/scripts and executable Python harness controls
 	$(PY) -m mypy factory_core factory_runtime scripts \
@@ -211,7 +211,7 @@ typecheck: check-python ## mypy over core/runtime/scripts and executable Python 
 		harness/phase_compiler.py harness/repo_rules.py harness/run_guidance.py harness/semantic_union.py \
 		harness/lane_watchdog.py harness/supervise_advisory.py harness/watchdog.py \
 		harness/spawn.py harness/with_secret.py harness/run_record.py harness/validate_candidate.py \
-		harness/persistent_lane.py harness/inbox_wake.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
+		harness/persistent_lane.py harness/native_session.py harness/inbox_wake.py harness/lane_admission.py harness/role_inputs.py harness/model_settings.py
 
 check-purity: check-python ## the anti-coupling guard (core imports nothing target-specific)
 	$(PY) scripts/check_core_purity.py

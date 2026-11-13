@@ -135,9 +135,13 @@ Denial tests must exercise the prohibited action and its absence, including a po
 
 ### Durable coordinator wake delivery
 
-New Claude and Antigravity coordinator seats use the existing acknowledged native JSON-stream
-transport. Their tmux panes show output; send operator input with `inject.sh RUN validator|orchestrator
-"message"`, rather than typing into those panes. This retains one native conversation without
+A Claude coordinator seat is the operator's own interactive Claude Code session, started
+through their launcher on their subscription and shown in its tmux window; it is never print
+mode and never an API key (`docs/HARNESS.md`, "Claude Code is the operator's own interactive
+session"). Inbox batches are typed into that session and count as delivered only when the
+session itself reports receiving them. Antigravity seats still use the acknowledged native
+JSON-stream transport; their panes show output only. Send operator input to either with
+`inject.sh RUN validator|orchestrator "message"`. This retains one native conversation without
 introducing another AI orchestrator. Existing runs are not converted or restarted. Other adapters
 retain their current terminal behavior and report automatic inbox wake as unsupported; the worker
 never guesses a safe terminal prompt or substitutes an agent.

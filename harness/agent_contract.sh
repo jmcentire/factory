@@ -51,7 +51,16 @@ case "$AGENT" in
         fail "cursor-agent CLI contract lacks $REQUIRED ($VERSION at $(at agent))"
     done
     CONTRACT="cursor-agent-stream-resume-v1" ;;
-  claude|claude-ollama|agy|muse|prime-agent)
+  claude|claude-ollama)
+    # The operator's own interactive Claude Code, hosted on a terminal (native_session.py).
+    # Only what an interactive session needs is required; no print-mode flag is.
+    VERSION=$(claude --version 2>/dev/null | head -1) || \
+      fail "claude CLI is not runnable ($(at claude))"
+    HELP=$(claude --help 2>/dev/null) || HELP=""
+    needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name \
+      --permission-mode
+    CONTRACT="claude-native-terminal-v1" ;;
+  agy|muse|prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.
