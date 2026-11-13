@@ -172,6 +172,16 @@ a stub shaped by that evidence.
   Cursor session is not supported yet.
 - **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
   and Enter the way Claude Code does. If it does not, messages stay `submitted`.
+- **Coordinator seats are not converted, for a reason.** A Validator or Orchestrator works in
+  the operator's own repository, not a lane's clone. Writing `.cursor/` project files there
+  would be writing the operator's files, which this adapter never does. A Cursor coordinator
+  therefore still runs its interactive program directly in its pane, and automatic inbox
+  wake remains unsupported for it. It needs lane configuration loaded from outside the
+  workspace (the candidate is `agent --plugin-dir`, unqualified) before it can be hosted.
+- **Export integrity.** A freeze copies every regular file in the clone except `.git` and
+  the target's own declared excludes, so a project file still present would be exported.
+  That is why the files exist only while the session runs, why a freeze removes any that a
+  killed session left before it copies anything, and why it stops if one of them changed.
 
 ### Memory isolation, said plainly
 
