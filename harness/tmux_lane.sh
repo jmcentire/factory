@@ -464,9 +464,12 @@ PY
     'import json,sys; print(json.load(sys.stdin)["root"])')
   # A native session removes the project files it wrote when it ends; one that was killed
   # could not. Remove exactly those (by each earlier slot's own record, unchanged bytes
-  # only) before this lane's inputs are checked, unless the lane is still running.
+  # only) before this lane's inputs are checked, unless the lane is still running. Only this
+  # lane's own slots ("$LANE" and "$LANE.<round>") and its own clone are looked at: another
+  # instance such as "$LANE-b" is another lane, with its own clone and possibly live.
   if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
-    for MANIFEST in "$TMUX_ROOT"/"$LANE"*-agent-home/*-project-files.json \
+    for MANIFEST in "$TMUX_ROOT/$LANE"-agent-home/*-project-files.json \
+        "$TMUX_ROOT/$LANE".*-agent-home/*-project-files.json \
         "$REPOSITORY"/.git/factory-runtime/*/agent/*-project-files.json; do
       [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || continue
       "$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST" >/dev/null || \

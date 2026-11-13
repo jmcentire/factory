@@ -156,16 +156,20 @@ a stub shaped by that evidence.
   both remove them first (`native_session.py clean-project --manifest <file>`), and a file
   whose bytes changed since is left and named instead of deleted.
 - **Session identity.** Cursor chooses its conversation id; the session's own start report
-  names it and it is bound then (`session_id_source: reported`). A relaunch continues it
-  with `--resume=<id>`.
+  names it and it is bound then (`session_id_source: reported`) and kept in
+  `<slot>-thread-id`. The wrapper continues a conversation when it is started with
+  `--resume=<id>`, but no lane command does that yet: an author lane whose process has
+  ended is replaced with `--replace-session`, or resumed by the operator by hand.
 - **Receipt.** States are Claude's: `queued`, `submitted`, `observed`, `unknown`. Cursor
   also gives each prompt a generation id that its stop report repeats, so an observed
   message gains `response_stop` (with Cursor's `status`) when the session reports that its
   response to that prompt ended. That is the session's word that it stopped, not acceptance
   of the work.
 - **Resume limit.** A resumed Cursor session sent no start report in the tester's run. Until
-  it reports something (the operator typing one prompt in its window is enough), it stays
-  `starting` and nothing is typed to it; a message returns `busy` with that reason.
+  it reports something it stays `starting` and nothing is typed to it; a message returns
+  `busy` with that reason. An operator typing a prompt in its window would make it report,
+  but that is a person's intervention, not unattended operation: unattended resume of a
+  Cursor session is not supported yet.
 - **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
   and Enter the way Claude Code does. If it does not, messages stay `submitted`.
 

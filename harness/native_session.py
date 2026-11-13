@@ -443,7 +443,10 @@ def remove_project_files(manifest: pathlib.Path) -> list[str]:
             try:
                 path.rmdir()  # only if this lane's files were all it held
             except OSError:
-                pass
+                # Still holding a file this lane wrote and left: remember the directory,
+                # so it goes when that file does. Otherwise it holds the target's files.
+                if any(other.startswith(name) for other in kept):
+                    kept[name] = digest
             continue
         if path.is_symlink() or not path.exists():
             continue
