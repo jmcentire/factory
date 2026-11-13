@@ -551,6 +551,24 @@ def test_signed_out_codex_is_refused_with_the_exact_fix_before_anything_starts(
     assert [row["exit_code"] for row in lanes.refusals()] == [77]
 
 
+def test_claude_sign_in_is_checked_in_the_operators_profile(tmp_path: Path) -> None:
+    # Shawn, 2026-11-10: the author preflight dropped CLAUDE_CONFIG_DIR, so it checked the
+    # default profile while the Claude turn itself runs in the selected one.
+    lanes = Lanes(tmp_path)
+    profile = tmp_path / "wander-claude"
+    _stub(lanes.stub, "claude", (
+        'if [ "${1:-}" = auth ]; then\n'
+        f'  if [ "${{CLAUDE_CONFIG_DIR:-}}" = "{profile}" ]; then\n'
+        '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'\n'
+        "  else echo '{\"loggedIn\": false}'; fi\n"
+        '  exit 0\nfi\n'
+        "exit 0\n"
+    ))
+    launched = lanes.lane("coder", "--agent", "claude", "--model", "claude-opus-5-5",
+                          env={"CLAUDE_CONFIG_DIR": str(profile)})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+
 def test_signed_out_cursor_agent_is_refused(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=False)
