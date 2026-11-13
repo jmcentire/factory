@@ -37,7 +37,7 @@ Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of t
 Locations. `$BUILD_DIR` is a scratch directory outside the target repo, one per task
 (for example `${TMPDIR:-/tmp}/build-<task-id>/`).
 
-Governing standards (cite rule IDs in constraints, reviews and the done gate):
+Governing standards (cite rule IDs in constraints, reviews and the completion check):
 `$FACTORY_HOME/docs/standards/ARCHITECTURE.md` (A-rules),
 `$FACTORY_HOME/docs/standards/HOW-WE-WRITE-CODE.md` (W-rules),
 `$FACTORY_HOME/docs/standards/TESTING.md` (T-rules),
@@ -64,7 +64,7 @@ For a task large enough to lose track of, keep a task list of the phases you int
 
 1. Orient (session setup, context, kindex search)
 2. Research (understand the problem deeply before touching code)
-3. Constrain (boundaries, acceptance criteria, done criteria)
+3. Constrain (boundaries, acceptance criteria, completion criteria)
 4. Preflight (self-constraints, Plan B, contingencies)
 5. Decompose (architecture, components, contracts)
 6. Implement (build, validate, capture)
