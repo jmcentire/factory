@@ -126,8 +126,10 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
+# So is Cursor's agent: its interactive program, never `-p`.
 case "$ACTION:$AGENT" in
-  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy)
+  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
+  launch:cursor-agent|qualify:cursor-agent|launch:agy)
     PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
 esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -135,8 +137,9 @@ case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude
 esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in
-    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama or (launch only) agy" >&2; exit 64 ;;
+    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
+    launch:cursor-agent|qualify:cursor-agent|launch:agy) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent or (launch only) agy" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -459,6 +462,17 @@ PY
       "give each lane and each parallel instance its own clone (git clone <source> <dir>), never a git worktree: the Codex sandbox blocks writes to the parent repository's git directory"
   REPOSITORY=$(printf '%s' "$REPOSITORY_RECEIPT" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.load(sys.stdin)["root"])')
+  # A native session removes the project files it wrote when it ends; one that was killed
+  # could not. Remove exactly those (by each earlier slot's own record, unchanged bytes
+  # only) before this lane's inputs are checked, unless the lane is still running.
+  if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+    for MANIFEST in "$TMUX_ROOT"/"$LANE"*-agent-home/*-project-files.json \
+        "$REPOSITORY"/.git/factory-runtime/*/agent/*-project-files.json; do
+      [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || continue
+      "$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST" >/dev/null || \
+        refuse 70 "an earlier session's project files could not be accounted for ($MANIFEST)"
+    done
+  fi
   if [ "$ACTION" = launch ]; then
     PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
@@ -1047,9 +1061,10 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
-    case "$AGENT" in claude|claude-ollama)
+    case "$AGENT" in claude|claude-ollama|cursor-agent)
       # The session's own hook commands write its lifecycle journal here, so it is the lane's
       # private runtime, which a kernel boundary leaves writable, not the host control tree.
+      # For Cursor it also holds the record of the project files the session wrote.
       printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
       WRAP+="$NATIVE_WRAP" ;;
     esac
@@ -1270,6 +1285,19 @@ fi
   echo "tmux-lane: $RUN:$LANE is not quiescent; stop the agent before freezing" >&2
   exit 70
 }
+# A native session removes the project files it wrote when it ends. One that was killed
+# could not; remove exactly those files (by the lane's own record, unchanged bytes only)
+# before the tree is exported, so no candidate carries a lane's hook or MCP file.
+for MANIFEST in "$TMUX_ROOT/$SLOT-agent-home/$SLOT-project-files.json" \
+    "$REPOSITORY/.git/factory-runtime/$SLOT/agent/$SLOT-project-files.json"; do
+  [ ! -f "$MANIFEST" ] || [ -L "$MANIFEST" ] || {
+    LEFT=$("$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST") || exit 70
+    [ -z "$LEFT" ] || {
+      echo "tmux-lane: a file this lane wrote changed afterwards and was left in place; inspect it before freezing: $LEFT" >&2
+      exit 70
+    }
+  }
+done
 
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \

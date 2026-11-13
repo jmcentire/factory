@@ -108,6 +108,9 @@ class Harness:
     # visible to the lane too. Independence of Coder and Tester then rests on their separate
     # inputs and clones, not on memory, and a launch says so.
     memory: str = "lane-only"
+    # How this provider's interactive program reports its lifecycle to the lane wrapper
+    # (native_session.DIALECTS), or "" when it is not hosted as a native session.
+    dialect: str = ""
     # Why this provider's lanes are not yet its own interactive program with the operator's
     # configuration intact; "" when they are. Stated where the registry is read, so the
     # limit is a recorded blocker and never a silent difference.
@@ -127,7 +130,7 @@ class Harness:
         they can opt in.
         """
 
-        if self.name not in ("claude", "claude-ollama", "agy"):
+        if self.name not in ("claude", "claude-ollama", "cursor-agent", "agy"):
             raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
         if built.prompt_via == "terminal":
@@ -560,19 +563,25 @@ class PrimeAgent(Harness):
 
 
 class CursorAgent(Harness):
-    """Cursor's agent CLI (Grok and the other models Cursor serves). The model name carries the
-    reasoning effort (``grok-4.7-xhigh``). Its stream's init event names the billing source:
-    ``login`` is the plan."""
+    """Cursor's agent CLI, interactive (Grok and the other models Cursor serves): the
+    operator's own sign-in, rules, hooks and MCP servers, all untouched and all still loaded.
+    The model name carries the reasoning effort (``grok-4.7-xhigh``).
+
+    The lane's hooks and its Kindex reach it the one lane-scoped way Cursor offers: the
+    project files ``.cursor/hooks.json`` and ``.cursor/mcp.json`` in the lane's own clone,
+    written and removed by ``native_session.cursor_plan`` and never over a target's own
+    file. Proven against the interactive program by the independent tester on 2026-11-13;
+    this adapter itself has not been run against Cursor."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["agent", "-p", "--output-format", "stream-json", "--force", "--trust",
-                "--approve-mcps", "--workspace", str(cwd)]
+        # The interactive program, with the permissions these lanes have always had.
+        argv = ["agent", "--force", "--trust", "--approve-mcps", "--workspace", str(cwd)]
         argv += ["--model", model] if model else []
-        argv += ["--resume", resume] if resume else []
+        argv += [f"--resume={resume}"] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
+        return Turn(tuple(argv), "terminal")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         doc = _last_json(stdout)
@@ -603,12 +612,11 @@ class CursorAgent(Harness):
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # cursor-agent reads ~/.cursor/mcp.json (and the operator's rules and hooks) from HOME;
-        # its sign-in is in the keychain. The lane's HOME has only its own mcp.json.
-        private = _keychain_home(home, operator_home)
-        config = private / ".cursor"
-        _write(config / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
+        # The operator's HOME, ~/.cursor and keychain are the lane's too, exactly as they
+        # are. The lane's Kindex is left here for the wrapper, which places it in the lane
+        # clone's project MCP file for as long as the session runs.
+        _write(home / "cursor-mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
+        return LaneSetup()
 
 
 # What stands between each remaining provider and the Claude arrangement (its own
@@ -629,13 +637,6 @@ _BLOCKERS = {
            "servers and a workspace may list plugins in .agents/plugins.json. Not "
            "established: that a project .agents/hooks.json and a workspace plugin load "
            "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
-    "cursor-agent": "Cursor. Established (cursor.com/docs/agent/hooks, cursor.com/docs/cli/"
-                    "mcp): project <root>/.cursor/hooks.json runs beside user hooks; events "
-                    "sessionStart (session_id), beforeSubmitPrompt, stop (status, "
-                    "loop_count), sessionEnd; the CLI uses the editor's project MCP "
-                    "configuration. Not established: that beforeSubmitPrompt carries the "
-                    "prompt text, and that these hooks fire in the interactive CLI. A target "
-                    "that already has .cursor/ files is unhandled." + _TO_SHOW,
     "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
             "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
             "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
@@ -685,9 +686,10 @@ HARNESSES: Mapping[str, Harness] = {
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
                                   "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator",
+                         dialect="claude",
                          metered=False),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
-                                  memory="beside-operator"),
+                                  memory="beside-operator", dialect="claude"),
     # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
     # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
     "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
@@ -701,7 +703,7 @@ HARNESSES: Mapping[str, Harness] = {
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
     "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
-                                native_blocker=_BLOCKERS["cursor-agent"]),
+                                memory="beside-operator", dialect="cursor"),
 }
 
 
@@ -768,7 +770,8 @@ def prepare_lane(name: str, *, billing: str, home: Path, model: str,
             filename = _write(home / "signet-settings.json", json.dumps(settings))
             setup = LaneSetup(env=setup.env, argv=(*setup.argv, "--settings", str(filename)))
         elif name == "cursor-agent":
-            _write(Path(setup.env["CURSOR_CONFIG_DIR"]) / "hooks.json", json.dumps(settings))
+            # Joined to the lane's project hook file by the wrapper, beside the operator's.
+            _write(home / "cursor-hooks.json", json.dumps(settings))
         else:
             raise ValueError("required Signet client adapter is not qualified")
     values = {variable: environ[variable] for variable in admitted if environ.get(variable)}

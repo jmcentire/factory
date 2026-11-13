@@ -47,12 +47,12 @@ case "$AGENT" in
     VERSION=$(agent --version 2>/dev/null) || \
       fail "cursor-agent CLI (agent) is not runnable ($(at agent))"
     HELP=$(agent --help 2>/dev/null) || HELP=""
-    for REQUIRED in --print --model --force --trust --workspace --output-format --resume \
-        --approve-mcps; do
+    # The interactive program; no print-mode flag is required because none is used.
+    for REQUIRED in --model --force --trust --workspace --resume --approve-mcps; do
       printf '%s' "$HELP" | grep -q -- "$REQUIRED" || \
         fail "cursor-agent CLI contract lacks $REQUIRED ($VERSION at $(at agent))"
     done
-    CONTRACT="cursor-agent-stream-resume-v1" ;;
+    CONTRACT="cursor-agent-native-terminal-v1" ;;
   claude|claude-ollama)
     # The operator's own interactive Claude Code, hosted on a terminal (native_session.py).
     # Only what an interactive session needs is required; no print-mode flag is.

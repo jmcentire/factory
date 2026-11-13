@@ -132,11 +132,48 @@ started through the operator's launcher on a terminal the lane wrapper owns
 - **Interrupt** is refused for these sessions: Claude Code runs no stop hook for an
   interrupted turn, so the harness could not tell a stopped turn from a running one.
 
+### Cursor lanes are Cursor's own interactive agent
+
+A `cursor-agent` lane runs `agent --force --trust --approve-mcps --workspace <clone>`
+interactively on the same terminal host, never `-p`. The operator's HOME, `~/.cursor`,
+sign-in, rules, hooks and MCP servers are the lane's too, untouched and all still loaded.
+The interface was proven against the interactive program by the independent tester on
+2026-11-13 (cursor-agent 2026.11.05 and 2026.11.13); this adapter has been run only against
+a stub shaped by that evidence.
+
+- **Where lane configuration goes.** Cursor offers one lane-scoped place: the project files
+  `.cursor/hooks.json` and `.cursor/mcp.json` in its workspace. The wrapper writes them into
+  the lane's clone when the session starts: four observation hooks (`sessionStart`,
+  `beforeSubmitPrompt`, `stop`, `sessionEnd`), any required Signet hooks, and the lane's
+  Kindex. They load beside the operator's user-level hooks and servers.
+- **The target's files are never touched.** If the clone already has either file, it is the
+  target project's own; it is not edited, merged into or replaced, and the lane refuses to
+  start with that reason. Nothing is written outside the clone.
+- **Nothing leaks into a candidate.** The two paths are listed in the clone's
+  `.git/info/exclude`, so no commit carries them. The wrapper removes exactly what it wrote
+  (recorded with digests in `<slot>-project-files.json` under the lane's private runtime)
+  when the session ends. A killed wrapper cannot; the next launch of that lane and a freeze
+  both remove them first (`native_session.py clean-project --manifest <file>`), and a file
+  whose bytes changed since is left and named instead of deleted.
+- **Session identity.** Cursor chooses its conversation id; the session's own start report
+  names it and it is bound then (`session_id_source: reported`). A relaunch continues it
+  with `--resume=<id>`.
+- **Receipt.** States are Claude's: `queued`, `submitted`, `observed`, `unknown`. Cursor
+  also gives each prompt a generation id that its stop report repeats, so an observed
+  message gains `response_stop` (with Cursor's `status`) when the session reports that its
+  response to that prompt ended. That is the session's word that it stopped, not acceptance
+  of the work.
+- **Resume limit.** A resumed Cursor session sent no start report in the tester's run. Until
+  it reports something (the operator typing one prompt in its window is enough), it stays
+  `starting` and nothing is typed to it; a message returns `busy` with that reason.
+- **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
+  and Enter the way Claude Code does. If it does not, messages stay `submitted`.
+
 ### Memory isolation, said plainly
 
 A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
-scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude and Codex
-lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
+scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude, Cursor and
+Codex lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
 added beside them: any memory server the operator configured is visible to the lane, so
 Coder and Tester independence rests on their separate inputs and clones, not on memory.
 That is the consequence of not suppressing the operator's configuration, and it is the
@@ -145,16 +182,15 @@ operator's to weigh.
 ### Providers not yet native, and exactly why
 
 Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
-still run `codex exec`. Antigravity, Cursor, Muse and Prime lanes still start in print mode
-with a private configuration. Each launch records and prints `native_blocker`, asked by the
-lane agent's own name: it is empty only for `claude`, `claude-ollama` and
+still run `codex exec`. Antigravity, Muse and Prime lanes still start in print mode with a
+private configuration. Each launch records and prints `native_blocker`, asked by the lane
+agent's own name: it is empty only for `claude`, `claude-ollama`, `cursor-agent` and
 `codex-interactive`, and `python harness/agents.py describe --agent <lane agent>` prints it. They are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|
 | Antigravity | From its own `agy changelog`: hooks.json events `SessionStart`, `PreInvocation` (input carries `lastUserInput`), `Stop` (input carries `continuation_active`); follow-up messages queue until the turn ends by default; plugins may bundle MCP servers and a workspace may list plugins in `.agents/plugins.json`. | That a project `.agents/hooks.json` and a workspace plugin load without an edit to the operator's configuration or a trust prompt. `agy mcp add` writes the operator's configuration and is not an option. |
-| Cursor | From cursor.com/docs/agent/hooks and /docs/cli/mcp: project `.cursor/hooks.json` runs beside user hooks; events `sessionStart` (`session_id`), `beforeSubmitPrompt`, `stop` (`status`, `loop_count`), `sessionEnd`; the CLI uses the editor's project MCP configuration. | That `beforeSubmitPrompt` carries the prompt text, and that these hooks fire in the interactive CLI. A target that already has `.cursor/` files is unhandled. |
 | Muse | Probed live on muse 1.4.6 (2026-10-12) and from its help: events `sessionStart`, `userPromptSubmit`, `stop`, `notification`, `sessionEnd`; hooks by per-run `-c hooks=<json>` or project `.muse/hooks.json` (off until the workspace is trusted); project MCP file `<repository>/.mcp.json`. | Whether `-c hooks=` adds to or replaces the operator's hooks, and the `userPromptSubmit` payload. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
 | Prime | Nothing: the program is not installed where this was written. | Everything. |
 | Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |

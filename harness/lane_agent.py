@@ -105,8 +105,9 @@ AGENTS: Mapping[str, Agent] = {
     "codex-interactive": Agent("codex-interactive", "codex", "argv", True, "codex-login"),
     # `codex exec --oss` on a model the local Ollama server already has.
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
-    # Cursor's agent CLI in print mode: `agent -p [--model <m>] --force --trust --workspace <lane>`.
-    "cursor-agent": Agent("cursor-agent", "agent", "argv", False, "cursor-status"),
+    # Cursor's agent CLI, interactive, hosted like Claude Code on a terminal the wrapper owns:
+    # `agent [--model <m>] --force --trust --approve-mcps --workspace <lane>`. Never `-p`.
+    "cursor-agent": Agent("cursor-agent", "agent", "terminal", False, "cursor-status"),
     # Claude Code: the operator's own interactive session on a terminal the lane wrapper owns
     # (harness/native_session.py), signed in to their subscription. Never print mode, never an
     # API key. ``terminal`` stays False: the wrapper, not the pane, holds the program's terminal.
@@ -124,9 +125,10 @@ AGENTS: Mapping[str, Agent] = {
 
 
 #: Lanes that stay resident and take later messages into the same native process.
-PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "agy"})
-#: Of those, the ones hosted as a native terminal session rather than a stream.
-NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama"})
+PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "agy"})
+#: Of those, the ones hosted as a native terminal session rather than a stream: each
+#: reports its own lifecycle through hooks the wrapper adds beside the operator's.
+NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent"})
 
 
 def agent(name: str) -> Agent:
@@ -894,23 +896,35 @@ def run_lane(
 
         assert run_root is not None
         try:
+            found = shutil.which(argv[0], path=child_env.get("PATH"))
             if session_agent == "claude":
                 launcher = native_session.resolve_launcher(child_env, executable=argv[0])
+            elif not found:
+                raise ValueError(f"{argv[0]} is not on PATH")
             else:
                 # claude-ollama talks only to the loopback server its own variables name.
-                found = shutil.which(argv[0], path=child_env.get("PATH"))
-                if not found:
-                    raise ValueError(f"{argv[0]} is not on PATH")
                 launcher = native_session.Launcher(argv[0], "executable", path=found)
-            native_plan = native_session.plan(
-                argv[1:], launcher=launcher, directory=native_dir or log.parent, slot=slot,
-                name=f"{run_root.name}-{slot}", python=sys.executable)
+            if chosen is not None and chosen.dialect == "cursor":
+                # Cursor reads lane hooks and the lane's Kindex only from its workspace.
+                native_plan = native_session.cursor_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(), python=sys.executable)
+            else:
+                native_plan = native_session.plan(
+                    argv[1:], launcher=launcher, directory=native_dir or log.parent,
+                    slot=slot, name=f"{run_root.name}-{slot}", python=sys.executable)
             # Before the program exists: a retained delivery record that cannot be trusted
             # stops the start, so nothing typed once can be typed again.
             import persistent_lane
 
             persistent_lane.retained(run_root, slot, native_plan.session_id)
         except (OSError, ValueError) as error:
+            if native_plan is not None and native_plan.manifest is not None:
+                # A start refused after its project files were written leaves none behind.
+                try:
+                    native_session.remove_project_files(native_plan.manifest)
+                except (OSError, ValueError):
+                    pass
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
             marker = f"__LANE_EXIT__ {slot} rc=127\n"
             _append(log, marker.encode())
@@ -1156,6 +1170,18 @@ def run_lane(
     finally:
         if hosted is not None:
             hosted.close()  # hand the pane's terminal back before anything is printed to it
+        if native_plan is not None and native_plan.manifest is not None:
+            # The session is over: its project files leave the lane's repository with it,
+            # so no later export, digest or commit of that tree carries them.
+            import native_session
+
+            try:
+                left = native_session.remove_project_files(native_plan.manifest)
+            except (OSError, ValueError) as error:
+                left = [f"(not removed: {error})"]
+            for name in left:
+                _append(log, f"lane-agent: left {name}: it changed after this lane wrote it\n"
+                        .encode())
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     if refused_billing:

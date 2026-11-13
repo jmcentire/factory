@@ -268,6 +268,9 @@ class Plan:
     # nothing it reports, however fast, falls before it; rows an earlier process of the same
     # seat wrote fall before it and are never read as this start's.
     journal_offset: int = 0
+    # The record of files this start wrote into the lane's own repository (Cursor's project
+    # configuration), so exactly those are removed when the session ends; None: it wrote none.
+    manifest: pathlib.Path | None = None
 
 
 def plan(arguments: Sequence[str], *, launcher: Launcher, directory: pathlib.Path, slot: str,
@@ -346,6 +349,173 @@ def _split_values(arguments: Sequence[str], flags: Sequence[str]) -> list[str]:
     return result
 
 
+# -- files a provider reads only from the project ------------------------------------------------
+
+#: Cursor reads lane-scoped hooks and MCP servers from these two files in its workspace and
+#: from nowhere else a lane may write. They are the lane's for as long as its session runs.
+CURSOR_HOOKS = ".cursor/hooks.json"
+CURSOR_MCP = ".cursor/mcp.json"
+#: Banned for Cursor: its print mode.
+BANNED_CURSOR_FLAGS = ("-p", "--print", "--output-format")
+
+
+def _sha(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _manifest(path: pathlib.Path) -> dict[str, str]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(value, dict) or not all(
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise ValueError(f"{path.name} is malformed; refusing to guess which project files "
+                         "this lane wrote")
+    return value
+
+
+def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
+                          manifest: pathlib.Path) -> None:
+    """Write lane configuration into the lane's own repository without touching the target's.
+
+    A path that already exists is the target project's file unless this lane's manifest
+    recorded writing exactly those bytes; a target's file is never edited, merged into or
+    replaced, so its presence refuses the start. Every file written is recorded with its
+    digest before it is written, listed in ``.git/info/exclude`` so no commit carries it,
+    and removed by ``remove_project_files``. Nothing outside ``workspace`` is written.
+    """
+
+    workspace = workspace.resolve()
+    recorded = _manifest(manifest)
+    planned: dict[str, str] = {}
+    for relative, data in files.items():
+        target = workspace / relative
+        parent = target.parent
+        if parent.is_symlink() or target.is_symlink() or workspace not in target.resolve().parents:
+            raise ValueError(f"{relative} in the lane's repository is a link; refusing to write "
+                             "through it")
+        if target.exists():
+            mine = recorded.get(str(target))
+            if mine is None or _sha(target.read_bytes()) != mine:
+                raise ValueError(
+                    f"the lane's repository already has {relative}, which is the target "
+                    "project's own file and is not edited or replaced. This provider reads "
+                    "lane hooks and the lane's Kindex only from that path, so the lane "
+                    "cannot run as a native session in this repository")
+        planned[str(target)] = _sha(data)
+    _write_private(manifest, json.dumps({**recorded, **planned}, sort_keys=True))
+    exclude = workspace / ".git" / "info" / "exclude"
+    if (workspace / ".git").is_dir() and not (workspace / ".git").is_symlink():
+        exclude.parent.mkdir(exist_ok=True)
+        present = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        missing = [f"/{relative}" for relative in files
+                   if f"/{relative}" not in present.splitlines()]
+        if missing:
+            with exclude.open("a", encoding="utf-8") as stream:
+                stream.write(("" if present.endswith("\n") or not present else "\n")
+                             + "".join(line + "\n" for line in missing))
+    for relative, data in files.items():
+        target = workspace / relative
+        created = not target.parent.exists()
+        target.parent.mkdir(exist_ok=True)
+        if created:
+            planned[str(target.parent) + "/"] = "directory"
+        temporary = target.with_name(f".{target.name}.factory-{os.getpid()}")
+        temporary.write_bytes(data)
+        os.replace(temporary, target)
+    _write_private(manifest, json.dumps({**recorded, **planned}, sort_keys=True))
+
+
+def remove_project_files(manifest: pathlib.Path) -> list[str]:
+    """Remove exactly the files this lane wrote and still holds unchanged; report the rest.
+
+    A recorded file whose bytes changed is left where it is and named in the result: someone
+    else wrote it since, and it is theirs to keep.
+    """
+
+    recorded = _manifest(manifest)
+    kept: dict[str, str] = {}
+    left: list[str] = []
+    for name, digest in sorted(recorded.items(), reverse=True):  # files before directories
+        path = pathlib.Path(name)
+        if digest == "directory":
+            try:
+                path.rmdir()  # only if this lane's files were all it held
+            except OSError:
+                pass
+            continue
+        if path.is_symlink() or not path.exists():
+            continue
+        if _sha(path.read_bytes()) != digest:
+            kept[name] = digest
+            left.append(name)
+            continue
+        path.unlink()
+    if recorded:
+        _write_private(manifest, json.dumps(kept, sort_keys=True))
+    return left
+
+
+def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+                slot: str, workspace: pathlib.Path, python: str = sys.executable) -> Plan:
+    """A native start of Cursor's interactive agent.
+
+    ``arguments`` exclude the executable. The lane's observation hooks, any required hook
+    file the registry left in ``directory`` (``cursor-hooks.json``) and the lane's Kindex
+    (``cursor-mcp.json``) go into the two project files Cursor reads, beside the operator's
+    own user-level hooks and servers, which are untouched and still load. Cursor chooses its
+    own conversation id, so it is known only when the session reports starting, unless
+    ``--resume=<id>`` names one.
+    """
+
+    args = _split_values(list(arguments), ("--resume",))
+    banned = sorted({_flag(part) for part in args if _flag(part) in BANNED_CURSOR_FLAGS})
+    if banned:
+        raise ValueError("native Cursor session refuses " + ", ".join(banned))
+    session = ""
+    resumed = "--resume" in args
+    if resumed:
+        index = args.index("--resume")
+        session = args[index + 1] if index + 1 < len(args) else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native conversation id missing or malformed") from None
+        # The one spelling proven against the interactive program.
+        args[index:index + 2] = [f"--resume={session}"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "cursor", "--journal", str(journal)])
+    hooks: dict[str, list[object]] = {event: [{"command": command}] for event in CURSOR_EVENTS}
+    extra = directory / "cursor-hooks.json"
+    if extra.exists():
+        document = json.loads(extra.read_text(encoding="utf-8"))
+        required = document.get("hooks") if isinstance(document, dict) else None
+        if not isinstance(required, dict):
+            raise ValueError("required Cursor hook file is malformed")
+        for event, entries in required.items():
+            if not isinstance(entries, list):
+                raise ValueError("required Cursor hook file is malformed")
+            hooks[event] = [*entries, *hooks.get(event, [])]
+    files = {CURSOR_HOOKS: json.dumps({"version": 1, "hooks": hooks}, sort_keys=True).encode()}
+    servers = directory / "cursor-mcp.json"
+    if servers.exists():
+        files[CURSOR_MCP] = servers.read_bytes()
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(workspace, files, manifest)
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest)
+
+
 def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
     """The program's environment: the wrapper's, without any API-billing variable."""
 
@@ -354,26 +524,46 @@ def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
 
 # -- hook journal --------------------------------------------------------------------------------
 
-def record_hook(journal: pathlib.Path, payload: Mapping[str, object]) -> None:
+#: Cursor's hook events, as its interactive CLI sent them from a project .cursor/hooks.json
+#: (independent proof, 2026-11-13, cursor-agent 2026.11.05 and 2026.11.13), under the names
+#: the journal uses. Its conversation id is its session id and is what ``--resume=`` takes;
+#: ``generation_id`` is one prompt's, and that prompt's stop report carries the same one.
+CURSOR_EVENTS = {"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserPromptSubmit",
+                 "stop": "Stop", "sessionEnd": "SessionEnd"}
+DIALECTS = ("claude", "cursor")
+
+
+def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
+                dialect: str = "claude") -> None:
     """Append one native lifecycle fact. Prompt text is kept as a digest, never verbatim."""
 
     event = payload.get("hook_event_name")
+    session = payload.get("session_id")
+    if dialect == "cursor":
+        event = CURSOR_EVENTS.get(str(event))
+        session = payload.get("conversation_id")
     if event not in HOOK_EVENTS:
         return
     row: dict[str, object] = {
         "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds"),
         "event": event,
-        "session_id": str(payload.get("session_id") or ""),
+        "session_id": str(session or ""),
     }
+    if dialect == "cursor":
+        if isinstance(payload.get("generation_id"), str):
+            row["generation"] = payload["generation_id"]
+        if event == "Stop" and isinstance(payload.get("status"), str):
+            row["status"] = payload["status"]
     if event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str):
         reported = str(payload["prompt"])
         row["prompt_sha256"] = text_digest(reported)
         row["tokens"] = TOKEN.findall(reported)[:16]
     if event == "SessionStart" and isinstance(payload.get("source"), str):
         row["source"] = payload["source"]
-    if event == "Stop":
+    if event == "Stop" and dialect == "claude":
         # True when this stop ends a continuation another stop hook asked for.
         row["stop_hook_active"] = payload.get("stop_hook_active") is True
+    if event == "Stop":
         if isinstance(payload.get("last_assistant_message"), str):
             row["last_assistant_message"] = str(payload["last_assistant_message"])[:MESSAGE_LIMIT]
     if event == "Notification":
@@ -709,6 +899,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     hook = sub.add_parser("hook", help="append the lifecycle event on stdin to a journal")
     hook.add_argument("--journal", type=pathlib.Path, required=True)
+    hook.add_argument("--dialect", choices=DIALECTS, default="claude")
+    clean = sub.add_parser("clean-project", help="remove the project files a lane wrote, by "
+                           "its manifest; prints any it left because they had changed")
+    clean.add_argument("--manifest", type=pathlib.Path, required=True)
     sub.add_parser("launcher", help="print how Claude Code starts here: name, NUL, via, NUL")
     args = parser.parse_args(argv)
     if args.command == "hook":
@@ -716,9 +910,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             payload = json.loads(sys.stdin.buffer.read(8 * 1024 * 1024))
             if isinstance(payload, dict):
-                record_hook(args.journal, payload)
+                record_hook(args.journal, payload, args.dialect)
         except (OSError, ValueError):
             pass
+        if args.dialect == "cursor":
+            # Cursor reads a JSON reply; the empty object changes nothing (the form proven).
+            # Claude Code adds a prompt hook's output to the model's context, so it gets none.
+            sys.stdout.write("{}")
+        return 0
+    if args.command == "clean-project":
+        try:
+            left = remove_project_files(args.manifest)
+        except (OSError, ValueError) as error:
+            print(f"native-session: {error}", file=sys.stderr)
+            return 70
+        for name in left:
+            print(name)
         return 0
     try:
         chosen = resolve_launcher(os.environ)

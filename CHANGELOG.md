@@ -64,13 +64,20 @@ public API is still pre-1.0.
   Claude author lanes beside the lane's own Kindex; input separation rests on the role
   projections, separate clones and the lane protocol.
 - A lane launch records and prints `memory_isolation`. For Claude and Codex lanes it is
-  `beside-operator`: the operator's MCP servers are visible beside the lane's Kindex, so
+  `beside-operator` (Cursor too): the operator's MCP servers are visible beside the lane's
+  Kindex, so
   independence rests on the separate inputs and clones, not on memory.
+- Cursor lanes run Cursor's own interactive agent on the same terminal host, with the
+  operator's HOME, sign-in, rules, hooks and MCP servers intact: no `-p`, no private HOME.
+  Lane hooks and the lane's Kindex go into the clone's project files `.cursor/hooks.json`
+  and `.cursor/mcp.json` for as long as the session runs, never over a target's own file
+  (the lane refuses to start instead), excluded from commits and removed on exit, before a
+  relaunch and before a freeze. A resumed Cursor session that reports nothing is not typed to.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
-  "Providers not yet native"): Antigravity, Cursor, Muse and Prime still start in print mode
-  with a private configuration, because no qualified interface lets their interactive
-  programs report readiness or receipt, and converting now would cost the lane its Kindex
-  and any way to message it. Codex still runs `codex exec`.
+  "Providers not yet native"): Antigravity, Muse and Prime still start in print mode with a
+  private configuration, because no qualified interface lets their interactive programs
+  report readiness or receipt, and converting now would cost the lane its Kindex and any way
+  to message it. Codex still runs `codex exec`.
 
 ## [0.8.29] - 2026-11-09
 

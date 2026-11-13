@@ -667,7 +667,9 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
     * unreadable, oversized, symlinked, or not a record of this slot in a known schema with
       a session id and a well-formed delivery map: refuse;
     * the same conversation: it must hold the first message's record (every wrapper writes
-      one before it types); it is returned and its receipts stand;
+      one before it types); it is returned and its receipts stand. An empty ``session_id``
+      means this start's conversation is new and its id not yet known (the provider chooses
+      it and reports it), so it is the same conversation as nothing;
     * another conversation that never existed (no session id was ever bound) or never
       started (a terminal record with nothing but untyped ``queued`` entries): nothing was
       typed, so this start may supersede it;
@@ -699,7 +701,7 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
                    for key, record in deliveries.items())
     ):
         raise ValueError(f"retained delivery record {path.name} is malformed; {refusal}")
-    if earlier == session_id:
+    if session_id and earlier == session_id:
         if "initial" not in deliveries:
             raise ValueError(
                 f"retained delivery record {path.name} for this conversation has no record "
@@ -767,6 +769,13 @@ def run_terminal(
 
     Delivery records survive this wrapper: a restart that resumes the same conversation
     keeps them, types nothing that was ever typed, and marks an unfinished one ``unknown``.
+
+    ``session_id`` is empty when the provider chooses its own conversation id (Cursor): the
+    first start report after this program was spawned names it, and it is bound then. Where
+    a report carries a per-prompt ``generation`` (Cursor), the stop report with the same
+    generation is recorded on that message as ``response_stop``: the session's own word
+    that its response to that prompt ended, with its status. That is still not acceptance
+    of the work, and a session without generations (Claude Code) gets no such field.
     """
     import native_session
 
@@ -787,9 +796,10 @@ def run_terminal(
         raise ValueError("symlinked session file")
     if session_file.exists() and session_file.read_text().strip() != session_id:
         raise ValueError("retained conversation changed")
+    chosen_here = bool(session_id)
 
     def token_for(identifier):
-        return native_session.message_token(session_id, identifier)
+        return native_session.message_token(state["session_id"], identifier)
 
     # What an earlier wrapper of this same conversation recorded is kept, not recreated.
     deliveries: dict = {}
@@ -835,6 +845,9 @@ def run_terminal(
         "worker": receipt["worker"],
         "wrapper": receipt["wrapper"],
         "session_id": session_id,
+        # "chosen": this wrapper named the conversation at start, or resumed a known one.
+        # "reported": the provider chose it and its own start report named it.
+        "session_id_source": "chosen" if chosen_here else "reported",
         "session_started": False,
         "phase": "starting",
         "last_native_event": None,
@@ -873,6 +886,15 @@ def run_terminal(
     def outstanding():
         return [key for key, record in deliveries.items() if record.get("state") in OUTSTANDING]
 
+    def bind(reported):
+        # The provider's own name for the conversation this wrapper started.
+        if not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", reported):
+            return False
+        if session_file.exists() and session_file.read_text().strip() != reported:
+            raise ValueError("retained conversation changed")
+        state["session_id"] = reported
+        return True
+
     def stop_row(row):
         # A stop report, named as one. It is not a result: it carries no success or error
         # verdict, and another hook may make the session continue after it. The message is
@@ -882,12 +904,19 @@ def run_terminal(
             "type": "native-stop-report",
             "stop_hook_active": row.get("stop_hook_active") is True,
             "last_assistant_message": text if isinstance(text, str) else "",
-            "session_id": session_id, "source": "native-stop-hook",
+            **({"status": row["status"]} if isinstance(row.get("status"), str) else {}),
+            "session_id": state["session_id"], "source": "native-stop-hook",
         }) + "\n").encode())
 
     def observe(row):
         nonlocal ready_at
         kind = row.get("event")
+        if not state["session_id"]:
+            # Not bound yet: only this program's own start report can name the conversation.
+            if kind != "SessionStart" or not bind(str(row.get("session_id") or "")):
+                state["unbound_events"] += 1
+                return
+        session_id = state["session_id"]
         if row.get("session_id") != session_id:
             # Another conversation in this terminal (the operator cleared or switched it) is
             # not this seat's: it neither confirms nor ends anything.
@@ -899,6 +928,17 @@ def run_terminal(
         state["last_native_event"] = {"event": kind, "at": time.time()}
         if kind != "Notification":
             state.pop("asking", None)  # any later report means that question is behind it
+        if kind in ("UserPromptSubmit", "Stop") and not state["session_started"]:
+            # A resumed session may send no start report (Cursor did not). Its first prompt
+            # or stop report is the same evidence that it is running and taking input; until
+            # one arrives the session stays "starting" and nothing is typed to it.
+            state["session_started"] = True
+            state["phase"] = "started"
+            ready_at = time.monotonic() + native_session.SETTLE_S
+            if not session_file.exists():
+                fd = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as stream:
+                    stream.write(session_id + "\n")
         if kind == "SessionStart":
             if not state["session_started"]:
                 state["session_started"] = True
@@ -938,6 +978,8 @@ def run_terminal(
                     text_match=how,
                     evidence="the session's prompt hook reported this message; receipt, "
                     "not acceptance or completion",
+                    **({"generation": row["generation"]}
+                       if isinstance(row.get("generation"), str) else {}),
                 )
                 state["current_message_id"] = identifier
                 if identifier != "initial" and slot not in {"validator", "orchestrator"}:
@@ -956,8 +998,17 @@ def run_terminal(
         elif kind == "Stop":
             stop_row(row)
             # A stop report is the session's, not any message's: with a queued prompt taken
-            # mid-continuation, the next stop can belong to the turn before it.
+            # mid-continuation, the next stop can belong to the turn before it. Only a
+            # provider's own per-prompt id ties one to a message, and then it is recorded as
+            # that and nothing more.
             state["stop_reports"] += 1
+            generation = row.get("generation")
+            for identifier, record in deliveries.items():
+                if (isinstance(generation, str) and record.get("generation") == generation
+                        and record.get("state") == "observed"):
+                    deliveries[identifier] = dict(record, response_stop={
+                        "at": time.time(), "status": row.get("status"),
+                        "meaning": "the session reported its response to this prompt ended"})
             if state["phase"] == "prompt-observed":
                 # Elapsed time between two reports. Not a completed turn's duration: the
                 # session may continue past this stop.
@@ -1062,7 +1113,8 @@ def run_terminal(
     def handle(command):
         if not isinstance(command, dict):
             raise ValueError("persistent request is not an object")
-        if command.get("token") != state["token"] or command.get("thread") != session_id:
+        if (command.get("token") != state["token"] or not state["session_id"]
+                or command.get("thread") != state["session_id"]):
             raise ValueError("persistent request binding mismatch")
         if command.get("action", "deliver") != "deliver":
             raise ValueError("a native terminal session accepts deliver requests only")
