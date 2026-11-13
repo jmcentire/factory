@@ -628,7 +628,40 @@ _BLOCKERS = {
             "the preflight still reads whether a sign-in is stored." + _TO_SHOW,
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
+    # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
+    # the operator's Codex configuration is ignored); their mode is not.
+    "codex": "Codex: this lane runs `codex exec`, the non-interactive mode, not the "
+             "interactive program. Established (`codex --help` here, and this harness's own "
+             "use): the interactive program is `codex [PROMPT]` (lane agent "
+             "codex-interactive), `codex resume [SESSION_ID]` continues a session, `codex "
+             "queue` queues a message for an existing session, and hooks given by `-c` are "
+             "skipped until the operator trusts them. Not established: any report from the "
+             "interactive program that it started, received a prompt or stopped, and that "
+             "`codex queue` reaches a live interactive session, so a codex-interactive lane "
+             "can be neither messaged nor resumed by the Factory and cannot replace exec "
+             "for unattended work." + _TO_SHOW,
 }
+#: Lane agents that share a registry entry, and the blocker each really has. A lane agent's
+#: truth is its own: `codex-interactive` is already the interactive program with the
+#: operator's configuration (no blocker in this sense, though the Factory cannot message or
+#: resume it), while `codex` and `codex-ollama` still run `codex exec`.
+#: Each maps to (registry entry, blocker or None for the entry's own, resumable by the Factory).
+LANE_VARIANTS: Mapping[str, tuple[str, str | None, bool]] = {
+    "codex-interactive": ("codex", "", False),
+    "codex-ollama": ("codex", None, True),
+}
+
+
+def describe_lane(name: str) -> tuple[Harness, str, bool]:
+    """The registry entry a lane agent runs on, that lane agent's own native blocker, and
+    whether the Factory can continue its session."""
+
+    if name not in LANE_VARIANTS:
+        chosen = harness(name)
+        return chosen, chosen.native_blocker, chosen.resumable
+    base, blocker, resumable = LANE_VARIANTS[name]
+    chosen = harness(base)
+    return chosen, chosen.native_blocker if blocker is None else blocker, resumable
 
 HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
@@ -637,9 +670,10 @@ HARNESSES: Mapping[str, Harness] = {
                                   "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator"),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
                                   memory="beside-operator"),
-    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration.
+    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
+    # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
     "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
-                   memory="beside-operator"),
+                   memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
     "agy": Antigravity("agy", "agy", (), True,
                        api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
                        native_blocker=_BLOCKERS["agy"]),
@@ -811,10 +845,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "list":
             print("\n".join(HARNESSES))
         elif args.command == "describe":
-            chosen = harness(args.agent)
-            sys.stdout.write(f"{'resumable' if chosen.resumable else 'single'}\0"
+            # A lane agent name (codex-interactive, codex-ollama) answers for itself.
+            chosen, blocker, resumable = describe_lane(args.agent)
+            sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
                              f"{'plan' if chosen.plan else 'metered-only'}\0"
-                             f"memory:{chosen.memory}\0{chosen.native_blocker}\0")
+                             f"memory:{chosen.memory}\0{blocker}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":

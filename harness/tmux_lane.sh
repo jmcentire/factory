@@ -231,8 +231,9 @@ if [ "$ACTION" != "freeze" ]; then
   # Whether this lane's memory is its own, and what (if anything) keeps this provider from
   # running as its own interactive program with the operator's configuration: both come from
   # the registry, are recorded in the launch and are said aloud when the lane starts.
-  case "$AGENT" in codex|codex-interactive|codex-ollama) REGISTRY_AGENT=codex ;; *) REGISTRY_AGENT="$AGENT" ;; esac
-  exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$REGISTRY_AGENT")
+  # Asked by the lane agent's own name: `codex` (exec) and `codex-interactive` share a
+  # registry entry but not a blocker.
+  exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT")
   { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
     IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4; } || exit 70
   exec 4<&-

@@ -134,9 +134,11 @@ operator's to weigh.
 
 ### Providers not yet native, and exactly why
 
-Codex lanes load the operator's whole Codex configuration but still run `codex exec`.
-Antigravity, Cursor, Muse and Prime lanes still start in print mode with a private
-configuration. Each launch records and prints `native_blocker`. They are not converted
+Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
+still run `codex exec`. Antigravity, Cursor, Muse and Prime lanes still start in print mode
+with a private configuration. Each launch records and prints `native_blocker`, asked by the
+lane agent's own name: it is empty only for `claude`, `claude-ollama` and
+`codex-interactive`, and `python harness/agents.py describe --agent <lane agent>` prints it. They are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:
 
 | Provider | Established, and from where | Not established |
@@ -145,6 +147,7 @@ because doing so today would cost the lane its Kindex and any way to send it a m
 | Cursor | From cursor.com/docs/agent/hooks and /docs/cli/mcp: project `.cursor/hooks.json` runs beside user hooks; events `sessionStart` (`session_id`), `beforeSubmitPrompt`, `stop` (`status`, `loop_count`), `sessionEnd`; the CLI uses the editor's project MCP configuration. | That `beforeSubmitPrompt` carries the prompt text, and that these hooks fire in the interactive CLI. A target that already has `.cursor/` files is unhandled. |
 | Muse | Probed live on muse 1.4.6 (2026-10-12) and from its help: events `sessionStart`, `userPromptSubmit`, `stop`, `notification`, `sessionEnd`; hooks by per-run `-c hooks=<json>` or project `.muse/hooks.json` (off until the workspace is trusted); project MCP file `<repository>/.mcp.json`. | Whether `-c hooks=` adds to or replaces the operator's hooks, and the `userPromptSubmit` payload. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
 | Prime | Nothing: the program is not installed where this was written. | Everything. |
+| Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |
 
 To clear a row, a live session of that program must show: a report when the session is
 ready for input, a report carrying a submitted prompt, a report when it stops, and the
