@@ -134,14 +134,17 @@ PY
 import json, sys
 state = json.loads(sys.argv[1])
 if state.get("transport") == "native-terminal":
-    # Free for one more message: its last report is a start or a stop, and no earlier
-    # message is still unconfirmed. That is what was reported, not proof the turn is over.
+    # Idle only on the session's own word: it reported that it is waiting for input (Claude
+    # Code says so about a minute after it stops), or it has started and received nothing.
+    # A stop report alone is not that; the session may continue past it.
     unsettled = [d for d in (state.get("deliveries") or {}).values()
-                 if d.get("state") in ("queued", "submitted", "observed")]
-    idle = (state.get("phase") in ("started", "stop-reported") and not unsettled
+                 if d.get("state") in ("queued", "submitted")]
+    idle = (state.get("phase") in ("started", "waiting-for-input") and not unsettled
             and state.get("process_state") == "running")
-else:
-    idle = state.get("phase") == "idle" and state.get("process_state") == "running"
+    said = "idle" if idle else f"not reported waiting for input (last report: {state.get('phase')})"
+    print(f"lane-message: {sys.argv[2]} {said} (native terminal session)")
+    raise SystemExit(0 if idle else 75)
+idle = state.get("phase") == "idle" and state.get("process_state") == "running"
 print(f"lane-message: {sys.argv[2]} {'idle' if idle else 'busy or held'} (native persistent lane)")
 raise SystemExit(0 if idle else 75)
 PY
@@ -536,12 +539,21 @@ if [ "$PERSISTENT" = 1 ]; then
   done
   [ -z "$DELIVERY_STATE" ] || printf '%s\n' "$DELIVERY_STATE"
   if [ "$DELIVERY_RC" != 0 ]; then
-    echo "lane-message: $MESSAGE_ID is not acknowledged by $RUN:$SLOT, so it is not recorded as delivered here. Do not resend it: the same id is never sent twice, and a message the session has observed is recorded as delivered when the session next reports a stop. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+    echo "lane-message: $RUN:$SLOT has not reported receiving $MESSAGE_ID, so it is not recorded as delivered. Do not resend it: the same id is never sent twice, and a message typed while the session works waits in the program's own input queue until the session reports it. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
     exit "$DELIVERY_RC"
   fi
-  "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
-    --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport persistent >/dev/null
-  echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $AGENT persistent"
+  case "$DELIVERY_STATE" in
+    *'"state": "observed"'*)
+      # A terminal session's own prompt report: the message reached the session. That is
+      # receipt, not acceptance and not completion, and the journal row says which it was.
+      "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
+        --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport terminal-observed >/dev/null
+      echo "lane-message: $RUN:$SLOT reported receiving $MESSAGE_ID (its own prompt report; receipt, not acceptance or completion)" ;;
+    *)
+      "$FACTORY_PYTHON" "$D/lane_dialogue.py" delivered --root "$ROOT" \
+        --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport persistent >/dev/null
+      echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $AGENT persistent" ;;
+  esac
   exit 0
 fi
 
@@ -639,7 +651,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_POLICY="--ask-for-approval never"
   [ "$LANE_SANDBOX" != off ] || RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
-  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s %s -C %q exec --json resume --ignore-user-config --ignore-rules --strict-config --disable apps -c %q -c %q -c %q %s %q -' \
+  printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s %s -C %q exec --json resume -c %q -c %q -c %q %s %q -' \
     "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$RESUME_POLICY" "$REPOSITORY" \

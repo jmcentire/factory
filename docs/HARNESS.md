@@ -80,28 +80,38 @@ started through the operator's launcher on a terminal the lane wrapper owns
   run root by `--add-dir` for coordinators. The permission mode is what it was before
   (author lanes bypass, coordinators default unless `FACTORY_LANE_SANDBOX=off`) and is left
   out entirely when the launcher is the operator's own function, which makes that choice.
-- **Messages** are typed into that terminal, to the exact process the wrapper started, one
-  outstanding at a time, each followed by a typed mark `[factory-message:<id>]`. A state
-  names only what was observed: `queued` (accepted, not one byte typed), `submitted` (typing
-  began; unconfirmed), `observed` (the session's own prompt hook reported a prompt carrying
-  the mark), `acknowledged` (a stop report followed that prompt with no other prompt
-  between), `unknown` (typed, and its outcome can no longer be observed). `busy` means it
-  was not accepted. Asking again reports the state and never types a message twice, across
-  wrapper restarts too.
+- **Messages** are typed into that terminal, to the exact process the wrapper started,
+  each followed by a typed mark `[factory-message:<id>]`. A state names only what was
+  observed: `queued` (accepted, not one byte typed), `submitted` (typing began; if the
+  session is working, the message is in Claude Code's own input queue), `observed` (the
+  session's own prompt hook reported a prompt carrying the mark), `unknown` (typing began
+  under an earlier wrapper process and no report was seen). `busy` means it was not
+  accepted, with the reason. `observed` is receipt and the end of what can be known; there
+  is no "acknowledged" or "completed". Asking again reports the state and never types a
+  message twice, across wrapper restarts too. One message of the wrapper's is unaccounted
+  for at a time; that is its custody rule, not a claim about the session.
 - **What the hooks can establish.** They are observation hooks added beside the operator's
   own, which run in parallel and may reject a prompt or make the session continue past a
-  stop. A prompt report therefore means the prompt reached the session, not that it was
-  accepted, and a stop report means the session reported ending a response, not that the
-  work is complete or successful. `phase` names the last report: `starting`, `started`,
-  `prompt-observed`, `stop-reported`. A folder-trust or sign-in question keeps the seat at
-  `starting` with its first message `queued`; answer it in the window. Nothing is inferred
-  from the screen, from silence or from elapsed time, and nothing is typed into a session
-  that has not reported starting.
-- **Limits.** If an operator hook makes the session continue past a stop, `stop-reported`
-  is early; a message typed then waits in Claude Code's own queue as `submitted`. How Claude
-  Code reports pasted text is its own business, so a report is matched by the typed mark,
-  and `text_match` says whether the reported text was also byte-identical (`exact`) or only
-  carried the mark (`token`).
+  stop. A prompt report means the prompt reached the session, not that it was accepted. A
+  stop report means the session reported ending a response, not that the work is complete
+  or successful, and it is never tied to a message: on Claude Code 2.1.323 a prompt typed
+  during a continued stop was taken from the queue while the earlier turn was still
+  finishing. `phase` names the last report: `starting`, `started`, `prompt-observed`,
+  `stop-reported`, `asking-operator` (a permission or input question is on screen; nothing
+  is typed then, because keys would answer it), `waiting-for-input` (Claude Code's own
+  `idle_prompt` notice, about a minute after it stops). A folder-trust or sign-in question
+  keeps the seat at `starting` with its first message `queued`; answer it in the window.
+  Nothing is inferred from the screen, from silence or from elapsed time, and nothing is
+  typed into a session that has not reported starting.
+- **When a message is typed.** Never because a phase looks idle. It is typed when the
+  session has reported starting, no earlier message of the wrapper's is unaccounted for,
+  and the session is not asking the operator a question. Claude Code queues input it
+  receives while working, as it does for a person typing.
+- **Limits.** How Claude Code reports pasted text is its own business, so a report is
+  matched by the typed mark, and `text_match` says whether the reported text was also
+  byte-identical (`exact`), carried only the mark (`token`), or was the message without
+  the mark (`body`). A retained delivery record that cannot be read, or that belongs to
+  another conversation which received input, stops the start: nothing is retyped.
 - **Status.** `python harness/run_record.py --runs R --run ID status` lists each coordinator
   seat under `seats`. `python harness/persistent_lane.py status --root RUN_ROOT --slot SLOT`
   prints one live session, and exits 70 with the reason once its process has ended; the
@@ -109,7 +119,7 @@ started through the operator's launcher on a terminal the lane wrapper owns
 - **Resume.** A session that reported starting keeps its id in `<slot>-session-id`
   (`-thread-id` for authors). Starting the seat again continues that conversation with
   `--resume`, interactively.
-- **Interrupt** is refused for these sessions: the program reports nothing back for an
+- **Interrupt** is refused for these sessions: Claude Code runs no stop hook for an
   interrupted turn, so the harness could not tell a stopped turn from a running one.
 
 ## Messages and oversight

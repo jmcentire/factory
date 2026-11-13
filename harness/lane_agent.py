@@ -15,11 +15,10 @@ that finished sat idle because nothing recorded that they had ended
              the exact scrubbed environment the lane gets. Exit 0 when signed in; exit 77 with
              the exact remediation command when it is not, or when the check itself waits for
              input (that is the login screen the lane would have sat on).
-  codex-model  the model selection a ``codex exec`` lane carries over from the operator's own
-             ``$CODEX_HOME/config.toml`` when no model was named: the model, then one
-             ``key=value`` override per field. Lanes run with ``--ignore-user-config`` so the
-             operator's MCP servers, sandbox and approval settings stay out of them, and without
-             this a lane would run Codex's built-in default instead of the operator's model.
+  codex-model  the model selection of the operator's own ``$CODEX_HOME/config.toml`` when no
+             model was named: the model, then one ``key=value`` override per field. A lane
+             loads that whole configuration itself; this is read so the launch record names
+             the model the lane ran and a resume runs the same.
   environment  the lane's dependency-cache variables and runtime directories, validated, as
              NUL-terminated fields for tmux_lane.sh and tmux_lane_message.sh: the Codex shell
              policy that sets them, the lane PATH, the launch record, the prompt notice and
@@ -568,8 +567,9 @@ def preflight(
 
 # -- codex model ---------------------------------------------------------------------------------
 
-# The keys of a Codex config.toml that choose the model, and nothing else. The rest of the
-# operator's config (MCP servers, sandbox, approvals, hooks) stays out of a lane.
+# The keys of a Codex config.toml that choose the model. They are read so a launch record names
+# the model a lane ran and a resume runs the same; the lane itself loads the operator's whole
+# configuration, with nothing ignored.
 CODEX_MODEL_KEYS = (
     "model",
     "model_provider",
@@ -862,6 +862,11 @@ def run_lane(
             native_plan = native_session.plan(
                 argv[1:], launcher=launcher, directory=native_dir or log.parent, slot=slot,
                 name=f"{run_root.name}-{slot}", python=sys.executable)
+            # Before the program exists: a retained delivery record that cannot be trusted
+            # stops the start, so nothing typed once can be typed again.
+            import persistent_lane
+
+            persistent_lane.retained(run_root, slot, native_plan.session_id)
         except (OSError, ValueError) as error:
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
             marker = f"__LANE_EXIT__ {slot} rc=127\n"
@@ -973,6 +978,19 @@ def run_lane(
         finally:
             os.set_blocking(descriptor, True)
 
+    def native_rejection() -> None:
+        # What a native terminal program printed before it ended, bounded, into the log.
+        assert hosted is not None
+        kept = 0
+
+        def keep(raw: bytes) -> None:
+            nonlocal kept
+            if kept < 4 * 1024 * 1024:
+                _append(log, raw)
+                kept += len(raw)
+
+        hosted.drain(keep)
+
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
         stopped = True
@@ -1005,12 +1023,18 @@ def run_lane(
             hosted = native_session.Terminal(argv, env=child_env)
             process = hosted.process
             register()
-            rc = persistent_lane.run_terminal(
-                hosted, root=run_root, slot=slot, agent=session_agent,
-                prompt=argv_prompt(prompt, pathlib.Path.cwd()), session_file=session_file,
-                session_id=native_plan.session_id, journal=native_plan.journal,
-                journal_offset=native_plan.journal_offset,
-                launcher=native_plan.launcher.record(), note=note)
+            if process.poll() not in {None, 0}:
+                # The program rejected its start before a process receipt existed. Keep
+                # what it said and its own exit code; there is no session to drive.
+                native_rejection()
+                rc = process.wait()
+            else:
+                rc = persistent_lane.run_terminal(
+                    hosted, root=run_root, slot=slot, agent=session_agent,
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), session_file=session_file,
+                    session_id=native_plan.session_id, journal=native_plan.journal,
+                    journal_offset=native_plan.journal_offset,
+                    launcher=native_plan.launcher.record(), note=note)
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()
@@ -1051,8 +1075,12 @@ def run_lane(
         if early_rejection:
             # Also covers exit between the poll above and initial stdin/identity checks.
             # Once a native session exists, binding/protocol failures remain lane failures.
-            assert process is not None and process.stdout is not None
-            rejection_output()
+            assert process is not None
+            if hosted is not None:
+                native_rejection()
+            else:
+                assert process.stdout is not None
+                rejection_output()
             assert native_exit is not None
             rc = native_exit
         elif process is not None and process.poll() is None:

@@ -486,8 +486,8 @@ def seat_status(root: Path, role: str) -> dict[str, Any]:
     (it may be showing the operator a folder-trust or sign-in question), then ``started``,
     ``prompt-observed`` and ``stop-reported``. The operator's own hooks may reject a prompt or
     continue past a stop, so neither report is called acceptance or completion. A delivery is
-    ``queued``, ``submitted``, ``observed``, ``acknowledged`` or ``unknown``
-    (``persistent_lane.OUTSTANDING``); only ``acknowledged`` is evidence the session took it.
+    ``queued``, ``submitted``, ``observed`` or ``unknown`` (``persistent_lane.OUTSTANDING``);
+    ``observed`` means the session reported receiving it, and nothing stronger is known.
     """
     import importlib
 

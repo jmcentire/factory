@@ -29,7 +29,9 @@ case "$AGENT" in
   codex|codex-ollama)
     VERSION=$(codex --version 2>/dev/null) || fail "codex CLI is not runnable ($(at codex))"
     EXEC_HELP=$(codex exec --help 2>/dev/null) || EXEC_HELP=""
-    needs "$EXEC_HELP" codex "$VERSION" --ignore-user-config --ignore-rules --strict-config --json
+    # Only what a lane uses. Nothing that ignores the operator's Codex configuration is
+    # required, because nothing of it is ignored.
+    needs "$EXEC_HELP" codex "$VERSION" --json
     QUEUE_HELP=$(codex queue --help 2>/dev/null) || QUEUE_HELP=""
     printf '%s' "$QUEUE_HELP" | grep -q -- '--thread' || \
       fail "codex CLI contract lacks queue --thread ($VERSION at $(at codex))"
@@ -39,7 +41,7 @@ case "$AGENT" in
     # --no-daemon keeps the TUI off the app-server daemon whose socket failure sent msg-r2's
     # Coder to a login screen.
     HELP=$(codex --help 2>/dev/null) || HELP=""
-    needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen --strict-config
+    needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen
     CONTRACT="codex-tui-no-daemon-v1" ;;
   cursor-agent)
     VERSION=$(agent --version 2>/dev/null) || \

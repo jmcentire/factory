@@ -306,7 +306,8 @@ def _validate(rows: Sequence[Mapping[str, object]]) -> None:
                 set(row) != expected
                 or identifier not in planned
                 or identifier in delivered
-                or row.get("transport") not in {"queue", "resume", "persistent"}
+                or row.get("transport") not in {"queue", "resume", "persistent",
+                                                "terminal-observed"}
                 or not isinstance(row.get("thread_id"), str)
                 or not _THREAD.fullmatch(str(row["thread_id"]))
             ):
@@ -706,7 +707,8 @@ def main() -> int:
     delivered.add_argument("--root", type=pathlib.Path, required=True)
     delivered.add_argument("--message-id", required=True)
     delivered.add_argument("--thread-id", required=True)
-    delivered.add_argument("--transport", choices=("queue", "resume", "persistent"), required=True)
+    delivered.add_argument("--transport", required=True,
+                           choices=("queue", "resume", "persistent", "terminal-observed"))
     pending = commands.add_parser("pending")
     pending.add_argument("--root", type=pathlib.Path, required=True)
     pending.add_argument("--lane", type=_lane_argument)

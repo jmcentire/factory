@@ -527,10 +527,10 @@ PY
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
 
-  # A codex lane runs with --ignore-user-config, which keeps the operator's MCP servers, sandbox
-  # and approval settings out of it, and would also drop their model for Codex's built-in one.
-  # So with no --model, the model keys of the operator's Codex config are carried over: the lane
-  # runs what their own `codex` would. A config that names no model leaves Codex's own default.
+  # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
+  # or disabled. With no --model, the model keys of that config are read here only so the
+  # launch record names what the lane ran and a resume runs the same; the lane runs what the
+  # operator's own `codex` would. A config that names no model leaves Codex's own default.
   if [ "$AGENT" = codex ] && [ -z "$MODEL" ]; then
     exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" codex-model --codex-home "$SAFE_CODEX_HOME")
     IFS= read -r -d '' MODEL <&4 || refuse 70 "the model in $SAFE_CODEX_HOME/config.toml could not be read" \
@@ -959,7 +959,7 @@ PY
   append_event "$PLANNED"
 
   LOCAL_ARGS=""
-  # Carry only the approved evaluator hook, never the operator's full hook/MCP configuration.
+  # Add the approved evaluator hook beside the operator's own hook and MCP configuration.
   # This settings selection does not waive Codex's hook trust review or attest runtime loading.
   if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
       [ -n "${FACTORY_SIGNET_DIGEST:-}" ]; then
@@ -1042,16 +1042,16 @@ PY
   [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
   # Codex refuses --ask-for-approval together with the bypass flag (rc=2), so the TUI takes one or the other.
   CODEX_POLICY_ARG="${CODEX_SANDBOX_ARG:---ask-for-approval never}"
-  # Ignore-user-config does not disable Codex's built-in app connector surface. Authors must
-  # use their explicitly scoped local Kindex server, not a same-named operator connector.
+  # The operator's Codex configuration, rules, apps and MCP servers stay as they are. The lane
+  # adds its permission profile, shell policy and scoped Kindex as -c overrides beside them.
   case "$AGENT" in
     codex|codex-ollama)
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config %s %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
+      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)

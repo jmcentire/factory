@@ -56,7 +56,13 @@ CLAUDE_API_ENV = (
 LAUNCHER_ENV = "FACTORY_CLAUDE_LAUNCHER"
 DEFAULT_LAUNCHER = "cl"
 #: Native lifecycle events the hook settings subscribe to.
-HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd")
+HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd")
+#: Notification types that mean the session is asking the operator something on screen.
+#: Keys typed then would answer that question, so nothing is typed while one is the last report.
+ASKING = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input")
+#: The one report that the session is waiting for input: Claude Code sends it about a minute
+#: after it finished responding, if nothing was typed since.
+WAITING = "idle_prompt"
 #: Flags that carry the Factory's own permission choice; an operator launcher makes its own.
 PERMISSION_FLAGS = ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
 PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
@@ -126,6 +132,8 @@ _KIND_SCRIPT = (
     'case "$kind" in function|file|*": function"|*": command"|*": hashed") exit 0 ;; '
     'alias|*": alias") exit 3 ;; *) exit 1 ;; esac'
 )
+#: The program the default launcher may stand in for.
+CLAUDE_PROGRAM = "claude"
 
 
 def _shell_kind(shell: str, name: str, environ: Mapping[str, str], timeout: float) -> str:
@@ -141,13 +149,17 @@ def _shell_kind(shell: str, name: str, environ: Mapping[str, str], timeout: floa
     return {0: "function", 3: "alias"}.get(probe.returncode, "")
 
 
-def resolve_launcher(environ: Mapping[str, str], *, executable: str = "claude",
+def resolve_launcher(environ: Mapping[str, str], *, executable: str = CLAUDE_PROGRAM,
                      timeout: float = 30.0) -> Launcher:
     """Choose the launcher. A named one that cannot be run is an error, never a substitute.
 
     A launcher is an executable on PATH or a function the login shell defines. A shell alias
     is not one: an alias is expanded only where a shell reads it as a command word, which a
     launcher given arguments by another program never is.
+
+    The default launcher stands in for Claude Code and nothing else: a caller that asks for
+    a program not named ``claude`` gets that program, run directly. Naming a launcher in
+    ``FACTORY_CLAUDE_LAUNCHER`` is the operator's explicit choice and always applies.
     """
 
     named = environ.get(LAUNCHER_ENV, "").strip()
@@ -155,6 +167,16 @@ def resolve_launcher(environ: Mapping[str, str], *, executable: str = "claude",
     if not re.fullmatch(r"[A-Za-z0-9_./-]+", wanted):
         raise ValueError(f"{LAUNCHER_ENV} must be one command name or path, not {wanted!r}")
     search = environ.get("PATH")
+
+    def direct() -> Launcher:
+        own = shutil.which(executable, path=search)
+        if not own:
+            raise ValueError(f"{executable} is not on PATH")
+        return Launcher(pathlib.Path(executable).name, "executable",
+                        path=str(pathlib.Path(own).absolute()))
+
+    if not named and pathlib.Path(executable).name != CLAUDE_PROGRAM:
+        return direct()
     found = shutil.which(wanted, path=search)
     if found:
         return Launcher(pathlib.Path(wanted).name, "executable",
@@ -172,11 +194,7 @@ def resolve_launcher(environ: Mapping[str, str], *, executable: str = "claude",
             if kind == "alias" else
             f"{LAUNCHER_ENV}={named} is neither an executable on PATH nor a function the "
             f"login shell {shell} defines")
-    found = shutil.which(executable, path=search)
-    if not found:
-        raise ValueError(f"{executable} is not on PATH")
-    return Launcher(pathlib.Path(executable).name, "executable",
-                    path=str(pathlib.Path(found).absolute()))
+    return direct()
 
 
 # -- arguments and hooks -------------------------------------------------------------------------
@@ -345,8 +363,16 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object]) -> None:
         row["tokens"] = TOKEN.findall(reported)[:16]
     if event == "SessionStart" and isinstance(payload.get("source"), str):
         row["source"] = payload["source"]
-    if event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
-        row["last_assistant_message"] = str(payload["last_assistant_message"])[:MESSAGE_LIMIT]
+    if event == "Stop":
+        # True when this stop ends a continuation another stop hook asked for.
+        row["stop_hook_active"] = payload.get("stop_hook_active") is True
+        if isinstance(payload.get("last_assistant_message"), str):
+            row["last_assistant_message"] = str(payload["last_assistant_message"])[:MESSAGE_LIMIT]
+    if event == "Notification":
+        kind = payload.get("notification_type")
+        if kind != WAITING and kind not in ASKING:
+            return  # no other notification says anything about the session's input
+        row["notification_type"] = kind
     if event == "SessionEnd" and isinstance(payload.get("reason"), str):
         row["reason"] = payload["reason"]
     data = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")

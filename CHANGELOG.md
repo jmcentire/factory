@@ -14,13 +14,19 @@ public API is still pre-1.0.
   `--strict-mcp-config` and `--bare` are no longer used and are refused if supplied.
 - API-billing variables are unset for Claude Code and none is set. `claude-ollama` reaches the
   loopback Ollama server with `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.
-- Messages to a Claude session are typed into its terminal, one outstanding at a time, each
-  with a typed mark. States say only what was observed: `queued`, `submitted`, `observed`
-  (the session's prompt hook reported it), `acknowledged` (a stop report followed that
-  prompt) or `unknown`. The operator's hooks run beside the observation hooks and may reject
-  a prompt or continue past a stop, so no single report is called delivery or completion.
-  Delivery records survive a wrapper restart; nothing typed once is typed again.
-  `run_record.py status` lists coordinator seats.
+- Messages to a Claude session are typed into its terminal, each with a typed mark. States
+  say only what was observed: `queued`, `submitted`, `observed` (the session's prompt hook
+  reported it) or `unknown`. `observed` is receipt, recorded in the dialogue journal as
+  transport `terminal-observed`; nothing is called acceptance or completion, because the
+  operator's hooks may reject a prompt or continue past a stop and a stop report cannot be
+  tied to a message. A message is typed when the session has started, none of the wrapper's
+  earlier messages is unaccounted for and the session is not asking the operator a question;
+  Claude Code queues input it receives while working. Delivery records survive a wrapper
+  restart; an unreadable or foreign record stops the start; nothing typed once is typed
+  again. `run_record.py status` lists coordinator seats.
+- Codex lanes load the operator's whole Codex configuration: `--ignore-user-config`,
+  `--ignore-rules`, `--strict-config` and `--disable apps` are gone from launch and resume,
+  and the code that disabled every MCP server but the lane's Kindex is deleted.
 - A Claude sign-in is not prejudged with a bare `claude auth status` when the launcher is the
   operator's shell function; the session shows its own sign-in state.
 - Qualification probes with Claude are resident sessions too and are frozen after they end.
@@ -38,8 +44,8 @@ public API is still pre-1.0.
   native session with `--replace-session`. The operator's MCP servers are now visible to
   Claude author lanes beside the lane's own Kindex; input separation rests on the role
   projections, separate clones and the lane protocol.
-- Not yet converted: Antigravity (`--print` stream), Codex (`exec` with user configuration
-  ignored), Cursor (`-p`, private HOME), Muse (`exec`, private settings) and Prime (`--print`).
+- Not yet converted: Antigravity (`--print` stream, private HOME), Codex (`exec`), Cursor
+  (`-p`, private HOME), Muse (`exec`, private settings) and Prime (`--print`).
 
 ## [0.8.29] - 2026-11-09
 
