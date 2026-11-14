@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 H = Path(__file__).resolve().parents[1] / "harness"
+pytest_plugins = ["tests.test_native_claude_contract"]
+
 SID = "12345678-1234-4234-8234-123456789abc"
-FAKE = r'''
+FAKE = r"""
 import json, os, pathlib, sys, time
 
 folder = pathlib.Path(__file__).parent
@@ -171,7 +173,7 @@ for line in sys.stdin:
         raise AssertionError("forbidden fallback")
     else:
         answer(r, {})
-'''
+"""
 
 
 def until(predicate, child=None, diagnostic=None):
@@ -387,3 +389,69 @@ def test_ended_hosted_resume_is_strict_and_never_loads(hosted, mode):
     else:
         assert code == 70, (lane.root / "wrapper-1.log").read_text()
         assert len(prompts) == 1, "failed identity recovery must never submit a prompt"
+
+
+@pytest.mark.parametrize("agent", ["agy", "muse"])
+def test_public_author_custody_refuses_hosted_provider_before_spawn(native_case, tmp_path, agent):
+    from tests.test_native_claude_contract import execute, launch
+
+    allowed = {
+        "HOME",
+        "PATH",
+        "SHELL",
+        "TMPDIR",
+        "TERM",
+        "LANG",
+        "CLAUDE_CONFIG_DIR",
+        "FACTORY_VALIDATOR_AGENT",
+        "FACTORY_ORCHESTRATOR_AGENT",
+        "FACTORY_PYTHON",
+        "FACTORY_CONFIG",
+        "FACTORY_KINDEX_LITE_BIN",
+    }
+    case = native_case
+    case["env"] = {k: v for k, v in case["env"].items() if k in allowed}
+    launch(case)
+    provider = case["bin_dir"] / agent
+    provider.write_text(f"#!{sys.executable}\n" + FAKE)
+    provider.chmod(0o755)
+    prepared = execute(
+        [
+            sys.executable,
+            str(H / "role_inputs.py"),
+            "prepare",
+            "--runs",
+            str(case["runs"]),
+            "--run",
+            "native-acceptance",
+            "--role",
+            "coder",
+            "--repo",
+            str(tmp_path / "author"),
+        ],
+        case["env"],
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    repo = json.loads(prepared.stdout)["repository"]
+    prompt = tmp_path / "hosted-brief"
+    prompt.write_text("synthetic protected author")
+    result = execute(
+        [
+            "bash",
+            str(H / "tmux_lane.sh"),
+            "native-acceptance",
+            "coder",
+            "launch",
+            "--runs",
+            str(case["runs"]),
+            "--repo",
+            repo,
+            "--prompt",
+            str(prompt),
+            "--agent",
+            agent,
+        ],
+        case["env"],
+    )
+    assert result.returncode == 77, result.stdout + result.stderr
+    assert not (case["bin_dir"] / "rpc.jsonl").exists()
