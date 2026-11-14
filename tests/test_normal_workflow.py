@@ -124,6 +124,9 @@ def test_start_has_only_assigned_residents_and_private_socket(tmp_path, reposito
     calls = []
 
     def fake_run(argv, **kwargs):
+        # Read-only custody observation; this fixture has no live old owners.
+        if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0)
 
@@ -291,6 +294,9 @@ def test_partial_start_failure_stops_only_its_session_and_retains_failure(tmp_pa
     fail = True
 
     def fake_run(argv, **kwargs):
+        # Read-only custody observation; this fixture has no live old owners.
+        if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
         calls.append(argv)
         if fail and "new-window" in argv:
             raise subprocess.CalledProcessError(7, argv)
