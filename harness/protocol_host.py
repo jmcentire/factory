@@ -54,8 +54,15 @@ import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import native_session
-import validator_boundary
+if __name__ == "__main__":
+    # As a program this is trusted and runs outside any boundary, in the lane's clone. Only
+    # absolute import-path entries are kept: a relative one (the empty entry, or the
+    # placeholder an editable install leaves) is read against the working directory, where
+    # a lane can write. (Imported, the importing program's path is its own business.)
+    sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
+
+import native_session  # noqa: E402
+import validator_boundary  # noqa: E402
 
 SCHEMA = "factory-hosted-session/1"
 #: The lane's dialect names, and the protocol each provider's server speaks.
@@ -151,16 +158,29 @@ def refuse_guarded(environ: Mapping[str, str], *, dialect: str = "",
             "where one is required. Nothing was started")
 
 
-def trust_roots() -> list[pathlib.Path]:
-    """The trees the trusted side runs from: this checkout and the Python it runs on.
+def trust_roots(launch_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
+    """Every place the trusted side loads code from when it starts: this checkout, the
+    interpreter's own trees, every entry of the import path as this interpreter actually
+    has it (site-packages, anything a ``.pth`` file or ``PYTHONPATH`` added), the user's
+    site directory where it is in use (whether or not it exists yet), and, when given, the
+    directory a launcher is run from (which is on the import path of its inline helpers).
 
-    A provider that could write any of them could change what the trusted host or the lane
-    wrapper does the next time either starts, so each must be out of its reach.
+    A provider that could write into any of them, or create one that is missing, could run
+    code outside the boundary the next time the trusted side starts, so each must be out of
+    its reach.
     """
 
+    import site
+
     roots = {pathlib.Path(__file__).resolve().parent.parent,
-             pathlib.Path(sys.prefix).resolve(), pathlib.Path(sys.base_prefix).resolve(),
              pathlib.Path(os.path.realpath(sys.executable)).parent}
+    for value in (sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix,
+                  *site.getsitepackages(), *(entry for entry in sys.path if entry)):
+        roots.add(pathlib.Path(value).resolve())
+    if site.ENABLE_USER_SITE:
+        roots.add(pathlib.Path(site.getusersitepackages()).resolve())
+    if launch_dir is not None:
+        roots.add(pathlib.Path(launch_dir).resolve())
     return sorted(roots)
 
 
@@ -168,15 +188,64 @@ def _within(path: pathlib.Path, roots: Sequence[pathlib.Path]) -> bool:
     return any(path == root or path.is_relative_to(root) for root in roots)
 
 
-def _user_writable(path: pathlib.Path) -> bool:
-    try:
-        return path.stat().st_uid == os.getuid() or os.access(path, os.W_OK)
-    except OSError:
-        return True  # cannot tell: treated as within reach
+#: How many entries of an uncovered tree are examined before it is called too large to
+#: establish, which counts as within reach.
+REACH_LIMIT = 100000
+
+
+def _reachable(root: pathlib.Path) -> str | None:
+    """A path at or under ``root`` that this user could change, or None if there is none.
+
+    The whole tree is looked at, not its top: a tree another user owns can hold a directory
+    this one may write. A path that does not exist is within reach if the nearest directory
+    that does exist is. A symlink that leaves the tree is followed one step, to what it
+    names. What cannot be examined, and a tree too large to examine, count as within reach.
+    """
+
+    uid = os.getuid()
+
+    def mine(path: str) -> bool:
+        try:
+            status = os.lstat(path)
+        except OSError:
+            return True
+        return status.st_uid == uid or (not os.path.islink(path) and os.access(path, os.W_OK))
+
+    top = str(root)
+    while not os.path.lexists(top):
+        parent = os.path.dirname(top)
+        if parent == top:
+            return top
+        top = parent
+    if top != str(root):
+        return top if mine(top) else None
+    if mine(top):
+        return top
+    pending, seen = [top], 0
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            return current
+        for entry in entries:
+            seen += 1
+            if seen > REACH_LIMIT:
+                return f"{root} (too large to establish)"
+            if mine(entry.path):
+                return entry.path
+            if entry.is_symlink():
+                target = os.path.realpath(entry.path)
+                if not _within(pathlib.Path(target), [root]) and mine(target):
+                    return target
+            elif entry.is_dir(follow_symlinks=False):
+                pending.append(entry.path)
+    return None
 
 
 def confinement(record: object, role: str, workspace: pathlib.Path,
-                control: Sequence[pathlib.Path]) -> tuple[dict, validator_boundary.Boundary]:
+                control: Sequence[pathlib.Path], launch_dir: pathlib.Path | None = None,
+                ) -> tuple[dict, validator_boundary.Boundary]:
     """Check a boundary before anything is spawned under it, and that it protects what the
     trusted side depends on. Returns the validated record and the parsed boundary.
 
@@ -188,8 +257,8 @@ def confinement(record: object, role: str, workspace: pathlib.Path,
     - every directory in ``control`` (the lane's journals, the host's record with its socket
       secret, its command ids, its socket): under a root the boundary denies reading, which
       it also denies writing;
-    - every tree in ``trust_roots`` that this user can write: under a root the boundary
-      denies writing.
+    - every place in ``trust_roots`` (with ``launch_dir``, when a launcher asks) that this
+      user could change anywhere within: under a root the boundary denies writing.
 
     Nothing is assumed from how a contract was provisioned: one that leaves any of these
     out is refused here, by name.
@@ -210,13 +279,30 @@ def confinement(record: object, role: str, workspace: pathlib.Path,
             raise BoundaryUnusable(
                 f"the kernel boundary does not keep the lane's control records from the "
                 f"provider: {path} is not under a root it denies reading")
-    for root in trust_roots():
-        if _user_writable(root) and not _within(root, unwritable):
+    for root in trust_roots(launch_dir):
+        if _within(root, unwritable):
+            continue
+        found = _reachable(root)
+        if found is not None:
             raise BoundaryUnusable(
                 f"the kernel boundary does not protect what the trusted host runs from: "
-                f"{root} can be written by this user and is not under a root it denies "
-                "writing (`protocol_host.py trust-roots` lists what a contract must cover)")
+                f"{root} is not under a root it denies writing, and {found} can be changed "
+                "by this user (`protocol_host.py trust-roots` lists what a contract must "
+                "cover)")
     return checked, boundary
+
+
+def confined_argv(argv: Sequence[str], record: object, role: str,
+                  workspace: pathlib.Path) -> list[str]:
+    """One run of the provider's program inside the boundary, for the runs that are not its
+    session server (its account check, its version, its help). Every run of the provider's
+    program for a bounded lane goes inside: its start-up is the provider's code too."""
+
+    try:
+        return validator_boundary.model_command(list(argv), record, role, workspace)
+    except (validator_boundary.BoundaryError, OSError, ValueError, TypeError,
+            KeyError) as error:
+        raise BoundaryUnusable(f"the kernel boundary cannot be used: {error}") from None
 
 
 #: Run inside the boundary, as the very process that becomes the provider's server, before
@@ -603,27 +689,45 @@ class Host:
                 raise
 
     def pin(self, digest: str | None) -> None:
-        """A restart keeps exactly the policy its session was started under: the same
-        boundary, or none. The record that says which is this host's own, out of the
-        provider's reach when there is a boundary, so it cannot be made to say otherwise."""
+        """A restart of a lane keeps exactly the policy its session was started under: the
+        same boundary, or none, by the lane's own retained record of that session. The
+        record is this host's, out of the provider's reach when there is a boundary. With
+        no such record, a damaged one, one that is another session's, or one that names
+        another policy, the restart is refused before anything is started: a missing
+        record is not read as "no boundary".
 
-        if not self.args.resume:
+        A probe is not a lane's continuation and has no record to keep to."""
+
+        if not self.args.resume or getattr(self.args, "probing", False):
             return
+        if self.record.is_symlink():
+            raise Refused("the record of how this session was hosted is a symlink; the "
+                          "restart is refused")
         try:
             raw = self.record.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return  # no earlier host of this slot here; the launcher's retained binding governs
+            raise Refused(f"there is no record of how this session was hosted "
+                          f"({self.record.name}); a lane is continued only from its own "
+                          "retained record, so the restart is refused") from None
         except OSError as error:
             raise Refused(f"the record of how this session was hosted cannot be read "
                           f"({error}); the restart is refused") from None
         try:
             prior = json.loads(raw)
-            before = _dict(prior.get("confined")).get("digest") if isinstance(prior, dict) else 0
         except ValueError:
-            before = 0
-        if before == 0 or (before is not None and not isinstance(before, str)):
+            prior = None
+        held = prior.get("confined") if isinstance(prior, dict) else None
+        if (not isinstance(prior, dict) or prior.get("schema") != SCHEMA
+                or prior.get("protocol") != self.protocol
+                or ("confined" in prior and not (
+                    isinstance(held, dict) and isinstance(held.get("digest"), str)
+                    and held["digest"]))):
             raise Refused("the record of how this session was hosted is damaged; the restart "
                           "is refused")
+        if prior.get("session_id") != self.args.resume:
+            raise Refused("the record of how this lane was hosted is of another session than "
+                          "the one to resume; the restart is refused")
+        before = held["digest"] if isinstance(held, dict) else None
         if before != digest:
             def named(value: str | None) -> str:
                 return f"under the boundary {value[:16]}" if value else "with no boundary"
@@ -1353,15 +1457,16 @@ def send(args: argparse.Namespace) -> int:
 
 def cover(args: argparse.Namespace) -> int:
     """Say what a boundary contract must cover for a hosted lane whose control directories
-    are those given: nothing is guessed by the caller and nothing is random. The host's
-    socket is ``<slot>-hosted.sock`` in the first control directory."""
+    are those given, launched from the directory this is run in: nothing is guessed by the
+    caller and nothing is random. The host's socket is ``<slot>-hosted.sock`` in the lane's
+    own control directory."""
 
-    roots = trust_roots()
+    reach = {str(root): _reachable(root) for root in trust_roots(pathlib.Path.cwd())}
     print(json.dumps({
         "deny_read": [str(pathlib.Path(item).resolve()) for item in args.control],
-        "deny_write": [str(root) for root in roots if _user_writable(root)],
-        "out_of_reach_already": [str(root) for root in roots if not _user_writable(root)],
-        "socket": "<slot>-hosted.sock in the first control directory; never listed in "
+        "deny_write": [root for root, found in reach.items() if found is not None],
+        "out_of_reach_already": [root for root, found in reach.items() if found is None],
+        "socket": "<slot>-hosted.sock in the lane's control directory; never listed in "
                   "allowed_sockets",
     }, indent=1, sort_keys=True))
     return 0
@@ -1418,6 +1523,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                               "exit 0, or 70 with the reason; nothing is started")
     checking.add_argument("--workspace", type=pathlib.Path, required=True)
     bounded(checking)
+    confining = sub.add_parser("confined-run", help="run one command of the provider's "
+                               "program inside the lane's boundary (its account check, "
+                               "version or help); the command follows --")
+    confining.add_argument("--workspace", type=pathlib.Path, required=True)
+    bounded(confining)
+    confining.add_argument("provider", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command == "send":
         return send(args)
@@ -1425,11 +1536,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cover(args)
     if args.command == "check-boundary":
         try:
-            confinement(args.boundary_record, args.boundary_role, args.workspace, args.control)
+            confinement(args.boundary_record, args.boundary_role, args.workspace, args.control,
+                        launch_dir=pathlib.Path.cwd())
         except BoundaryUnusable as error:
             print(f"hosted-session: {error}", file=sys.stderr)
             return 70
         return 0
+    if args.command == "confined-run":
+        command = args.provider[1:] if args.provider[:1] == ["--"] else args.provider
+        if not command or args.boundary_record is None:
+            parser.error("confined-run needs --boundary-record and a command after --")
+        try:
+            wrapped = confined_argv(command, args.boundary_record, args.boundary_role,
+                                    args.workspace)
+        except BoundaryUnusable as error:
+            print(f"hosted-session: {error}", file=sys.stderr)
+            return 70
+        os.chdir(args.workspace)
+        os.execv(wrapped[0], wrapped)
     # A start that is refused as such is refused first, whatever else is wrong with the
     # command line: nothing about a malformed request turns a refusal into a usage error.
     refused = _refusal(args)
@@ -1442,6 +1566,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not provider:
         parser.error("the provider's server command is required after --")
     if args.command == "probe":
+        args.probing = True
         args.journal = args.record.with_name("probe-events.jsonl")
         args.message, args.model, args.effort = "", "", ""
         args.permissive, args.mcp_file = False, None

@@ -3,6 +3,11 @@
 # Authentication, native session identity, input separation and explicit spend caps are
 # real boundaries. Model approval, signatures and review-backlog holds are not prerequisites.
 set -euo pipefail
+# The Python helpers this script runs are the Factory's own code, run outside any lane's
+# boundary. What they import is decided here and by the checkout, never by a variable that
+# happened to be in the caller's environment: a directory named there could hold code a
+# lane was able to write.
+unset PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
@@ -314,6 +319,7 @@ if [ "$ACTION" != "freeze" ]; then
   # outside and only Antigravity's server inside (protocol_host). A Muse lane may not:
   # Muse's own shell sandbox cannot be applied inside the boundary, and running Muse with
   # that sandbox off is not adopted.
+  EARLY_BOUNDARY=null
   case "$AGENT" in muse|agy)
     PROTECTED=""
     for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY; do
@@ -733,8 +739,13 @@ PY
   set +e
   PREFLIGHT_BILLING=plan
   [ "$METERED" != true ] || PREFLIGHT_BILLING=metered
+  # Under the kernel boundary (a hosted Antigravity lane) the provider's account check runs
+  # inside that boundary, in the lane's clone, and so do the contract check's runs below.
+  CONFINED_PREFLIGHT=()
+  [ "$EARLY_BOUNDARY" = null ] || CONFINED_PREFLIGHT=(--boundary-record "$EARLY_BOUNDARY" \
+    --boundary-role "$ROLE" --cwd "$REPOSITORY")
   AUTH=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/lane_agent.py" preflight --agent "$AGENT" \
-    --billing "$PREFLIGHT_BILLING" 2>&1)
+    --billing "$PREFLIGHT_BILLING" ${CONFINED_PREFLIGHT[@]+"${CONFINED_PREFLIGHT[@]}"} 2>&1)
   AUTH_RC=$?
   set -e
   if [ "$AUTH_RC" -ne 0 ]; then
@@ -747,7 +758,9 @@ PY
 
   # The agent's CLI contract, before anything is written (harness/agent_contract.sh, which
   # setup also runs to confirm or update an agent before a run).
-  CONTRACT_REPORT=$("$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
+  CONTRACT_REPORT=$(FACTORY_CONTRACT_BOUNDARY_RECORD="$EARLY_BOUNDARY" \
+    FACTORY_CONTRACT_BOUNDARY_ROLE="$ROLE" FACTORY_CONTRACT_WORKSPACE="$REPOSITORY" \
+    "$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
     refuse 70 "$CONTRACT_REPORT" \
       "update that executable (its own update command, brew or npm), or put a current one first on PATH"
   CLI_CONTRACT=${CONTRACT_REPORT%%$'\n'*}

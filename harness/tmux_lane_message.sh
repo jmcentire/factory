@@ -5,6 +5,11 @@
 # question. The watchdog sends only the generated wrap-up notice (lane_watchdog.py), and only the
 # Validator sends a progress review, to a Coder lane, through the coder leak guard.
 set -euo pipefail
+# The Python helpers this script runs are the Factory's own code, run outside any lane's
+# boundary. What they import is decided here and by the checkout, never by a variable that
+# happened to be in the caller's environment: a directory named there could hold code a
+# lane was able to write.
+unset PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
@@ -292,14 +297,25 @@ MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
 # Reuse only the launch's binding. Ambient configuration cannot replace or drop it.
-"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" <<'PY' || exit 77
+# A boundary that no longer validates (its contract gone or changed, another digest) starts
+# nothing, and says so in one line. For a hosted Muse or Antigravity lane that is exit 70,
+# as every unusable boundary is for them; for the others it stays 77.
+"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" "$AGENT" "$RUN:$SLOT" <<'PY' || exit $?
 import json, os, pathlib, sys
 sys.path.insert(0, sys.argv[1])
 from validator_boundary import validate_lane_record
 record = json.loads(sys.argv[2])
+code = 70 if sys.argv[5] in ("muse", "agy") else 77
 if record is None and os.environ.get("FACTORY_REQUIRE_BOUNDARY") == "1":
-    raise SystemExit("lane-message: required retained author boundary is absent")
-validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+    print("lane-message: required retained author boundary is absent", file=sys.stderr)
+    raise SystemExit(code)
+try:
+    validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+except (OSError, ValueError, TypeError, KeyError) as error:
+    print(f"lane-message: the boundary {sys.argv[6]} was launched under cannot be used any "
+          f"more ({error}); nothing was started and no message was delivered",
+          file=sys.stderr)
+    raise SystemExit(code)
 PY
 BOUNDARY_MODEL_ARGS=""
 BOUNDARY_CODEX_ARGS=""
@@ -657,6 +673,17 @@ if [ "$PERSISTENT" = 1 ]; then
         if [ -n "$BOUNDED" ] && [ "$AGENT" = muse ]; then
           echo "lane-message: a kernel boundary is required ($(printf '%s' "$BOUNDED" | cut -c2-)), and a hosted muse session is refused under one (Muse's own shell sandbox cannot be applied inside it, and Muse with that sandbox off is not adopted), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
           exit 77
+        fi
+        if [ "$BOUNDARY_RECORD" != null ]; then
+          # The restart is held to the boundary as the launch was, before anything of the
+          # lane's is started: its control records, the code the trusted side runs from and
+          # the directory this command is run in must all be out of the provider's reach.
+          BOUNDARY_WHY=$("$FACTORY_PYTHON" "$D/protocol_host.py" check-boundary \
+            --boundary-record "$BOUNDARY_RECORD" --boundary-role "$LANE" --workspace "$REPOSITORY" \
+            --control "$TMUX_ROOT" --control "$NATIVE_DIR" 2>&1 >/dev/null) || {
+            echo "lane-message: ${BOUNDARY_WHY#hosted-session: }, so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+            exit 70
+          }
         fi ;;
       esac
       case "$AGENT" in codex-interactive|cursor-agent|muse|agy) LAUNCH_ARGUMENT_RESTART=1 ;; esac

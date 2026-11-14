@@ -80,8 +80,17 @@ case "$AGENT" in
   agy)
     # Antigravity, hosted through its own session server (protocol_host.py). Only what that
     # server start uses is required; its print mode is not, because it is never used.
-    VERSION=$(agy --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
-    HELP=$(agy acp --help 2>&1) || HELP=""
+    # For a lane under the kernel boundary the launcher names that boundary, and these runs
+    # of Antigravity go inside it like every other: its start-up is the provider's code.
+    RUN_AGY=(agy)
+    if [ -n "${FACTORY_CONTRACT_BOUNDARY_RECORD:-}" ] && [ "$FACTORY_CONTRACT_BOUNDARY_RECORD" != null ]; then
+      RUN_AGY=("${FACTORY_PYTHON:-python3}" "$D/protocol_host.py" confined-run
+               --boundary-record "$FACTORY_CONTRACT_BOUNDARY_RECORD"
+               --boundary-role "${FACTORY_CONTRACT_BOUNDARY_ROLE:-}"
+               --workspace "${FACTORY_CONTRACT_WORKSPACE:-$PWD}" -- agy)
+    fi
+    VERSION=$("${RUN_AGY[@]}" --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
+    HELP=$("${RUN_AGY[@]}" acp --help 2>&1) || HELP=""
     needs "$HELP" "agy acp" "$VERSION" --stdio
     CONTRACT="agy-session-server-v1" ;;
   prime-agent)

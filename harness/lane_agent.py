@@ -58,6 +58,12 @@ from typing import Any
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
+if __name__ == "__main__":
+    # As a program the wrapper is trusted and runs outside any lane's boundary, in the lane's
+    # clone. Only absolute import-path entries are kept: a relative one (the empty entry, or
+    # the placeholder an editable install leaves) is read against the working directory,
+    # where the lane can write, and a module found there would run out here.
+    sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
 
 import agents  # noqa: E402  (harness/agents.py, the harness registry)
 import validator_boundary  # noqa: E402
@@ -410,10 +416,14 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation: str,
             label: str, env: Mapping[str, str] | None = None,
+            cwd: pathlib.Path | None = None,
             ) -> subprocess.CompletedProcess[str]:
     # ``env``: the environment the check is about. Without it the runner uses this process's
     # own, which is the lane's when a launcher runs this under the lane's environment.
+    # ``cwd``: where the check runs, when it must be somewhere in particular.
     extra: dict[str, Any] = {} if env is None else {"env": dict(env)}
+    if cwd is not None:
+        extra["cwd"] = str(cwd)
     try:
         return runner(
             list(argv),
@@ -444,9 +454,16 @@ def preflight(
     timeout: float = 20.0,
     runner: Runner = subprocess.run,
     billing: str = "plan",
+    boundary_record: object = None,
+    boundary_role: str = "",
+    cwd: pathlib.Path | None = None,
 ) -> str:
     """Return how sign-in was established, or raise PreflightRefused with the exact fix. A plan
-    lane (the default) must be signed in to the operator's plan, not to a per-use API key."""
+    lane (the default) must be signed in to the operator's plan, not to a per-use API key.
+
+    With ``boundary_record`` (a hosted lane under the kernel boundary) the provider's own
+    account command runs inside that boundary, in ``cwd``: its start-up is the provider's
+    code, and no run of it for a bounded lane is left outside."""
 
     chosen = agent(name)
     if name in ("muse", "agy"):
@@ -455,7 +472,8 @@ def preflight(
         import protocol_host
 
         try:
-            protocol_host.refuse_guarded(environ, dialect=name, starting=False)
+            protocol_host.refuse_guarded(environ, dialect=name,
+                                         boundary=boundary_record is not None)
         except protocol_host.GuardRequired as error:
             raise PreflightRefused(
                 str(error), "choose an agent with a qualified guard for this lane "
@@ -578,8 +596,18 @@ def preflight(
         return "ollama-server-answers"
     if chosen.auth == "agy-plan":
         remediation = "agy   (run it once interactively, as this user, to sign in)"
-        result = _status([chosen.executable, "models"], timeout=timeout, runner=runner,
-                         remediation=remediation, label="agy")
+        check = [chosen.executable, "models"]
+        if boundary_record is not None:
+            import protocol_host
+
+            try:
+                check = protocol_host.confined_argv(
+                    check, boundary_record, boundary_role, cwd or pathlib.Path.cwd())
+            except protocol_host.BoundaryUnusable as error:
+                raise PreflightRefused(str(error), "supply a boundary contract and digest "
+                                       "that validate for this lane") from None
+        result = _status(check, timeout=timeout, runner=runner,
+                         remediation=remediation, label="agy", cwd=cwd)
         shown = result.stdout + result.stderr
         if result.returncode != 0 or "sign in" in shown.lower():
             raise PreflightRefused("agy is not signed in", remediation)
@@ -1427,6 +1455,9 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--agent", required=True)
     check.add_argument("--timeout", type=float, default=20.0)
     check.add_argument("--billing", choices=("plan", "metered"), default="plan")
+    check.add_argument("--boundary-record", type=json.loads, default=None)
+    check.add_argument("--boundary-role", choices=("coder", "tester"), default="")
+    check.add_argument("--cwd", type=pathlib.Path, default=None)
     environment = commands.add_parser("environment")
     environment.add_argument("--path", required=True)
     environment.add_argument("--cache-env", action="append", default=[])
@@ -1503,7 +1534,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "preflight":
             how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout,
-                            billing=arguments.billing)
+                            billing=arguments.billing,
+                            boundary_record=arguments.boundary_record,
+                            boundary_role=arguments.boundary_role, cwd=arguments.cwd)
             print(how)
             return 0
         wake = _Wake(arguments.ready_channel) if arguments.ready_channel else None

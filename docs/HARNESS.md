@@ -491,17 +491,31 @@ the lane's contract and digest unchanged. The host's journal, record, command id
 stay in the run's own control tree and never go into the clone.
 
 - **The contract is held to what a hosted lane needs, before anything is started.** The
-  lane's control directories must be under a root the contract denies reading, and the
-  trees the trusted side runs from (the Factory checkout, the Python it runs on) must be
-  under a root it denies writing unless this user cannot write them anyway. A contract that
-  leaves any of that out is refused by name (exit 70), by the launcher before the
-  provider's program is run for any reason, and again by the host.
+  lane's control directories must be under a root the contract denies reading. Every place
+  the trusted side loads code from when it starts must be under a root it denies writing,
+  unless nothing anywhere within it can be changed by this user (the whole tree is looked
+  at, not its top): the Factory checkout, the interpreter's own trees, each entry of its
+  import path as it actually is (site-packages, whatever a `.pth` file added), the user's
+  site directory where one is in use, and the directory the launcher is run from. A
+  contract that leaves any of that out is refused by name (exit 70), by the launcher before
+  the provider's program is run for any reason, by the message command before a restart,
+  and again by the host. So a bounded lane is launched, and messaged, from a directory the
+  contract protects (the Factory checkout, in practice).
   `python harness/protocol_host.py trust-roots --control <dir>...` prints what a contract
   must cover; `check-boundary` checks one. A contract that is missing, changed or has the
   wrong digest fails the existing boundary admission (exit 77), also before any provider
   run. On a machine whose interpreter is the user's own (Homebrew), covering it means
   denying the lane that interpreter, or running the Factory on one the user cannot write:
   the boundary module does not accept a write-protected root with symlinks that leave it.
+- **Every run of the provider's program is inside.** Not only its session server: the
+  account check, the version and the help text the launcher asks of it before a lane
+  starts are run through the same boundary, in the lane's clone. Its start-up is the
+  provider's code too.
+- **Nothing ambient decides what the trusted side imports.** `tmux_lane.sh` and
+  `tmux_lane_message.sh` drop `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` and
+  `PYTHONINSPECT` from their environment before they run any helper, and the lane wrapper
+  and the host, which run in the lane's clone, keep only absolute entries on their import
+  path (a relative one would be read against the clone).
 - **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
   control directory, which the contract already keeps from the provider.
 - **The child attests before the provider exists.** The process the boundary starts first
@@ -513,9 +527,14 @@ stay in the run's own control tree and never go into the clone.
   is no confined provider and the start exits 70. Its record then carries `confined`: that
   process's PID and start time (read from outside), the contract, its digest, the role and
   how many attempts were denied. A requested digest alone never produces that record.
-- **A restart keeps the policy.** The boundary a lane was launched under comes back from
-  the launch record, and the host refuses (exit 70) a restart whose boundary digest, or lack
-  of one, differs from the session's earlier host record.
+- **A restart keeps the policy, by the lane's own record.** The boundary a lane was
+  launched under comes back from the launch record, and a contract that is gone or changed
+  starts nothing (one line, exit 70 for these lanes). The host then requires its own earlier
+  record of that session: valid, of this protocol, of the session being resumed, and naming
+  the same boundary digest or none. A record that is missing, damaged, of another session,
+  or of another policy is refused (exit 70) before anything is started: a missing record
+  is never read as "no boundary". This holds for unbounded hosted lanes as well. (The
+  zero-prompt `probe` is not a lane's continuation and keeps to no record.)
 - **What it is.** Static confinement of the server's process tree: no read of the denied
   roots, no write of control records, no unix-socket, spawner or signal escape, by any
   route, including tools the server runs.
@@ -531,9 +550,14 @@ stay in the run's own control tree and never go into the clone.
   attempts refused each time (reads of a canary, the host record, the journal and the
   wrapper's delivery record, direct and through `/bin/sh`; writes and a rename in the
   control tree, the policy directory and the Factory's code; a connect to the host socket;
-  a signal to the host) while a write in the workspace succeeded; a contract leaving out
-  the control records or the code refused; a wrong digest refused; a restart without the
-  boundary refused. Antigravity's real server: `initialize` answered under the profile.
+  a signal to the host) while a write in the workspace succeeded; all four runs of the
+  stand-in's program for a launch (account check, version, help, server) found inside; a
+  contract leaving out the control records or the code refused; a wrong digest refused; a
+  restart refused, with nothing started, after the contract changed, with the contract
+  gone, with a host record of another schema, of another session, or with its confinement
+  removed, and when run from an unprotected directory; a `sitecustomize.py` on a
+  `PYTHONPATH` given to the restart did not run. Antigravity's real server: `initialize`
+  answered under the profile.
   **Not run:** any real Antigravity session, prompt or tool under the boundary.
 - **Muse is refused under a boundary.** Its own shell sandbox cannot be applied inside one
   (the kernel reports a forbidden second sandbox), and Muse with that sandbox off is not
