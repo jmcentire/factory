@@ -722,9 +722,9 @@ _BLOCKERS = {
              "skipped until the operator trusts them. The interactive program is now "
              "hosted as the lane agent codex-interactive, which reports its start, prompts "
              "and stops, takes a later message through `codex queue`, and is restarted by "
-             "a lane message with Codex's own resume; this exec lane is not converted, "
-             "because that adapter is not accepted: its restart has been run only against "
-             "a stand-in program, and no lane with a tool call has been run on it." + _TO_SHOW,
+             "a lane message with Codex's own resume (run once against Codex itself, "
+             "2026-11-14); this exec lane is not converted yet: that is a separate change, "
+             "not made, and the interactive adapter has no Signet guard shown on it." + _TO_SHOW,
     # The lane agent `codex-interactive`: Codex's own interactive session, hosted. What is
     # open is stated, not hidden.
     "codex-interactive": "Codex interactive: hosted as its own interactive session from an "
@@ -751,12 +751,19 @@ _BLOCKERS = {
                          "way, the message recorded as handed over before the program "
                          "exists and never handed over twice. That path was run through "
                          "tmux_lane.sh and tmux_lane_message.sh with a stand-in program "
-                         "that calls no model; this adapter's restart has not been run "
-                         "against Codex. A restarted program that ends before reporting "
-                         "leaves that one message `unknown`, and another message is "
-                         "needed to restart the session. Fourth, no tool call was run, so "
-                         "nothing about a tool hook or a Signet guard in the interactive "
-                         "session was observed here.",
+                         "that calls no model, and once against Codex itself (2026-11-14, "
+                         "codex-cli 0.167.0, a synthetic folder Codex already trusted, "
+                         "FACTORY_LANE_SANDBOX=off): the lane read its inputs with shell "
+                         "commands and answered; after a clean end a lane message "
+                         "restarted the same session id and was reported once; two "
+                         "follow-ups went through the queue and were each reported once. "
+                         "Not run: a restart after a crash, a watcher's pause or wrap-up "
+                         "of a Codex session, or a second machine. A restarted program "
+                         "that ends before reporting leaves that one message `unknown`, "
+                         "and another message is needed to restart the session. Fourth, "
+                         "the model ran shell commands and called the lane's Kindex in "
+                         "that one lane, but no tool hook of the Factory's and no Signet "
+                         "guard was in place, so nothing about either is established.",
 }
 #: Lane agents that share a registry entry, and the blocker each really has. `codex-ollama`
 #: runs `codex exec` like `codex`. (`codex-interactive` has a registry entry of its own.)

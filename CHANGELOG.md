@@ -143,15 +143,18 @@ public API is still pre-1.0.
   `codex resume`, the message given as the resume's launch argument, because a resumed
   Codex session that is given nothing reports nothing (observed). The hand-over is recorded
   before the program exists and a message is never handed over twice. The registry now
-  reports `codex-interactive` as resumable by the Factory. Shown with a stand-in program;
-  not yet run against Codex. `codex` and `codex-ollama` still run `codex exec`.
+  reports `codex-interactive` as resumable by the Factory. Shown with a stand-in program
+  and run once against Codex itself through `tmux_lane.sh` and `tmux_lane_message.sh`
+  (2026-11-14, codex-cli 0.167.0, a synthetic folder): launch, clean end, restart on the
+  same session id, two queued follow-ups, every message reported once. `codex` and
+  `codex-ollama` still run `codex exec`.
 - `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
   exited interactive Codex session to `codex exec resume`, a non-interactive run, after
   reading Codex's own session file. A `codex-interactive` lane that an earlier Factory
   started with nothing hosting it is refused a message; its conversation is continued with
   Codex's own `codex resume <session id>`, or a hosted session is started with
-  `tmux_lane.sh launch --replace-session`. The Factory does not yet restart an ended
-  interactive Codex session itself.
+  `tmux_lane.sh launch --replace-session`. (A hosted session that has ended is restarted
+  by a lane message: the entry above.)
 - Antigravity coordinator seats no longer run print mode fed over stdin. A seat is still
   allowed: it starts as Antigravity's own interactive session in its window and is driven
   there, with a warning at start that wakes and messages are not delivered into it (a wake

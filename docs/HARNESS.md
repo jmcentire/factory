@@ -467,11 +467,23 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   progress-review pauses are offered for it. Run through `tmux_lane.sh` and
   `tmux_lane_message.sh` with a stand-in program that calls no model: live message by
   queue, ended, restarted with the message `observed`, a failed restart, no repeat, and a
-  restart by another sender's message. **Not run against Codex:** this adapter's restart,
-  and a watcher's pause or wrap-up of a Codex session.
+  restart by another sender's message.
+- **Run once against Codex itself, through the public commands** (2026-11-14, codex-cli
+  0.167.0, the operator's ChatGPT sign-in with no API key in the lane's environment, a
+  synthetic folder Codex already trusted, `FACTORY_LANE_SANDBOX=off`):
+  `tmux_lane.sh launch --agent codex-interactive` started the lane with no folder
+  question; the first message was `observed` (exact) and the session bound by its mark;
+  the model read the lane's two input files with shell commands, called the lane's
+  Kindex, and answered. After a clean end (`.codex/` removed, exit 0),
+  `tmux_lane_message.sh ... status` restarted the same session id with `codex resume`
+  and that message was `observed` (`via: launch-argument`, exact); Codex's answer drew on
+  the earlier turn. Two further status messages were `observed` through the queue. Codex's
+  own hook receipts for the run: one session id throughout, four prompt reports with four
+  different marks, none twice.
+- **Not run against Codex.** A restart after a crash rather than a clean end; a restart
+  whose program fails; a watcher's pause or wrap-up of a Codex session.
 - **Not observed.** A message queued while the model is in the middle of a turn; any tool
-  call, tool hook or Signet guard in the interactive session; `tmux_lane.sh` end to end
-  with Codex itself.
+  hook or Signet guard in the interactive session.
 - **No `codex exec` behind it.** `tmux_lane_message.sh --native-session-file`, which handed
   an exited interactive session to `codex exec resume` after reading Codex's own session
   file, is removed and refused by name. A `codex-interactive` lane that an earlier Factory

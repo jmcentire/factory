@@ -60,7 +60,7 @@ while [ "$#" -gt 0 ]; do
     --native-session-file)
       # Removed, and said so by name. It handed an exited interactive Codex session to
       # `codex exec resume`, a non-interactive run, after reading Codex's own session file.
-      echo "lane-message: --native-session-file is no longer accepted: an interactive Codex lane is never continued through \`codex exec\`. Codex's own way to continue that conversation is \`codex resume <session id>\` in a window of your own; the Factory does not yet restart an ended interactive Codex session, and starts a hosted one with tmux_lane.sh launch --agent codex-interactive (--replace-session '<why>' for a slot that has one)" >&2
+      echo "lane-message: --native-session-file is no longer accepted: an interactive Codex lane is never continued through \`codex exec\`. A hosted codex-interactive lane whose session has ended is restarted by an ordinary lane message, with Codex's own resume, and needs no option. A Codex TUI that an earlier Factory started with nothing hosting it is not continued by the Factory: continue it yourself with \`codex resume <session id>\` in a window of your own, or start a hosted session with tmux_lane.sh launch --agent codex-interactive --replace-session '<why>'" >&2
       exit 64 ;;
     --question-id) QUESTION_ID="$2"; shift 2 ;;
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
