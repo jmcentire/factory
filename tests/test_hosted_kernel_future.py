@@ -30,7 +30,7 @@ def eventually(check):
 
 
 @pytest.mark.parametrize("agent", ["agy"])
-@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection"])
+@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection", "usercustomize-injection", "cwd-injection"])
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper
 ):
@@ -186,6 +186,7 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
                 str(case["runs"]),
             ],
             case["env"],
+            cwd=workspace if tamper == "cwd-injection" else None,
         )
 
     (case["bin_dir"] / "exit-after-completion").touch()
@@ -217,17 +218,20 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
             if tamper == "record-session": changed["session_id"] = "ffffffff-ffff-4fff-8fff-ffffffffffff"
             if tamper == "record-confinement": changed.pop("confined", None)
             retained.write_text(json.dumps(changed))
-    elif tamper == "pythonpath-injection":
+    elif tamper.endswith("injection"):
         injection = workspace / "injection"
         injection.mkdir()
         marker = workspace / "trusted-host-injection-executed"
-        (injection / "sitecustomize.py").write_text(
+        (injection / ("usercustomize.py" if tamper == "usercustomize-injection" else "sitecustomize.py")).write_text(
             "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
-        case["env"]["PYTHONPATH"] = str(injection)
+        if tamper == "cwd-injection":
+            (workspace / "sitecustomize.py").write_text((injection / "sitecustomize.py").read_text())
+        else:
+            case["env"]["PYTHONPATH"] = str(injection)
     resumed = message()
-    if tamper == "pythonpath-injection":
+    if tamper.endswith("injection"):
         assert not marker.exists(), "untrusted Python startup code executed outside provider boundary"
-    if tamper not in ("none", "pythonpath-injection"):
+    if tamper != "none" and not tamper.endswith("injection"):
         assert len([r for r in rows() if r.get("spawn")]) == before
         assert resumed.returncode == 70, resumed.stdout + resumed.stderr
     else:
@@ -236,6 +240,6 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         assert state()["session_id"] == sid
         assert any(r.get("request", {}).get("method") == "session/resume" for r in rows())
     probes = [r["kernel_probe"] for r in rows() if "kernel_probe" in r]
-    assert len(probes) == (3 if tamper in ("none", "pythonpath-injection") else 2)
+    assert len(probes) == (3 if tamper == "none" or tamper.endswith("injection") else 2)
     assert all(all(p.values()) for p in probes), probes
     assert record.read_text() == "original"
