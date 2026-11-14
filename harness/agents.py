@@ -115,6 +115,8 @@ class Harness:
     # Factory does and does not approve for them. Printed and recorded at launch, so a
     # question waiting in a lane's window is expected rather than discovered.
     start_requires: str = ""
+    # A line this provider's lanes need in their protocol prompt, or "".
+    protocol_note: str = ""
     # Why this provider's lanes are not yet its own interactive program with the operator's
     # configuration intact, or are but have not been accepted for unattended work; "" only
     # when neither is open. Stated where the registry is read, so the
@@ -569,7 +571,7 @@ class PrimeAgent(Harness):
 
 #: The lane's Kindex as Cursor knows it. Not "kindex": an operator who has their own server of
 #: that name keeps it, and the lane's permission rule must not be able to match theirs.
-CURSOR_LANE_SERVER = "lane-kindex"
+CURSOR_LANE_SERVER = signet_hooks.CURSOR_LANE_KINDEX
 
 
 class CursorAgent(Harness):
@@ -667,14 +669,14 @@ _BLOCKERS = {
     # The lane is Cursor's own interactive agent with the operator's configuration. What is
     # open is acceptance, not conversion.
     "cursor-agent": "Cursor: hosted as its own interactive agent from an interface the "
-                    "independent tester proved (2026-11-13), but this adapter has never been "
-                    "run against Cursor and is not accepted. Open: that its terminal takes "
-                    "the typed message as Claude Code does; that the project permission "
-                    "rule and the lane server's approval behave as documented; unattended "
-                    "resume (no lane command resumes, and a resumed session reported nothing "
-                    "until prompted); a target that already has .cursor/hooks.json, mcp.json "
-                    "or cli.json is refused; an author can still force-add the lane's "
-                    "project files to a commit, which nothing checks.",
+                    "independent tester proved (2026-11-13), and not yet accepted. Two things "
+                    "are open. First, a complete live session of this adapter: one live start "
+                    "got as far as Cursor rejecting the generated permission file, since "
+                    "corrected; that its terminal takes a typed message as Claude Code does, "
+                    "and that the project permission rule and the lane server's approval "
+                    "behave as documented, are still unobserved. Second, unattended resume: "
+                    "no lane command resumes a session, and a resumed session reported "
+                    "nothing until prompted.",
     "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
             "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
             "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
@@ -750,6 +752,12 @@ HARNESSES: Mapping[str, Harness] = {
     "cursor-agent": CursorAgent(
         "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
         memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
+        protocol_note=(
+            f"- Your Kindex is the MCP server named {CURSOR_LANE_SERVER}. It is this lane's own. "
+            "Do not call the\n  server named kindex: it is not this lane's memory. The files "
+            ".cursor/hooks.json,\n  .cursor/mcp.json and .cursor/cli.json are this lane's "
+            "runtime configuration, not the work:\n  do not edit them, and never add them to "
+            "a commit (not with git add -f either).\n"),
         start_requires=(
             "Cursor asks its own questions in the lane's window and the Factory answers none "
             "of them: whether to trust the workspace, and whether to approve the lane's MCP "
@@ -851,8 +859,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
     describe = sub.add_parser("describe", help="resumable, plan, memory isolation, the "
-                              "native blocker (or empty) and what a start asks of the "
-                              "operator (or empty), NUL-separated")
+                              "native blocker (or empty), what a start asks of the "
+                              "operator (or empty) and the lane protocol note (or empty), "
+                              "NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
     turn.add_argument("--agent", required=True)
@@ -926,7 +935,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             chosen, blocker, resumable = describe_lane(args.agent)
             sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
                              f"{'plan' if chosen.plan else 'metered-only'}\0"
-                             f"memory:{chosen.memory}\0{blocker}\0{chosen.start_requires}\0")
+                             f"memory:{chosen.memory}\0{blocker}\0{chosen.start_requires}\0"
+                             f"{chosen.protocol_note}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":

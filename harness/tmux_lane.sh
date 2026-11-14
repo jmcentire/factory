@@ -244,7 +244,7 @@ if [ "$ACTION" != "freeze" ]; then
   exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT")
   { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
     IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4 &&
-    IFS= read -r -d '' START_REQUIRES <&4; } || exit 70
+    IFS= read -r -d '' START_REQUIRES <&4 && IFS= read -r -d '' PROTOCOL_NOTE <&4; } || exit 70
   exec 4<&-
   MEMORY_ISOLATION=${MEMORY_ISOLATION#memory:}
   if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
@@ -476,6 +476,14 @@ PY
       "$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST" >/dev/null || \
         refuse 70 "an earlier session's project files could not be accounted for ($MANIFEST)"
     done
+    # With the lane's own leftovers gone, anything at the paths a Cursor lane writes is the
+    # target project's. It is never edited or replaced, so the lane cannot run here. Say so
+    # now, before a budget is reserved or a launch recorded, not from inside the lane.
+    if [ "$AGENT" = cursor-agent ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has Cursor project configuration of its own, which is not edited or replaced: $OCCUPIED" \
+          "a Cursor lane reads its hooks and its Kindex only from those paths and cannot run in this repository; choose another agent for this lane"
+    fi
   fi
   if [ "$ACTION" = launch ]; then
     PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
@@ -703,7 +711,7 @@ PY
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
-  PROMPT_DIGEST=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
     "$REPOSITORY" "$BRIEF_MANIFEST" "$ROOT" "$D" <<'PY'
 import hashlib, json, os, pathlib, sys
@@ -755,6 +763,9 @@ if int(review) and resumable == "1":
     )
 if environment:
     protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
+# What this lane's provider needs said (harness/agents.py protocol_note), e.g. which MCP
+# server is the lane's own Kindex.
+protocol += os.environ.get("LANE_PROTOCOL_NOTE", "")
 git_dir = repository / ".git"
 if not git_dir.is_dir() or git_dir.is_symlink():
     raise SystemExit("tmux-lane: the lane repository has no .git directory to hold its brief")

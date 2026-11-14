@@ -25,6 +25,57 @@ from factory_runtime.kindex_workspace import mark_no_index
 _record = (importlib.import_module("harness.run_record") if __package__
            else importlib.import_module("run_record"))
 load, write_new = _record.load, _record.write_new
+_native = (importlib.import_module("harness.native_session") if __package__
+           else importlib.import_module("native_session"))
+
+
+def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> list[str]:
+    """The lane runtime files a candidate carries, each with why it is one.
+
+    A Cursor lane writes its hooks, its Kindex and one permission rule into its clone's
+    ``.cursor/`` and keeps them out of ordinary commits, but an author can force one in. A
+    candidate is the work, not the lane's configuration, so such a commit is not validated.
+
+    A file is the lane's when it holds the lane's own hook command or server name, or is
+    byte-for-byte what a lane's manifest recorded, or (in a run that launched a Cursor
+    lane) was added or changed relative to the run's base commit. A target that tracked
+    its own ``.cursor`` files before the run, unchanged, is never refused for them.
+    """
+
+    lanes = root / "tmux-lanes"
+    usable = lanes.is_dir() and not lanes.is_symlink()
+    manifests = sorted(lanes.glob("*-agent-home/*-project-files.json")) if usable else []
+    journals = sorted(lanes.glob("*-launch.jsonl")) if usable else []
+    cursor_lane = False
+    for journal in journals:
+        if journal.is_symlink():
+            continue
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("agent") == "cursor-agent":
+                cursor_lane = True
+    found: list[str] = []
+    for relative in _native.CURSOR_PROJECT_FILES:
+        path = candidate / relative
+        if path.is_symlink() or not path.is_file():
+            continue
+        data = path.read_bytes()
+        reason = _native.lane_file_in_candidate(relative, data, manifests)
+        if not reason and cursor_lane:
+            try:
+                base = run_host_git(Path(task["repository"]),
+                                    ["show", f"{task['resolved_commit']}:{relative}"])
+            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
+                base = None  # the base commit has no such file: the candidate added it
+            if base != data:
+                reason = ("a Cursor lane ran in this run and the file is new or changed "
+                          "since the run's base commit")
+        if reason:
+            found.append(f"{relative} ({reason})")
+    return found
 
 
 def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None:
@@ -135,6 +186,12 @@ def validate(
             max_lfs_bytes=16 * 1024**3 if lfs_objects is not None else None,
         )
         result["candidate"] = dataclasses.asdict(materialized)
+        carried = lane_project_files(root, task, candidate)
+        if carried:
+            raise ValueError(
+                "candidate commit carries a lane's own Cursor project configuration, which "
+                "is not part of the work: " + "; ".join(carried) + ". Take those paths out "
+                "of the commit and validate the new commit.")
         if require_lfs and materialized.lfs_pointers_left:
             raise ValueError(
                 f"candidate requires LFS content; {materialized.lfs_pointers_left} "

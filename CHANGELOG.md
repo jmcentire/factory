@@ -75,6 +75,12 @@ public API is still pre-1.0.
   target's own file (the lane refuses to start instead), excluded from commits and removed
   on exit, before a relaunch and before a freeze. A resumed Cursor session that reports
   nothing is not typed to.
+- For Cursor lanes: a required Signet hook evaluates the lane's `lane-kindex` server as
+  Kindex and refuses the operator's server named `kindex`; the lane's prompt names its own
+  server and says to leave the three project files alone; `tmux_lane.sh` refuses a clone
+  that already has any of them before reserving a budget or recording a launch; and
+  `validate_candidate.py` refuses a candidate commit that carries a lane's project file.
+  The generated `.cursor/cli.json` carries the empty `deny` list Cursor's schema requires.
 - Cursor lanes no longer pass `--force`, `--approve-mcps` or `--trust`. With the operator's
   configuration loaded those would approve everything the operator has configured. Cursor
   now asks its own workspace-trust and MCP-server questions in the lane's window, and what a

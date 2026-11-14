@@ -361,8 +361,65 @@ CURSOR_CLI = ".cursor/cli.json"
 BANNED_CURSOR_FLAGS = ("-p", "--print", "--output-format")
 
 
+CURSOR_PROJECT_FILES = (CURSOR_HOOKS, CURSOR_MCP, CURSOR_CLI)
+#: Text only a lane's own generated file carries: the observation hook's command, and the
+#: lane server's name. A target project's own Cursor files hold neither.
+_LANE_MARKS = {CURSOR_HOOKS: (b"native_session.py", b"--dialect"),
+               CURSOR_MCP: (b"lane-kindex",),
+               CURSOR_CLI: (b"Mcp(lane-kindex:",)}
+
+
 def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def project_collisions(workspace: pathlib.Path,
+                       relatives: Sequence[str] = CURSOR_PROJECT_FILES) -> list[str]:
+    """What in ``workspace`` already occupies the paths a lane would write, in words.
+
+    For a launcher to ask before it reserves anything: a path that exists here is the target
+    project's own file (a lane's own leftovers are cleared first, by their manifest), and a
+    link on the way is not written through. ``install_project_files`` makes the same
+    refusal for a caller that did not ask.
+    """
+
+    root = workspace.resolve()
+    found: list[str] = []
+    for relative in relatives:
+        target = root / relative
+        parent = target.parent
+        if parent.is_symlink():
+            reason = f"{parent.relative_to(root)} is a link"
+        elif target.is_symlink():
+            reason = f"{relative} is a link"
+        elif target.exists():
+            reason = f"{relative} already exists and is the target project's own file"
+        else:
+            continue
+        if reason not in found:
+            found.append(reason)
+    return found
+
+
+def lane_file_in_candidate(relative: str, data: bytes, manifests: Sequence[pathlib.Path] = ()
+                           ) -> str:
+    """Why ``data`` at ``relative`` in a candidate is a lane's own project file, or "".
+
+    By what it contains (the lane's hook command, the lane server's name), or by being
+    byte-for-byte a file some lane's manifest recorded writing.
+    """
+
+    marks = _LANE_MARKS.get(relative)
+    if marks and all(mark in data for mark in marks):
+        return "it holds a lane's own hook command or lane server"
+    digest = _sha(data)
+    for manifest in manifests:
+        try:
+            if digest in _manifest(manifest).values():
+                return f"it is the file recorded in {manifest.name}"
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def _manifest(path: pathlib.Path) -> dict[str, str]:
@@ -906,6 +963,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     hook = sub.add_parser("hook", help="append the lifecycle event on stdin to a journal")
     hook.add_argument("--journal", type=pathlib.Path, required=True)
     hook.add_argument("--dialect", choices=DIALECTS, default="claude")
+    check = sub.add_parser("check-project", help="say what in a workspace already occupies "
+                           "the Cursor project paths a lane would write; exit 70 if anything")
+    check.add_argument("--workspace", type=pathlib.Path, required=True)
     clean = sub.add_parser("clean-project", help="remove the project files a lane wrote, by "
                            "its manifest; prints any it left because they had changed")
     clean.add_argument("--manifest", type=pathlib.Path, required=True)
@@ -923,6 +983,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Cursor reads a JSON reply; the empty object changes nothing (the form proven).
             # Claude Code adds a prompt hook's output to the model's context, so it gets none.
             sys.stdout.write("{}")
+        return 0
+    if args.command == "check-project":
+        try:
+            found = project_collisions(args.workspace)
+        except OSError as error:
+            print(f"native-session: {error}", file=sys.stderr)
+            return 70
+        if found:
+            print("; ".join(found))
+            return 70
         return 0
     if args.command == "clean-project":
         try:

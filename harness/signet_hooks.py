@@ -56,6 +56,35 @@ def contract(path: pathlib.Path, expected: str) -> dict[str, Any]:
     return value
 
 
+#: Signet's rules speak of the lane's memory as ``mcp__kindex__<tool>``.
+CANONICAL_KINDEX = "kindex"
+#: A Cursor lane's own Kindex server (``agents.CursorAgent`` registers it under this name).
+#: It is named apart from ``kindex`` because a Cursor lane also sees the operator's servers,
+#: and a server of theirs called ``kindex`` is the operator's shared graph, not the lane's.
+CURSOR_LANE_KINDEX = "lane-kindex"
+
+
+class NotThisLanesKindex(ValueError):
+    """A Cursor lane called the operator's ``kindex`` server. The message is fixed text."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"This lane's Kindex is the MCP server `{CURSOR_LANE_KINDEX}`. The server "
+            f"`{CANONICAL_KINDEX}` is the operator's own and is not this lane's memory; "
+            "action blocked.")
+
+
+def _cursor_kindex(server: str) -> str:
+    """The server a Cursor MCP call is evaluated as. The lane's own Kindex is Signet's
+    ``kindex``; the operator's server of that name is refused rather than allowed to stand
+    in for it, which would both satisfy the lane's Kindex prerequisite and open a channel
+    to memory shared across lanes."""
+
+    if server == CANONICAL_KINDEX:
+        raise NotThisLanesKindex()
+    return CANONICAL_KINDEX if server == CURSOR_LANE_KINDEX else server
+
+
 def normalize(client: str, payload: Any, fixed: dict[str, Any]) -> dict[str, Any]:
     if client not in CLIENTS or not isinstance(payload, dict):
         raise ValueError("unsupported hook client or payload")
@@ -74,13 +103,19 @@ def normalize(client: str, payload: Any, fixed: dict[str, Any]) -> dict[str, Any
         prefix = f"mcp__{server}__"
         if name.startswith("mcp__") and not name.startswith(prefix):
             raise ValueError("MCP tool and server identities disagree")
-        name = name if name.startswith(prefix) else prefix + name
+        tool = name[len(prefix):] if name.startswith(prefix) else name
+        name = f"mcp__{_cursor_kindex(server)}__{tool}"
         if isinstance(parameters, str):
             parameters = json.loads(parameters)
     elif event != ("preToolUse" if client == "cursor-agent" else "PreToolUse"):
         raise ValueError("unsupported tool hook event")
     if not isinstance(name, str) or not name or not isinstance(parameters, dict):
         raise ValueError("hook tool name/input is missing")
+    if client == "cursor-agent" and event == "preToolUse" and name.startswith("mcp__"):
+        # The same rule when Cursor presents an MCP call to the general tool hook.
+        server, separator, tool = name[len("mcp__"):].partition("__")
+        if separator and tool:
+            name = f"mcp__{_cursor_kindex(server)}__{tool}"
     # Cursor's documented Shell is the same operation as Signet's canonical Bash.
     if client == "cursor-agent" and name == "Shell":
         name = "Bash"
@@ -312,6 +347,9 @@ def main(argv: list[str] | None = None) -> int:
                                    args.custody_socket, args.custody_digest)
         else:
             output = evaluate(args.client, json.loads(raw), fixed)
+    except NotThisLanesKindex as refusal:
+        # Fixed text naming the lane's own server; nothing from the input is echoed.
+        output = denial(args.client, str(refusal))
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         # Do not echo input, evaluator stderr, credential values or arbitrary exception text.
         output = denial(args.client, "Factory Signet hook unavailable or invalid; action blocked.")

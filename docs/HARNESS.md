@@ -189,10 +189,21 @@ a stub shaped by that evidence.
   Cursor session is not supported yet.
 - **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
   and Enter the way Claude Code does. If it does not, messages stay `submitted`.
-- **A forced commit is not caught.** `.git/info/exclude` keeps the lane's project files out
-  of an ordinary `git add`, and a resident lane is judged by its committed SHA, not by a
-  freeze. An author that runs `git add -f .cursor/...` would commit them, and nothing in
-  the harness checks a candidate commit for those paths yet.
+- **A forced commit is refused at validation.** `.git/info/exclude` keeps the lane's project
+  files out of an ordinary `git add`, and the lane's prompt says to leave them alone, but
+  an author can still force one into a commit. `validate_candidate.py` therefore refuses a
+  candidate that carries one (`status: validation-failed`, `exit_code: 70` in its retained
+  result) before running any check: a file that holds the lane's own hook command or
+  server name, or is byte-for-byte what a lane's manifest recorded, or, in a run that
+  launched a Cursor lane, is new or changed since the run's base commit. A target that
+  tracked its own `.cursor` files before the run, unchanged, is never refused for them.
+- **Signet sees the lane's Kindex as Kindex.** A required Signet hook evaluates a call to
+  `lane-kindex` as `mcp__kindex__<tool>`, so the lane's own memory satisfies rules written
+  about Kindex. A call to the operator's server named `kindex` is refused under that hook
+  with a message naming the lane's server: it must not stand in for the lane's memory.
+- **The refusal for a target's own files comes first.** For a Cursor lane `tmux_lane.sh`
+  checks the three paths (after clearing the lane's own leftovers) before any budget is
+  reserved or launch recorded, and refuses there with the path that is occupied.
 - **Coordinator seats are not converted, for a reason.** A Validator or Orchestrator works in
   the operator's own repository, not a lane's clone. Writing `.cursor/` project files there
   would be writing the operator's files, which this adapter never does. A Cursor coordinator
