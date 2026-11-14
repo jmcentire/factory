@@ -94,16 +94,17 @@ public API is still pre-1.0.
 - Muse lanes run Muse Code's own interactive session on the same terminal host, with the
   operator's HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no
   replaced `XDG_CONFIG_HOME`, no `--yolo` (except for `FACTORY_LANE_SANDBOX=off`), no
-  `--disable-request-user-input`. The lane's first message is Muse's launch argument, later
-  ones are typed; lane hooks are the clone's `.muse/hooks.json` (same custody as Cursor's
+  `--disable-request-user-input`. The lane's first message is Muse's launch argument; lane hooks are the clone's `.muse/hooks.json` (same custody as Cursor's
   project files, including the launch and candidate refusals); the lane's Kindex is the
   per-run server `lane-kindex`; the sign-in check is `muse usage` and no longer opens the
   sign-in file. The hand-over of the first message is recorded durably before Muse is
-  spawned and never repeated for a slot. A later message is held until Muse's next stop
-  report, which narrows the chance of typing into a dialog but does not show the session is
-  idle; unattended follow-up messages to a Muse lane are not established as safe. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
+  spawned and never repeated for a slot. Nothing is typed into a Muse session after
+  launch: a later message is kept `queued` with the reason and left for a person to enter,
+  because the tester showed a message typed after Muse's stop report being taken into a
+  continued earlier turn, and Muse reports no safe moment. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
   accepted, and nothing about a signed-in model run is established (`docs/HARNESS.md`).
-  Narrower than before, deliberately: a Muse lane is no longer resumable by the Factory, so
+  Narrower than before, deliberately: reviews, answers and other later messages do not
+  reach a Muse lane unattended; a Muse lane is no longer resumable by the Factory, so
   wrap-up and progress-review pauses are not offered for it and a lane message does not
   restart an ended Muse session; a Muse lane launched in print mode by an earlier version
   is not resumed in print mode (`--replace-session`).

@@ -1106,7 +1106,7 @@ def run_lane(
                     journal_offset=native_plan.journal_offset,
                     launcher=native_plan.launcher.record(), note=note,
                     diagnostic=startup_output, launched=native_plan.launched,
-                    between_turns=chosen is not None and chosen.type_between_turns)
+                    withhold_followups=chosen is not None and chosen.withhold_followups)
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

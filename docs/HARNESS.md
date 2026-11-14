@@ -257,7 +257,7 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
 - **First message at launch.** Muse reports a session's start only when its first prompt is
   submitted, so the lane's first message is Muse's launch argument (after `--`), with its
   mark. Its delivery is `submitted` from the start (`via: launch-argument`) and `observed`
-  when Muse's prompt report carries the mark. Later messages are typed.
+  when Muse's prompt report carries the mark.
 - **Handed over once.** A launch argument reaches Muse the moment it is spawned, before any
   session state can exist. So the wrapper first writes `<slot>-launch-intent.json`,
   durably, and only then spawns Muse; the record is never cleared. If one already exists
@@ -266,20 +266,20 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   start's session did with the message is unknown, and unknown is not permission to give
   it again. Start a replacement lane, or remove the record knowing the message was not
   taken.
-- **Follow-up typing is held, not proven safe.** A start report does not show that what is
-  on screen later is the chat input: during a turn it can be a permission or question
-  dialog, and typed keys would answer it. Muse was not observed to report such a dialog.
-  So a later message is typed only while Muse's last report is a stop; one asked for after
-  a prompt report is accepted, shown as `queued` with `held`, and typed at the next stop
-  report. The Factory approves nothing and changes no approval setting to get past a
-  dialog. This narrows a risk and establishes nothing about readiness. A stop report is
-  sent before Muse decides whether to stop: another Stop hook, the operator's own
-  included, may ask it to continue, and a turn is then running again with no new prompt
-  report. So a stop report does not show that no turn is running or that the chat input is
-  on screen, and unattended follow-up messages to a Muse lane are not established as safe.
-  Open, and not answerable on the echo provider alone: what Muse reports when a Stop hook
-  continues it, whether any report marks the point after which it will not continue, and
-  any report of a tool or question dialog.
+- **Later messages are not typed.** After the launch argument the Factory types nothing
+  into a Muse session. A later message to the lane is accepted, kept `queued` with `held`
+  giving the reason, and never typed automatically; a person can enter it in the lane's
+  window. The reason is the tester's finding at `ef8fdd7`
+  (`/tmp/factory-muse-ef/RESULT.md`): with an operator Stop hook still deciding (it slept
+  12 seconds, then asked Muse to continue), a follow-up typed 1.2 seconds after the lane's
+  own stop report was taken into the continued earlier turn. Muse reported no prompt for
+  it, the continuation's stop carried the earlier turn's id, and the message stayed
+  `submitted`. A stop report comes before Muse decides whether to stop, so it is not a safe
+  moment, and no other report marks one. Until Muse is shown to report the point after
+  which it will not continue, or to offer a delivery route of its own (`muse
+  session-message send` refused an ordinary process: `sender_unverified`), a review, an
+  answer or a wrap-up notice does not reach a Muse lane unattended. The Factory approves
+  nothing and changes no hook or approval setting to get around this.
 - **Hooks beside the operator's.** The lane's observation hooks are the project file
   `.muse/hooks.json` in the lane's own clone, which Muse runs in addition to the operator's
   hooks. It has the custody a Cursor lane's project files have: never written over a
@@ -293,8 +293,8 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   refuses literal `env` values in that form.
 - **Reports.** `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`, in Claude Code's
   names. A prompt's report and its turn's stop report share a turn id, so that stop is
-  recorded on the message as `response_stop`. (Muse itself queues a message typed while a
-  turn runs and reports it when the turn ends; the wrapper does not rely on that.)
+  recorded on the message as `response_stop`; when a Stop hook continues the turn, the
+  continuation's stop carries the same turn id and replaces it.
 - **Permissions.** Nothing is imposed: no `--yolo`, no `--disable-request-user-input`.
   `FACTORY_LANE_SANDBOX=off` is the one configuration that adds `--yolo`.
 - **Sign-in check.** `muse usage`, Muse's own account command. The sign-in file is not

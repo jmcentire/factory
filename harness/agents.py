@@ -114,11 +114,10 @@ class Harness:
     # How this provider's interactive program reports its lifecycle to the lane wrapper
     # (native_session.DIALECTS), or "" when it is not hosted as a native session.
     dialect: str = ""
-    # A later message is typed into this program's session only while its last report is a
-    # stop report. Set where the program was not observed to report that it is asking the
-    # operator something. It narrows the chance of typing into a dialog; it does not show the
-    # session is idle, because a stop report precedes the decision to stop.
-    type_between_turns: bool = False
+    # Nothing is typed into this program's session after its launch: a later message is kept
+    # queued and left for a person to enter. Set where the program has no observed report of
+    # a point at which typed input is safe.
+    withhold_followups: bool = False
     # What the provider's own program asks the operator when a lane starts, and what the
     # Factory does and does not approve for them. Printed and recorded at launch, so a
     # question waiting in a lane's window is expected rather than discovered.
@@ -703,13 +702,15 @@ _BLOCKERS = {
             "session reports nothing until a prompt is typed, and Muse refuses a prompt "
             "beside `resume`, so no lane command restarts an ended session and wrap-up and "
             "review pauses are not offered. Third, no report of Muse asking the operator a "
-            "question was observed, so a lane waiting on one is not shown as such. A later "
-            "message is held until Muse's next stop report, which narrows the chance of "
-            "typing into a dialog and proves nothing: a stop report comes before Muse "
-            "decides whether to continue (another Stop hook, the operator's included, may "
-            "ask it to), so it does not show the session is idle or its chat input is on "
-            "screen. Unattended follow-up messages to a Muse lane are not established as "
-            "safe.",
+            "question was observed, so a lane waiting on one is not shown as such. Fourth, "
+            "and the largest: later messages are not typed into a Muse session. The "
+            "independent tester showed (ef8fdd7, /tmp/factory-muse-ef/RESULT.md) that a "
+            "message typed after Muse's stop report, while an operator Stop hook was still "
+            "deciding, was taken into the continued earlier turn with no prompt report of "
+            "its own. Muse reports no point at which typed input is safe, so a later "
+            "message is kept `queued` with the reason and left for a person to enter in "
+            "the lane's window: a review, an answer or a wrap-up notice does not reach a "
+            "Muse lane unattended.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
     # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
@@ -773,7 +774,7 @@ HARNESSES: Mapping[str, Harness] = {
     "muse": Muse(
         "muse", "muse", (), False, api_env=("META_API_KEY",),
         memory="beside-operator", dialect="muse", native_blocker=_BLOCKERS["muse"],
-        type_between_turns=True,
+        withhold_followups=True,
         protocol_note=(
             f"- Your Kindex is the MCP server named {LANE_SERVER}. It is this lane's own. "
             "Do not call the\n  server named kindex: it is not this lane's memory. The file "
@@ -783,8 +784,9 @@ HARNESSES: Mapping[str, Harness] = {
             "Muse asks its own workspace-trust question in the lane's window for a clone it "
             "has not been told to trust, and the Factory does not answer it or pass "
             "--trust-workspace. The lane's first message is given to Muse at launch and is "
-            "submitted when that question is answered. Until the session reports starting "
-            "it is `starting` and nothing is typed to it.")),
+            "submitted when that question is answered. Nothing is typed into a Muse "
+            "session after that: a later message to the lane is kept queued, and you enter "
+            "it in the lane's window yourself.")),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
