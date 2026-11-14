@@ -433,6 +433,10 @@ def _seats(monkeypatch, on_wait=lambda role: None):
     calls = []
 
     def tmux(argv, **kwargs):
+        # Process custody observation is not a native-provider invocation.
+        # This isolated fixture owns no running prior workers.
+        if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
         assert argv[0] == "tmux", "startup must not probe or execute native agents"
         calls.append(argv)
         if "wait-for" in argv:
