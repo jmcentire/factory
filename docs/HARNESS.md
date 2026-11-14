@@ -358,22 +358,26 @@ unattended (Muse, Antigravity) or hold a restarted session to its conversation
 - It works for an unprotected lane: one that requires no Signet guard, no author custody
   and no kernel boundary. That is the positive capability, and the only one.
 - A protected lane is refused, as set out next. Nothing here is a step toward a guard.
-- No turn on a real subscription model has been run through it for either provider. What
-  has been run is listed at the end of this section; everything beyond that list is
-  unproven, including that a real model's turn, tool call or approval request behaves as
-  the stand-ins do.
+- On a real subscription model, exactly one thing has been run: a single text-only turn
+  on Antigravity, by the independent tester. No real Muse turn, and no tool call or
+  approval request on either provider. What has been run is listed at the end of this
+  section; everything beyond that list is unproven, including that a real model's tool
+  call or approval request behaves as the stand-ins do.
 
 **This is transport, not a guard.** It is groundwork. A protected launch, or a message
 that would restart an ended session under protection, is refused with exit 77 before the
-provider's program is run at all (its sign-in check included), before any record and
-before any process. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
+provider's program is run at all (its sign-in check included) and before any prompt is
+delivered. A refusal does leave its own records: the launcher's refusal event; for
+`lane_agent.py run`, a line in the lane log and an exit row carrying 77; for a message,
+the planned message, which stays planned and undelivered. In the cases tried it left no
+launch journal and no launch hand-over record. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
 `FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set to anything but empty or
 `0`; a Signet contract or digest, an author-custody config or digest, or a boundary
 contract or digest named (by variable or by the launcher's own options); or a boundary
 record handed to the lane wrapper. The kernel boundary is in that list because it has not
 been qualified around a host program and the provider's server under it. The refusal is made by `protocol_host` itself, which every hosted
 start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
-(exit 77, nothing recorded), `lane_agent.py preflight` (exit 77, the provider's account
+(exit 77, the provider not started and no hand-over recorded), `lane_agent.py preflight` (exit 77, the provider's account
 command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
 (what an existing grant, rule or permissive mode already allows is never presented), both
 skip a hook that fails or times out, and Muse 1.4.20 lists a per-connection hook method in
@@ -435,8 +439,12 @@ for either, and none is claimed.
   `tmux_lane_message.sh`: launch, a later message, the done line, a restart on the same
   session, an unknown and a wrong session refused with no prompt and no `session/load`,
   stray and unnamed frames settling nothing, a damaged command-id record refused, model and
-  effort confirmed or refused, and every protected launch and restart refused with no run
-  of the provider's program.
+  effort confirmed or refused, and the protected starts that were tried refused with no
+  run of the provider's program. Those were: a launch under each of the three
+  `FACTORY_REQUIRE_*` flags, under a boundary contract and digest named by variable, and
+  under each of the launcher's three option pairs and all three together; a message
+  restart under the Signet flag; and the direct entries under a flag or a named binding.
+  Other combinations were not tried.
   *Muse Code 1.4.20's own server on its echo provider* (no model, no sign-in used, a
   throwaway HOME), on an unmanaged lane started with `lane_agent.py run`: start, a later
   message to the running lane, a second one answered `busy`, host stop, restart on the
@@ -444,13 +452,19 @@ for either, and none is claimed.
   reply in the lane log, and an unknown session refused on Muse's own error. The adapter's
   author ran this, and the independent tester ran the same lifecycle separately and it
   passed.
-- **Not run, and so not claimed.** Any turn on a real subscription model, on either
-  provider. Any tool call, and any approval request answered in the window against a real
-  server. Antigravity's real server with a prompt: what it sends before a prompt's answer,
-  and whether the model name the launcher records matches a session option, are taken from
-  the protocol and from recorded handshakes, not from a turn. A later message arriving
-  while a real Muse turn is running (echo turns are too short to overlap). The lane's
-  Kindex reaching a real session. A hosted lane inside the kernel boundary.
+  *Antigravity's real server on the operator's subscription,* by the independent tester
+  only (2026-11-14): one text-only turn, whose reply was exactly the text asked for and
+  which ended with the stop reason `end_turn`. No tool was called and no approval was
+  requested in it, so it shows a text turn through the transport and nothing about tools
+  or a guard.
+- **Not run, and so not claimed.** Any turn on a real Muse model. Any tool call, and any
+  approval request answered in the window against a real server, on either provider. For
+  Antigravity, anything beyond that one text-only turn: what its server sends before a
+  prompt's answer in a turn that uses tools, and whether the model name the public
+  launcher records matches a session option, are taken from the protocol and from recorded
+  handshakes. A later message arriving while a real Muse turn is running (echo turns are
+  too short to overlap). The lane's Kindex reaching a real session. A hosted lane inside
+  the kernel boundary. Any proof about a Signet guard.
 
 ### Earlier terminal route for Muse lanes (history; lanes no longer use it)
 
