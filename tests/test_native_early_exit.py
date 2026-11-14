@@ -1,4 +1,4 @@
-"""A rejected native CLI must retain its own exit and diagnostic before registration."""
+"""A rejected native CLI must retain its own exit and diagnostic before SessionStart."""
 
 import json
 import subprocess
@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.mark.parametrize("code", [64, 78])
-def test_native_rejection_before_registration_is_not_reclassified_as_wrapper_failure(
+def test_native_rejection_before_session_start_is_not_reclassified_as_wrapper_failure(
     tmp_path, code
 ):
     harness = Path(__file__).resolve().parents[1] / "harness"
@@ -21,28 +21,22 @@ def test_native_rejection_before_registration_is_not_reclassified_as_wrapper_fai
         'print("native configuration rejected",file=sys.stderr,flush=True)\n'
         f"raise SystemExit({code})\n"
     )
+    executable = tmp_path / "fake-claude"
+    executable.write_text(f"#!{sys.executable}\n" + native)
+    executable.chmod(0o755)
     wrapper = r"""
 import pathlib, subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import lane_agent
 root = pathlib.Path(sys.argv[2])
-original = subprocess.Popen
-def already_finished(*args, **kwargs):
-    subprocess.Popen = original
-    child = original(*args, **kwargs)
-    child.wait(timeout=5)
-    return child
-# Force the actual child to have exited before process identity registration. This
-# reproduces the short-lived CLI race deterministically, without faking its exit.
-subprocess.Popen = already_finished
 raise SystemExit(lane_agent.run_lane(
-    [sys.executable, '-u', '-c', sys.argv[3]], slot='validator',
+    [sys.argv[3]], slot='validator',
     log=root/'validator-lane.log', exits=root/'validator-exits.jsonl',
     prompt=root/'prompt', session_agent='claude', session_file=root/'session',
     persistent=True, run_root=root))
 """
     result = subprocess.run(
-        [sys.executable, "-c", wrapper, str(harness), str(tmp_path), native],
+        [sys.executable, "-c", wrapper, str(harness), str(tmp_path), str(executable)],
         capture_output=True,
         text=True,
         timeout=15,
