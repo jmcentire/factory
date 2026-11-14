@@ -139,6 +139,16 @@ public API is still pre-1.0.
   other. Programs the registry does not report as resumable are refused (exit 70) with the
   message left planned. A message a busy session could not take is now said to be not
   given, rather than "do not resend".
+- A held message to a Muse or Antigravity lane settles when a person enters it. These
+  lanes take no later message automatically: one is recorded `queued` and `held` and the
+  operator is told to enter it in the lane's window. Until now doing so changed nothing:
+  the message stayed held and every later message was answered `busy`, for good. Now,
+  when the session's own prompt report is exactly the held message (its text, or its text
+  followed by its mark), it becomes `observed` (`via: operator-entered`), its receipt is
+  recorded, and the next message is accepted. Other text, or other text carrying the
+  mark, settles nothing. Nothing is typed automatically and no claim of unattended
+  delivery is added. The message command now names the file holding the exact text to
+  enter. Run against Muse's echo provider; not against Antigravity.
 - An ended `cursor-agent` session is restarted by a lane message, with Cursor's own
   `--resume=<id>` and the message as its launch argument (`agent ... -- <message>`),
   because a resumed Cursor session that is given nothing reports nothing. The hand-over is

@@ -666,7 +666,11 @@ _BLOCKERS = {
            "they say when a Stop hook continues the turn was not observed, so no report is "
            "taken as a safe moment; a later message is kept `queued` with the reason and "
            "left for a person to enter, and a review, an answer or a wrap-up notice does "
-           "not reach an Antigravity lane unattended. Third, no lane command restarts an "
+           "not reach an Antigravity lane unattended. When a person enters exactly that "
+           "message and Antigravity's own prompt report says so, it is recorded as received "
+           "and later messages are accepted (the settlement is the same code as Muse's and "
+           "was run against Muse's echo provider only; against Antigravity only its report's "
+           "mapping was checked). Third, no lane command restarts an "
            "ended session, so wrap-up and review pauses are not offered. Fourth, there is "
            "no Signet guard and a launch that requires one is refused: a user shell action "
            "typed in the session ran with no hook called. This user-shell route did not "
@@ -742,7 +746,11 @@ _BLOCKERS = {
             "its own. Muse reports no point at which typed input is safe, so a later "
             "message is kept `queued` with the reason and left for a person to enter in "
             "the lane's window: a review, an answer or a wrap-up notice does not reach a "
-            "Muse lane unattended.",
+            "Muse lane unattended. When a person enters exactly that message and Muse's own "
+            "prompt report says so, it is recorded as received and later messages are "
+            "accepted (run against Muse Code 1.4.20 with its echo provider, 2026-11-14: "
+            "other text left it held; the exact text, pasted, settled it; the next message "
+            "was then accepted).",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
     # The registry entry `codex` is `codex exec`. The only lane agent still on it is
@@ -867,7 +875,8 @@ HARNESSES: Mapping[str, Harness] = {
             "clone it has not been told to trust, and the Factory does not answer it. The "
             "lane's first message is given to Antigravity at launch. Nothing is typed into "
             "an Antigravity session after that: a later message to the lane is kept queued, "
-            "and you enter it in the lane's window yourself.")),
+            "and you enter it in the lane's window yourself, exactly as its file gives it; "
+            "the lane records it as received when Antigravity reports that text.")),
     # Not resumable by the Factory yet, for the reason its blocker gives. Muse's own resume is
     # untouched: `turn(resume=<id>)` builds `resume <id>`, the same session and never a new one.
     "muse": Muse(
@@ -885,7 +894,8 @@ HARNESSES: Mapping[str, Harness] = {
             "--trust-workspace. The lane's first message is given to Muse at launch and is "
             "submitted when that question is answered. Nothing is typed into a Muse "
             "session after that: a later message to the lane is kept queued, and you enter "
-            "it in the lane's window yourself.")),
+            "it in the lane's window yourself, exactly as its file gives it; the lane "
+            "records it as received when Muse reports that text.")),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),

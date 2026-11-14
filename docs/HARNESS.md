@@ -342,6 +342,26 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   session-message send` refused an ordinary process: `sender_unverified`), a review, an
   answer or a wrap-up notice does not reach a Muse lane unattended. The Factory approves
   nothing and changes no hook or approval setting to get around this.
+- **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
+  answers a held message with exit 75, says it was not typed, and names the file that
+  holds its exact text (`<run>/dialogue/<message id>.txt`). The operator enters that text
+  in the lane's window when they judge the session ready. Nothing is typed for them and no
+  moment is chosen for them. When the session's own prompt report is exactly that message
+  (its text, or its text followed by its mark `[factory-message:<mark>]`), the message
+  becomes `observed` with `via: operator-entered`, its receipt goes into the dialogue
+  journal, `persistent_lane.py status` shows it, and the next message to the lane is
+  accepted (and held in its turn). The message command is not the way to look: once a
+  message is received, sending the same words again plans a new message. Until then a further message is answered `busy` and
+  names the held one. Other text the operator enters is theirs: it is counted as foreign
+  input and settles nothing, and so does other text that merely carries the mark.
+  "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
+  Run against Muse Code 1.4.20 with its echo provider (no account, no model), through the
+  lane wrapper, 2026-11-14: other text left the message held; the exact two-line text,
+  pasted, settled it (`body`); the next message was then accepted and settled when
+  entered with its mark (`exact`); other text carrying a mark settled nothing. Before this
+  change the same steps left the first message held for good and every later one `busy`.
+  Not run: the message command itself against a Muse lane (the launcher needs Muse's
+  account sign-in), or a signed-in model.
 - **Hooks beside the operator's.** The lane's observation hooks are the project file
   `.muse/hooks.json` in the lane's own clone, which Muse runs in addition to the operator's
   hooks. It has the custody a Cursor lane's project files have: never written over a
@@ -426,6 +446,22 @@ and they are not the same thing:
   by a Stop hook, which is the case that matters (it is what swallowed a typed message in
   Muse). A later message is kept `queued` with the reason and left for a person to enter:
   a review, an answer or a wrap-up notice does not reach an Antigravity lane unattended.
+- **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
+  answers a held message with exit 75, says it was not typed, and names the file that
+  holds its exact text (`<run>/dialogue/<message id>.txt`). The operator enters that text
+  in the lane's window when they judge the session ready. Nothing is typed for them and no
+  moment is chosen for them. When the session's own prompt report is exactly that message
+  (its text, or its text followed by its mark `[factory-message:<mark>]`), the message
+  becomes `observed` with `via: operator-entered`, its receipt goes into the dialogue
+  journal, `persistent_lane.py status` shows it, and the next message to the lane is
+  accepted (and held in its turn). The message command is not the way to look: once a
+  message is received, sending the same words again plans a new message. Until then a further message is answered `busy` and
+  names the held one. Other text the operator enters is theirs: it is counted as foreign
+  input and settles nothing, and so does other text that merely carries the mark.
+  "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
+  For Antigravity this is the same code as for Muse and was not run against Antigravity:
+  only the mapping of its prompt report (`PreInvocation`, `lastUserInput`) to the text
+  that is compared was checked.
 - **No completion line.** In the actual executions the stop report carried no model text
   under any field, so a lane's done line is not seen from its reports.
 - **Permissions.** Nothing is imposed. `FACTORY_LANE_SANDBOX=off` is the one configuration

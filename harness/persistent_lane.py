@@ -857,7 +857,13 @@ def run_terminal(
     which typed input is safe (Muse Code). Then this wrapper types nothing into the session
     at all: its first message went in as the launch argument, and a later message is
     accepted, kept ``queued`` with ``held`` saying why, and never typed. A person can still
-    enter it in the session's own window.
+    enter it in the session's own window, and that is how it is delivered: when the
+    session's own prompt report is exactly the held message (its text, or its text with its
+    mark after it), the message becomes ``observed`` (``via: operator-entered``), its
+    receipt is written to the dialogue journal, and the next message is accepted. A report
+    of anything else, including other text that carries the mark, is the operator's own
+    input and settles nothing. Exactness is that of ``native_session.text_digest``: line
+    endings and whitespace at the two ends are not compared, everything else is.
 
     Why nothing short of that. A start report does not show that what is on screen later is
     the chat input. A stop report does not either: it is sent before the program decides
@@ -1019,6 +1025,14 @@ def run_terminal(
     typing: list | None = None
     digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
     bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
+    for identifier, record in deliveries.items():
+        # A held message carried over from an earlier wrapper of this conversation is still
+        # recognised when a person enters it.
+        if (record.get("state") == "queued" and record.get("held") and identifier in waiting
+                and isinstance(record.get("token"), str)):
+            bodies[identifier] = native_session.text_digest(waiting[identifier])
+            digests[identifier] = native_session.text_digest(
+                native_session.marked(waiting[identifier], record["token"]))
     if handed is not None and deliveries[handed].get("via") == "launch-argument":
         digests[handed] = launched["typed_sha256"]
         bodies[handed] = launched["body_sha256"]
@@ -1157,8 +1171,29 @@ def run_terminal(
                            and record.get("via") == "provider-queue"
                            and record.get("token") in tokens
                            and reported and reported == record.get("typed_sha256")]
+            entered = False
+            if not matched and withhold_followups:
+                # A held message is never typed here. A person may enter it in the session's
+                # own window, and then the session's own report is the receipt: the reported
+                # prompt must be exactly the message ("body"), or exactly the message with
+                # its mark after it ("exact"). A prompt that merely carries the mark around
+                # other text is not the message and settles nothing.
+                held = [key for key, record in deliveries.items()
+                        if record.get("state") == "queued" and record.get("held")]
+                matched = [(key, "exact") for key in held
+                           if reported and reported == digests.get(key)]
+                if not matched:
+                    matched = [(key, "body") for key in held
+                               if reported and reported == bodies.get(key)]
+                entered = bool(matched)
             if len(matched) == 1:
                 identifier, how = matched[0]
+                if entered:
+                    # No longer waiting, no longer held, and never to be typed by anyone.
+                    waiting.pop(identifier, None)
+                    deliveries[identifier] = {
+                        name: value for name, value in deliveries[identifier].items()
+                        if name != "held"}
                 deliveries[identifier] = dict(
                     deliveries[identifier],
                     state="observed",
@@ -1172,6 +1207,8 @@ def run_terminal(
                     # Settled late: its queue command's outcome had been left unknown.
                     **({"settled_from": "unknown"}
                        if deliveries[identifier].get("state") == "unknown" else {}),
+                    # Entered by a person in the session's own window, not by this wrapper.
+                    **({"via": "operator-entered", "settled_from": "held"} if entered else {}),
                 )
                 state["current_message_id"] = identifier
                 if identifier != "initial" and slot not in {"validator", "orchestrator"}:
@@ -1246,6 +1283,15 @@ def run_terminal(
             },
         )
 
+    def hold(identifier, text, record):
+        """What recognises a held message when a person enters it: its exact text, and
+        that text followed by this message's own mark. Nothing here types anything."""
+
+        marker = token_for(identifier)
+        bodies[identifier] = native_session.text_digest(text)
+        digests[identifier] = native_session.text_digest(native_session.marked(text, marker))
+        record.update({"token": marker, "enter_sha256": bodies[identifier]})
+
     def accept(row):
         identifier = row["message_id"]
         reopen(row)
@@ -1255,7 +1301,11 @@ def run_terminal(
             result["held"] = ("not typed, and it will not be typed automatically: this "
                               "program reports no point at which typed input is safe (a "
                               "stop report comes before it decides whether to continue). "
-                              "Enter the message in the session's own window to deliver it")
+                              "Enter the message in the session's own window to deliver it: "
+                              "when the session itself reports a prompt that is exactly "
+                              "this message, with or without its mark after it, the "
+                              "message is recorded as received")
+            hold(identifier, row["text"], result)
         deliveries[identifier] = result
         save()  # durable before any byte is typed
         return result
@@ -1359,12 +1409,15 @@ def run_terminal(
             return {"state": "busy", "message_id": identifier,
                     "reason": "the session is asking the operator a question on screen"}
         if typing is not None or waiting or outstanding():
-            held = withhold_followups and any(
-                record.get("held") for record in deliveries.values())
+            held = sorted(key for key, record in deliveries.items()
+                          if record.get("held")) if withhold_followups else []
             return {"state": "busy", "message_id": identifier,
                     "reason": ("an earlier message is held for a person to enter: this "
-                               "program takes no later message automatically"
-                               if held else "an earlier message is not yet accounted for")}
+                               "program takes no later message automatically. Once the "
+                               "session reports exactly that message, later ones are "
+                               "accepted"
+                               if held else "an earlier message is not yet accounted for"),
+                    **({"held_message_ids": held} if held else {})}
         return accept(row)
 
     with tempfile.TemporaryDirectory(prefix="factory-live-", dir="/tmp") as directory:
