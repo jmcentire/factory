@@ -116,7 +116,8 @@ class Harness:
     # question waiting in a lane's window is expected rather than discovered.
     start_requires: str = ""
     # Why this provider's lanes are not yet its own interactive program with the operator's
-    # configuration intact; "" when they are. Stated where the registry is read, so the
+    # configuration intact, or are but have not been accepted for unattended work; "" only
+    # when neither is open. Stated where the registry is read, so the
     # limit is a recorded blocker and never a silent difference.
     native_blocker: str = ""
 
@@ -661,6 +662,17 @@ _BLOCKERS = {
            "servers and a workspace may list plugins in .agents/plugins.json. Not "
            "established: that a project .agents/hooks.json and a workspace plugin load "
            "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
+    # The lane is Cursor's own interactive agent with the operator's configuration. What is
+    # open is acceptance, not conversion.
+    "cursor-agent": "Cursor: hosted as its own interactive agent from an interface the "
+                    "independent tester proved (2026-11-13), but this adapter has never been "
+                    "run against Cursor and is not accepted. Open: that its terminal takes "
+                    "the typed message as Claude Code does; that the project permission "
+                    "rule and the lane server's approval behave as documented; unattended "
+                    "resume (no lane command resumes, and a resumed session reported nothing "
+                    "until prompted); a target that already has .cursor/hooks.json, mcp.json "
+                    "or cli.json is refused; an author can still force-add the lane's "
+                    "project files to a commit, which nothing checks.",
     "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
             "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
             "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
@@ -731,9 +743,11 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
+    # Not resumable from here yet: no lane command restarts a Cursor session with
+    # --resume=<id>, and a resumed session reported nothing until it was given a prompt.
     "cursor-agent": CursorAgent(
-        "cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
-        memory="beside-operator", dialect="cursor",
+        "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
+        memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
         start_requires=(
             "Cursor asks its own questions in the lane's window and the Factory answers none "
             "of them: whether to trust the workspace, and whether to approve the lane's MCP "

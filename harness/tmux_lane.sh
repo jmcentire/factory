@@ -1232,7 +1232,7 @@ PY
   if [ "$MEMORY_ISOLATION" = beside-operator ]; then
     echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
   fi
-  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
+  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: open for this provider: $NATIVE_BLOCKER"
   [ -z "$START_REQUIRES" ] || echo "tmux-lane: this start asks you: $START_REQUIRES"
   case "$AGENT" in claude|claude-ollama)
     if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then

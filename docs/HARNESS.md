@@ -188,6 +188,10 @@ a stub shaped by that evidence.
   Cursor session is not supported yet.
 - **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
   and Enter the way Claude Code does. If it does not, messages stay `submitted`.
+- **A forced commit is not caught.** `.git/info/exclude` keeps the lane's project files out
+  of an ordinary `git add`, and a resident lane is judged by its committed SHA, not by a
+  freeze. An author that runs `git add -f .cursor/...` would commit them, and nothing in
+  the harness checks a candidate commit for those paths yet.
 - **Coordinator seats are not converted, for a reason.** A Validator or Orchestrator works in
   the operator's own repository, not a lane's clone. Writing `.cursor/` project files there
   would be writing the operator's files, which this adapter never does. A Cursor coordinator
@@ -214,8 +218,11 @@ operator's to weigh.
 Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
 still run `codex exec`. Antigravity, Muse and Prime lanes still start in print mode with a
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
-agent's own name: it is empty only for `claude`, `claude-ollama`, `cursor-agent` and
-`codex-interactive`, and `python harness/agents.py describe --agent <lane agent>` prints it. They are not converted
+agent's own name: it is empty only for `claude`, `claude-ollama` and `codex-interactive`,
+and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`
+it says what is open against an adapter that is converted but not accepted, and the
+registry reports Cursor as not resumable by the Factory, so wrap-up and progress-review
+pauses, which continue a session, are not offered for it. They are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:
 
 | Provider | Established, and from where | Not established |
