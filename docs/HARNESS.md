@@ -138,8 +138,21 @@ A `cursor-agent` lane runs `agent --workspace <clone>` interactively on the same
 host, never `-p`. The operator's HOME, `~/.cursor`, sign-in, rules, hooks, MCP servers and
 permission settings are the lane's too, untouched and all still in force.
 The interface was proven against the interactive program by the independent tester on
-2026-11-13 (cursor-agent 2026.11.05 and 2026.11.13); this adapter has been run only against
-a stub shaped by that evidence.
+2026-11-13 (cursor-agent 2026.11.05 and 2026.11.13), and the tester then ran this adapter
+against real Cursor 2026.11.13 on the operator's subscription, with no API key and no
+blanket approval:
+
+- At `aa8870b`: a lane started by `tmux_lane.sh launch --agent cursor-agent` took its first
+  prompt, and a second message sent by `tmux_lane_message.sh` was reported `observed` with
+  matching text, in the same session. Cursor accepted the generated permission file and
+  listed `lane-kindex` ready beside the operator's servers.
+- At `aae71ef`: the model called the lane server's `scope_info`, read-only, and no separate
+  MCP approval question appeared after the workspace-trust answer.
+
+Not exercised live, and still open: resuming a lane, a Cursor coordinator seat, a required
+Signet guard enforcing end to end, what the lane's Kindex returns for a seeded search, and
+a live launch into a clone that already has Cursor project files (that refusal and the
+candidate guard were exercised on temporary repositories, not through a live lane).
 
 - **Permissions are the operator's own; the Factory approves nothing for them.** With the
   operator's configuration loaded, Cursor's blanket flags would reach everything they have
@@ -193,8 +206,9 @@ a stub shaped by that evidence.
   `agents.py turn --agent cursor-agent --resume <id>` builds `--resume=<id>`, the same
   conversation. A message to a Cursor lane goes to its running session or is not delivered;
   it never starts a new session in its place.
-- **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
-  and Enter the way Claude Code does. If it does not, messages stay `submitted`.
+- **Typing, as observed.** Cursor's terminal takes a bracketed paste followed by the typed
+  mark and Enter: the tester's second message at `aa8870b` was reported with matching text.
+  One message, one Cursor version; a message Cursor does not report stays `submitted`.
 - **A forced commit is refused at validation.** `.git/info/exclude` keeps the lane's project
   files out of an ordinary `git add`, and the lane's prompt says to leave them alone, but
   an author can still force one into a commit. `validate_candidate.py` therefore refuses a
@@ -249,7 +263,7 @@ still run `codex exec`. Antigravity, Muse and Prime lanes still start in print m
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
 agent's own name: it is empty only for `claude`, `claude-ollama` and `codex-interactive`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`
-it says what is open against an adapter that is converted but not accepted, and the
+it says what was run live and what is still open, and the
 registry reports Cursor as not resumable by the Factory, so wrap-up and progress-review
 pauses, which continue a session, are not offered for it. They are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:

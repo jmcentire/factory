@@ -106,7 +106,7 @@ AGENTS: Mapping[str, Agent] = {
     # `codex exec --oss` on a model the local Ollama server already has.
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
     # Cursor's agent CLI, interactive, hosted like Claude Code on a terminal the wrapper owns:
-    # `agent [--model <m>] --force --trust --approve-mcps --workspace <lane>`. Never `-p`.
+    # `agent --workspace <lane> [--model <m>]`, with no approval flag of any kind. Never `-p`.
     "cursor-agent": Agent("cursor-agent", "agent", "terminal", False, "cursor-status"),
     # Claude Code: the operator's own interactive session on a terminal the lane wrapper owns
     # (harness/native_session.py), signed in to their subscription. Never print mode, never an

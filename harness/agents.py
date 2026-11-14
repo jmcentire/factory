@@ -585,8 +585,13 @@ class CursorAgent(Harness):
     The lane's hooks and its Kindex reach it the one lane-scoped way Cursor offers: the
     project files ``.cursor/hooks.json`` and ``.cursor/mcp.json`` in the lane's own clone,
     written and removed by ``native_session.cursor_plan`` and never over a target's own
-    file. Proven against the interactive program by the independent tester on 2026-11-13;
-    this adapter itself has not been run against Cursor.
+    file. The interface was proven against the interactive program by the independent
+    tester on 2026-11-13, and the tester then ran this adapter against real Cursor
+    (cursor-agent 2026.11.13): at ``aa8870b`` a lane started by ``tmux_lane.sh`` took its
+    first prompt and a second message sent by ``tmux_lane_message.sh``, reported
+    ``observed`` with matching text in the same session; at ``aae71ef`` the model called
+    the lane server's ``scope_info``. Not exercised live: resume, a Cursor coordinator
+    seat, and a required Signet guard.
 
     Permissions are the operator's own. With their configuration loaded, Cursor's blanket
     flags would reach everything they have configured, so none is passed: not ``--force``
@@ -669,17 +674,20 @@ _BLOCKERS = {
            "servers and a workspace may list plugins in .agents/plugins.json. Not "
            "established: that a project .agents/hooks.json and a workspace plugin load "
            "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
-    # The lane is Cursor's own interactive agent with the operator's configuration. What is
-    # open is acceptance, not conversion.
-    "cursor-agent": "Cursor: hosted as its own interactive agent from an interface the "
-                    "independent tester proved (2026-11-13), and not yet accepted. Two things "
-                    "are open. First, a complete live session of this adapter: one live start "
-                    "got as far as Cursor rejecting the generated permission file, since "
-                    "corrected; that its terminal takes a typed message as Claude Code does, "
-                    "and that the project permission rule and the lane server's approval "
-                    "behave as documented, are still unobserved. Second, unattended resume: "
-                    "no lane command resumes a session, and a resumed session reported "
-                    "nothing until prompted.",
+    # The lane is Cursor's own interactive agent with the operator's configuration, and the
+    # independent tester has run it against real Cursor. What follows is what is still open.
+    "cursor-agent": "Cursor: hosted as its own interactive agent. The independent tester ran "
+                    "this adapter against real Cursor (cursor-agent 2026.11.13). At aa8870b a "
+                    "lane started by tmux_lane.sh took its first prompt and a second message "
+                    "sent by tmux_lane_message.sh, reported `observed` with matching text in "
+                    "the same session; the generated permission file was accepted and "
+                    "lane-kindex was listed ready beside the operator's servers. At aae71ef "
+                    "the model called the lane server's scope_info, read-only. Still open: "
+                    "unattended resume (no lane command resumes a session, and a resumed "
+                    "session reported nothing until prompted); a Cursor coordinator seat, "
+                    "which has not been exercised; a required Signet guard, not shown "
+                    "enforcing end to end; and what the lane's Kindex returns for a seeded "
+                    "search.",
     "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
             "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
             "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
