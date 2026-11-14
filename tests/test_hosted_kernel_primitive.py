@@ -307,3 +307,85 @@ print(json.dumps(out))
     assert all(json.loads(result.stdout).values()), result.stdout
     assert record.read_bytes() == original
     assert not (store / "injected").exists() and not (store / "moved").exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS kernel primitive")
+def test_kernel_protects_code_ancestors_and_parent_signal_access(primitive):
+    import os
+
+    root, contract, _, base = primitive
+    trusted = root / "trusted-parent"
+    code = trusted / "code"
+    code.mkdir(parents=True)
+    module = code / "synthetic_host.py"
+    module.write_text("ORIGINAL_SYNTHETIC_TRUSTED_CODE")
+    value = json.loads(contract.read_text())
+    value["protected_writes"].append(str(code))
+    boundary = Boundary.parse(value)
+    contract.write_text(json.dumps(boundary.document()))
+    base[base.index("--digest") + 1] = boundary.digest
+    probe = r"""
+import errno,fcntl,json,os,pathlib,stat,subprocess,sys
+root=pathlib.Path(sys.argv[1]);parent=int(sys.argv[2]);out={}
+def deny(name,fn):
+ try:fn();out[name]=False
+ except OSError as e:out[name]=e.errno in (errno.EPERM,errno.EACCES)
+deny('code_write',lambda:(root/'trusted-parent/code/synthetic_host.py').write_text('forged'))
+deny('ancestor_rename',lambda:(root/'trusted-parent').rename(root/'moved-parent'))
+deny('code_unlink',lambda:(root/'trusted-parent/code/synthetic_host.py').unlink())
+deny('parent_signal_access',lambda:os.kill(parent,0))
+c=subprocess.run(['/bin/sh','-c','kill -0 "$1"','probe',str(parent)],capture_output=True,text=True)
+out['shell_signal_access']=c.returncode!=0
+# Pipes/stdin/stdout are expected; writable regular file handles beyond stdio are not.
+unsafe=[]
+for fd in range(3,128):
+ try:
+  if stat.S_ISREG(os.fstat(fd).st_mode) and fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY:
+   unsafe.append(fd)
+ except OSError:pass
+out['no_writable_regular_inherited_fd']=not unsafe
+print(json.dumps(out))
+"""
+    result = subprocess.run(
+        base + [sys.executable, "-c", probe, str(root), str(os.getpid())],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert all(json.loads(result.stdout).values()), result.stdout
+    assert module.read_text() == "ORIGINAL_SYNTHETIC_TRUSTED_CODE"
+    assert not (root / "moved-parent").exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS kernel primitive")
+def test_kernel_entry_does_not_leak_preopened_protected_descriptors(primitive):
+    import os
+
+    root, _, _, base = primitive
+    original = (root / "control/record").read_bytes()
+    read_fd = os.open(root / "denied/oracle", os.O_RDONLY)
+    write_fd = os.open(root / "control/record", os.O_WRONLY)
+    try:
+        probe = """import errno,json,os,sys
+out={}
+for name,fd in [('read',int(sys.argv[1])),('write',int(sys.argv[2]))]:
+ try:
+  os.read(fd,1024) if name=='read' else os.write(fd,b'forged')
+  out[name]=False
+ except OSError as e:out[name]=e.errno in (errno.EBADF,errno.EPERM,errno.EACCES)
+print(json.dumps(out))
+"""
+        result = subprocess.run(
+            base + [sys.executable, "-c", probe, str(read_fd), str(write_fd)],
+            pass_fds=(read_fd, write_fd),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"read": True, "write": True}
+        assert (root / "control/record").read_bytes() == original
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)

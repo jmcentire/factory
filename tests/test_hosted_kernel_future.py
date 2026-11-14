@@ -28,7 +28,7 @@ def eventually(check):
     raise AssertionError("public hosted kernel lifecycle outcome missing")
 
 
-@pytest.mark.parametrize("agent", ["agy", "muse"])
+@pytest.mark.parametrize("agent", ["agy"])
 @pytest.mark.parametrize("tamper", [False, True])
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper

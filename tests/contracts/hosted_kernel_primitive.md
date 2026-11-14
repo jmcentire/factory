@@ -35,3 +35,16 @@ and tampered retained contract refusal, while preserving required semantic
 Signet/custody refusal. Host state is protected from provider writes. It is not
 qualified until actual candidate succeeds and independent review approves the
 explicit kernel-only admission change. No required protection flags are unset.
+
+Per-provider release scope: only AGY kernel-only positive admission is eligible
+for the next candidate. Muse native default nested sandbox remains incompatible;
+no disabling its sandbox is authorized. Its hypothetical positive tests live in
+`tests/future_qualification/muse_kernel.py`, explicitly outside default collection.
+Muse protected refusal and both providers' semantic Signet/custody refusals remain
+active acceptance. AGY baseline boundary-only refusal migrates only once qualified.
+
+Additional static controls: protected synthetic code and ancestor rename cannot
+be modified; direct and shell signal-0 access to trusted parent is denied. The
+public entry drops or denies intentionally preopened synthetic denied-read and
+protected-write descriptors. These are primitive outcomes, not a claim of complete
+ptrace/Mach control coverage or actual provider-profile attestation.
