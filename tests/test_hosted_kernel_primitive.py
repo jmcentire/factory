@@ -110,7 +110,8 @@ def test_g0_protected_hosted_wrapper_refuses_before_provider(
         ],
         case["env"],
     )
-    assert result.returncode == 77, result.stdout + result.stderr
+    expected = 70 if agent == "agy" and not require_signet else 77
+    assert result.returncode == expected, result.stdout + result.stderr
     assert not marker.exists(), "protected hosted gate cannot spawn even preflight"
 
 

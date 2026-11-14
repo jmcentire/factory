@@ -45,7 +45,7 @@ for line in sys.stdin:
     if 'id' not in r:continue
     method=r['method']
     if method=='initialize':
-        result={'protocolVersion':1,'agentCapabilities':{'loadSession':False},'authMethods':[]}
+        result={'protocolVersion':1,'agentCapabilities':{'loadSession':False,'sessionCapabilities':{'resume':{}}},'authMethods':[]}
     elif method=='session/resume':
         result={'sessionId':r['params']['sessionId']}
     else:

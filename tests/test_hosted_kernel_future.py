@@ -63,7 +63,11 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     record = control / "record"
     record.write_text("original")
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    prepared = execute([sys.executable, str(H / "role_inputs.py"), "prepare",
+                        "--runs", str(case["runs"]), "--run", "native-acceptance",
+                        "--role", "coder", "--repo", str(workspace)], case["env"])
+    assert prepared.returncode == 0, prepared.stderr
+    workspace = Path(json.loads(prepared.stdout)["repository"])
     planned = subprocess.run([sys.executable, str(H / "protocol_host.py"), "trust-roots",
                               "--control", str(run.resolve() / "tmux-lanes")],
                              capture_output=True, text=True, check=True)
@@ -113,6 +117,10 @@ if args and args[0] == 'usage':
         "        log(prompt=p, durable_before_write=snapshots)",
         probe + "\n        log(prompt=p, durable_before_write=snapshots)",
     )
+    # Keep the live reply observable before the separate clean-end transition.
+    # Immediate response+exit is an independent transport acknowledgment race.
+    body = body.replace('if (folder / "exit-after-completion").exists():',
+                        'if (folder / "exit-after-completion").exists():\n            time.sleep(1)')
     provider.write_text("#!/usr/bin/python3\n" + body)
     provider.chmod(0o755)
     prompt = tmp_path / "brief"
@@ -187,8 +195,8 @@ if args and args[0] == 'usage':
         contract.unlink()
     resumed = message()
     if tamper != "none":
-        assert resumed.returncode == 70, resumed.stdout + resumed.stderr
         assert len([r for r in rows() if r.get("spawn")]) == before
+        assert resumed.returncode == 70, resumed.stdout + resumed.stderr
     else:
         assert resumed.returncode in (0, 75), resumed.stdout + resumed.stderr
         eventually(lambda: len([r for r in rows() if "prompt" in r]) == 3)
