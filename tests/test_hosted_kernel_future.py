@@ -46,6 +46,7 @@ def eventually(check):
         "cwd-injection",
         "json-injection",
         "editable-injection",
+        "editable-first-injection",
     ],
 )
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
@@ -98,6 +99,22 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     )
     assert prepared.returncode == 0, prepared.stderr
     workspace = Path(json.loads(prepared.stdout)["repository"])
+    if tamper == "editable-first-injection":
+        marker = workspace / "trusted-first-launch-injection-executed"
+        observed = subprocess.run(
+            [case["env"]["FACTORY_PYTHON"], "-c", "import sys,json; print(json.dumps(sys.path))"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        relative = [p for p in json.loads(observed.stdout) if p and not Path(p).is_absolute()]
+        assert relative
+        for item in relative:
+            startup = workspace / item
+            startup.mkdir(parents=True, exist_ok=True)
+            (startup / "sitecustomize.py").write_text(
+                "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+            )
     planned = subprocess.run(
         [
             sys.executable,
@@ -210,6 +227,9 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         return json.loads(path.read_text()) if path.exists() else {}
 
     eventually(lambda: state().get("deliveries", {}).get("initial", {}).get("response_stop"))
+    if tamper == "editable-first-injection":
+        assert not marker.exists(), "untrusted startup code executed in fresh wrapper lifecycle"
+        return
     sid = state()["session_id"]
     if tamper == "all-invocations":
         invocation_rows = [r for r in rows() if "invocation_guarded" in r]
