@@ -63,7 +63,9 @@ ASKING = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "
 #: The one report that the session is waiting for input: Claude Code sends it about a minute
 #: after it finished responding, if nothing was typed since.
 WAITING = "idle_prompt"
-#: Flags that carry the Factory's own permission choice; an operator launcher makes its own.
+#: Claude Code's permission arguments. The Factory passes one only on the operator's explicit
+#: selection, and never over a launcher that is the operator's own function, which makes
+#: that choice itself (``cl`` passes its own permissive flags).
 PERMISSION_FLAGS = ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
 PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
 EVENT_LIMIT = 4 * 1024 * 1024
@@ -277,7 +279,8 @@ def plan(arguments: Sequence[str], *, launcher: Launcher, directory: pathlib.Pat
     if banned:
         raise ValueError("native Claude session refuses " + ", ".join(banned))
     if launcher.via == "login-shell":
-        # The operator's own launcher carries their permission choice; add none over it.
+        # The operator's own launcher carries their permission choice; nothing is added over
+        # it, not even an explicitly selected flag: the launcher is the more specific choice.
         kept: list[str] = []
         skip = False
         for part in args:

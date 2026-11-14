@@ -12,6 +12,14 @@ public API is still pre-1.0.
   default `cl` when the login shell defines it, otherwise `claude`). Print mode (`-p`),
   `--output-format`, `--input-format`, `--max-turns`, `--setting-sources`,
   `--strict-mcp-config` and `--bare` are no longer used and are refused if supplied.
+- No permission mode is imposed on Claude Code through any launcher. Author lanes no longer
+  get `--permission-mode bypassPermissions` and coordinators no longer get
+  `--permission-mode default`; the operator's launcher and Claude Code settings decide. `cl`
+  stays as permissive as it is. `FACTORY_LANE_SANDBOX=off` is the explicit selection of the
+  permissive mode and passes `--dangerously-skip-permissions` (lanes as well as
+  coordinators), except over a launcher that is the operator's own shell function. An
+  operator who starts lanes with the bare `claude` executable and has not selected or
+  configured a permissive mode will see Claude Code ask in the lane's window.
 - API-billing variables are unset for Claude Code and none is set. `claude-ollama` reaches the
   loopback Ollama server with `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.
 - Messages to a Claude session are typed into its terminal, each with a typed mark. States

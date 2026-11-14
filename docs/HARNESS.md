@@ -77,9 +77,19 @@ started through the operator's launcher on a terminal the lane wrapper owns
 - **What is added.** `--name=<run>-<slot>`, `--session-id <uuid>` (or `--resume <uuid>` to
   continue), `--settings <file>` carrying four observation hooks beside the operator's own,
   the assigned `--model`/`--effort` if any, the lane's Kindex by `--mcp-config`, and the
-  run root by `--add-dir` for coordinators. The permission mode is what it was before
-  (author lanes bypass, coordinators default unless `FACTORY_LANE_SANDBOX=off`) and is left
-  out entirely when the launcher is the operator's own function, which makes that choice.
+  run root by `--add-dir` for coordinators.
+- **Permissions are the operator's, through every launcher.** The Factory passes Claude Code
+  no permission mode: not `bypassPermissions` for author lanes and not `default` for
+  coordinators, both of which it used to impose. What a session may do without asking is
+  decided where the operator decides it natively: their launcher (`cl` passes its own
+  permissive flags, and stays permissive) and their Claude Code settings. An operator who
+  wants the permissive mode from the `claude` executable selects it explicitly with
+  `FACTORY_LANE_SANDBOX=off`, and the Factory then passes Claude Code's own
+  `--dangerously-skip-permissions`. Nothing is passed over a launcher that is the
+  operator's own shell function, even then: the function is the more specific choice. A
+  lane launch prints which of these applies. A session whose settings make it ask leaves
+  the question in its window; from the Factory's side it stays `prompt-observed`, or
+  `asking-operator` when Claude Code reports the question.
 - **Messages** are typed into that terminal, to the exact process the wrapper started,
   each followed by a typed mark `[factory-message:<id>]`. A state names only what was
   observed: `queued` (accepted, not one byte typed), `submitted` (typing began; if the

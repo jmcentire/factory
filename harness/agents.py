@@ -257,11 +257,16 @@ class ClaudeCode(Harness):
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        # The interactive program and nothing that changes what it is: the permission mode
-        # author lanes have always run with, the operator's assigned model and effort when
-        # they named one, and the conversation to continue. ``max_turns`` bounds print mode
-        # only and has no meaning here.
-        argv = ["claude", "--permission-mode", "bypassPermissions"]
+        # The interactive program and nothing that changes what it is: the operator's
+        # assigned model and effort when they named one, and the conversation to continue.
+        # No permission argument. What a session may do without asking is the operator's
+        # choice, made where they make it natively: their launcher (``cl`` passes its own
+        # permissive flags) and their Claude Code settings. The registry imposes neither
+        # ``bypassPermissions`` nor any other mode on top of that. An operator who selects
+        # the permissive mode explicitly (FACTORY_LANE_SANDBOX=off) gets Claude Code's own
+        # flag for it from the launcher of the lane or seat, not from here. ``max_turns``
+        # bounds print mode only and has no meaning here.
+        argv = ["claude"]
         argv += ["--model", model] if model else []
         argv += ["--effort", effort] if effort else []
         argv += ["--resume", resume] if resume else []

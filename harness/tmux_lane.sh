@@ -1084,6 +1084,15 @@ PY
         --home "$AGENT_HOME" --model "$MODEL" --kindex-record "$KINDEX" \
         --env-file "$CREDENTIALS" > "$SETUP_OUT" || \
         refuse 70 "the agent registry could not prepare $AGENT's lane home"
+      case "$AGENT" in claude|claude-ollama)
+        # No permission mode is imposed on Claude Code. Only the operator's explicit
+        # FACTORY_LANE_SANDBOX=off adds its native permissive flag, retained with the turn.
+        # A launcher that is the operator's own function makes that choice itself, and the
+        # wrapper passes no permission argument over it.
+        if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+          printf '%s\0' '--dangerously-skip-permissions' >> "$SETUP_OUT"
+        fi ;;
+      esac
       if [ "$AGENT" = cursor-agent ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
         # Retain the explicit choice with the turn, so later resumes do not fall back to
         # the user's unrelated Cursor configuration.
@@ -1198,6 +1207,13 @@ PY
     echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
   fi
   [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
+  case "$AGENT" in claude|claude-ollama)
+    if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+      echo "tmux-lane: permissions: you selected FACTORY_LANE_SANDBOX=off, so Claude Code is given --dangerously-skip-permissions (not when your launcher is your own shell function, which decides for itself)."
+    else
+      echo "tmux-lane: permissions: yours. The Factory passes Claude Code no permission mode; your launcher and your Claude Code settings decide what this lane may do without asking. If they ask, the question waits in the lane's window."
+    fi ;;
+  esac
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
   echo "tmux-lane: wakes land in $TMUX_ROOT/wake.jsonl and $ROOT/events.jsonl"
   echo "tmux-lane: the entire repository is now agent-owned; do not run host Git there"

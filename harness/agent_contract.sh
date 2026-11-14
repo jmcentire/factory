@@ -59,8 +59,7 @@ case "$AGENT" in
     VERSION=$(claude --version 2>/dev/null | head -1) || \
       fail "claude CLI is not runnable ($(at claude))"
     HELP=$(claude --help 2>/dev/null) || HELP=""
-    needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name \
-      --permission-mode
+    needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name
     CONTRACT="claude-native-terminal-v1" ;;
   agy|muse|prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
