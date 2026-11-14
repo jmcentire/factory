@@ -2,10 +2,13 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 from tests.test_cursor_ended_native_recovery import PROVIDER
 from tests.test_native_claude_contract import FACTORY, execute, launch, read_events, wait_for
@@ -13,7 +16,10 @@ from tests.test_native_claude_contract import FACTORY, execute, launch, read_eve
 pytest_plugins = ["tests.test_native_claude_contract"]
 
 
-def test_fresh_launch_keeps_previous_native_hooks_until_owner_has_exited(native_case, tmp_path):
+@pytest.mark.parametrize("window_race", [False, True])
+def test_fresh_launch_keeps_previous_native_hooks_until_owner_has_exited(
+    native_case, tmp_path, window_race
+):
     case = native_case
     allowed = {
         "HOME",
@@ -109,14 +115,41 @@ tty.setraw(0)""",
     log = case["bin_dir"] / "cursor-events.jsonl"
     count = len([e for e in read_events(log) if "argv" in e])
     replacement = argv + ["--round", "r2", "--replace-session", "synthetic old session replacement"]
+    if window_race:
+        real_tmux = shutil.which("tmux", path=env["PATH"])
+        shim = tmp_path / "tmux-race"
+        shim.mkdir()
+        marker = shim / "live-window-reported"
+        executable = shim / "tmux"
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            + f"""
+import pathlib, subprocess, sys
+args = sys.argv[1:]
+marker = pathlib.Path({str(marker)!r})
+if 'list-windows' in args and {run["tmux_socket"]!r} in args and not marker.exists():
+    result = subprocess.run([{real_tmux!r}, *args], capture_output=True)
+    marker.write_bytes(result.stdout)
+    subprocess.run([{real_tmux!r}, '-L', {run["tmux_socket"]!r},
+                    'kill-window', '-t', 'native-acceptance:coder'], check=True)
+    sys.stdout.buffer.write(result.stdout)
+    sys.stderr.buffer.write(result.stderr)
+    raise SystemExit(result.returncode)
+raise SystemExit(subprocess.run([{real_tmux!r}, *args]).returncode)
+"""
+        )
+        executable.chmod(0o755)
+        env = {**env, "PATH": str(shim) + os.pathsep + env["PATH"]}
     child = None
     try:
-        execute(
-            ["tmux", "-L", run["tmux_socket"], "kill-window", "-t", "native-acceptance:coder"], env
-        )
-        wait_for(
-            lambda: any(e.get("stopping") == before["worker"]["pid"] for e in read_events(log))
-        )
+        if not window_race:
+            execute(
+                ["tmux", "-L", run["tmux_socket"], "kill-window", "-t", "native-acceptance:coder"],
+                env,
+            )
+            wait_for(
+                lambda: any(e.get("stopping") == before["worker"]["pid"] for e in read_events(log))
+            )
         child = subprocess.Popen(
             replacement,
             cwd=FACTORY,
@@ -125,6 +158,12 @@ tty.setraw(0)""",
             stderr=subprocess.PIPE,
             text=True,
         )
+        if window_race:
+            wait_for(lambda: marker.exists())
+            assert "coder" in marker.read_text()
+            wait_for(
+                lambda: any(e.get("stopping") == before["worker"]["pid"] for e in read_events(log))
+            )
         deadline = time.monotonic() + 1.2
         while time.monotonic() < deadline:
             old_start = subprocess.run(
