@@ -4,6 +4,7 @@ Oracle: tests/contracts/hosted_transport.md, approved hosted-only scope. These t
 intentionally cannot qualify Signet enforcement; required security must refuse.
 """
 
+import hashlib
 import importlib
 import json
 import os
@@ -769,7 +770,13 @@ def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
     assert snapshot["session_id"] == follow["prompt"]["sessionId"]
     # A dialogue plan alone does not establish that this exact delivery was handed over.
     if lane.agent == "muse":
-        assert handover["command_id"] == follow["prompt"]["commandId"]
+        typed = "".join(x["text"] for x in follow["prompt"]["input"])
+        digest = hashlib.sha256(typed.encode()).hexdigest()
+        assert handover["typed_sha256"] == "sha256:" + digest
+        commands = json.loads(
+            follow["durable_before_write"]["tmux-lanes/coder-hosted-commands.json"]
+        )
+        assert commands[digest] == follow["prompt"]["commandId"]
     (lane.folder / "crash-before-ack").unlink()
     # Public delivery retry may refuse or report unknown; neither may resubmit.
     try:
