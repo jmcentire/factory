@@ -65,6 +65,7 @@ if __name__ == "__main__":
                    *(entry for entry in sys.path if os.path.isabs(entry))]
 
 import native_session  # noqa: E402
+import trusted_start  # noqa: E402
 import validator_boundary  # noqa: E402
 
 SCHEMA = "factory-hosted-session/1"
@@ -189,16 +190,8 @@ def trust_roots(launch_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
 
 
 #: Python flags for a trusted program started in a lane's clone: isolated mode and no site.
-ISOLATED = ("-I", "-S")
-
-
-def _isolated(command: list[str]) -> list[str]:
-    """The boundary program's own command, started isolated. It is trusted code that runs
-    outside the boundary, in the lane's clone, until it becomes the confined command."""
-
-    if command[:1] == [sys.executable] and command[1:2] != ["-I"]:
-        return [command[0], *ISOLATED, *command[1:]]
-    return command
+ISOLATED = trusted_start.ISOLATED
+_isolated = trusted_start.isolated
 
 
 def _within(path: pathlib.Path, roots: Sequence[pathlib.Path]) -> bool:
@@ -674,8 +667,13 @@ class Host:
         # The provider's server never has an API-routing variable, whoever started this
         # program and with whatever arguments: that is what keeps it on the operator's
         # sign-in. ``--unset`` only adds names to these; it cannot take any away.
+        # The lane's ``--cache-env`` settings are the provider's too: this program was
+        # handed them carried in one variable and sets them here, on the provider's server
+        # only. Its own start-up isolation, if it was given any, is not passed on.
         withheld = {*API_ENV, *args.unset}
-        environment = {key: value for key, value in os.environ.items() if key not in withheld}
+        environment = {key: value
+                       for key, value in trusted_start.provider_environment(os.environ).items()
+                       if key not in withheld}
         self.secret = secrets.token_hex(24)
         self.confined: dict | None = None
         self.socket_dir = ""
@@ -1578,7 +1576,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"hosted-session: {error}", file=sys.stderr)
             return 70
         os.chdir(args.workspace)
-        os.execv(wrapped[0], wrapped)
+        # The provider's program gets none of the start-up isolation this one was given.
+        os.execve(wrapped[0], wrapped, trusted_start.provider_environment(os.environ))
     # A start that is refused as such is refused first, whatever else is wrong with the
     # command line: nothing about a malformed request turns a refusal into a usage error.
     refused = _refusal(args)

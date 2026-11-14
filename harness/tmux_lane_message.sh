@@ -813,6 +813,8 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # helper of this script does, and the wrapper keeps both variables from the provider.
   printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
   ENV_PREFIX+="$STARTUP_ENV"
+  # The launch's cache settings, carried in one variable for the provider's program alone
+  # (as at launch): none of them is set under its own name on a trusted program.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   if [ "$HOSTED_RESUME" = 1 ]; then
     # As at launch: the run's tmux server, and the command the operator starts Claude Code

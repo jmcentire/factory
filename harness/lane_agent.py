@@ -58,21 +58,12 @@ from typing import Any
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
-#: How the launchers start this program and every other trusted Python helper: with the
-#: working directory off the import path and ``harness/trusted_startup`` run first. The two
-#: variables are for the Factory's own programs. A provider's program is never given them.
-TRUSTED_STARTUP = {"PYTHONSAFEPATH": "1",
-                   "PYTHONPATH": f"{_HARNESS_ROOT}/trusted_startup:{_HARNESS_ROOT}"}
+import trusted_start  # noqa: E402
 
-
-def provider_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    """``environ`` without the start-up isolation this program was itself started with.
-
-    Only the launcher's own values are removed: a ``PYTHONPATH`` the lane's own environment
-    file sets for the provider is some other value and is left alone."""
-
-    return {name: value for name, value in environ.items()
-            if TRUSTED_STARTUP.get(name) != value}
+#: How this program starts, and what is the provider's alone (harness/trusted_start.py).
+PROVIDER_ENV = trusted_start.PROVIDER_ENV
+TRUSTED_STARTUP = trusted_start.TRUSTED_STARTUP
+provider_environment = trusted_start.provider_environment
 
 
 if __name__ == "__main__":
@@ -924,7 +915,10 @@ def run_lane(
                          "session, or a hosted Muse or Antigravity session, only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
-    # What the provider's program is given. Never this wrapper's own start-up isolation.
+    # What the provider's program is given: never this wrapper's own start-up isolation, and
+    # the lane's ``--cache-env`` settings under their own names. Those are the provider's;
+    # this wrapper has them only in the one variable they are carried in.
+    provider_settings = trusted_start.carried(os.environ)
     child_env = provider_environment(os.environ)
     if session_agent == "claude":
         # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
@@ -1081,12 +1075,18 @@ def run_lane(
     else:
         bounded = validator_boundary.model_command(
             argv, boundary_record, boundary_role, pathlib.Path.cwd())
-        if bounded is not argv and bounded[:1] == [sys.executable]:
+        if bounded is not argv:
             # The boundary program is trusted code that runs here, outside the boundary and
             # in the lane's clone, until it becomes the confined command. It is started
             # isolated: no site start-up, nothing imported by way of the clone.
-            bounded[1:1] = ["-I", "-S"]
+            bounded = trusted_start.isolated(bounded)
         argv = bounded
+    if len(argv) > 1 and os.path.realpath(argv[1]) == os.path.join(
+            _HARNESS_ROOT, "codex_lane_session.py"):
+        # Codex's session driver is the Factory's own program, run here in the lane's clone
+        # and outside the model's boundary, with the environment the provider is given. It
+        # is started isolated too, and names its own import path.
+        argv = [argv[0], *trusted_start.ISOLATED, *argv[1:]]
     stopped = False
     refused_billing = ""
     session_seen = False
@@ -1233,7 +1233,12 @@ def run_lane(
                 _append(log, raw)  # never the pane: that terminal is the program's
                 _watch(raw)
 
-            hosted = native_session.Terminal(argv, env=child_env)
+            # A hosted session's host is trusted and starts the provider's server itself:
+            # it is handed the provider's settings carried, as this wrapper was, not set.
+            host_env = (trusted_start.trusted_environment(child_env, provider_settings)
+                        if chosen is not None and chosen.dialect in ("muse", "agy")
+                        else child_env)
+            hosted = native_session.Terminal(argv, env=host_env)
             process = hosted.process
             register()
             if process.poll() not in {None, 0}:
@@ -1256,7 +1261,7 @@ def run_lane(
                        if chosen is not None and chosen.dialect == "codex" else
                        # A later message goes to the host that owns the session, over its
                        # own socket; the host gives it to the provider's server.
-                       dict(queue_env=child_env, queue_command=functools.partial(
+                       dict(queue_env=host_env, queue_command=functools.partial(
                            protocol_host.queue, sys.executable, protocol_host.record_path(
                                native_dir or log.parent, slot)))
                        if chosen is not None and chosen.dialect in ("muse", "agy") else {}))
@@ -1378,7 +1383,7 @@ def run_lane(
 # directory the lane cannot write: a read-only store, never a credential.
 CORE_SHELL_POLICY = 'shell_environment_policy={inherit="core",ignore_default_excludes=false}'
 RESERVED_ENV = frozenset({"HOME", "USER", "PATH", "TMPDIR", "TERM", "SHELL", "LANG", "CODEX_HOME",
-                          "FACTORY_RUNS_DIR", "HARNESS_RUN_ROOT"})
+                          "FACTORY_RUNS_DIR", "HARNESS_RUN_ROOT", PROVIDER_ENV})
 
 
 @dataclass(frozen=True)
@@ -1401,8 +1406,15 @@ class LaneEnvironment:
                 "runtime_dirs": list(self.runtime_dirs)}
 
     def assignments(self) -> str:
-        return " ".join(shlex.quote(f"{name}={value}")
-                        for name, value in sorted(self.cache_env.items()))
+        """The one assignment the launchers add to the environment they rebuild.
+
+        The settings are the provider's (a ``PYTHONPATH`` among them would otherwise decide
+        what the lane wrapper and its watcher import), so none is set under its own name
+        there: the wrapper sets them on the provider's program only."""
+
+        if not self.cache_env:
+            return ""
+        return shlex.quote(f"{PROVIDER_ENV}={trusted_start.carry(self.cache_env)}")
 
     def notice(self) -> str:
         lines = [f"- {name}={value} is set for your commands; it is a read-only, pre-fetched "

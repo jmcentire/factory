@@ -1223,7 +1223,11 @@ PY
   # what it hands the provider's program, so the lane's own environment is unchanged.
   printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
   ENV_PREFIX+="$STARTUP_ENV"
-  # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
+  # Agents without a shell policy (cursor-agent) read the cache variables from their own
+  # environment. Those settings are the provider's and nobody else's: they travel in one
+  # variable (FACTORY_LANE_PROVIDER_ENV), and the wrapper sets them, under their own names,
+  # on the provider's program only. A PYTHONPATH among them therefore decides nothing about
+  # what the wrapper, the watcher or a session's host imports.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
   ENV_PREFIX+="$SOCKET_ENV"

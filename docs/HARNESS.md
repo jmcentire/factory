@@ -479,7 +479,9 @@ for either, and none is claimed.
   session, a message arriving while a turn runs. For Antigravity, what its server sends
   before a prompt's answer in a turn that uses tools, and whether the model name the
   public launcher records matches a session option. The lane's Kindex reaching a real
-  session. A hosted lane inside the kernel boundary.
+  session. Either of these two real turns inside a kernel boundary: both ran with none.
+  (What has since been run under one, on Antigravity only, and that no real session has,
+  is the next section.)
 
 #### Under the kernel boundary (Antigravity only)
 
@@ -507,6 +509,9 @@ stay in the run's own control tree and never go into the clone.
   run. On a machine whose interpreter is the user's own (Homebrew), covering it means
   denying the lane that interpreter, or running the Factory on one the user cannot write:
   the boundary module does not accept a write-protected root with symlinks that leave it.
+  That is a requirement on how the machine is provisioned and what the contract lists. It
+  is not something a launch can waive: an interpreter the lane could change is trusted
+  code the lane could change, and a bounded launch that leaves it uncovered is refused.
 - **Every run of the provider's program is inside.** Not only its session server: the
   account check, the version and the help text the launcher asks of it before a lane
   starts are run through the same boundary, in the lane's clone. Its start-up is the
@@ -519,12 +524,29 @@ stay in the run's own control tree and never go into the clone.
   is on no helper's import path; `harness/trusted_startup` then runs first in every
   helper and drops any other relative entry (an editable install leaves one, which Python
   reads against the working directory). The same isolation is carried into every trusted
-  Python program started after that, and into none of the provider's: the rebuilt
-  environments the lane wrapper and its watcher start from name the same two variables;
-  the wrapper removes them from what it hands the provider's program; the host, its
-  message command and the boundary program, which start in the lane's clone, are started
-  with Python's isolated, no-site flags instead, so the provider's environment is not
-  touched at all. A module planted in the clone is not imported by any of them.
+  Python program started after that, and into none of the provider's
+  (`harness/trusted_start.py` is the one place that says how): the rebuilt environments
+  the lane wrapper and its watcher start from name the same two variables, and the wrapper
+  removes them from what it hands the provider's program. Where a variable cannot be
+  relied on, the program is started with Python's isolated, no-site flags instead, which
+  read no `PYTHON*` variable and run no site start-up: the host, its message command, the
+  boundary program and the Codex session driver, which the wrapper starts with the
+  environment the provider is given, and the lifecycle hook command
+  (`native_session.py hook`), which the provider itself runs from its settings, in the
+  session's workspace, with whatever environment it has. A module planted in the clone or
+  the workspace is not imported by any of them.
+- **A lane's `--cache-env` settings are the provider's and decide nothing for the trusted
+  side.** They used to be assigned by name in the rebuilt environment, after the
+  isolation, so a `--cache-env PYTHONPATH=<store>` replaced it for the wrapper and the
+  watcher. They now travel in one variable (`FACTORY_LANE_PROVIDER_ENV`, which
+  `--cache-env` may not name), and are set under their own names only on the provider's
+  program: by the wrapper, or by a hosted session's host on the provider's server. The
+  provider still gets its `PYTHONPATH`, exactly as given. Two limits, stated: the
+  boundary program and the Codex session driver share the provider's environment (one
+  becomes the provider's program, the other is its parent), so they are kept from Python
+  variables by the isolated flags and from nothing else; and inside a kernel boundary the
+  provider is given only the boundary's own short list of variables, as before, so a
+  `--cache-env` setting outside that list does not reach a bounded provider at all.
 - **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
   control directory, which the contract already keeps from the provider.
 - **The child attests before the provider exists.** The process the boundary starts first
@@ -569,8 +591,16 @@ stay in the run's own control tree and never go into the clone.
   editable install's placeholder planted there, ran neither and succeeded; a trusted
   script importing a module the interpreter lacks, started from that clone, loaded the
   planted one with a bare rebuilt environment and not with the environment the launchers
-  now build nor with the isolated flags; no run of the provider's program saw either
-  variable; the direct
+  now build nor with the isolated flags; with `--cache-env PYTHONPATH=<store>` on
+  unbounded Muse and Antigravity lanes, the store's start-up modules were loaded by the
+  provider's server alone (at launch and at restart), which had that `PYTHONPATH`, no
+  `PYTHONSAFEPATH` and no carrying variable, and by no trusted program, where the same
+  settings assigned by name, as before, were loaded by the wrapper; the hook command, run
+  from a workspace with planted modules and a `PYTHONPATH` naming more, ran none and wrote
+  its journal row, where the command as it was published before ran them; a stand-in
+  Cursor lane reported its lifecycle through the new command; the Codex session driver,
+  started as the wrapper now starts it, ran a stand-in turn and loaded nothing planted;
+  the direct
   entries refused a contract that validates but leaves out the code or the named control
   directory, with no run of the provider's program. Antigravity's real server: `initialize`
   answered under the profile.
