@@ -1762,7 +1762,7 @@ SEAT_AUTHORITY = (
 
 
 @pytest.mark.parametrize("mode", ["qualify", "launch"])
-def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
+def test_ollama_tester_freeze_distinguishes_qualification_from_product_acceptance(
     tmp_path: Path, mode: str,
 ) -> None:
     """Freezing a quiescent author exports evidence; it never accepts the product.
@@ -1770,13 +1770,16 @@ def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
     Missing Critical coverage remains visible in the plan for Validator review.
     Both modes preserve their identity, and an invalid recorded mode is refused.
     """
-    root, operator, _, launch = _ignite_and_launcher(tmp_path, "Export is not acceptance")
+    root, operator, _, launch = _ignite_and_launcher(
+        tmp_path, "Export is not acceptance", budget="50")
     env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
     (root / "artifacts" / "testing-strategy.md").write_text(
         "planned-case: BOOK-LOCK Critical\ntest-modules: tests/test_*.py\n"
     )
     lane = tmp_path / "standalone-tester"
-    result = launch("tester", "--round", "probe", action=mode)
+    _ollama_stub(tmp_path / "factory-bin", available=True)
+    result = launch("tester", "--round", "probe", "--agent", "codex-ollama",
+                    "--model", "glm-test:cloud", *METERED_CAPS, action=mode)
     assert result.returncode == 0, result.stdout + result.stderr
     (lane / "tests").mkdir()
     (lane / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n")
@@ -1802,17 +1805,24 @@ def test_tester_freeze_distinguishes_qualification_from_product_acceptance(
         assert "launch mode" in refused.stderr
 
 
+@pytest.mark.parametrize("agent", ["codex", "codex-ollama"])
 def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
-    tmp_path: Path,
+    tmp_path: Path, agent: str,
 ) -> None:
-    root, operator, tmux_log, launch = _ignite_and_launcher(tmp_path, "Implement task")
+    root, operator, tmux_log, launch = _ignite_and_launcher(tmp_path, "Implement task", budget="50")
     lane = tmp_path / "standalone-coder"
     env = {"PATH": f"{tmp_path / 'factory-bin'}:{os.environ['PATH']}"}
-    launched = launch("coder")
+    _ollama_stub(tmp_path / "factory-bin", available=True)
+    extra = [] if agent == "codex" else ["--model", "glm-test:cloud", *METERED_CAPS]
+    launched = launch("coder", "--agent", agent, *extra)
 
     assert launched.returncode == 0, launched.stdout + launched.stderr
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
-    assert "codex --ask-for-approval never exec" in coder_call
+    if agent == "codex":
+        assert "codex --no-daemon --no-alt-screen --ask-for-approval never" in coder_call
+        assert "codex exec" not in coder_call
+    else:
+        assert "exec" in coder_call and "--oss" in coder_call
     assert "env -i" in coder_call
     assert "--ignore-user-config" not in coder_call and "--ignore-rules" not in coder_call
     assert "--strict-config" not in coder_call and "--disable apps" not in coder_call
@@ -1847,6 +1857,9 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
         env,
     )
 
+    if agent == "codex":
+        assert frozen.returncode == 64 and "committed SHA" in frozen.stderr
+        return
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     export = json.loads(frozen.stdout)
     assert export["git_invoked_after_handoff"] is False
@@ -1871,13 +1884,25 @@ def ordinary_message_fixture(tmp_path: Path):
     return tmp_path, root, env, log
 
 
+
+def hosted_codex_restart_fields(folder: Path) -> dict[str, object]:
+    """Retained public launch inputs, matching an observed native launch record."""
+    prompt = folder / "coder-prompt.txt"
+    prompt.write_text("Original task, never replay it on native resume.\n")
+    native = folder / "coder-agent-home"
+    native.mkdir(exist_ok=True)
+    return {"prompt_path": str(prompt), "native": {"dir": str(native)},
+            "lane_log": str(folder / "coder-lane.log"),
+            "lane_exits": str(folder / "coder-exits.jsonl")}
+
 @pytest.mark.parametrize("sandbox", ["on", "off"])
-def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_blocked(
+def test_ollama_exec_answer_resumes_exact_questioning_thread_even_when_blocked(
     tmp_path: Path, sandbox: str
 ) -> None:
     from harness.lane_dialogue import record_question
 
     operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
+    _ollama_stub(tmp_path / "factory-bin", available=True)
     # The resume follows the launch record's sandbox, never the ambient switch: the ambient value
     # here is always the opposite of what the lane launched with.
     env["FACTORY_LANE_SANDBOX"] = "off" if sandbox == "on" else "on"
@@ -1891,7 +1916,8 @@ def test_tmux_lane_answer_resumes_the_exact_questioning_codex_thread_even_when_b
         "mode": "launch",
         "run_id": "r1",
         "role": "tester",
-        "agent": "codex",
+        "agent": "codex-ollama",
+        "model": "glm-test:cloud",
         "repository": str(lane),
     }
     if sandbox == "off":
@@ -2001,13 +2027,16 @@ def test_tmux_lane_message_refuses_orchestrator_specification_answer(
     lane.mkdir()
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
+    (launch_dir / "coder-turn.json").write_text(json.dumps({
+        "schema_version": "factory-lane-turn/1", "agent": "codex-interactive",
+        "model": "", "effort": "", "extra": [], "persistent": True}))
     (launch_dir / "coder-launch.jsonl").write_text(
         json.dumps(
             {
                 "status": "active",
                 "run_id": "r1",
                 "role": "coder",
-                "agent": "codex",
+                "agent": "codex-interactive", "mode": "launch", "persistent": True,
                 "repository": str(lane),
             }
         )
@@ -7391,7 +7420,7 @@ def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
 
     assert launch("coder", "--model", "gpt-coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
-    assert " exec -m gpt-coder " in coder_call
+    assert " -m gpt-coder " in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"], row["model_config"]) == ("gpt-coder", "operator", [])
     assert row["sandbox"] == "on"  # the record a resume reuses (FACTORY_LANE_SANDBOX unset)
@@ -7431,7 +7460,7 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     assert launch("coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
     carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
-    assert f" exec {carried_args} " in coder_call
+    assert f" {carried_args} " in coder_call
     assert "personal-mcp" not in coder_call and "danger-full-access" not in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["model"] == "gpt-mine" and row["model_source"] == "codex-config"
@@ -7440,7 +7469,7 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     # A named model wins over the config; the config's keys are then not carried over.
     assert launch("tester", "--model", "gpt-named").returncode == 0
     tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
-    assert " exec -m gpt-named " in tester_call
+    assert " -m gpt-named " in tester_call
     assert "gpt-mine" not in tester_call
 
 
@@ -7454,13 +7483,22 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
+    (launch_dir / "coder-turn.json").write_text(json.dumps({
+        "schema_version": "factory-lane-turn/1", "agent": "codex-interactive",
+        "model": "", "effort": "", "extra": [], "persistent": True}))
     (launch_dir / "coder-thread-id").write_text(
         "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
     )
 
     def probe(model: object, config: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
-               "role": "coder", "agent": "codex", "model": model, "repository": str(lane)}
+               "role": "coder", "agent": "codex-interactive", "mode": "launch", "persistent": True,
+               "model": model,
+               "repository": str(lane)}
+        (launch_dir / "coder-turn.json").write_text(json.dumps({
+            "schema_version": "factory-lane-turn/1", "agent": "codex-interactive",
+            "model": model, "effort": "", "extra": [], "persistent": True}))
+        row.update(hosted_codex_restart_fields(launch_dir))
         if config is not None:
             row["model_config"] = config
         (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
@@ -7477,22 +7515,31 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
         assert "retained launch fields are malformed" in malformed.stderr
         assert not tmux_log.exists()
     literal = probe("gpt coder $(touch MODEL_EXECUTED)")
-    assert literal.returncode == 0, literal.stdout + literal.stderr
+    # The tmux recorder cannot emit native receipts. A queued resume command is
+    # inspectable, but must not be reported as delivered.
+    assert literal.returncode == 70, literal.stdout + literal.stderr
+    assert "NOT delivered" in literal.stderr
+    assert tmux_log.exists(), literal.stderr
     first = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert "gpt coder $(touch MODEL_EXECUTED)" in shlex.split(first)
     assert not (operator / "MODEL_EXECUTED").exists()
     tmux_log.unlink()
     resumed = probe("gpt-coder")
-    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert resumed.returncode == 70, resumed.stdout + resumed.stderr
+    assert "NOT delivered" in resumed.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
-    assert " codex -m gpt-coder --ask-for-approval never " in respawn
+    assert "-m gpt-coder" in respawn
+    assert "codex resume" in respawn and "--ask-for-approval never" in respawn
+    assert "codex exec" not in respawn
 
     tmux_log.unlink()
     carried = probe("gpt-mine", ['model="gpt-mine"', 'model_reasoning_effort="high"'])
-    assert carried.returncode == 0, carried.stdout + carried.stderr
+    assert carried.returncode == 70, carried.stdout + carried.stderr
+    assert "NOT delivered" in carried.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
-    assert f" codex {carried_args} --ask-for-approval" in respawn
+    assert f" {carried_args} " in respawn
+    assert "codex resume" in respawn and "--ask-for-approval never" in respawn
     assert " -m " not in respawn
 
 
@@ -7509,12 +7556,19 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(
     subprocess.run(["git", "init", "-q", "-b", "main", str(lane)], check=True)
     launch_dir = root / "tmux-lanes"
     launch_dir.mkdir()
+    (launch_dir / "coder-turn.json").write_text(json.dumps({
+        "schema_version": "factory-lane-turn/1", "agent": "codex-interactive",
+        "model": "", "effort": "", "extra": [], "persistent": True}))
     (launch_dir / "coder-thread-id").write_text(
         "12345678-1234-4234-8234-123456789abc\n", encoding="utf-8"
     )
     row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
-           "role": "coder", "agent": "codex", "model": "", "repository": str(lane),
-           "caps": {"wall_cap_s": wall_cap}}
+           "role": "coder", "agent": "codex-interactive", "mode": "launch", "persistent": True,
+           "model": "", "repository": str(lane),
+           "caps": {"wall_cap_s": wall_cap},
+           "watch": {"review_every_s": 0, "wrap_s": 0, "stall_window_s": 1200,
+                     "read_allowance_s": 900, "poll_s": 30}}
+    row.update(hosted_codex_restart_fields(launch_dir))
     (launch_dir / "coder-launch.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
     probe = run(
@@ -7524,11 +7578,17 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(
         env,
     )
 
-    assert probe.returncode == 0, probe.stdout + probe.stderr
-    assert "via Codex resume" in probe.stdout
+    assert probe.returncode == 70 and "NOT delivered" in probe.stderr
+    assert tmux_log.exists(), probe.stderr
     calls = tmux_log.read_text()
-    assert "new-window -t r1 -n coder" in calls and "exec --json resume" in calls
-    assert ("-n watch-coder" in calls) == (wall_cap is not None)
+    assert "new-window -t r1 -n coder" in calls and "codex resume" in calls
+    # Native recovery restores its existing watcher, including the retained
+    # stall policy; it must not invent a cap, periodic review or wrap-up policy.
+    assert "-n watch-coder" in calls
+    retained = next(r for r in read_chain(launch_dir / "coder-launch.jsonl")
+                    if r.get("status") == "active")
+    assert retained["caps"] == row["caps"]
+    assert retained["watch"] == row["watch"]
 
 
 @pytest.mark.parametrize("prior_mode", ["qualify", "launch", None])
