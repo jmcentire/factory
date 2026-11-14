@@ -79,7 +79,13 @@ def test_attribution_uses_retained_identity_and_never_invents_missing_version(
 
     # Older saved startup prompts predate named builder identity. Restoring an unnamed
     # retained version must not replace those prompts or prevent retry after a launch failure.
-    legacy_root, _, _, capture, _, _ = launch
+    legacy_root, _, binary, capture, _, _ = launch
+    # Prompt-retention is transport-independent; use a supported native
+    # persistent coordinator rather than AGY's manual-only seat.
+    native = binary / "claude"
+    native.write_bytes((binary / "agy").read_bytes())
+    native.chmod(0o755)
+    monkeypatch.setenv("FACTORY_ORCHESTRATOR_AGENT", "claude")
     record_path = legacy_root / "harness.json"
     legacy_doc = json.loads(record_path.read_text())
     retained = legacy_doc.pop("factory_version")
