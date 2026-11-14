@@ -81,6 +81,31 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     record = control / "record"
     record.write_text("original")
     workspace = tmp_path / "workspace"
+    if tamper == "editable-first-injection":
+        marker = workspace / "trusted-first-launch-injection-executed"
+        observed = subprocess.run(
+            [case["env"]["FACTORY_PYTHON"], "-c", "import sys,json; print(json.dumps(sys.path))"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        relative = [p for p in json.loads(observed.stdout) if p and not Path(p).is_absolute()]
+        assert relative
+        for item in relative:
+            startup = tmp_path / "target" / item
+            startup.mkdir(parents=True, exist_ok=True)
+            (startup / "sitecustomize.py").write_text(
+                "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+            )
+        assert execute(["git", "add", "."], case["env"], cwd=tmp_path / "target").returncode == 0
+        assert (
+            execute(
+                ["git", "commit", "-qm", "synthetic startup fixture"],
+                case["env"],
+                cwd=tmp_path / "target",
+            ).returncode
+            == 0
+        )
     prepared = execute(
         [
             sys.executable,
@@ -99,22 +124,6 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     )
     assert prepared.returncode == 0, prepared.stderr
     workspace = Path(json.loads(prepared.stdout)["repository"])
-    if tamper == "editable-first-injection":
-        marker = workspace / "trusted-first-launch-injection-executed"
-        observed = subprocess.run(
-            [case["env"]["FACTORY_PYTHON"], "-c", "import sys,json; print(json.dumps(sys.path))"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        relative = [p for p in json.loads(observed.stdout) if p and not Path(p).is_absolute()]
-        assert relative
-        for item in relative:
-            startup = workspace / item
-            startup.mkdir(parents=True, exist_ok=True)
-            (startup / "sitecustomize.py").write_text(
-                "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
-            )
     planned = subprocess.run(
         [
             sys.executable,
