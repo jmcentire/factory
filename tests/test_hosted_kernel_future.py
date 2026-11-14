@@ -47,6 +47,7 @@ def eventually(check):
         "json-injection",
         "editable-injection",
         "editable-first-injection",
+        "cache-pythonpath",
     ],
 )
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
@@ -95,7 +96,9 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
             startup = tmp_path / "target" / item
             startup.mkdir(parents=True, exist_ok=True)
             (startup / "sitecustomize.py").write_text(
-                "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+                "import sys, os\nopen("
+                + repr(str(marker))
+                + ", 'w').write(repr({'argv':sys.argv,'pid':os.getpid(),'cwd':os.getcwd()}))\n"
             )
         assert execute(["git", "add", "."], case["env"], cwd=tmp_path / "target").returncode == 0
         assert (
@@ -203,6 +206,23 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
     provider.chmod(0o755)
     prompt = tmp_path / "brief"
     prompt.write_text("synthetic initial kernel-only hosted message")
+    if tamper == "editable-first-injection":
+        assert not marker.exists(), "untrusted startup ran during preparation before public launch"
+    cache_args = []
+    if tamper == "cache-pythonpath":
+        store = tmp_path / "readonly-python-cache"
+        store.mkdir()
+        marker = workspace / "trusted-cache-injection-executed"
+        (store / "sitecustomize.py").write_text(
+            "import sys,os\ntry:\n    open("
+            + repr(str(denied / "oracle"))
+            + ").read()\nexcept PermissionError:\n    pass\nelse:\n    open("
+            + repr(str(marker))
+            + ", 'w').write(repr({'argv':sys.argv,'cwd':os.getcwd()}))\n"
+        )
+        (store / "sitecustomize.py").chmod(0o444)
+        store.chmod(0o555)
+        cache_args = ["--cache-env", "PYTHONPATH=" + str(store)]
     result = execute(
         [
             "bash",
@@ -222,9 +242,14 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
             str(contract),
             "--boundary-digest",
             boundary.digest,
+            *cache_args,
         ],
         case["env"],
     )
+    if tamper == "cache-pythonpath":
+        assert not marker.exists(), "trusted startup executed cache PYTHONPATH injection"
+        if result.returncode in (70, 77):
+            return
     assert result.returncode == 0, result.stdout + result.stderr
 
     def rows():
@@ -236,7 +261,7 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         return json.loads(path.read_text()) if path.exists() else {}
 
     eventually(lambda: state().get("deliveries", {}).get("initial", {}).get("response_stop"))
-    if tamper == "editable-first-injection":
+    if tamper in ("editable-first-injection", "cache-pythonpath"):
         assert not marker.exists(), "untrusted startup code executed in fresh wrapper lifecycle"
         return
     sid = state()["session_id"]
