@@ -455,7 +455,7 @@ def preflight(
         import protocol_host
 
         try:
-            protocol_host.refuse_guarded(environ)
+            protocol_host.refuse_guarded(environ, dialect=name, starting=False)
         except protocol_host.GuardRequired as error:
             raise PreflightRefused(
                 str(error), "choose an agent with a qualified guard for this lane "
@@ -942,7 +942,16 @@ def run_lane(
                     workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
                     message_id=launch_message_id, api_env=chosen.api_env,
-                    environ=child_env, boundary=boundary_record is not None)
+                    environ=child_env, boundary_record=boundary_record,
+                    boundary_role=boundary_role,
+                    # With a boundary, the provider's server runs inside it and the host
+                    # outside. Everything this wrapper records must then be out of the
+                    # provider's reach too, and the plan refuses a boundary that leaves
+                    # any of it within reach.
+                    control=sorted({log.parent.resolve(), exits.parent.resolve(),
+                                    session_file.parent.resolve(),
+                                    (run_root / "tmux-lanes").resolve()})
+                    if boundary_record is not None and session_file is not None else ())
             elif chosen is not None and chosen.dialect == "codex":
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.
@@ -997,7 +1006,10 @@ def run_lane(
             # such (77), not a start that could not be made (127).
             import protocol_host
 
-            refused = 77 if isinstance(error, protocol_host.GuardRequired) else 127
+            # A boundary that was handed over and cannot be relied on is a start that
+            # must not be made (70).
+            refused = (77 if isinstance(error, protocol_host.GuardRequired)
+                       else 70 if isinstance(error, protocol_host.BoundaryUnusable) else 127)
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
             marker = f"__LANE_EXIT__ {slot} rc={refused}\n"
             _append(log, marker.encode())
@@ -1007,8 +1019,14 @@ def run_lane(
             native_session.write_bounded(1, marker.encode())
             return refused
         argv = list(native_plan.argv)
-    argv = validator_boundary.model_command(
-        argv, boundary_record, boundary_role, pathlib.Path.cwd())
+    if native and chosen is not None and chosen.dialect in ("muse", "agy"):
+        # A hosted session's host is trusted and stays outside the boundary, as this wrapper
+        # does; it puts only the provider's server inside (protocol_host). Wrapping the host
+        # here would put its records and its socket within the provider's reach.
+        pass
+    else:
+        argv = validator_boundary.model_command(
+            argv, boundary_record, boundary_role, pathlib.Path.cwd())
     stopped = False
     refused_billing = ""
     session_seen = False

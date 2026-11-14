@@ -633,17 +633,29 @@ if [ "$PERSISTENT" = 1 ]; then
         # No Signet guard and no custody exist for these two (harness/agents.py), and a
         # restart is a start: refused before anything is spawned, as a launch is.
         PROTECTED=""
-        for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+        for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY; do
           case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
         done
         for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
-            FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+            FACTORY_AUTHOR_CUSTODY_DIGEST; do
           [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
         done
         [ "$AUTHOR_CUSTODY" = null ] || PROTECTED="$PROTECTED recorded-author-custody"
-        [ "$BOUNDARY_RECORD" = null ] || PROTECTED="$PROTECTED recorded-boundary"
         if [ -n "$PROTECTED" ]; then
-          echo "lane-message: a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session (no gate on every tool action and no read isolation is established), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+          echo "lane-message: a Signet guard or author custody is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and neither is qualified for a hosted $AGENT session (no gate on every tool action is established, and the kernel boundary is not one), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+          exit 77
+        fi
+        # The boundary a session was launched under is the one a restart runs under (the
+        # launch's own record, read above; nothing ambient replaces or drops it). Muse is
+        # refused under any.
+        BOUNDED=""
+        case "${FACTORY_REQUIRE_BOUNDARY:-}" in ""|0) ;; *) BOUNDED="$BOUNDED FACTORY_REQUIRE_BOUNDARY" ;; esac
+        for NAME in FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+          [ -z "${!NAME:-}" ] || BOUNDED="$BOUNDED $NAME"
+        done
+        [ "$BOUNDARY_RECORD" = null ] || BOUNDED="$BOUNDED recorded-boundary"
+        if [ -n "$BOUNDED" ] && [ "$AGENT" = muse ]; then
+          echo "lane-message: a kernel boundary is required ($(printf '%s' "$BOUNDED" | cut -c2-)), and a hosted muse session is refused under one (Muse's own shell sandbox cannot be applied inside it, and Muse with that sandbox off is not adopted), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
           exit 77
         fi ;;
       esac

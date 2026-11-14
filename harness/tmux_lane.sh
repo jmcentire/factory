@@ -304,23 +304,52 @@ if [ "$ACTION" != "freeze" ]; then
   }
   # Muse and Antigravity are hosted through their own session servers. Neither asks about
   # every action (existing grants and permissive modes are not asked about) and both skip a
-  # hook that fails, so no gate on every tool action and no read isolation is established
-  # for them, and the kernel boundary has not been qualified around a host and its server.
-  # A protected launch (one that requires a Signet guard, author custody or a boundary, by
-  # flag or by a named binding) is refused here: before the provider's sign-in check or any
-  # other run of the provider's program, before any record and before any process.
+  # hook that fails, so no gate on every tool action is established for them. A launch that
+  # requires a Signet guard or author custody (by flag or by a named binding) is refused
+  # here: before the provider's sign-in check or any other run of the provider's program,
+  # before any launch record and before any process. The kernel boundary does not change
+  # that: it confines paths and sockets and decides nothing per action.
+  #
+  # The kernel boundary itself: an Antigravity lane may run under one, with its host
+  # outside and only Antigravity's server inside (protocol_host). A Muse lane may not:
+  # Muse's own shell sandbox cannot be applied inside the boundary, and running Muse with
+  # that sandbox off is not adopted.
   case "$AGENT" in muse|agy)
     PROTECTED=""
-    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY; do
       case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
     done
     for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
-        FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+        FACTORY_AUTHOR_CUSTODY_DIGEST; do
       [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
     done
     [ -z "$PROTECTED" ] || \
-      refuse 77 "a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session: no gate on every tool action and no read isolation is established for it" \
+      refuse 77 "a Signet guard or author custody is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and neither is qualified for a hosted $AGENT session: no gate on every tool action is established for it, and the kernel boundary is not one" \
         "choose an agent with a qualified guard for this lane (harness/agents.py describe); nothing was started"
+    BOUNDED=""
+    case "${FACTORY_REQUIRE_BOUNDARY:-}" in ""|0) ;; *) BOUNDED="$BOUNDED FACTORY_REQUIRE_BOUNDARY" ;; esac
+    for NAME in FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+      [ -z "${!NAME:-}" ] || BOUNDED="$BOUNDED $NAME"
+    done
+    if [ -n "$BOUNDED" ] && [ "$AGENT" = muse ]; then
+      refuse 77 "a kernel boundary is required ($(printf '%s' "$BOUNDED" | cut -c2-)), and a hosted muse session is refused under one: Muse's own shell sandbox cannot be applied inside the boundary (macOS forbids a second sandbox), and running Muse with that sandbox off is not adopted, because the boundary leaves IP egress open and would not keep Muse's own network policy for shell commands" \
+        "run this lane without the boundary, or choose another agent for it; nothing was started"
+    fi
+    if [ -n "$BOUNDED" ]; then
+      # Antigravity under a boundary. The boundary is admitted, and held to what a hosted
+      # lane needs of it, here: before the provider's program is run for any reason. A
+      # contract that is missing, changed, or that leaves the lane's control records or the
+      # code the trusted host runs within the provider's reach, starts nothing.
+      EARLY_BOUNDARY=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
+        --role "$ROLE" --cwd "$REPOSITORY" 2>/dev/null) || \
+        refuse 77 "author boundary admission failed" \
+          "supply a boundary contract and its digest that validate for this lane; nothing was started"
+      BOUNDARY_WHY=$("$FACTORY_PYTHON" "$D/protocol_host.py" check-boundary \
+        --boundary-record "$EARLY_BOUNDARY" --boundary-role "$ROLE" --workspace "$REPOSITORY" \
+        --control "$TMUX_ROOT" --control "$TMUX_ROOT/$SLOT-agent-home" 2>&1 >/dev/null) || \
+        refuse 70 "${BOUNDARY_WHY#hosted-session: }" \
+          "python harness/protocol_host.py trust-roots --control $TMUX_ROOT --control $TMUX_ROOT/$SLOT-agent-home lists what the contract must cover; nothing was started"
+    fi
     ;;
   esac
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
@@ -940,6 +969,11 @@ PY
     ) || refuse 77 "author private runtime cannot be isolated"
     KINDEX_HOME="$PRIVATE_RUNTIME/kindex"
     AGENT_HOME="$PRIVATE_RUNTIME/agent"
+    # A hosted Antigravity session's host runs outside the boundary, and its journal, its
+    # record and its socket are what the lane's reports rest on. They stay in the run's own
+    # control tree, which the boundary keeps from the provider, and never go into the clone.
+    # (The lane's Kindex home stays in the clone: the provider's own child server writes it.)
+    [ "$AGENT" != agy ] || AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
   fi
   # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
   SEED_ARGS=()

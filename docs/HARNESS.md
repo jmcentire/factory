@@ -357,25 +357,29 @@ unattended (Muse, Antigravity) or hold a restarted session to its conversation
 
 - It works for an unprotected lane: one that requires no Signet guard, no author custody
   and no kernel boundary. That is the positive capability, and the only one.
-- A protected lane is refused, as set out next. Nothing here is a step toward a guard.
+- A lane that requires a Signet guard or author custody is refused, as set out next.
+  Nothing here is a step toward a guard.
+- A lane that requires the kernel boundary is refused for Muse, and runs for Antigravity
+  with the host outside the boundary and only Antigravity's server inside it (see "Under
+  the kernel boundary" below). That is static confinement, and it is all it is.
 - On a real subscription model, one bounded thing has been run for each provider, by the
   independent tester: a single text-only turn. No tool call and no approval request
   occurred in either. What has been run is listed at the end of this section; everything
   beyond that list is unproven, including that a real model's tool call or approval
   request behaves as the stand-ins do.
 
-**This is transport, not a guard.** It is groundwork. A protected launch, or a message
-that would restart an ended session under protection, is refused with exit 77 before the
-provider's program is run at all (its sign-in check included) and before any prompt is
-delivered. A refusal does leave its own records: the launcher's refusal event; for
+**This is transport, not a guard.** It is groundwork. A launch, or a message that would
+restart an ended session, that requires a Signet guard or author custody, or that requires
+the kernel boundary of a Muse lane, is refused with exit 77 before the provider's program
+is run at all (its sign-in check included) and before any prompt is delivered. A refusal does leave its own records: the launcher's refusal event; for
 `lane_agent.py run`, a line in the lane log and an exit row carrying 77; for a message,
 the planned message, which stays planned and undelivered. In the cases tried it left no
-launch journal and no launch hand-over record. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
-`FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set to anything but empty or
-`0`; a Signet contract or digest, an author-custody config or digest, or a boundary
-contract or digest named (by variable or by the launcher's own options); or a boundary
-record handed to the lane wrapper. The kernel boundary is in that list because it has not
-been qualified around a host program and the provider's server under it. The refusal is made by `protocol_host` itself, which every hosted
+launch journal and no launch hand-over record. A requirement is any of:
+`FACTORY_REQUIRE_SIGNET`, `FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set
+to anything but empty or `0`; a Signet contract or digest, an author-custody config or
+digest, or a boundary contract or digest named (by variable or by the launcher's own
+options); or a boundary record handed to the lane wrapper. A Signet or custody requirement
+is refused for both providers whether or not a boundary is also supplied. The refusal is made by `protocol_host` itself, which every hosted
 start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
 (exit 77, the provider not started and no hand-over recorded), `lane_agent.py preflight` (exit 77, the provider's account
 command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
@@ -476,6 +480,65 @@ for either, and none is claimed.
   before a prompt's answer in a turn that uses tools, and whether the model name the
   public launcher records matches a session option. The lane's Kindex reaching a real
   session. A hosted lane inside the kernel boundary.
+
+#### Under the kernel boundary (Antigravity only)
+
+When an `agy` lane is launched with a boundary contract and digest
+(`--boundary-contract`/`--boundary-digest`, or the variables), and no Signet or custody
+requirement, the host program stays **outside** the boundary, as the lane wrapper does, and
+only Antigravity's server runs **inside** it, started through `validator_boundary.py` with
+the lane's contract and digest unchanged. The host's journal, record, command ids and socket
+stay in the run's own control tree and never go into the clone.
+
+- **The contract is held to what a hosted lane needs, before anything is started.** The
+  lane's control directories must be under a root the contract denies reading, and the
+  trees the trusted side runs from (the Factory checkout, the Python it runs on) must be
+  under a root it denies writing unless this user cannot write them anyway. A contract that
+  leaves any of that out is refused by name (exit 70), by the launcher before the
+  provider's program is run for any reason, and again by the host.
+  `python harness/protocol_host.py trust-roots --control <dir>...` prints what a contract
+  must cover; `check-boundary` checks one. A contract that is missing, changed or has the
+  wrong digest fails the existing boundary admission (exit 77), also before any provider
+  run. On a machine whose interpreter is the user's own (Homebrew), covering it means
+  denying the lane that interpreter, or running the Factory on one the user cannot write:
+  the boundary module does not accept a write-protected root with symlinks that leave it.
+- **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
+  control directory, which the contract already keeps from the provider.
+- **The child attests before the provider exists.** The process the boundary starts first
+  runs a short system-shell stage, as the very process that then becomes Antigravity's
+  server: it lists every denied and control directory, tries to create a file in every
+  denied, protected and control directory, and tries to connect to the host's socket, says
+  what the kernel answered, and only then becomes the server. The host requires that
+  account first, from the process it started, with every attempt denied; otherwise there
+  is no confined provider and the start exits 70. Its record then carries `confined`: that
+  process's PID and start time (read from outside), the contract, its digest, the role and
+  how many attempts were denied. A requested digest alone never produces that record.
+- **A restart keeps the policy.** The boundary a lane was launched under comes back from
+  the launch record, and the host refuses (exit 70) a restart whose boundary digest, or lack
+  of one, differs from the session's earlier host record.
+- **What it is.** Static confinement of the server's process tree: no read of the denied
+  roots, no write of control records, no unix-socket, spawner or signal escape, by any
+  route, including tools the server runs.
+- **What it is not.** Not a decision per action: a Signet-required lane is still refused.
+  Not a limit on IP egress: what the lane can read, it can send. Not isolation of anything
+  the contract does not list: the profile denies named roots and allows the rest. And the
+  lane's reports are still the provider's own account: with the writer outside they cannot
+  be forged in the lane's files, which says nothing about a provider that reports
+  something untrue. macOS only.
+- **What was run.** A stand-in server, through the launcher and message command, under the
+  real profile: launch, a later message, restart on the same session with a new confined
+  process under the same digest; from inside, on first start and after the restart, 21
+  attempts refused each time (reads of a canary, the host record, the journal and the
+  wrapper's delivery record, direct and through `/bin/sh`; writes and a rename in the
+  control tree, the policy directory and the Factory's code; a connect to the host socket;
+  a signal to the host) while a write in the workspace succeeded; a contract leaving out
+  the control records or the code refused; a wrong digest refused; a restart without the
+  boundary refused. Antigravity's real server: `initialize` answered under the profile.
+  **Not run:** any real Antigravity session, prompt or tool under the boundary.
+- **Muse is refused under a boundary.** Its own shell sandbox cannot be applied inside one
+  (the kernel reports a forbidden second sandbox), and Muse with that sandbox off is not
+  adopted: the boundary leaves IP egress open and would not keep Muse's own network policy
+  for shell commands.
 
 ### Earlier terminal route for Muse lanes (history; lanes no longer use it)
 
