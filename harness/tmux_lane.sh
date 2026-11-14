@@ -314,10 +314,20 @@ if [ "$ACTION" != "freeze" ]; then
   # processes, not only by their window: each earlier slot of this lane is waited for, by the
   # exact wrapper and program its receipt names (PID and start time) and for a bounded time,
   # before anything of theirs is cleaned, anything is recorded or anything is started.
-  # Nothing is signalled. A lane whose window is still live is left to the refusal further
-  # down, which names it as running. A lane that has never run has no receipt and is not
-  # made to wait or to read the process table.
-  if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+  # Nothing is signalled. A lane that has never run has no receipt and is not made to wait or
+  # to read the process table.
+  #
+  # The lane's window is looked at once, here, and that one answer decides the rest of this
+  # launch. Seen live, the launch ends in the refusal further down that names the lane as
+  # running, whatever a later look shows: a window that closes meanwhile leaves its round
+  # stopping, which nobody has waited for. Seen gone, the earlier rounds are waited for now,
+  # and only then is anything of theirs cleaned or anything started. So no path cleans or
+  # starts without that wait having passed.
+  LANE_LIVE=0
+  if tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+    LANE_LIVE=1
+  fi
+  if [ "$LANE_LIVE" = 0 ]; then
     for EARLIER in "$TMUX_ROOT/$LANE"-process.json "$TMUX_ROOT/$LANE".*-process.json; do
       [ -e "$EARLIER" ] || [ -L "$EARLIER" ] || continue
       EARLIER_SLOT=$(basename "$EARLIER" -process.json)
@@ -508,7 +518,10 @@ PY
   # only) before this lane's inputs are checked, unless the lane is still running. Only this
   # lane's own slots ("$LANE" and "$LANE.<round>") and its own clone are looked at: another
   # instance such as "$LANE-b" is another lane, with its own clone and possibly live.
-  if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+  # "Still running" is the answer taken above, with the wait for the earlier rounds: looking
+  # at the window again here could find it just closed and clean under a round nobody waited
+  # for.
+  if [ "$LANE_LIVE" = 0 ]; then
     for MANIFEST in "$TMUX_ROOT/$LANE"-agent-home/*-project-files.json \
         "$TMUX_ROOT/$LANE".*-agent-home/*-project-files.json \
         "$REPOSITORY"/.git/factory-runtime/*/agent/*-project-files.json; do
@@ -603,9 +616,12 @@ PY
   ) || exit 70
 
 
-  # A tmux window per lane: a new round replaces a finished one, never a running one.
+  # A tmux window per lane: a new round replaces a finished one, never a running one. A lane
+  # seen running when this launch began is refused even if its window has closed since (its
+  # round may still be stopping, and this launch did not wait for it or clean after it); so
+  # is one whose window is live now.
   WINDOWS=$(tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null || true)
-  if printf '%s\n' "$WINDOWS" | grep -qx "$LANE 0"; then
+  if [ "$LANE_LIVE" = 1 ] || printf '%s\n' "$WINDOWS" | grep -qx "$LANE 0"; then
     refuse 70 "lane $LANE is still running in $RUN:$LANE" \
       "wait for its watcher to report it done, or stop it, before launching another round"
   fi

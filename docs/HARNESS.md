@@ -60,7 +60,10 @@ wrapper and program running in the lane's clone for a while, and a new round is 
 started beside them. The launch waits up to 15 seconds per earlier slot, then refuses
 (exit 75 while one is still running, naming it; exit 70 when that cannot be told) before
 it cleans the earlier round's project files, records anything or starts anything. A lane
-that has never run is not made to wait.
+that has never run is not made to wait. The lane's window is looked at once per launch: a
+lane seen running is refused as running (exit 70) even if its window closes during the
+launch, so nothing is cleaned or started on any path that did not wait for the earlier
+round.
 `python harness/lane_watchdog.py previous-owner --receipt <file>` is the same check on its
 own: exit 0 when the earlier owner has stopped or there is none, 75 while it runs, 70
 when it cannot be told.
