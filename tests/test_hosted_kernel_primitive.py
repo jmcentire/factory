@@ -53,8 +53,9 @@ def primitive(tmp_path):
 
 
 @pytest.mark.parametrize("agent", ["agy", "muse"])
+@pytest.mark.parametrize("require_signet", [False, True])
 def test_g0_protected_hosted_wrapper_refuses_before_provider(
-    native_case, primitive, tmp_path, agent
+    native_case, primitive, tmp_path, agent, require_signet
 ):
     root, contract, digest, _ = primitive
     case = native_case
@@ -77,6 +78,8 @@ def test_g0_protected_hosted_wrapper_refuses_before_provider(
     }
     case["env"] = {k: v for k, v in case["env"].items() if k in allowed}
     launch(case)
+    if require_signet:
+        case["env"]["FACTORY_REQUIRE_SIGNET"] = "1"
     marker = tmp_path / "provider-spawned"
     binary = case["bin_dir"] / agent
     binary.write_text(
