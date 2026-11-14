@@ -136,6 +136,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
               for relative in relatives]
     for relative, agent in owners:
         label = _native.PROJECT_LABEL[agent]
+        label = ("an " if label[0] in "AEIOU" else "a ") + label
         lane_ran = agent in ran
         # Outermost first: a link on the way is judged as a link and never followed, so
         # nothing outside the materialized candidate is read through it.
@@ -145,7 +146,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
         if on_the_way is not None:
             link = os.readlink(candidate / on_the_way).encode()
             if _base_entry(task, on_the_way) != ("link", link) and lane_ran:
-                entry = (f"{on_the_way} (a {label} lane ran in this run and this link, on "
+                entry = (f"{on_the_way} ({label} lane ran in this run and this link, on "
                          f"the way to a lane's files, is new or changed since the run's "
                          "base commit)")
                 if entry not in found:
@@ -159,7 +160,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
             # A link is judged as a link and never followed.
             if base == ("link", os.readlink(path).encode()):
                 continue  # the target's own link, exactly as it was before the run
-            reason = (f"a {label} lane ran in this run and the link is new or changed since "
+            reason = (f"{label} lane ran in this run and the link is new or changed since "
                       "the run's base commit") if lane_ran else ""
             if reason:
                 found.append(f"{relative} ({reason})")
@@ -172,7 +173,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
         reason = _native.lane_file_in_candidate(
             relative, data, manifests, marks=base is None)
         if not reason and lane_ran:
-            reason = (f"a {label} lane ran in this run and the file is new or changed since "
+            reason = (f"{label} lane ran in this run and the file is new or changed since "
                       "the run's base commit")
         if reason:
             found.append(f"{relative} ({reason})")
