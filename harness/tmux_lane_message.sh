@@ -602,7 +602,9 @@ if [ "$PERSISTENT" = 1 ]; then
     1|missing)
       DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ') || exit 70
       case "$DESCRIBED" in
-        resumable*) ;;
+        # resumable: the watcher may also end and continue it. restartable: only this, a
+        # message to a session that has already ended (harness/agents.py).
+        resumable*|restartable*) ;;
         *)
           echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and the Factory cannot restart a $AGENT session, so $MESSAGE_ID is planned and NOT delivered. Continue the conversation yourself with the program's own resume in a window of your own, or start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
           exit 70 ;;

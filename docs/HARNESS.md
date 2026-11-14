@@ -112,8 +112,8 @@ started through the operator's launcher on a terminal the lane wrapper owns
   delivered only on the session's own prompt report. If the session does not report
   starting within 90s (it may be asking its folder-trust question) the command exits 75
   with the message still planned; if the program ends first it exits 70. A lane whose
-  program the registry does not report as resumable (Muse, Antigravity) is
-  refused with exit 70 and the message stays planned: the operator
+  program the registry reports as neither resumable nor restartable (Muse, Antigravity)
+  is refused with exit 70 and the message stays planned: the operator
   continues it with the program's own resume, or starts a new session with
   `--replace-session`. A lane launched before the `native` entry was recorded is refused
   the same way. Shown with a stand-in program that calls no model, not with Claude Code.
@@ -226,15 +226,24 @@ candidate guard were exercised on temporary repositories, not through a live lan
   wrapper records that hand-over before the program exists, under the message's own id,
   and a message is never handed over twice: if the restarted program ends before
   reporting, that message is `unknown` and a message with other content, or from another
-  sender, is needed. The registry therefore reports `cursor-agent` as resumable by the
-  Factory (`agents.py describe --agent cursor-agent` prints `resumable`; the watchdog's
-  list agrees), and wrap-up and progress-review pauses are offered for it. A message to a
-  running session is typed into it, as before; a first launch is unchanged.
-  Run through `tmux_lane.sh` and `tmux_lane_message.sh` with a stand-in program that calls
-  no model: live follow-up, clean end, restart with the message `observed` on the same
-  conversation id, a follow-up typed into the restarted session, a failed restart, no
-  repeat, a restart by another sender's message; five messages, five different marks.
-  **Run once against Cursor itself, through the public commands** (2026-11-14,
+  sender, is needed. A message to a running session is typed into it, as before; a first
+  launch is unchanged.
+- **Restartable, not resumable.** The registry keeps two facts apart. *Resumable*: the
+  watcher may end a live session to pause it for review or wrap it up, and a lane message
+  continues it. *Restartable*: a lane message restarts a session that has already ended,
+  and nothing more. Cursor is restartable only (`agents.py describe --agent cursor-agent`
+  prints `restartable`; it is not in the watchdog's list). So `tmux_lane.sh` refuses
+  `--review-every-minutes` and `--wrap-up-minutes` for a Cursor lane, and the watcher
+  never ends a Cursor session in order to continue it. The reason is evidence, not
+  design: restarting a Cursor session after a clean end was run against Cursor; the
+  watcher's stop of a live Cursor session, and a restart after it, was not.
+- **What was run, and against what.**
+  *With a stand-in program that calls no model*, through `tmux_lane.sh` and
+  `tmux_lane_message.sh`: live follow-up, clean end, restart with the message `observed`
+  on the same conversation id, a follow-up typed into the restarted session, a failed
+  restart, no repeat, a restart by another sender's message; five messages, five different
+  marks; and a launch asking for a review pause refused.
+  *Against Cursor itself, once, through the public commands* (2026-11-14,
   cursor-agent 2026.11.13, the account's sign-in with no API key in the lane's
   environment, a new synthetic workspace, default sandbox setting, no blanket option):
   `tmux_lane.sh launch --agent cursor-agent` started the lane; Cursor asked its trust
@@ -250,9 +259,13 @@ candidate guard were exercised on temporary repositories, not through a live lan
   report on the resume); three prompt reports with three generation ids, each bound to
   one message. For the two typed messages Cursor's report carried no mark and they were
   matched by their exact text, as before; the launch-argument message carried its mark.
-  **Not run against Cursor:** a restart after a crash, or one whose program fails; a
-  restart in a workspace Cursor was not asked to trust at launch; a watcher's pause or
-  wrap-up of a Cursor session.
+- **Not run against Cursor, and not claimed.** A watcher's stop of a live session and a
+  restart after it (which is why no pause is offered); a restart after a crash, or after
+  any end that was not a clean exit; a restart whose program fails; a restart in a
+  workspace Cursor was not asked to trust at launch; a required Signet guard on a first or
+  a restarted session. A message to a Cursor session that ended in one of those ways is
+  not refused: the same restart is attempted, and what Cursor does then has not been
+  seen.
   One more thing seen: Cursor's workspace trust follows the exact spelling of the path
   (`/private/tmp/...` was trusted, the same folder as `/tmp/...` was asked about again).
 - **Typing, as observed.** Cursor's terminal takes a bracketed paste followed by the typed
@@ -552,7 +565,8 @@ start in print mode with a private configuration. Each launch records and prints
 agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
 `muse`, `agy` and `codex-interactive` it says what was run and what is still open. The
-registry reports `muse` and `agy` as not resumable by the Factory, so wrap-up
+registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory (a Cursor
+session that has ended is restarted by a lane message, which is a different thing), so wrap-up
 and progress-review pauses, which continue a session, are not offered for them. The rest:
 
 | Provider | Established, and from where | Not established |

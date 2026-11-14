@@ -143,8 +143,10 @@ public API is still pre-1.0.
   `--resume=<id>` and the message as its launch argument (`agent ... -- <message>`),
   because a resumed Cursor session that is given nothing reports nothing. The hand-over is
   recorded before the program exists and a message is never handed over twice. The
-  registry now reports `cursor-agent` as resumable by the Factory, so wrap-up and
-  progress-review pauses are offered for it. A first launch and messages to a running
+  registry reports `cursor-agent` as `restartable`, a new word beside `resumable`: a
+  message restarts a session that has ended, and that is all. The watcher still offers no
+  wrap-up or review pause for a Cursor lane and never ends one to continue it, because its
+  stop of a live Cursor session was not run. A first launch and messages to a running
   session are unchanged. Cursor's resume was observed directly (same conversation id, the
   message reported byte for byte, no start report); the restart was run through the lane
   commands with a stand-in program, and once against Cursor itself (2026-11-14: launch,
