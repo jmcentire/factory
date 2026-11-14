@@ -344,16 +344,21 @@ runs `harness/protocol_host.py` in the lane's window, and that program starts th
 provider's own stdio server (`muse serve`; `agy acp --stdio`) on the operator's HOME,
 sign-in and settings, and speaks the provider's published protocol to it (Muse's session
 protocol; the Agent Client Protocol). `META_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY` and
-`AGY_LLM_GATEWAY_API_KEY` are removed from the server's environment. No print mode, no
+`AGY_LLM_GATEWAY_API_KEY` are always removed from the server's environment, however the
+host was started and whatever it was told. No print mode, no
 `muse exec`, no settings edited, and nothing written into the lane's clone: there is no
 `.muse/hooks.json` and no `.agents/plugins/lane/` for a hosted lane. The two sections after
 this one describe the earlier terminal route and its evidence; lanes no longer use it.
 
-**This is transport, not a guard.** It is groundwork. A launch, or a message that would
-restart an ended session, that requires a Signet guard or author custody
-(`FACTORY_REQUIRE_SIGNET=1`, a Signet contract or digest, `FACTORY_REQUIRE_AUTHOR_CUSTODY=1`,
-an author-custody config or digest) is refused with exit 77 before any provider check, any
-record and any process. The refusal is made by `protocol_host` itself, which every hosted
+**This is transport, not a guard.** It is groundwork. A protected launch, or a message
+that would restart an ended session under protection, is refused with exit 77 before the
+provider's program is run at all (its sign-in check included), before any record and
+before any process. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
+`FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set to anything but empty or
+`0`; a Signet contract or digest, an author-custody config or digest, or a boundary
+contract or digest named (by variable or by the launcher's own options); or a boundary
+record handed to the lane wrapper. The kernel boundary is in that list because it has not
+been qualified around a host program and the provider's server under it. The refusal is made by `protocol_host` itself, which every hosted
 start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
 (exit 77, nothing recorded), `lane_agent.py preflight` (exit 77, the provider's account
 command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
@@ -400,9 +405,10 @@ for either, and none is claimed.
   Antigravity `--dangerously-skip-permissions`), as before.
 - **Model and effort.** Muse: `--model` is its server's own option; effort is given on
   each turn. Antigravity: the lane's model and effort are put in force through the
-  session's own options, and the server's answer must show them in force. A model the
-  session does not offer, or an answer that does not show it selected, is refused before
-  any prompt rather than run under another's name.
+  session's own options, and after the last change the server's own account of its
+  options must show both in force together (a later change can undo an earlier one). A
+  model the session does not offer, or a final answer that does not show what was asked
+  for, is refused before any prompt rather than run under another's name.
 - **Not resumable by the watcher.** The registry reports both as `restartable`: a message
   restarts an ended session, and nothing stops a live one for a pause or wrap-up, so
   `--review-every-minutes` and `--wrap-up-minutes` stay refused. A slot an earlier Factory

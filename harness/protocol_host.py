@@ -83,14 +83,20 @@ class GuardRequired(ValueError):
     """A guard or custody is required of this start, and a hosted session has neither."""
 
 
-#: What requires a guard or custody of a lane: a flag that is set, or a binding that is named.
-GUARD_FLAGS = ("FACTORY_REQUIRE_SIGNET", "FACTORY_REQUIRE_AUTHOR_CUSTODY")
+#: What makes a lane a protected one: a flag that is set, or a binding that is named. The
+#: three families are the guard, author custody, and the kernel boundary. None of them is
+#: qualified around a hosted session (a host program and the provider's server under it).
+GUARD_FLAGS = ("FACTORY_REQUIRE_SIGNET", "FACTORY_REQUIRE_AUTHOR_CUSTODY",
+               "FACTORY_REQUIRE_BOUNDARY")
 GUARD_BINDINGS = ("FACTORY_SIGNET_CONTRACT", "FACTORY_SIGNET_DIGEST",
-                  "FACTORY_AUTHOR_CUSTODY_CONFIG", "FACTORY_AUTHOR_CUSTODY_DIGEST")
+                  "FACTORY_AUTHOR_CUSTODY_CONFIG", "FACTORY_AUTHOR_CUSTODY_DIGEST",
+                  "FACTORY_BOUNDARY_CONTRACT", "FACTORY_BOUNDARY_DIGEST")
 
 
-def refuse_guarded(environ: Mapping[str, str]) -> None:
-    """Refuse a hosted start that a guard or custody is required of.
+def refuse_guarded(environ: Mapping[str, str], *, boundary: bool = False) -> None:
+    """Refuse a hosted start that a guard, custody or a boundary is required of.
+
+    ``boundary`` says the caller was handed a boundary record for this start.
 
     This is the authority for that refusal: every way of starting a hosted session comes
     through ``plan`` or ``run``, and both call it before anything is spawned or recorded.
@@ -100,11 +106,14 @@ def refuse_guarded(environ: Mapping[str, str]) -> None:
 
     named = [name for name in GUARD_FLAGS if environ.get(name, "") not in ("", "0")]
     named += [name for name in GUARD_BINDINGS if environ.get(name)]
+    if boundary:
+        named.append("a boundary record")
     if named:
         raise GuardRequired(
-            "a guard or author custody is required (" + ", ".join(named) + "), and neither is "
-            "qualified for a hosted Muse or Antigravity session: no gate on every tool action "
-            "and no read isolation is established for it. Nothing was started")
+            "a guard, author custody or a boundary is required (" + ", ".join(named) + "), "
+            "and none is qualified for a hosted Muse or Antigravity session: no gate on "
+            "every tool action and no read isolation is established for it. Nothing was "
+            "started")
 
 
 def uuid7() -> str:
@@ -206,7 +215,8 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
          directory: pathlib.Path, slot: str, workspace: pathlib.Path, prompt: str,
          python: str = sys.executable, message_id: str = "",
          api_env: Sequence[str] = (),
-         environ: Mapping[str, str] | None = None) -> native_session.Plan:
+         environ: Mapping[str, str] | None = None,
+         boundary: bool = False) -> native_session.Plan:
     """A start of a hosted session, as the lane wrapper's terminal driver takes any start.
 
     The program the wrapper runs is this file; the provider's server is its child. The
@@ -216,7 +226,7 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
     Nothing is written into the lane's repository.
     """
 
-    refuse_guarded(os.environ if environ is None else environ)
+    refuse_guarded(os.environ if environ is None else environ, boundary=boundary)
     settings = translate(dialect, arguments)
     resumed = bool(settings["resume"])
     if resumed and not message_id:
@@ -327,8 +337,11 @@ class Host:
         self.ended = False
         self.pane = bytearray()
         os.set_blocking(sys.stdout.fileno(), False)
-        environment = {key: value for key, value in os.environ.items()
-                       if key not in set(args.unset)}
+        # The provider's server never has an API-routing variable, whoever started this
+        # program and with whatever arguments: that is what keeps it on the operator's
+        # sign-in. ``--unset`` only adds names to these; it cannot take any away.
+        withheld = {*API_ENV, *args.unset}
+        environment = {key: value for key, value in os.environ.items() if key not in withheld}
         self.child = subprocess.Popen(provider, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, env=environment,
                                       cwd=self.workspace)
@@ -752,34 +765,49 @@ class Host:
         def now(name: str) -> str:
             return str(options.get(name, {}).get("currentValue") or "")
 
-        wanted: dict[str, str] = {}
+        # What must be in force when this returns: option id -> value.
+        required: dict[str, str] = {}
         model, effort = self.args.model, self.args.effort
-        if model and model != now("model") and model != f"{now('model')}-{now('thought_level')}":
-            if model in offered("model"):
-                wanted["model"] = model
+        if model:
+            if model == now("model") or model in offered("model"):
+                required["model"] = model
+            elif model == f"{now('model')}-{now('thought_level')}":
+                required["model"], required["thought_level"] = now("model"), now("thought_level")
             else:
                 pairs = [(m, t) for m in offered("model") for t in offered("thought_level")
                          if model == f"{m}-{t}"]
-                if len(pairs) != 1 or (effort and effort != pairs[0][1]):
+                if len(pairs) != 1:
                     raise Refused(f"this server does not offer the model `{model}` "
                                   f"(offered: {', '.join(offered('model')) or 'none named'})")
-                wanted["model"], wanted["thought_level"] = pairs[0]
-        if effort and wanted.get("thought_level", now("thought_level")) != effort:
-            if effort not in offered("thought_level"):
+                required["model"], required["thought_level"] = pairs[0]
+        if effort:
+            if required.get("thought_level", effort) != effort:
+                raise Refused(f"the model `{model}` names the effort "
+                              f"`{required['thought_level']}` and the lane asks for `{effort}`")
+            if effort != now("thought_level") and effort not in offered("thought_level"):
                 raise Refused(f"this server does not offer the effort `{effort}` "
                               f"(offered: {', '.join(offered('thought_level')) or 'none named'})")
-            wanted["thought_level"] = effort
-        for name, value in wanted.items():
+            required["thought_level"] = effort
+        current = {name: now(name) for name in options}
+        for name, value in required.items():
+            if current.get(name) == value:
+                continue
             answer = self.call("session/set_config_option", {
                 "sessionId": self.session, "configId": name, "value": value})
-            # The server's own word that it is now in force. An answer that does not say so
-            # (no options returned, or another value) is not taken for one.
-            current = {str(o.get("id")): o.get("currentValue")
+            # The server's own account of every option after this change, which replaces
+            # what was known: a later change may have undone an earlier one.
+            current = {str(o.get("id")): str(o.get("currentValue") or "")
                        for o in (answer.get("configOptions") or []) if isinstance(o, dict)}
-            if current.get(name) != value:
-                raise Refused(f"asked for {name} `{value}` and the server's answer does not "
-                              f"show it in force (it shows `{current.get(name)}`); nothing "
-                              "was prompted")
+        # The whole of what was asked for, together, by the server's last word. An answer
+        # that does not show a value in force (no options returned, another value, or one
+        # selection reset by a later one) is not taken for it.
+        missing = {name: current.get(name) for name, value in required.items()
+                   if current.get(name) != value}
+        if missing:
+            raise Refused("asked for " + ", ".join(f"{k} `{required[k]}`" for k in missing)
+                          + " and the server's final options do not show it in force ("
+                          + ", ".join(f"{k} `{v}`" for k, v in missing.items())
+                          + "); nothing was prompted")
 
     def serve(self) -> int:
         self.open()

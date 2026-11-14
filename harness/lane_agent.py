@@ -942,7 +942,7 @@ def run_lane(
                     workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
                     message_id=launch_message_id, api_env=chosen.api_env,
-                    environ=child_env)
+                    environ=child_env, boundary=boundary_record is not None)
             elif chosen is not None and chosen.dialect == "codex":
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.

@@ -305,15 +305,23 @@ if [ "$ACTION" != "freeze" ]; then
   # Muse and Antigravity are hosted through their own session servers. Neither asks about
   # every action (existing grants and permissive modes are not asked about) and both skip a
   # hook that fails, so no gate on every tool action and no read isolation is established
-  # for them. A launch that requires a Signet guard or custody is refused here, before any
-  # provider preflight, any record and any process.
+  # for them, and the kernel boundary has not been qualified around a host and its server.
+  # A protected launch (one that requires a Signet guard, author custody or a boundary, by
+  # flag or by a named binding) is refused here: before the provider's sign-in check or any
+  # other run of the provider's program, before any record and before any process.
   case "$AGENT" in muse|agy)
-    if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
-        [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || [ "${FACTORY_REQUIRE_AUTHOR_CUSTODY:-0}" = 1 ] || \
-        [ -n "${FACTORY_AUTHOR_CUSTODY_CONFIG:-}" ] || [ -n "${FACTORY_AUTHOR_CUSTODY_DIGEST:-}" ]; then
-      refuse 77 "a Signet guard or author custody is required, and neither is qualified for a hosted $AGENT session: no gate on every tool action and no read isolation is established for it" \
+    PROTECTED=""
+    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+      case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
+    done
+    for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
+        FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+      [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
+    done
+    [ -z "$PROTECTED" ] || \
+      refuse 77 "a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session: no gate on every tool action and no read isolation is established for it" \
         "choose an agent with a qualified guard for this lane (harness/agents.py describe); nothing was started"
-    fi ;;
+    ;;
   esac
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
     "send new work into its session: harness/tmux_lane_message.sh $RUN validator $LANE review|answer ..."

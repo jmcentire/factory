@@ -632,11 +632,18 @@ if [ "$PERSISTENT" = 1 ]; then
         }
         # No Signet guard and no custody exist for these two (harness/agents.py), and a
         # restart is a start: refused before anything is spawned, as a launch is.
-        if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
-            [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || [ "${FACTORY_REQUIRE_AUTHOR_CUSTODY:-0}" = 1 ] || \
-            [ -n "${FACTORY_AUTHOR_CUSTODY_CONFIG:-}" ] || [ -n "${FACTORY_AUTHOR_CUSTODY_DIGEST:-}" ] || \
-            [ "$AUTHOR_CUSTODY" != null ]; then
-          echo "lane-message: a Signet guard or author custody is required, and neither is qualified for a hosted $AGENT session (no gate on every tool action and no read isolation is established), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+        PROTECTED=""
+        for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+          case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
+        done
+        for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
+            FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+          [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
+        done
+        [ "$AUTHOR_CUSTODY" = null ] || PROTECTED="$PROTECTED recorded-author-custody"
+        [ "$BOUNDARY_RECORD" = null ] || PROTECTED="$PROTECTED recorded-boundary"
+        if [ -n "$PROTECTED" ]; then
+          echo "lane-message: a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session (no gate on every tool action and no read isolation is established), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
           exit 77
         fi ;;
       esac
