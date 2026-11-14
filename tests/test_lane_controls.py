@@ -1501,8 +1501,8 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    # AGY remains unsupported for unattended restart. Cursor and native Codex
-    # now both have same-conversation hosted recovery.
+    # AGY remains unsupported for unattended restart. Native Codex has
+    # watcher-compatible recovery; Cursor only supports already-ended recovery.
     refused = lanes.lane("coder", "--agent", "agy", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
     native = Lanes(tmp_path / "native-codex")
@@ -1517,11 +1517,16 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     assert "codex exec" not in native_call
     cursor = Lanes(tmp_path / "native-cursor")
     _cursor_stub(cursor.stub, signed_in=True)
+    refused_cursor = cursor.lane("coder", "--agent", "cursor-agent",
+                                 "--review-every-minutes", "10")
+    assert refused_cursor.returncode == 64
+    assert "need a resumable lane" in refused_cursor.stderr
+    assert cursor.windows("coder") == []
     accepted_cursor = cursor.lane("coder", "--agent", "cursor-agent",
-                                  "--review-every-minutes", "10")
+                                  "--review-every-minutes", "0")
     assert accepted_cursor.returncode == 0, accepted_cursor.stdout + accepted_cursor.stderr
     cursor_row = read_chain(cursor.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
-    assert cursor_row["watch"]["review_every_s"] == 600
+    assert cursor_row["watch"]["review_every_s"] == 0
     [cursor_call] = cursor.windows("coder")
     assert "--session-agent cursor-agent" in cursor_call and "--persistent" in cursor_call
     assert "--print" not in cursor_call
