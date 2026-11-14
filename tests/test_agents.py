@@ -76,7 +76,7 @@ def test_every_registry_harness_resumes_its_session(name: str, flag: str, tmp_pa
     made = agents.harness(name).turn(model="m", effort="", cwd=tmp_path, resume="sess-1234")
     assert made.argv[made.argv.index(flag) + 1] == "sess-1234"
     if name == "agy":
-        assert made.argv[-1] == "--print"  # the prompt follows it
+        assert "--print" not in made.argv and "--output-format" not in made.argv
 
 
 def test_claude_ollama_is_native_claude_code_on_the_loopback_server(tmp_path: Path) -> None:
@@ -202,22 +202,41 @@ def test_cursor_preserves_operator_home_and_config(tmp_path: Path) -> None:
     assert not (tmp_path / "cursor" / "Library").exists()
 
 
-def test_agy_lane_gets_a_private_home_that_keeps_the_keychain(tmp_path: Path) -> None:
+def test_agy_setup_preserves_operator_home_settings_and_credentials(tmp_path: Path) -> None:
+    # Native interactive AGY must inherit the operator's configuration rather
+    # than replace it with a private HOME or linked authentication files.
     operator = _home(tmp_path)
-    environ = {"HOME": str(operator)}
-    agy = agents.prepare_lane("agy", billing="plan", home=tmp_path / "agy", model="",
+    original = {path.relative_to(operator): path.read_bytes()
+                for path in operator.rglob("*") if path.is_file()}
+    environ = {"HOME": str(operator), "XDG_CONFIG_HOME": str(tmp_path / "operator-config")}
+    lane_home = tmp_path / "agy"
+    agy = agents.prepare_lane("agy", billing="plan", home=lane_home, model="",
                               kindex_record=RECORD, env_file=tmp_path / "a.env",
                               environ=environ)
-    state = Path(agy.env["HOME"]) / ".gemini"
-    assert (state / "antigravity-cli" / "antigravity-oauth-token").is_symlink()
-    assert not (state / "antigravity-cli" / "mcp_config.json").is_symlink()
-    for path in (state / "antigravity-cli" / "mcp_config.json",
-                 state / "config" / "mcp_config.json"):
-        assert list(json.loads(path.read_text())["mcpServers"]) == ["kindex"]
-    assert (state / "config" / ".migrated").exists()
-    # A relaunch rebuilds the same home in place.
-    agents.prepare_lane("agy", billing="plan", home=tmp_path / "agy", model="",
-                        kindex_record=RECORD, env_file=tmp_path / "a.env", environ=environ)
+    effective = {**environ, **agy.env}
+    assert effective["HOME"] == environ["HOME"]
+    assert effective["XDG_CONFIG_HOME"] == environ["XDG_CONFIG_HOME"]
+    assert {path.relative_to(operator): path.read_bytes()
+            for path in operator.rglob("*") if path.is_file()} == original
+    assert not (lane_home / ".gemini").exists()
+    assert not any(path.is_symlink() and path.resolve().is_relative_to(operator.resolve())
+                   for path in lane_home.rglob("*"))
+    assert "--print" not in agy.argv
+    assert "--dangerously-skip-permissions" not in agy.argv
+
+
+def test_agy_turn_is_native_interactive_without_automatic_factory_resume(tmp_path: Path) -> None:
+    out = subprocess.run(
+        [sys.executable, str(REPO / "harness" / "agents.py"), "turn", "--agent", "agy",
+         "--model", "operator-selected-model", "--cwd", str(tmp_path)],
+        capture_output=True, check=True,
+    ).stdout.decode().split("\0")
+    assert out[0] == "terminal" and out[1] == "agy"
+    assert out[out.index("--model") + 1] == "operator-selected-model"
+    assert not {"--print", "--input-format", "--output-format",
+                "--dangerously-skip-permissions"}.intersection(out)
+    assert not agents.harness("agy").resumable
+    assert "agy" not in lane_watchdog.RESUMABLE_AGENTS
 
 
 # First streamed lines, as each harness printed them (2026-10-16, values shortened).
@@ -227,8 +246,6 @@ STREAMS = {
     "cursor-agent": ('{"type":"system","subtype":"init","apiKeySource":"login","session_id":'
                      '"7e565b43-db46-4bbe-b991-8d180c2d29c7"}',
                      "7e565b43-db46-4bbe-b991-8d180c2d29c7"),
-    "agy": ('{"event":"init","conversation_id":"63cad11c-be83-4b67-b890-353b3a784d62"}',
-            "63cad11c-be83-4b67-b890-353b3a784d62"),
 
 }
 
@@ -251,11 +268,6 @@ def test_billing_source_is_read_from_the_init_event() -> None:
 
 
 def test_outcomes_read_each_harness_final_event() -> None:
-    agy = agents.harness("agy").outcome(
-        STREAMS["agy"][0] + "\n" + '{"event":"step_update","step_update":{"step_type":'
-        '"agent_response","text_delta":"OK\\n","usage":{"input_tokens":3,"output_tokens":1}}}')
-    assert agy.text == "OK\n" and agy.session == STREAMS["agy"][1]
-    assert agy.tokens["input"] == 3
     cursor = agents.harness("cursor-agent").outcome(
         '{"type":"result","result":"OK","session_id":"s-123456789","usage":{"inputTokens":5}}')
     assert cursor.text == "OK" and cursor.session == "s-123456789"
