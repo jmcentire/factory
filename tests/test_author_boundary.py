@@ -194,7 +194,8 @@ def test_resume_uses_retained_binding_and_refuses_drift_before_respawn(tmp_path)
                FACTORY_BOUNDARY_DIGEST="0" * 64)
     resumed = run(args, operator, env)
     assert resumed.returncode == 70, resumed.stdout + resumed.stderr
-    assert "NOT delivered" in resumed.stderr
+    assert "NOT recorded as delivered" in resumed.stderr
+    assert "never handed over again" in resumed.stderr
     # Recording a respawn is not an observed native prompt receipt.
     command = next(row for row in tmux_log.read_text().splitlines() if "respawn-pane" in row)
     assert record["digest"] in command and "replacement-not-used" not in command

@@ -413,7 +413,8 @@ for line in sys.stdin:
     result=run(['bash',str(HARNESS/'tmux_lane_message.sh'),'r1','validator','coder','status',
                 '--runs',str(root.parent)],operator,env)
     assert result.returncode==70,result.stdout+result.stderr
-    assert "NOT delivered" in result.stderr
+    assert "NOT recorded as delivered" in result.stderr
+    assert "never handed over again" in result.stderr
     # The recorder does not execute the respawn, so no delivery can be claimed.
     resumed=next(row for row in tmux_log.read_text().splitlines() if 'respawn-pane' in row)
     assert 'author_custody.py' in resumed and digest in resumed
