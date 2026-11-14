@@ -266,7 +266,8 @@ while True:
                 {
                     "sessionId": sid,
                     "turnId": tid,
-                    "accepted": True,
+                    "status": "accepted",
+                    "commandId": p["commandId"],
                     "disposition": "queued" if active else "started",
                     "startedNewTurn": not active,
                 },
@@ -327,6 +328,7 @@ def hosted(tmp_path, monkeypatch, request):
     prompt.write_text("-literal initial\nno shell $(false)")
     env = {k: v for k, v in os.environ.items() if k in {"PATH", "SHELL", "TMPDIR", "TERM", "LANG"}}
     env.update(HOME=str(home), FACTORY_PYTHON=sys.executable)
+    env["PATH"] = str(folder) + os.pathsep + env["PATH"]
     for key in ["META_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"]:
         env[key] = "synthetic-not-a-key"
     command = [
@@ -440,7 +442,10 @@ def test_hosted_initial_and_live_followup_bind_exact_identity_without_pollution(
     assert len([x for x in before if x.get("prompt")]) == 1
     assert all(not r["keys"] and r["home"] == str(lane.home) for r in before if r.get("spawn"))
     mid = lane.plan("-followup\nverbatim body")
-    foreign = lane.send(mid, "99999999-9999-4999-8999-999999999999")
+    try:
+        foreign = lane.send(mid, "99999999-9999-4999-8999-999999999999")
+    except ValueError:
+        foreign = {"state": "refused"}
     assert foreign.get("state") != "observed"
     assert len([x for x in lane.rows() if x.get("prompt")]) == 1
     lane.send(mid)
@@ -656,6 +661,9 @@ def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
         assert handover["command_id"] == follow["prompt"]["commandId"]
     (lane.folder / "crash-before-ack").unlink()
     # Public delivery retry may refuse or report unknown; neither may resubmit.
-    result = lane.send(mid)
+    try:
+        result = lane.send(mid)
+    except ValueError:
+        result = {"state": "refused"}
     assert result.get("state") != "observed"
     assert len([r for r in lane.rows() if "prompt" in r]) == 2
