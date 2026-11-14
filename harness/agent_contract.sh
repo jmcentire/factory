@@ -26,7 +26,8 @@ needs() {  # needs <help text> <cli name> <version> <flag>...
 }
 
 case "$AGENT" in
-  codex|codex-ollama)
+  codex-ollama)
+    # The one lane agent that still runs `codex exec` (with --oss, on a local Ollama model).
     VERSION=$(codex --version 2>/dev/null) || fail "codex CLI is not runnable ($(at codex))"
     EXEC_HELP=$(codex exec --help 2>/dev/null) || EXEC_HELP=""
     # Only what a lane uses. Nothing that ignores the operator's Codex configuration is
@@ -36,7 +37,10 @@ case "$AGENT" in
     printf '%s' "$QUEUE_HELP" | grep -q -- '--thread' || \
       fail "codex CLI contract lacks queue --thread ($VERSION at $(at codex))"
     CONTRACT="codex-exec-json-plus-queue-resume-v1" ;;
-  codex-interactive)
+  codex|codex-interactive)
+    # Codex's own interactive session, hosted. `codex`, the default author lane, is this
+    # adapter (tmux_lane.sh turns the name into codex-interactive before it asks here), so
+    # asked on its own it is held to the same contract and not to `codex exec`'s.
     VERSION=$(codex --version 2>/dev/null) || fail "codex CLI is not runnable ($(at codex))"
     # --no-daemon keeps the TUI off the app-server daemon whose socket failure sent msg-r2's
     # Coder to a login screen.
