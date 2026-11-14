@@ -1499,8 +1499,20 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    refused = lanes.lane("coder", "--agent", "codex-interactive", "--review-every-minutes", "10")
+    # Cursor is still documented as unsupported for unattended ended-session
+    # recovery. Native Codex now has a qualified same-conversation resume path.
+    refused = lanes.lane("coder", "--agent", "cursor-agent", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
+    native = Lanes(tmp_path / "native-codex")
+    _codex_stub(native.stub, signed_in=True)
+    accepted = native.lane("coder", "--agent", "codex-interactive",
+                           "--review-every-minutes", "10")
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    native_row = read_chain(native.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert native_row["watch"]["review_every_s"] == 600
+    [native_call] = native.windows("coder")
+    assert "--session-agent codex-interactive" in native_call
+    assert "codex exec" not in native_call
     assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "pauses this lane" not in prompt and "capped at" not in prompt
