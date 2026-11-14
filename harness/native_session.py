@@ -168,7 +168,11 @@ def resolve_launcher(environ: Mapping[str, str], *, executable: str = CLAUDE_PRO
     wanted = named or DEFAULT_LAUNCHER
     if not re.fullmatch(r"[A-Za-z0-9_./-]+", wanted):
         raise ValueError(f"{LAUNCHER_ENV} must be one command name or path, not {wanted!r}")
-    search = environ.get("PATH")
+    # Resolution depends on the environment it was given and nothing else: never this
+    # process's own PATH (shutil.which would fall back to it), and never a login shell
+    # unless that environment says whose it is. A lane's or seat's environment always
+    # carries both; a caller that passes neither gets only what is on the default path.
+    search = environ.get("PATH") or os.defpath
 
     def direct() -> Launcher:
         own = shutil.which(executable, path=search)
@@ -185,7 +189,7 @@ def resolve_launcher(environ: Mapping[str, str], *, executable: str = CLAUDE_PRO
                         path=str(pathlib.Path(found).absolute()))
     shell = environ.get("SHELL") or "/bin/sh"
     kind = ""
-    if "/" not in wanted and shutil.which(shell, path=search):
+    if "/" not in wanted and environ.get("HOME") and shutil.which(shell, path=search):
         kind = _shell_kind(shell, wanted, environ, timeout)
     if kind == "function":
         return Launcher(wanted, "login-shell", shell=shell)

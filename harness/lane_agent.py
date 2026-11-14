@@ -485,20 +485,27 @@ def preflight(
     if chosen.auth == "claude-plan":
         import native_session
 
+        launcher: native_session.Launcher | None
         try:
             launcher = native_session.resolve_launcher(environ, executable=chosen.executable)
         except ValueError as error:
-            raise PreflightRefused(
-                str(error), f"set {native_session.LAUNCHER_ENV} to the command you start "
-                "Claude Code with, or put claude on PATH") from None
-        if launcher.via == "login-shell":
+            if environ.get(native_session.LAUNCHER_ENV, "").strip():
+                # A launcher the operator named and that cannot be run is theirs to fix.
+                raise PreflightRefused(
+                    str(error), f"set {native_session.LAUNCHER_ENV} to the command you start "
+                    "Claude Code with, or put claude on PATH") from None
+            # No launcher and no `claude` found in this environment: ask the CLI by name
+            # through the runner, which reports a program that cannot be run with its fix.
+            launcher = None
+        program = launcher.path if launcher is not None else chosen.executable
+        if launcher is not None and launcher.via == "login-shell":
             # The operator's own function decides the account and configuration the session
             # runs with. Asking a bare `claude` about its sign-in would answer for a different
             # start than the one about to happen, and could refuse a launcher that works. The
             # session shows its own sign-in state; until it reports started it is "starting".
             return f"claude-launcher:{launcher.name}:sign-in-not-checked"
         remediation = "claude auth login   (once, as this user, with the Claude subscription)"
-        result = _status([launcher.path, "auth", "status", "--json"], timeout=timeout,
+        result = _status([program, "auth", "status", "--json"], timeout=timeout,
                          runner=runner, remediation=remediation, label="Claude Code")
         try:
             document = json.loads(result.stdout)
@@ -819,13 +826,10 @@ def run_lane(
                        or run_root is None or session_file is None or prompt is None):
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
     native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
-    if session_agent in NATIVE_TERMINAL_AGENTS and not native:
-        raise ValueError(f"{session_agent} runs only as a resident native terminal session; "
-                         "print mode is never used")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
-    if native and session_agent == "claude":
+    if session_agent == "claude":
         # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
         # API-billing variable the launching shell happened to export reaches Claude Code,
         # and the lane runs rather than refusing over a variable it can simply not pass on.
@@ -842,7 +846,7 @@ def run_lane(
             if sep and name.isidentifier():
                 child_env[name] = value
                 named.append(name)
-        if native and session_agent == "claude":
+        if session_agent == "claude":
             # A variable in the lane's own file was put there on purpose. One that would
             # bill Claude Code to an API key or point it at another endpoint is not dropped
             # quietly, which would hide the mistake and run a different lane than the one
@@ -851,15 +855,22 @@ def run_lane(
                               if name in named and child_env.get(name))
             if explicit:
                 raise ValueError(
-                    f"credential file {env_file.name} sets " + ", ".join(explicit)
-                    + " for Claude Code, which runs only on the operator's subscription and "
-                    "is never given an API key or another endpoint")
+                    f"credential file {env_file.name} sets API-routing variables for Claude "
+                    "Code: " + ", ".join(explicit) + ". Claude Code runs only on the "
+                    "operator's subscription and is never given an API key or another "
+                    "endpoint")
     if plan_only and chosen is not None:
         forbidden = sorted(name for name in chosen.api_env if child_env.get(name))
         if forbidden:
             # Inspect the final environment, including env_file overrides. Never log values.
             raise ValueError("plan-only lane contains API-routing variables: "
                              + ", ".join(forbidden))
+    # Credentials are judged first, so a contaminated file is named for what it is whatever
+    # else is wrong with the request. Then: a Claude lane is a resident native session or
+    # nothing.
+    if session_agent in NATIVE_TERMINAL_AGENTS and not native:
+        raise ValueError(f"{session_agent} runs only as a resident native terminal session; "
+                         "print mode is never used")
     native_plan = None
     if native:
         import native_session
