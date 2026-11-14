@@ -82,7 +82,8 @@ public API is still pre-1.0.
   `validate_candidate.py` refuses a candidate commit that carries a lane's project file at
   one of the three paths a lane writes, when that file is new or changed since the run's
   base commit; a file unchanged from the base is the target's own and is never refused, and
-  copies under other names are not looked for.
+  copies under other names are not looked for. A base commit that cannot be read is
+  reported as `validation-unavailable`, never as the target lacking the file.
   The generated `.cursor/cli.json` carries the empty `deny` list Cursor's schema requires.
 - Cursor lanes no longer pass `--force`, `--approve-mcps` or `--trust`. With the operator's
   configuration loaded those would approve everything the operator has configured. Cursor

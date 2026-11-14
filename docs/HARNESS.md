@@ -204,6 +204,10 @@ a stub shaped by that evidence.
   the tree is not looked for. A link at one of those paths is compared as a link and never
   followed. Lane manifests are read from the run's control tree and from the lane clone's
   own private runtime.
+  When the run's base commit cannot be read (Git fails or times out), nothing is concluded
+  about the candidate: the result is `status: validation-unavailable`, `exit_code: 70`,
+  with the Git error, and no check is run. Only a base commit that Git read and that lists
+  nothing at a path counts as the target not having it.
 - **Signet sees the lane's Kindex as Kindex.** A required Signet hook evaluates a call to
   `lane-kindex` as `mcp__kindex__<tool>`, so the lane's own memory satisfies rules written
   about Kindex. A call to the operator's server named `kindex` is refused under that hook

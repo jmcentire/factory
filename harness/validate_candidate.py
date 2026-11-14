@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from factory_runtime.host_git import materialize_commit, run_host_git
+from factory_runtime.host_git import HostGitError, materialize_commit, run_host_git
 from factory_runtime.kindex_workspace import mark_no_index
 
 _record = (importlib.import_module("harness.run_record") if __package__
@@ -29,19 +29,40 @@ _native = (importlib.import_module("harness.native_session") if __package__
            else importlib.import_module("native_session"))
 
 
+class BaseUnavailable(RuntimeError):
+    """The run's base commit could not be read, so what it held is not known.
+
+    Not knowing is a different fact from the base holding nothing, and is never reported
+    as that: a candidate is judged against the base or not judged at all.
+    """
+
+
 def _base_entry(task: dict[str, Any], relative: str) -> tuple[str, bytes] | None:
-    """What the run's base commit holds at ``relative``: ("link", its target) or
-    ("file", its bytes); None when the base has nothing there."""
+    """What the run's base commit holds at ``relative``: ("link", its target),
+    ("file", its bytes) or, for anything that is not a file, (its Git type, b"").
+
+    None means one thing only: Git read the base commit and listed nothing at that path.
+    A Git command that fails, times out or answers in a form this cannot read raises
+    ``BaseUnavailable``.
+    """
 
     source, commit = Path(task["repository"]), task["resolved_commit"]
     try:
-        listing = run_host_git(source, ["ls-tree", commit, "--", relative]).decode()
-        if not listing.strip():
+        listing = run_host_git(source, ["ls-tree", "-z", commit, "--", relative])
+        if not listing:
             return None
-        mode = listing.split(None, 1)[0]
-        content = run_host_git(source, ["show", f"{commit}:{relative}"])
-    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
-        return None
+        fields = listing.split(b"\t", 1)[0].split()
+        if len(fields) != 3:
+            raise BaseUnavailable(
+                f"the run's base commit {commit} gave an unreadable listing for {relative}")
+        mode, kind, name = (field.decode("ascii", errors="replace") for field in fields)
+        if kind != "blob":
+            return (kind, b"")
+        content = run_host_git(source, ["cat-file", "blob", name])
+    except HostGitError as error:
+        raise BaseUnavailable(
+            f"the run's base commit {commit} could not be read for {relative}, so whether "
+            f"the target already had that path is not known: {error}") from error
     return ("link" if mode == "120000" else "file", content)
 
 
@@ -72,6 +93,10 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
     lane's own clone, from its private runtime under ``.git/factory-runtime``, which is
     where a lane under a kernel boundary keeps them.
 
+    The base is read only for a path the candidate actually has. When it cannot be read
+    (Git fails or times out) ``BaseUnavailable`` is raised: the candidate is not treated as
+    though the target had nothing there, and it is not refused as a lane's either.
+
     Scope, exactly: the three paths a Cursor lane writes (``.cursor/hooks.json``,
     ``.cursor/mcp.json``, ``.cursor/cli.json``). A copy of a lane's file committed under
     another name or elsewhere in the tree is not looked for.
@@ -101,6 +126,8 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
     found: list[str] = []
     for relative in _native.CURSOR_PROJECT_FILES:
         path = candidate / relative
+        if not path.is_symlink() and not path.is_file():
+            continue
         base = _base_entry(task, relative)
         if path.is_symlink():
             # A link is judged as a link and never followed.
@@ -110,8 +137,6 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
                       "the run's base commit") if cursor_lane else ""
             if reason:
                 found.append(f"{relative} ({reason})")
-            continue
-        if not path.is_file():
             continue
         data = path.read_bytes()
         if base == ("file", data):
@@ -248,8 +273,13 @@ def validate(
                 "pointer file(s) remain. Supply a complete local store with --lfs-objects."
             )
     except (ValueError, OSError, RuntimeError) as error:
+        # Evidence that could not be read is reported as that, not as a finding about the
+        # candidate: nothing was established against it and no check was run.
         result.update(
-            exit_code=70, status="validation-failed", error=str(error),
+            exit_code=70,
+            status=("validation-unavailable" if isinstance(error, BaseUnavailable)
+                    else "validation-failed"),
+            error=str(error),
             finished_at=dt.datetime.now(dt.UTC).isoformat(),
         )
         retain_result(root, result_root, result)
