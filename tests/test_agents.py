@@ -584,3 +584,29 @@ def test_a_lane_refused_before_it_runs_records_its_exit_and_wakes_the_launcher(t
     row = json.loads((tmp_path/'exits.jsonl').read_text())
     assert row['slot'] == 'validator' and row['rc'] == 70
     assert signals == [['tmux', '-L', 'factory-fixture', 'wait-for', '-S', 'ch']]
+
+
+def test_claude_preflight_never_falls_back_to_an_ambient_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing launcher in the supplied environment cannot borrow our account."""
+    ambient = tmp_path / "ambient"
+    selected = tmp_path / "selected"
+    ambient.mkdir()
+    selected.mkdir()
+    marker = tmp_path / "wrong-account-probed"
+    native = ambient / "claude"
+    native.write_text(
+        "#!/bin/sh\n"
+        f"printf probed > '{marker}'\n"
+        "printf '%s\\n' '{\"loggedIn\":true,\"authMethod\":\"claude.ai\","
+        "\"apiKeySource\":null}'\n",
+        encoding="utf-8",
+    )
+    native.chmod(0o755)
+    monkeypatch.setenv("PATH", str(ambient))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    supplied = {"HOME": str(tmp_path / "selected-home"), "PATH": str(selected)}
+    with pytest.raises(lane_agent.PreflightRefused):
+        lane_agent.preflight("claude", environ=supplied)
+    assert not marker.exists(), "preflight probed the ambient account instead of refusing"
