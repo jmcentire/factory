@@ -309,10 +309,10 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   Observed on 1.4.20 with the echo provider and a user shell action (`!touch …`, which
   Muse reports as tool `shell`): `PreToolUse` fires, also under `--yolo`; an explicit deny
   with a reason blocks the tool, and so does exit 2. The tool runs when the hook exits 1,
-  prints something that is not JSON, exceeds its timeout, or cannot be started. Muse has
-  no fail-closed option: an entry carrying a field it does not know (`failClosed`,
-  `required`) is disabled with a warning and the tool runs. So a hook can decide but
-  cannot be the thing that enforces. A user shell action is not held for approval even in
+  prints something that is not JSON, exceeds its timeout, or cannot be started. No
+  supported fail-closed hook setting has been qualified; tested `failClosed`/`required`
+  entries were disabled. This tested hook-only configuration cannot provide fail-closed
+  enforcement across those failures. A user shell action is not held for approval even in
   `--approval-mode untrusted`, and the permission hook is not consulted for it, so Muse's
   approval path cannot be exercised without a model.
 - **Not established.** Anything a signed-in model run would show: a model calling
@@ -368,10 +368,10 @@ and they are not the same thing:
   under any field, so a lane's done line is not seen from its reports.
 - **Permissions.** Nothing is imposed. `FACTORY_LANE_SANDBOX=off` is the one configuration
   that adds `--dangerously-skip-permissions`.
-- **No Signet guard.** A launch that requires a guard is refused for `agy`. No tool-use
-  hook has been seen firing: a user shell action typed in the session (`!touch …`) ran
-  with no hook called at all, so nothing triggers `PreToolUse` without a model, and what
-  happens when the hook fails is unobserved on this version. Antigravity does have native
+- **No Signet guard.** A launch that requires a guard is refused for `agy`. A user shell
+  action typed in the session (`!touch …`) ran with no hook called. This user-shell route
+  did not exercise `PreToolUse`; model-tool hook failure behavior remains unverified.
+  Antigravity does have native
   permission rules (`command(...)`, `mcp(server/tool)`, a `strict` tool-permission
   setting, by its changelog) that do not depend on a hook running; whether a lane can set
   them for one session, and how a hook's approval combines with them, is not established.
