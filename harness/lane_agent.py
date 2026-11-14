@@ -917,8 +917,7 @@ def run_lane(
             record_exit(exits, slot=slot, rc=127, stopped=False)
             if ready is not None:
                 ready()
-            sys.stdout.write(marker)
-            sys.stdout.flush()
+            native_session.write_bounded(1, marker.encode())
             return 127
         argv = list(native_plan.argv)
     argv = validator_boundary.model_command(
@@ -1167,8 +1166,17 @@ def run_lane(
     _append(log, marker.encode())
     record_exit(exits, slot=slot, rc=rc, stopped=stopped)
     announce()
-    sys.stdout.write(marker)
-    sys.stdout.flush()
+    if native_plan is not None:
+        # The exit is already durable: in the lane log and in the exits journal, above. The
+        # copy on this wrapper's own output is for whoever is watching, and that output may
+        # be a pipe nobody reads, full of the program's relayed screen. A plain write there
+        # would wait for ever on a process that has nothing left to do, so it is bounded.
+        import native_session
+
+        native_session.write_bounded(1, marker.encode())
+    else:
+        sys.stdout.write(marker)
+        sys.stdout.flush()
     return rc
 
 

@@ -611,13 +611,41 @@ class Terminal:
         signal.signal(signal.SIGWINCH, self._previous_winch)
         if self._saved is not None and self.inbound >= 0:
             try:
-                termios.tcsetattr(self.inbound, termios.TCSADRAIN, self._saved)  # type: ignore[arg-type]
+                # At once: waiting for the terminal's pending output to drain could wait on a
+                # reader, and the settings being restored do not depend on it.
+                termios.tcsetattr(self.inbound, termios.TCSANOW, self._saved)  # type: ignore[arg-type]
             except termios.error:
                 pass
         try:
             os.close(self.master)
         except OSError:
             pass
+
+
+def write_bounded(descriptor: int, data: bytes, timeout: float = 1.0) -> bool:
+    """Write ``data`` to an output that may never be read, without waiting on it for long.
+
+    For what a wrapper says on its own output once a native session has run: that output
+    may be a pipe nobody reads, already full of the program's relayed screen. Each write is
+    made only when the output is ready, and the whole attempt gives up after ``timeout``.
+    False means not all of it was written. Whatever must survive is written durably
+    elsewhere first; this is the copy for whoever is watching.
+    """
+
+    view = memoryview(data)
+    deadline = time.monotonic() + timeout
+    while view:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            if not select.select([], [descriptor], [], remaining)[1]:
+                return False
+            sent = os.write(descriptor, view[:select.PIPE_BUF])
+        except (OSError, ValueError):
+            return False
+        view = view[sent:]
+    return True
 
 
 def paste(text: str) -> bytes:
