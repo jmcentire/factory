@@ -21,3 +21,17 @@ These results do not establish hosted tool authorization, Signet behavior,
 all-tool interception, native credential compatibility, or provider config safety.
 Required hosted protections continue to refuse. Real provider hooks or model/tool
 calls are not part of these tests. No global profile or native settings changed.
+
+Extension on b5cbf82: static synthetic UNIX allowlist plus fake global-Kindex and
+provider-settings tests pass. Both unwrapped sockets connect; inside boundary only
+the declared broker connects. Fake global store reads/list and all tested writes
+fail; fake provider settings writes fail and bytes remain identical. This is not
+proof about real provider state-layout compatibility or remote Kindex transports.
+
+`test_hosted_kernel_future.py` is a separately committed future-feature oracle,
+intentionally red on b5cbf82: 4 public initial admissions refuse77 before provider
+spawn. It specifies desired kernel-only launch/live followup/same-session restart
+and tampered retained contract refusal, while preserving required semantic
+Signet/custody refusal. Host state is protected from provider writes. It is not
+qualified until actual candidate succeeds and independent review approves the
+explicit kernel-only admission change. No required protection flags are unset.

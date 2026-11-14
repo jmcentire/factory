@@ -214,3 +214,96 @@ def test_k4_digest_mismatch_refuses_before_child(primitive):
     )
     assert result.returncode != 0
     assert not marker.exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS kernel primitive")
+def test_kernel_explicit_socket_allowlist_denies_other_local_socket(primitive):
+    import socket
+    import tempfile
+
+    root, contract, _, base = primitive
+    with tempfile.TemporaryDirectory(prefix="f-kernel-", dir="/tmp") as temporary:
+        sockets = Path(temporary).resolve()
+        allowed, forbidden = sockets / "broker.sock", sockets / "foreign.sock"
+        with socket.socket(socket.AF_UNIX) as broker, socket.socket(socket.AF_UNIX) as other:
+            broker.bind(str(allowed))
+            broker.listen()
+            other.bind(str(forbidden))
+            other.listen()
+            value = json.loads(contract.read_text())
+            value["protected_writes"].append(str(sockets))
+            value["allowed_sockets"] = [str(allowed)]
+            boundary = Boundary.parse(value)
+            contract.write_text(json.dumps(boundary.document()))
+            base[base.index("--digest") + 1] = boundary.digest
+            probe = """import errno,json,socket,sys
+out={}
+for name,path in [('allowed',sys.argv[1]),('forbidden',sys.argv[2])]:
+ with socket.socket(socket.AF_UNIX) as s:
+  s.settimeout(2)
+  try: s.connect(path);out[name]='connected'
+  except OSError as e: out[name]='denied' if e.errno in (errno.EPERM,errno.EACCES) else repr(e)
+print(json.dumps(out))
+"""
+            args = [sys.executable, "-c", probe, str(allowed), str(forbidden)]
+            plain = subprocess.run(args, capture_output=True, text=True, timeout=10)
+            assert plain.returncode == 0, plain.stderr
+            assert json.loads(plain.stdout) == {"allowed": "connected", "forbidden": "connected"}
+            guarded = subprocess.run(
+                base + args, cwd=root, capture_output=True, text=True, timeout=10
+            )
+            assert guarded.returncode == 0, guarded.stderr
+            assert json.loads(guarded.stdout) == {"allowed": "connected", "forbidden": "denied"}
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS kernel primitive")
+@pytest.mark.parametrize("kind", ["fake-global-kindex", "fake-provider-settings"])
+def test_kernel_synthetic_global_store_and_settings_immutable(primitive, kind):
+    root, contract, _, base = primitive
+    store = root / kind
+    store.mkdir()
+    record = store / ("kindex.db" if kind == "fake-global-kindex" else "settings.json")
+    record.write_text("SYNTHETIC_ORIGINAL_NOT_OPERATOR_STATE")
+    value = json.loads(contract.read_text())
+    value["protected_writes"].append(str(store))
+    if kind == "fake-global-kindex":
+        value["denied_reads"].append(str(store))
+    boundary = Boundary.parse(value)
+    contract.write_text(json.dumps(boundary.document()))
+    base[base.index("--digest") + 1] = boundary.digest
+    original = record.read_bytes()
+    probe = """import errno,json,pathlib,subprocess,sys
+p=pathlib.Path(sys.argv[1]);out={}
+def attempt(name,fn):
+ try: fn();out[name]=False
+ except OSError as e:out[name]=e.errno in (errno.EPERM,errno.EACCES)
+if sys.argv[2]=='fake-global-kindex':
+ attempt('read',lambda:p.read_text())
+ attempt('list',lambda:list(p.parent.iterdir()))
+ c=subprocess.run(['/bin/sh','-c','cat "$1"','probe',str(p)],capture_output=True,text=True)
+ out['shell_read']=c.returncode!=0 and 'SYNTHETIC_ORIGINAL' not in c.stdout
+attempt('overwrite',lambda:p.write_text('changed'))
+attempt('create',lambda:(p.parent/'injected').write_text('changed'))
+attempt('rename',lambda:p.rename(p.parent/'moved'))
+attempt('unlink',lambda:p.unlink())
+for name,script in [('shell_overwrite','echo changed > "$1"'),
+                    ('shell_create','echo changed > "$2/injected"'),
+                    ('shell_rename','mv "$1" "$2/moved"'),('shell_unlink','rm "$1"')]:
+ c=subprocess.run(['/bin/sh','-c',script,'probe',str(p),str(p.parent)],capture_output=True,text=True)
+ out[name]=c.returncode!=0 and ('denied' in c.stderr.lower() or 'permitted' in c.stderr.lower())
+print(json.dumps(out))
+"""
+    # Outside the boundary the synthetic store is genuinely writable/readable.
+    record.write_bytes(original)
+    assert record.read_bytes() == original
+    result = subprocess.run(
+        base + [sys.executable, "-c", probe, str(record), kind],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert all(json.loads(result.stdout).values()), result.stdout
+    assert record.read_bytes() == original
+    assert not (store / "injected").exists() and not (store / "moved").exists()
