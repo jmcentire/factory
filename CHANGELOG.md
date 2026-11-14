@@ -68,11 +68,19 @@ public API is still pre-1.0.
   Kindex, so
   independence rests on the separate inputs and clones, not on memory.
 - Cursor lanes run Cursor's own interactive agent on the same terminal host, with the
-  operator's HOME, sign-in, rules, hooks and MCP servers intact: no `-p`, no private HOME.
-  Lane hooks and the lane's Kindex go into the clone's project files `.cursor/hooks.json`
-  and `.cursor/mcp.json` for as long as the session runs, never over a target's own file
-  (the lane refuses to start instead), excluded from commits and removed on exit, before a
-  relaunch and before a freeze. A resumed Cursor session that reports nothing is not typed to.
+  operator's HOME, sign-in, rules, hooks, MCP servers and permission settings intact: no
+  `-p`, no private HOME. Lane hooks, the lane's Kindex (as server `lane-kindex`) and one
+  permission rule for it go into the clone's project files `.cursor/hooks.json`,
+  `.cursor/mcp.json` and `.cursor/cli.json` for as long as the session runs, never over a
+  target's own file (the lane refuses to start instead), excluded from commits and removed
+  on exit, before a relaunch and before a freeze. A resumed Cursor session that reports
+  nothing is not typed to.
+- Cursor lanes no longer pass `--force`, `--approve-mcps` or `--trust`. With the operator's
+  configuration loaded those would approve everything the operator has configured. Cursor
+  now asks its own workspace-trust and MCP-server questions in the lane's window, and what a
+  lane may run unasked is the operator's own Cursor permission configuration plus the single
+  rule `Mcp(lane-kindex:*)`. A launch prints and records what a start asks of the operator
+  (`start_requires`). This narrows what a Cursor lane does unattended, deliberately.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
   "Providers not yet native"): Antigravity, Muse and Prime still start in print mode with a
   private configuration, because no qualified interface lets their interactive programs

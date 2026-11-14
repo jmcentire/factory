@@ -134,22 +134,38 @@ started through the operator's launcher on a terminal the lane wrapper owns
 
 ### Cursor lanes are Cursor's own interactive agent
 
-A `cursor-agent` lane runs `agent --force --trust --approve-mcps --workspace <clone>`
-interactively on the same terminal host, never `-p`. The operator's HOME, `~/.cursor`,
-sign-in, rules, hooks and MCP servers are the lane's too, untouched and all still loaded.
+A `cursor-agent` lane runs `agent --workspace <clone>` interactively on the same terminal
+host, never `-p`. The operator's HOME, `~/.cursor`, sign-in, rules, hooks, MCP servers and
+permission settings are the lane's too, untouched and all still in force.
 The interface was proven against the interactive program by the independent tester on
 2026-11-13 (cursor-agent 2026.11.05 and 2026.11.13); this adapter has been run only against
 a stub shaped by that evidence.
 
+- **Permissions are the operator's own; the Factory approves nothing for them.** With the
+  operator's configuration loaded, Cursor's blanket flags would reach everything they have
+  configured, so none is passed. `--force` ("force allow commands unless explicitly
+  denied") and `--approve-mcps` ("automatically approve all MCP servers") are gone.
+  `--trust` is gone too: Cursor documents it as headless-only, so it granted nothing in an
+  interactive session. Cursor therefore asks its own questions in the lane's window: whether
+  to trust the workspace, and whether to approve the lane's MCP server. `agent mcp enable
+  lane-kindex`, run by the operator in the lane's clone, is Cursor's per-server approval;
+  the Factory does not run it, because where Cursor keeps that list is not documented. What
+  the lane may run without asking is whatever the operator's own Cursor permission
+  configuration allows (`~/.cursor/cli-config.json`). A launch prints all of this as "this
+  start asks you" and records it as `start_requires`.
+- **The one rule the Factory adds.** Cursor's documented per-server permission is a project
+  rule: `.cursor/cli.json` with `permissions.allow: ["Mcp(lane-kindex:*)"]`. It covers the
+  tools of the lane's own Kindex server and nothing else. That server is named `lane-kindex`
+  rather than `kindex` so the rule cannot match a server of the operator's.
 - **Where lane configuration goes.** Cursor offers one lane-scoped place: the project files
-  `.cursor/hooks.json` and `.cursor/mcp.json` in its workspace. The wrapper writes them into
-  the lane's clone when the session starts: four observation hooks (`sessionStart`,
-  `beforeSubmitPrompt`, `stop`, `sessionEnd`), any required Signet hooks, and the lane's
-  Kindex. They load beside the operator's user-level hooks and servers.
-- **The target's files are never touched.** If the clone already has either file, it is the
-  target project's own; it is not edited, merged into or replaced, and the lane refuses to
+  `.cursor/hooks.json`, `.cursor/mcp.json` and `.cursor/cli.json` in its workspace. The
+  wrapper writes them into the lane's clone when the session starts: four observation hooks
+  (`sessionStart`, `beforeSubmitPrompt`, `stop`, `sessionEnd`), any required Signet hooks,
+  the lane's Kindex, and the rule above. They apply beside the operator's own.
+- **The target's files are never touched.** If the clone already has any of those files, it
+  is the target project's own; it is not edited, merged into or replaced, and the lane refuses to
   start with that reason. Nothing is written outside the clone.
-- **Nothing leaks into a candidate.** The two paths are listed in the clone's
+- **Nothing leaks into a candidate.** The paths are listed in the clone's
   `.git/info/exclude`, so no commit carries them. The wrapper removes exactly what it wrote
   (recorded with digests in `<slot>-project-files.json` under the lane's private runtime)
   when the session ends. A killed wrapper cannot; the next launch of that lane and a freeze

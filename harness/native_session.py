@@ -355,6 +355,8 @@ def _split_values(arguments: Sequence[str], flags: Sequence[str]) -> list[str]:
 #: from nowhere else a lane may write. They are the lane's for as long as its session runs.
 CURSOR_HOOKS = ".cursor/hooks.json"
 CURSOR_MCP = ".cursor/mcp.json"
+#: Cursor's project permission file: the one place a rule for the lane's own server can go.
+CURSOR_CLI = ".cursor/cli.json"
 #: Banned for Cursor: its print mode.
 BANNED_CURSOR_FLAGS = ("-p", "--print", "--output-format")
 
@@ -466,8 +468,9 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
 
     ``arguments`` exclude the executable. The lane's observation hooks, any required hook
     file the registry left in ``directory`` (``cursor-hooks.json``) and the lane's Kindex
-    (``cursor-mcp.json``) go into the two project files Cursor reads, beside the operator's
-    own user-level hooks and servers, which are untouched and still load. Cursor chooses its
+    (``cursor-mcp.json``) and its one permission rule (``cursor-cli.json``) go into the
+    project files Cursor reads, beside the operator's own user-level hooks, servers and
+    permissions, which are untouched and still apply. Cursor chooses its
     own conversation id, so it is known only when the session reports starting, unless
     ``--resume=<id>`` names one.
     """
@@ -505,9 +508,9 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
                 raise ValueError("required Cursor hook file is malformed")
             hooks[event] = [*entries, *hooks.get(event, [])]
     files = {CURSOR_HOOKS: json.dumps({"version": 1, "hooks": hooks}, sort_keys=True).encode()}
-    servers = directory / "cursor-mcp.json"
-    if servers.exists():
-        files[CURSOR_MCP] = servers.read_bytes()
+    for source, relative in (("cursor-mcp.json", CURSOR_MCP), ("cursor-cli.json", CURSOR_CLI)):
+        if (directory / source).exists():
+            files[relative] = (directory / source).read_bytes()
     manifest = directory / f"{slot}-project-files.json"
     install_project_files(workspace, files, manifest)
     try:

@@ -243,7 +243,8 @@ if [ "$ACTION" != "freeze" ]; then
   # registry entry but not a blocker.
   exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT")
   { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
-    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4; } || exit 70
+    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4 &&
+    IFS= read -r -d '' START_REQUIRES <&4; } || exit 70
   exec 4<&-
   MEMORY_ISOLATION=${MEMORY_ISOLATION#memory:}
   if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
@@ -886,7 +887,7 @@ PY
   fi
   DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
     --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
-  PLANNED=$(LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_START_REQUIRES="$START_REQUIRES" LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -978,6 +979,8 @@ print(json.dumps({
     "memory_isolation": os.environ["LANE_MEMORY_ISOLATION"],
     # Why this provider still runs in print mode with a private configuration, or null.
     "native_blocker": os.environ["LANE_NATIVE_BLOCKER"] or None,
+    # What the provider's own program asks the operator at start; the Factory answers none.
+    "start_requires": os.environ["LANE_START_REQUIRES"] or None,
     "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
@@ -1230,6 +1233,7 @@ PY
     echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
   fi
   [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
+  [ -z "$START_REQUIRES" ] || echo "tmux-lane: this start asks you: $START_REQUIRES"
   case "$AGENT" in claude|claude-ollama)
     if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
       echo "tmux-lane: permissions: you selected FACTORY_LANE_SANDBOX=off, so Claude Code is given --dangerously-skip-permissions (not when your launcher is your own shell function, which decides for itself)."

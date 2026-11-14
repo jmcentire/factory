@@ -111,6 +111,10 @@ class Harness:
     # How this provider's interactive program reports its lifecycle to the lane wrapper
     # (native_session.DIALECTS), or "" when it is not hosted as a native session.
     dialect: str = ""
+    # What the provider's own program asks the operator when a lane starts, and what the
+    # Factory does and does not approve for them. Printed and recorded at launch, so a
+    # question waiting in a lane's window is expected rather than discovered.
+    start_requires: str = ""
     # Why this provider's lanes are not yet its own interactive program with the operator's
     # configuration intact; "" when they are. Stated where the registry is read, so the
     # limit is a recorded blocker and never a silent difference.
@@ -562,6 +566,11 @@ class PrimeAgent(Harness):
         return str(event.get("id") or "") if event.get("type") == "session" else ""
 
 
+#: The lane's Kindex as Cursor knows it. Not "kindex": an operator who has their own server of
+#: that name keeps it, and the lane's permission rule must not be able to match theirs.
+CURSOR_LANE_SERVER = "lane-kindex"
+
+
 class CursorAgent(Harness):
     """Cursor's agent CLI, interactive (Grok and the other models Cursor serves): the
     operator's own sign-in, rules, hooks and MCP servers, all untouched and all still loaded.
@@ -571,13 +580,21 @@ class CursorAgent(Harness):
     project files ``.cursor/hooks.json`` and ``.cursor/mcp.json`` in the lane's own clone,
     written and removed by ``native_session.cursor_plan`` and never over a target's own
     file. Proven against the interactive program by the independent tester on 2026-11-13;
-    this adapter itself has not been run against Cursor."""
+    this adapter itself has not been run against Cursor.
+
+    Permissions are the operator's own. With their configuration loaded, Cursor's blanket
+    flags would reach everything they have configured, so none is passed: not ``--force``
+    (run everything unless denied), not ``--approve-mcps`` (approve every MCP server), and
+    not ``--trust``, which Cursor documents as headless-only and so grants nothing here.
+    The one thing added is the documented project rule ``Mcp(<lane server>:*)`` in
+    ``.cursor/cli.json``, for the lane's own Kindex server, which is named apart from any
+    server of the operator's so the rule can match nothing else."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        # The interactive program, with the permissions these lanes have always had.
-        argv = ["agent", "--force", "--trust", "--approve-mcps", "--workspace", str(cwd)]
+        # The interactive program and no approval of anything: see the class note.
+        argv = ["agent", "--workspace", str(cwd)]
         argv += ["--model", model] if model else []
         argv += [f"--resume={resume}"] if resume else []
         argv += list(extra)
@@ -615,7 +632,14 @@ class CursorAgent(Harness):
         # The operator's HOME, ~/.cursor and keychain are the lane's too, exactly as they
         # are. The lane's Kindex is left here for the wrapper, which places it in the lane
         # clone's project MCP file for as long as the session runs.
-        _write(home / "cursor-mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
+        lane = _mcp_servers(server).get("kindex")
+        servers = {CURSOR_LANE_SERVER: lane} if lane is not None else {}
+        _write(home / "cursor-mcp.json", json.dumps({"mcpServers": servers}))
+        if servers:
+            # Cursor's documented per-server rule (cli/reference/permissions): the lane's
+            # own server's tools, and nothing of the operator's.
+            _write(home / "cursor-cli.json", json.dumps(
+                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)"]}}))
         return LaneSetup()
 
 
@@ -687,6 +711,11 @@ HARNESSES: Mapping[str, Harness] = {
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
                                   "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator",
                          dialect="claude",
+                         start_requires=(
+                             "Claude Code asks its own folder-trust question for a directory "
+                             "it has not seen; answer it in the lane's window. Until the "
+                             "session reports starting it is `starting` and nothing is typed "
+                             "to it."),
                          metered=False),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
                                   memory="beside-operator", dialect="claude"),
@@ -702,8 +731,17 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
-    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
-                                memory="beside-operator", dialect="cursor"),
+    "cursor-agent": CursorAgent(
+        "cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
+        memory="beside-operator", dialect="cursor",
+        start_requires=(
+            "Cursor asks its own questions in the lane's window and the Factory answers none "
+            "of them: whether to trust the workspace, and whether to approve the lane's MCP "
+            f"server `{CURSOR_LANE_SERVER}` (`agent mcp enable {CURSOR_LANE_SERVER}`, run in "
+            "the lane's clone, approves that one server). What the lane may then run without "
+            "asking is your own Cursor permission configuration; the Factory adds one rule, "
+            f"`Mcp({CURSOR_LANE_SERVER}:*)`, and passes no --force, --approve-mcps or --trust. "
+            "Until the session reports starting it is `starting` and nothing is typed to it.")),
 }
 
 
@@ -796,8 +834,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
-    describe = sub.add_parser("describe", help="resumable, plan, memory isolation and the "
-                              "native blocker (or empty), NUL-separated")
+    describe = sub.add_parser("describe", help="resumable, plan, memory isolation, the "
+                              "native blocker (or empty) and what a start asks of the "
+                              "operator (or empty), NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
     turn.add_argument("--agent", required=True)
@@ -871,7 +910,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             chosen, blocker, resumable = describe_lane(args.agent)
             sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
                              f"{'plan' if chosen.plan else 'metered-only'}\0"
-                             f"memory:{chosen.memory}\0{blocker}\0")
+                             f"memory:{chosen.memory}\0{blocker}\0{chosen.start_requires}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":
