@@ -30,7 +30,7 @@ def eventually(check):
 
 
 @pytest.mark.parametrize("agent", ["agy"])
-@pytest.mark.parametrize("tamper", ["none", "changed", "missing"])
+@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection"])
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper
 ):
@@ -92,6 +92,15 @@ if args and args[0] == 'usage':
     print(json.dumps({'schemaVersion':1,'allowance':None,'reason':'server_sent_no_usage'}));sys.exit()
 """
     body = FAKE.replace('assert not {"-p",', auth + '\nassert not {"-p",')
+    invocation_probe = f"""
+try:
+    with open({str(denied / 'oracle')!r}) as f: f.read()
+    guarded_invocation=False
+except PermissionError:
+    guarded_invocation=True
+log(invocation_guarded=guarded_invocation, invocation_args=args)
+"""
+    body = body.replace('if "--help" in args:', invocation_probe + '\nif "--help" in args:')
     # Provider must not scan trusted-host receipts. The independent probe asks the
     # kernel directly and logs only denial booleans outside the protected run.
     start = body.index("        snapshots = {")
@@ -159,6 +168,10 @@ if args and args[0] == 'usage':
 
     eventually(lambda: state().get("deliveries", {}).get("initial", {}).get("response_stop"))
     sid = state()["session_id"]
+    if tamper == "all-invocations":
+        invocation_rows = [r for r in rows() if "invocation_guarded" in r]
+        assert invocation_rows and all(r["invocation_guarded"] for r in invocation_rows), invocation_rows
+        return
 
     def message():
         return execute(
@@ -193,8 +206,28 @@ if args and args[0] == 'usage':
         contract.write_text(json.dumps(changed))
     elif tamper == "missing":
         contract.unlink()
+    elif tamper.startswith("record-"):
+        retained = run / "tmux-lanes/coder-agent-home/coder-hosted.json"
+        assert retained.exists()
+        if tamper == "record-missing":
+            retained.unlink()
+        else:
+            changed = json.loads(retained.read_text())
+            if tamper == "record-schema": changed["schema"] = "unknown/999"
+            if tamper == "record-session": changed["session_id"] = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+            if tamper == "record-confinement": changed.pop("confined", None)
+            retained.write_text(json.dumps(changed))
+    elif tamper == "pythonpath-injection":
+        injection = workspace / "injection"
+        injection.mkdir()
+        marker = workspace / "trusted-host-injection-executed"
+        (injection / "sitecustomize.py").write_text(
+            "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
+        case["env"]["PYTHONPATH"] = str(injection)
     resumed = message()
-    if tamper != "none":
+    if tamper == "pythonpath-injection":
+        assert not marker.exists(), "untrusted Python startup code executed outside provider boundary"
+    if tamper not in ("none", "pythonpath-injection"):
         assert len([r for r in rows() if r.get("spawn")]) == before
         assert resumed.returncode == 70, resumed.stdout + resumed.stderr
     else:
@@ -203,6 +236,6 @@ if args and args[0] == 'usage':
         assert state()["session_id"] == sid
         assert any(r.get("request", {}).get("method") == "session/resume" for r in rows())
     probes = [r["kernel_probe"] for r in rows() if "kernel_probe" in r]
-    assert len(probes) == (2 if tamper != "none" else 3)
+    assert len(probes) == (3 if tamper in ("none", "pythonpath-injection") else 2)
     assert all(all(p.values()) for p in probes), probes
     assert record.read_text() == "original"
