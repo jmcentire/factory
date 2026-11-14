@@ -313,8 +313,8 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   supported fail-closed hook setting has been qualified; tested `failClosed`/`required`
   entries were disabled. This tested hook-only configuration cannot provide fail-closed
   enforcement across those failures. A user shell action is not held for approval even in
-  `--approval-mode untrusted`, and the permission hook is not consulted for it, so Muse's
-  approval path cannot be exercised without a model.
+  `--approval-mode untrusted`, and the permission hook is not consulted for it: this
+  user-shell probe did not exercise Muse's approval path.
 - **Not established.** Anything a signed-in model run would show: a model calling
   `lane-kindex`, a model's own tool call through these hooks, and any report of Muse
   asking the operator a question. Muse refreshes its own sign-in file when it starts; that
