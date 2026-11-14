@@ -53,7 +53,17 @@ if the receipt or the process table cannot be read, it is refused the same way. 
 earlier life is never signalled, and no session is replaced. A lane message that restarts
 an ended lane session does the same for the lane's slot (exit 75 while its earlier
 process is still stopping, with the message left planned), so the lane's watcher never
-counts an earlier life's exit record against the new one.
+counts an earlier life's exit record against the new one. A new round of a lane
+(`tmux_lane.sh launch --round ...`) does it for every earlier slot of that lane whose
+window is gone: a closed window or an ended tmux server can leave the earlier round's
+wrapper and program running in the lane's clone for a while, and a new round is not
+started beside them. The launch waits up to 15 seconds per earlier slot, then refuses
+(exit 75 while one is still running, naming it; exit 70 when that cannot be told) before
+it cleans the earlier round's project files, records anything or starts anything. A lane
+that has never run is not made to wait. The lane's window is looked at once per launch: a
+lane seen running is refused as running (exit 70) even if its window closes during the
+launch, so nothing is cleaned or started on any path that did not wait for the earlier
+round.
 `python harness/lane_watchdog.py previous-owner --receipt <file>` is the same check on its
 own: exit 0 when the earlier owner has stopped or there is none, 75 while it runs, 70
 when it cannot be told.

@@ -150,6 +150,17 @@ public API is still pre-1.0.
   that cannot be told. A lane message that restarts an ended lane session does the same
   (exit 75, message left planned). The earlier life is never signalled.
   `lane_watchdog.py previous-owner` runs the check by itself.
+- A new round of a lane is no longer started beside an earlier round that is still
+  stopping. `tmux_lane.sh launch` decided "finished" by the lane's tmux window alone, and a
+  closed window or an ended tmux server can leave the earlier round's wrapper and program
+  running in the lane's clone for seconds. The new round then started a second program in
+  that clone and cleared the earlier round's project files under it. The launch now waits
+  up to 15 seconds for the exact processes each earlier slot's receipt names (PID and start
+  time), and refuses if one is still running (exit 75) or if that cannot be told (exit 70),
+  before it cleans, records or starts anything. Nothing is signalled, and a lane's first
+  launch does not wait. The lane's window is looked at once per launch, so a window that
+  closes while the launch is under way cannot let it clean or start without that wait: a
+  lane seen running is refused as running (exit 70).
 - A held message to a Muse or Antigravity lane settles when a person enters it. These
   lanes take no later message automatically: one is recorded `queued` and `held` and the
   operator is told to enter it in the lane's window. Until now doing so changed nothing:
