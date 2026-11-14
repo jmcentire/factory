@@ -83,19 +83,22 @@ def read_wire():
 def run_turns():
     global active
     while True:
-        tid, session, hold = turns.get()
-        notify("turn/started", {"sessionId": session, "turnId": tid})
+        tid, session, hold, command_id, text = turns.get()
+        notify("turn/started", {"sessionId": session, "turnId": tid, "commandId":command_id})
+        notify('item/completed',{'sessionId':session,'item':{'itemId':tid+'-user',
+               'kind':'userMessage','turnId':tid,'revision':1,'status':'completed',
+               'recordedAt':'2026-11-14T09:00:00Z','text':text,'commandId':command_id}})
         log(turn_started=tid)
         if hold:
             log(active=True)
             while not (folder / "release-turn").exists():
                 time.sleep(0.02)
         notify(
-            "item/updated",
+            "item/completed",
             {
                 "sessionId": session,
                 "turnId": tid,
-                "item": {"id": tid + "-text", "type": "agentMessage", "text": "__LANE_DONE__"},
+                "item": {"itemId":tid+"-text", "kind":"agentMessage", "turnId":tid, "revision":1, "status":"completed", "recordedAt":"2026-11-14T09:00:00Z", "text":"__LANE_DONE__"},
             },
         )
         notify("turn/completed", {"sessionId": session, "turnId": tid, "terminal": "completed"})
@@ -273,7 +276,7 @@ while True:
                 },
             )
             active = True
-            turns.put((tid, sid, (folder / "hold-turn").exists() and prompt_count == 1))
+            turns.put((tid, sid, (folder / "hold-turn").exists() and prompt_count == 1, p["commandId"], "".join(x["text"] for x in content)))
         if (folder / "exit-after-completion").exists():
             if agent == "muse":
                 turns.join()
