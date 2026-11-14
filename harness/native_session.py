@@ -389,11 +389,19 @@ AGY_HOOKS = f"{AGY_PLUGIN}/hooks.json"
 AGY_MCP = f"{AGY_PLUGIN}/mcp_config.json"
 AGY_PROJECT_FILES = (AGY_MANIFEST, AGY_HOOKS, AGY_MCP)
 _LANE_MARKS[AGY_HOOKS] = (b"native_session.py", b"--dialect")
+#: Codex runs a trusted project's hooks from this file beside the operator's own (observed
+#: 2026-11-13 on codex-cli 0.167.0, interactive, on the operator's ChatGPT sign-in). It is
+#: the lane's for as long as its session runs.
+CODEX_HOOKS = ".codex/hooks.json"
+CODEX_PROJECT_FILES = (CODEX_HOOKS,)
+_LANE_MARKS[CODEX_HOOKS] = (b"native_session.py", b"--dialect")
 #: The project files a lane of each agent writes into its own clone, and what to call them.
 PROJECT_FILES: Mapping[str, tuple[str, ...]] = {"cursor-agent": CURSOR_PROJECT_FILES,
                                                 "muse": MUSE_PROJECT_FILES,
-                                                "agy": AGY_PROJECT_FILES}
-PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse", "agy": "Antigravity"}
+                                                "agy": AGY_PROJECT_FILES,
+                                                "codex-interactive": CODEX_PROJECT_FILES}
+PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse", "agy": "Antigravity",
+                 "codex-interactive": "Codex"}
 #: Directories a lane owns outright: anything else in one is the target project's, and the
 #: lane does not add its files beside it.
 PROJECT_OWNED_DIRS: Mapping[str, tuple[str, ...]] = {"agy": (AGY_PLUGIN,)}
@@ -828,6 +836,85 @@ def agy_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Pa
                 Launcher(name, "executable", path=executable), offset, manifest, launched)
 
 
+#: Codex subcommands a lane's session may begin with. Its others are different programs
+#: (the non-interactive `exec` and `review`, its servers), never a lane's session.
+_CODEX_SESSION_WORDS = ("resume",)
+
+
+def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+               slot: str, workspace: pathlib.Path, prompt: str,
+               python: str = sys.executable) -> Plan:
+    """A native start of Codex's interactive session.
+
+    ``arguments`` exclude the executable. The shape follows what was observed of codex-cli
+    0.167.0 on 2026-11-13 and goes no further:
+
+    - The lane's report hooks go into ``.codex/hooks.json`` in the lane's own clone, which
+      Codex runs beside the operator's hooks when the folder is trusted and the hooks are.
+      Neither trust is given here: Codex asks about the folder in the lane's window, and it
+      skips a hook it has not been told to trust unless the caller passed Codex's own
+      per-run option for that.
+    - The first message is the launch argument (after ``--``), with its mark; Codex reported
+      it as the session's first prompt.
+    - Codex chooses its own session id. Its hooks also report sessions of its own that this
+      lane did not start (a memory-writing agent was seen), so the lane's session is the one
+      whose prompt report carries the launch mark, not the first to report a start.
+    - ``resume <id>`` continues that session and is given no launch message here.
+    """
+
+    args = list(arguments)
+    if args and not args[0].startswith("-") and args[0] not in _CODEX_SESSION_WORDS:
+        raise ValueError(f"native Codex session refuses the `{args[0]}` subcommand; a lane is "
+                         "Codex's interactive session")
+    session = ""
+    resumed = args[:1] == ["resume"]
+    if resumed:
+        session = args[1] if len(args) > 1 else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native session id missing or malformed") from None
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "codex", "--journal", str(journal)])
+    hooks = {event: [{"hooks": [{"type": "command", "command": command}]}]
+             for event in CODEX_EVENTS}
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(
+        workspace, {CODEX_HOOKS: json.dumps({"hooks": hooks}, sort_keys=True).encode()},
+        manifest, reads="a lane's hooks, beside the operator's,")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
+def codex_queue(executable: str, session: str, text: str) -> list[str]:
+    """Codex's own command for giving a message to an existing session: nothing is typed.
+
+    Observed: it answers "Queued message <id> for thread <id>" and the running session then
+    reports the message as a prompt of its own. Sent while the session was between turns;
+    what happens to one queued during a turn was not observed.
+    """
+
+    return [executable, "queue", "--thread", session, "--message", text]
+
+
 def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
     """The program's environment: the wrapper's, without any API-billing variable."""
 
@@ -845,7 +932,11 @@ CURSOR_EVENTS = {"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserProm
 #: Muse Code's hooks use Claude Code's event names and nearly its payload (observed, as
 #: above): ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active``, and a
 #: ``turn_id`` that a prompt's report and that turn's stop report share.
-DIALECTS = ("claude", "cursor", "muse", "agy")
+DIALECTS = ("claude", "cursor", "muse", "agy", "codex")
+#: Codex's hooks use Claude Code's event names and nearly its payload (observed, as above):
+#: ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active`` and a
+#: ``turn_id`` a prompt's report and its turn's stop report share.
+CODEX_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd")
 #: Antigravity's hook events (observed, as above), under the names the journal uses. Its
 #: payload is camelCase: ``hookEventName``, ``conversationId``, ``lastUserInput``.
 #: ``PreInvocation`` runs before every model call, each time carrying the latest user
@@ -878,7 +969,7 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
             row["generation"] = payload["generation_id"]
         if event == "Stop" and isinstance(payload.get("status"), str):
             row["status"] = payload["status"]
-    if dialect == "muse" and isinstance(payload.get("turn_id"), str):
+    if dialect in ("muse", "codex") and isinstance(payload.get("turn_id"), str):
         row["generation"] = payload["turn_id"]
     if dialect == "agy" and event == "UserPromptSubmit":
         # One user message is reported once per model call. The number is kept so a reader
@@ -906,7 +997,7 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
         row["tokens"] = TOKEN.findall(reported)[:16]
     if event == "SessionStart" and isinstance(payload.get("source"), str):
         row["source"] = payload["source"]
-    if event == "Stop" and dialect in ("claude", "muse"):
+    if event == "Stop" and dialect in ("claude", "muse", "codex"):
         # True when this stop ends a continuation another stop hook asked for.
         row["stop_hook_active"] = payload.get("stop_hook_active") is True
     if event == "Stop":

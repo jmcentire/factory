@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import hashlib
 import json
 import os
@@ -101,8 +102,9 @@ class Agent:
 AGENTS: Mapping[str, Agent] = {
     # `codex exec`, non-interactive: the default for author lanes.
     "codex": Agent("codex", "codex", "stdin", False, "codex-login"),
-    # The Codex TUI, for an operator who wants to watch or steer a lane by hand.
-    "codex-interactive": Agent("codex-interactive", "codex", "argv", True, "codex-login"),
+    # Codex's own interactive session, hosted like Claude Code on a terminal the wrapper
+    # owns. Its first message is its launch argument; later ones go through `codex queue`.
+    "codex-interactive": Agent("codex-interactive", "codex", "terminal", False, "codex-login"),
     # `codex exec --oss` on a model the local Ollama server already has.
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
     # Cursor's agent CLI, interactive, hosted like Claude Code on a terminal the wrapper owns:
@@ -129,10 +131,11 @@ AGENTS: Mapping[str, Agent] = {
 
 
 #: Lanes that stay resident and take later messages into the same native process.
-PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy"})
+PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy",
+                               "codex-interactive"})
 #: Of those, the ones hosted as a native terminal session rather than a stream: each
 #: reports its own lifecycle through hooks the wrapper adds beside the operator's.
-NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy"})
+NATIVE_TERMINAL_AGENTS = PERSISTENT_AGENTS
 
 
 def agent(name: str) -> Agent:
@@ -911,6 +914,14 @@ def run_lane(
                     argv[1:], executable=launcher.path, directory=native_dir or log.parent,
                     slot=slot, workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+            elif chosen is not None and chosen.dialect == "codex":
+                # Codex runs lane hooks from its workspace, takes its first message as its
+                # launch argument and later ones through its own queue command.
+                assert prompt is not None
+                native_plan = native_session.codex_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
             elif chosen is not None and chosen.dialect == "agy":
                 # Antigravity loads lane hooks and the lane's Kindex from a plugin in its
                 # workspace and takes its first message at launch.
@@ -1116,7 +1127,11 @@ def run_lane(
                     journal_offset=native_plan.journal_offset,
                     launcher=native_plan.launcher.record(), note=note,
                     diagnostic=startup_output, launched=native_plan.launched,
-                    withhold_followups=chosen is not None and chosen.withhold_followups)
+                    withhold_followups=chosen is not None and chosen.withhold_followups,
+                    **(dict(bind_by_mark=True, queue_env=child_env,
+                            queue_command=functools.partial(
+                                native_session.codex_queue, native_plan.launcher.path))
+                       if chosen is not None and chosen.dialect == "codex" else {}))
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

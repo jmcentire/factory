@@ -139,12 +139,14 @@ class Harness:
                         extra: Sequence[str] = ()) -> Turn:
         """Keep one native process alive for successive messages.
 
-        For Claude Code, Cursor, Muse and Antigravity it is the interactive session itself,
+        For Claude Code, Cursor, Muse, Antigravity and interactive Codex it is the
+        interactive session itself,
         unchanged (``prompt_via`` is ``terminal``). Any other harness needs its own
         qualified transport before it can opt in; none has a stream transport any more.
         """
 
-        if self.name not in ("claude", "claude-ollama", "cursor-agent", "muse", "agy"):
+        if self.name not in ("claude", "claude-ollama", "cursor-agent", "muse", "agy",
+                             "codex-interactive"):
             raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
         if built.prompt_via != "terminal":
@@ -375,6 +377,30 @@ class Codex(Harness):
         if event.get("type") == "thread.started":
             return str(event.get("thread_id") or "")
         return ""
+
+
+class CodexInteractive(Harness):
+    """Codex's own interactive session, hosted on a terminal the lane wrapper owns: the
+    operator's sign-in, configuration, hooks and MCP servers, all untouched and all still
+    loaded. Never ``codex exec``. (The lane agents ``codex`` and ``codex-ollama`` still run
+    ``codex exec``; this entry is the lane agent ``codex-interactive`` only.)
+
+    What decides the shape was observed on codex-cli 0.167.0 on the operator's ChatGPT
+    sign-in, 2026-11-13: the first message given at launch is reported by Codex's own
+    prompt hook; a message given with ``codex queue`` to the running session is reported
+    the same way, with nothing typed; project hooks in ``.codex/hooks.json`` run when the
+    folder and the hooks are trusted. ``--no-daemon`` keeps the session off the operator's
+    shared background server."""
+
+    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
+             last_message_file: str = "", max_turns: int = 400,
+             extra: Sequence[str] = ()) -> Turn:
+        argv = ["codex", *(["resume", resume] if resume else []),
+                "--no-daemon", "--no-alt-screen", "-C", str(cwd)]
+        argv += ["-m", model] if model else []
+        argv += ["-c", f"model_reasoning_effort={json.dumps(effort)}"] if effort else []
+        argv += list(extra)
+        return Turn(tuple(argv), "terminal")
 
 
 class Antigravity(Harness):
@@ -690,19 +716,35 @@ _BLOCKERS = {
              "use): the interactive program is `codex [PROMPT]` (lane agent "
              "codex-interactive), `codex resume [SESSION_ID]` continues a session, `codex "
              "queue` queues a message for an existing session, and hooks given by `-c` are "
-             "skipped until the operator trusts them. Not established: any report from the "
-             "interactive program that it started, received a prompt or stopped, and that "
-             "`codex queue` reaches a live interactive session, so a codex-interactive lane "
-             "can be neither messaged nor resumed by the Factory and cannot replace exec "
-             "for unattended work." + _TO_SHOW,
+             "skipped until the operator trusts them. The interactive program is now "
+             "hosted as the lane agent codex-interactive, which reports its start, prompts "
+             "and stops and takes a later message through `codex queue`; this exec lane is "
+             "not converted, because that adapter is not accepted and cannot be restarted "
+             "by the Factory yet." + _TO_SHOW,
+    # The lane agent `codex-interactive`: Codex's own interactive session, hosted. What is
+    # open is stated, not hidden.
+    "codex-interactive": "Codex interactive: hosted as its own interactive session from an "
+                         "interface observed on codex-cli 0.167.0 on the operator's ChatGPT "
+                         "sign-in (2026-11-13, by the adapter's author, three one-word "
+                         "turns): the first message given at launch was reported by "
+                         "Codex's prompt hook, a message given with `codex queue` between "
+                         "turns was reported the same way with nothing typed, and each "
+                         "stop report carried the reply. Not accepted. Open. First, Codex "
+                         "skips a hook it has not been told to trust: without that trust "
+                         "(given by the operator through Codex's own review, or for one "
+                         "run by the caller's explicit permissive choice) the lane reports "
+                         "nothing and stays `starting`. Second, a message queued while a "
+                         "turn is running, or while a Stop hook is deciding, was not "
+                         "observed; it stays `submitted` until Codex reports it. Third, no "
+                         "lane command restarts an ended session, so wrap-up and review "
+                         "pauses are not offered. Fourth, no tool call was run, so nothing "
+                         "about a tool hook or a Signet guard in the interactive session "
+                         "was observed here.",
 }
-#: Lane agents that share a registry entry, and the blocker each really has. A lane agent's
-#: truth is its own: `codex-interactive` is already the interactive program with the
-#: operator's configuration (no blocker in this sense, though the Factory cannot message or
-#: resume it), while `codex` and `codex-ollama` still run `codex exec`.
+#: Lane agents that share a registry entry, and the blocker each really has. `codex-ollama`
+#: runs `codex exec` like `codex`. (`codex-interactive` has a registry entry of its own.)
 #: Each maps to (registry entry, blocker or None for the entry's own, resumable by the Factory).
 LANE_VARIANTS: Mapping[str, tuple[str, str | None, bool]] = {
-    "codex-interactive": ("codex", "", False),
     "codex-ollama": ("codex", None, True),
 }
 
@@ -738,6 +780,21 @@ HARNESSES: Mapping[str, Harness] = {
                    memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
     # Not resumable by the Factory yet, for the reasons its blocker gives. Antigravity's own
     # resume is untouched: `turn(resume=<id>)` builds `--conversation <id>`.
+    # Not resumable by the Factory yet: no lane command restarts an ended session. Codex's own
+    # resume is untouched: `turn(resume=<id>)` builds `codex resume <id>`.
+    "codex-interactive": CodexInteractive(
+        "codex-interactive", "codex", ("CODEX_HOME",), False, api_env=("OPENAI_API_KEY",),
+        memory="beside-operator", dialect="codex",
+        native_blocker=_BLOCKERS["codex-interactive"],
+        start_requires=(
+            "Codex asks its own folder-trust question in the lane's window for a clone it "
+            "has not been told to trust, and says it saves the answer; the Factory does not "
+            "answer it. Codex also skips this lane's report hooks (the clone's "
+            ".codex/hooks.json) until they are trusted: review them with Codex's /hooks in "
+            "the lane's window, or launch with FACTORY_LANE_SANDBOX=off, which is the "
+            "explicit per-run choice that passes Codex's own "
+            "--dangerously-bypass-hook-trust beside its approval and sandbox bypass. "
+            "Without one of those the lane works but reports nothing and stays `starting`.")),
     "agy": Antigravity(
         "agy", "agy", (), False,
         api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),

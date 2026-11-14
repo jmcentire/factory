@@ -42,7 +42,10 @@ case "$AGENT" in
     # Coder to a login screen.
     HELP=$(codex --help 2>/dev/null) || HELP=""
     needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen
-    CONTRACT="codex-tui-no-daemon-v1" ;;
+    # A later message goes through Codex's own queue command, never typed.
+    QUEUE_HELP=$(codex queue --help 2>/dev/null) || QUEUE_HELP=""
+    needs "$QUEUE_HELP" "codex queue" "$VERSION" --thread --message
+    CONTRACT="codex-native-terminal-v1" ;;
   cursor-agent)
     VERSION=$(agent --version 2>/dev/null) || \
       fail "cursor-agent CLI (agent) is not runnable ($(at agent))"

@@ -802,6 +802,9 @@ def run_terminal(
     diagnostic=None,
     launched=None,
     withhold_followups=False,
+    bind_by_mark=False,
+    queue_command=None,
+    queue_env=None,
 ) -> int:
     """Own one native terminal session until its actual exit.
 
@@ -851,6 +854,19 @@ def run_terminal(
     earlier turn, with no prompt report of its own, and stayed ``submitted``. Until the
     program is shown to report the point after which it will not continue, or to offer a
     delivery route of its own, automatic follow-up is withheld rather than guessed at.
+
+    ``bind_by_mark`` is set for a program whose hooks also report sessions this lane did
+    not start (Codex reports its own background agents). The lane's conversation is then
+    the one whose prompt report carries the launch message's mark, and a start report alone
+    binds nothing.
+
+    ``queue_command`` is given when the program has a command of its own for handing a
+    message to a running session (Codex: ``codex queue``). A later message is then given by
+    running ``queue_command(session_id, text)`` and nothing is typed. The record is
+    ``submitted`` (``via: provider-queue``) from before the command runs and ``observed``
+    only when the session's own prompt report carries the mark; the command's success is
+    not a receipt. A command that fails leaves the record ``unknown`` with what it said,
+    and it is not run again.
 
     ``launched`` is given when the first message was handed to the program as its launch
     argument rather than typed (Muse Code, which reports a session's start only with its
@@ -1013,6 +1029,18 @@ def run_terminal(
     def observe(row):
         nonlocal ready_at
         kind = row.get("event")
+        if not state["session_id"] and bind_by_mark:
+            # Not bound yet, and other sessions report through the same hooks: only the
+            # prompt report that carries this start's own mark names the conversation.
+            carried = row.get("tokens") if isinstance(row.get("tokens"), list) else []
+            if (kind != "UserPromptSubmit" or launched is None
+                    or launched["token"] not in carried
+                    or not bind(str(row.get("session_id") or ""))):
+                state["unbound_events"] += 1
+                return
+            note((json.dumps({"type": "native-session-start",
+                              "session_id": state["session_id"],
+                              "source": "native-prompt-hook"}) + "\n").encode())
         if not state["session_id"]:
             # Not bound yet: only this program's own start report can name the conversation.
             if kind != "SessionStart" or not bind(str(row.get("session_id") or "")):
@@ -1218,8 +1246,27 @@ def run_terminal(
         # so no later process ever types this message again.
         deliveries[identifier] = {
             "state": "submitted", "message_id": identifier, "token": marker,
-            "typed_sha256": digests[identifier], "at": time.time()}
+            "typed_sha256": digests[identifier], "at": time.time(),
+            **({"via": "provider-queue"} if queue_command is not None else {})}
         save()
+        if queue_command is not None:
+            # The program's own queue takes the message; nothing is typed.
+            try:
+                done = subprocess.run(
+                    queue_command(state["session_id"], typed), stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=30, env=queue_env)
+                said = (done.stdout.strip() or done.stderr.strip())[:300]
+                failed = done.returncode != 0
+            except (OSError, subprocess.SubprocessError) as error:
+                said, failed = str(error)[:300], True
+            deliveries[identifier] = dict(
+                deliveries[identifier], queue_said=said,
+                **({"state": "unknown", "last_state": "submitted",
+                    "detail": "the program's queue command did not succeed; whether it "
+                              "took the message is not known and it is not given again"}
+                   if failed else {}))
+            save()
+            return
         typing = [identifier, native_session.paste(text) + native_session.trailer(marker),
                   current]
 

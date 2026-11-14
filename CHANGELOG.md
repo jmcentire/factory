@@ -119,6 +119,15 @@ public API is still pre-1.0.
   session, so reviews and answers do not reach the lane unattended; it is not resumable by
   the Factory; a lane's done line is not seen, because Antigravity's stop report carries no
   model text; there is no Signet guard, and a launch requiring one is refused.
+- The lane agent `codex-interactive` is hosted by the lane wrapper as Codex's own
+  interactive session (`codex --no-daemon --no-alt-screen`), instead of an unhosted window
+  the Factory could neither read nor message. Its first message is given at launch; a later
+  message goes through Codex's own `codex queue` with nothing typed, and is `observed` only
+  when Codex's prompt hook reports it; stop reports carry the reply. Lane hooks are the
+  clone's `.codex/hooks.json`. Codex's folder trust and hook trust are not given by the
+  Factory; `FACTORY_LANE_SANDBOX=off` is the explicit per-run choice that also passes
+  `--dangerously-bypass-hook-trust`. Author lane only, not accepted, not resumable by the
+  Factory; `codex` and `codex-ollama` still run `codex exec` (`docs/HARNESS.md`).
 - Antigravity coordinator seats no longer run print mode fed over stdin. A seat is still
   allowed: it starts as Antigravity's own interactive session in its window and is driven
   there, with a warning at start that wakes and messages are not delivered into it (a wake

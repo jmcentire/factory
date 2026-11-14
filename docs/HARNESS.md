@@ -388,6 +388,50 @@ and they are not the same thing:
 - **Not observed.** The name Antigravity gives the lane's server (`lane_kindex`, by its
   changelog), a model calling it, any tool-use hook, and `--conversation` reporting.
 
+### Interactive Codex lanes are Codex's own session, hosted
+
+The lane agent `codex-interactive` runs `codex --no-daemon --no-alt-screen` on the same
+terminal host, with the operator's sign-in, configuration, hooks and MCP servers intact.
+`--no-daemon` keeps it off the operator's shared Codex server. The lane agents `codex` and
+`codex-ollama` still run `codex exec` and are not converted. What follows was observed on
+codex-cli 0.167.0 on the operator's ChatGPT sign-in on 2026-11-13, by the adapter's author
+only: three one-word turns in direct probes, then two one-word turns of this adapter
+through `lane_agent.py`. It is an author-lane adapter and is not accepted.
+
+- **First message at launch.** Given as Codex's launch argument (after `--`), with its
+  mark; Codex's own prompt hook reported it. The hand-over is recorded before Codex is
+  spawned and never repeated for a slot.
+- **Which session is the lane's.** Codex's hooks also report sessions the lane did not
+  start (a background memory-writing agent of Codex's own was seen). The lane binds to the
+  session whose prompt report carries the launch mark, not to the first start report.
+- **Later messages go through `codex queue`.** Nothing is typed. The wrapper runs
+  `codex queue --thread <session> --message <text>`; the delivery is `submitted`
+  (`via: provider-queue`) from before the command runs and `observed` only when Codex's
+  prompt hook reports the mark. Codex's "Queued message …" answer is kept as `queue_said`
+  and is not a receipt. A queue command that fails leaves the delivery `unknown`.
+- **Reports.** `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, in Claude Code's
+  names. A prompt's report and its turn's stop share a turn id, and the stop carries the
+  reply text, so a lane's done line is visible.
+- **Hooks beside the operator's.** The lane's report hooks are the project file
+  `.codex/hooks.json` in the lane's own clone, under the custody the other lanes' project
+  files have (launch refused over a target's own file, excluded from commits, removed at
+  exit, refused in a candidate).
+- **Two trusts, neither given by the Factory.** Codex asks about a folder it has not been
+  told to trust and says it saves the answer. Codex also skips a hook it has not been told
+  to trust: the operator reviews the lane's hooks with Codex's `/hooks`, or launches with
+  `FACTORY_LANE_SANDBOX=off`, the explicit per-run choice, which passes Codex's own
+  `--dangerously-bypass-hook-trust` beside its approval and sandbox bypass. That option
+  covers every enabled hook in the run, not only the lane's. Without either, the lane
+  works but reports nothing: it stays `starting` and its first message stays `submitted`.
+  A per-run `-c projects."<folder>".trust_level="trusted"` did not suppress the folder
+  question.
+- **Not observed.** A message queued while a turn is running or while a Stop hook is
+  deciding; any tool call, tool hook or Signet guard in the interactive session; a resumed
+  session; `tmux_lane.sh` end to end.
+- **Not resumable by the Factory.** `agents.py turn --agent codex-interactive --resume <id>`
+  builds `codex resume <id>`, but no lane command restarts an ended session, so wrap-up
+  and progress-review pauses are not offered.
+
 ### Memory isolation, said plainly
 
 A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
@@ -401,12 +445,12 @@ operator's to weigh.
 ### Providers not yet native, and exactly why
 
 Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
-still run `codex exec`. Prime lanes still start in print mode with a
+still run `codex exec`; the hosted interactive lane agent is `codex-interactive` (above). Prime lanes still start in print mode with a
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
-agent's own name: it is empty only for `claude`, `claude-ollama` and `codex-interactive`,
+agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
-`muse` and `agy` it says what was run and what is still open, and
-the registry reports all three as not resumable by the Factory, so wrap-up and progress-review
+`muse`, `agy` and `codex-interactive` it says what was run and what is still open, and
+the registry reports all four as not resumable by the Factory, so wrap-up and progress-review
 pauses, which continue a session, are not offered for them. The rest:
 
 | Provider | Established, and from where | Not established |

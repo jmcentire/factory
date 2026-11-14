@@ -108,7 +108,7 @@ if persistent:
     if (record.get("schema_version") != "factory-lane-turn/1"
             or record.get("agent") != active[0].get("agent")
             or record.get("agent") not in {"claude", "claude-ollama", "cursor-agent", "muse",
-                                           "agy"}
+                                           "agy", "codex-interactive"}
             or record.get("persistent") is not True):
         raise SystemExit("lane-message: launch and turn transports disagree")
 elif turn.is_file() and not turn.is_symlink():

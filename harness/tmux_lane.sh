@@ -128,9 +128,11 @@ exec 4<&-
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
 # So is Cursor's agent: its interactive program, never `-p`. So is Muse Code: its interactive
 # session, never `muse exec`. So is Antigravity: its interactive session, never `--print`.
+# So is the lane agent codex-interactive: Codex's interactive session, hosted by the wrapper.
 case "$ACTION:$AGENT" in
   launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy)
+  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy|\
+  launch:codex-interactive|qualify:codex-interactive)
     PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
 esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -139,8 +141,9 @@ esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in
     launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy) ;;
-    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse or agy" >&2; exit 64 ;;
+    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy|\
+    launch:codex-interactive|qualify:codex-interactive) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse, agy or codex-interactive" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -484,6 +487,11 @@ PY
       OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --workspace "$REPOSITORY" 2>&1) || \
         refuse 70 "the lane's repository has Cursor project configuration of its own, which is not edited or replaced: $OCCUPIED" \
           "a Cursor lane reads its hooks and its Kindex only from those paths and cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = codex-interactive ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent codex-interactive --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has a Codex project hook file of its own, which is not edited or replaced: $OCCUPIED" \
+          "an interactive Codex lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
     fi
     if [ "$AGENT" = agy ]; then
       OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent agy --workspace "$REPOSITORY" 2>&1) || \
@@ -1063,9 +1071,13 @@ PY
       printf '%s\0' '-c' 'features.hooks=true' '-c' "$SIGNET_OVERRIDE" > \
         "$TMUX_ROOT/$SLOT-lane-setup.nul"
     fi
+    # The interactive lane's record names it and says it is a resident session, which is
+    # what a lane message checks before it hands a message to the wrapper.
+    TURN_RECORD_AGENT=codex
+    [ "$AGENT" != codex-interactive ] || TURN_RECORD_AGENT=codex-interactive
     "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
-      --agent codex --model "$MODEL" --effort "$EFFORT" --billing plan \
-      --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" || \
+      --agent "$TURN_RECORD_AGENT" --model "$MODEL" --effort "$EFFORT" --billing plan \
+      --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" ${PERSISTENT_ARGS[@]+"${PERSISTENT_ARGS[@]}"} || \
       refuse 70 "the lane's turn record could not be written"
   fi
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
@@ -1089,7 +1101,7 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
-    case "$AGENT" in claude|claude-ollama|cursor-agent|muse|agy)
+    case "$AGENT" in claude|claude-ollama|cursor-agent|muse|agy|codex-interactive)
       # The session's own hook commands write its lifecycle journal here, so it is the lane's
       # private runtime, which a kernel boundary leaves writable, not the host control tree.
       # For Cursor, Muse and Antigravity it also holds the record of the project files the
@@ -1116,8 +1128,15 @@ PY
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s -C %q -c %q -c %q -c %q -c %q' \
-        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
+      # Codex's own interactive session on a terminal the wrapper owns (harness/native_session.py
+      # codex_plan): the wrapper adds the lane's report hooks and gives the first message at
+      # launch. Codex skips a hook it has not been told to trust; FACTORY_LANE_SANDBOX=off is
+      # the explicit per-run choice that also passes its own bypass for that. Nothing else
+      # about trust is decided here.
+      CODEX_HOOK_TRUST_ARG=""
+      [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_HOOK_TRUST_ARG="--dangerously-bypass-hook-trust"
+      printf -v LANE_CMD '%s %s --session-agent codex-interactive --session-file %q --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s %s -C %q -c %q -c %q -c %q -c %q' \
+        "$ENV_PREFIX" "$WRAP" "$THREAD_FILE" "$PROMPT" "$CODEX_POLICY_ARG" "$CODEX_HOOK_TRUST_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
       # A registry harness (harness/agents.py). Its lane configuration (the lane's scoped
