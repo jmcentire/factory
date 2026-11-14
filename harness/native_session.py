@@ -540,14 +540,36 @@ def remove_project_files(manifest: pathlib.Path) -> list[str]:
 
     A recorded file whose bytes changed is left where it is and named in the result: someone
     else wrote it since, and it is theirs to keep.
+
+    Nothing is reached through a link. Every recorded path was canonical when it was written
+    (no link anywhere above it), so if the directory it sits in no longer resolves to
+    itself, some directory on the way has since been replaced by a link, and what the path
+    now names is somewhere else: possibly a file outside the lane's repository that happens
+    to hold the same bytes. Such an entry is neither read nor removed. It is kept in the
+    record and named in the result, for a person to look at.
     """
 
     recorded = _manifest(manifest)
     kept: dict[str, str] = {}
     left: list[str] = []
+
+    def moved(path: pathlib.Path) -> bool:
+        try:
+            return path.parent.resolve(strict=True) != path.parent
+        except OSError:
+            return False  # the directory is gone, and so is anything that was in it
+
     for name, digest in sorted(recorded.items(), reverse=True):  # files before directories
         path = pathlib.Path(name)
+        if moved(path):
+            kept[name] = digest
+            left.append(name)
+            continue
         if digest == "directory":
+            if path.is_symlink():
+                kept[name] = digest  # replaced by a link: not this lane's directory any more
+                left.append(name)
+                continue
             try:
                 path.rmdir()  # only if this lane's files were all it held
             except OSError:

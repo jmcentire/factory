@@ -119,10 +119,14 @@ public API is still pre-1.0.
   session, so reviews and answers do not reach the lane unattended; it is not resumable by
   the Factory; a lane's done line is not seen, because Antigravity's stop report carries no
   model text; there is no Signet guard, and a launch requiring one is refused.
-- Antigravity coordinator seats no longer run print mode fed over stdin. A seat is
-  Antigravity's own interactive session in its window, driven there; nothing delivers a wake
-  or a message into it, and starting one says so. Antigravity cannot hold an unattended
-  coordinator seat until it has a supported delivery route.
+- Antigravity coordinator seats no longer run print mode fed over stdin. A seat is still
+  allowed: it starts as Antigravity's own interactive session in its window and is driven
+  there, with a warning at start that wakes and messages are not delivered into it (a wake
+  for it is reported `unsupported` and stays in the inbox). It works attended, not
+  unattended, until Antigravity has a supported delivery route.
+- Removing a lane's project files never goes through a link: if a directory on the way has
+  been replaced by one since the files were written, they are left and reported. The
+  candidate check likewise never follows a link on the way to a lane's paths.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
   "Providers not yet native"): Prime still starts in print mode with a private
   configuration and is not installed where this was written. Codex still runs `codex exec`.

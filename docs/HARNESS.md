@@ -362,11 +362,14 @@ and they are not the same thing:
   hook by itself is not enforcement. A launch that requires a guard is refused for `agy`.
 - **Resume.** `--conversation <id>` is built whenever an id is given. No lane command
   restarts an ended session; the registry reports `agy` as not resumable by the Factory.
-- **Coordinator seats.** An Antigravity seat is its own interactive session in its window,
-  started like any other seat's program and driven there. Nothing delivers a wake or a
-  message into it: the earlier delivery was print mode fed over stdin, which is never
-  used, and no supported route replaces it yet. So Antigravity cannot hold an unattended
-  coordinator seat today; starting one prints that.
+- **Coordinator seats.** An Antigravity seat is allowed. It is not refused, and it is not
+  put on print mode: it starts as Antigravity's own interactive session in its window, by
+  the same seat command as before (`agy --add-dir <run> ... --prompt-interactive <prompt>`),
+  and is driven there by a person. Starting one prints a warning that wakes and messages
+  are not delivered into it: the earlier delivery was print mode fed over stdin, which is
+  never used, and no supported route replaces it yet. A wake addressed to such a seat is
+  reported `unsupported` and stays in the inbox. So an Antigravity seat works attended and
+  does not work unattended.
 - **Not observed.** The name Antigravity gives the lane's server (`lane_kindex`, by its
   changelog), a model calling it, any tool-use hook, and `--conversation` reporting.
 

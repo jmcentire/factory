@@ -90,7 +90,11 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
 
     A link at one of the paths is compared the same way, as a link: unchanged from the
     base it is the target's own; new or changed in a run that launched a Cursor lane it is
-    refused. It is never followed, so what it points at is not read.
+    refused. It is never followed, so what it points at is not read. The same holds for a
+    link anywhere on the way to one of the paths (``.agents``, ``.agents/plugins``, the
+    plugin directory, ``.cursor``, ``.muse``): the path beneath it is not looked at through
+    it, an unchanged link is the target's own, and a new or changed one is refused when a
+    lane of that provider ran.
 
     Lane manifests are read from the run's control tree and, when ``repository`` is the
     lane's own clone, from its private runtime under ``.git/factory-runtime``, which is
@@ -133,6 +137,20 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
     for relative, agent in owners:
         label = _native.PROJECT_LABEL[agent]
         lane_ran = agent in ran
+        # Outermost first: a link on the way is judged as a link and never followed, so
+        # nothing outside the materialized candidate is read through it.
+        parts = Path(relative).parts
+        on_the_way = next((str(Path(*parts[:depth])) for depth in range(1, len(parts))
+                           if (candidate / Path(*parts[:depth])).is_symlink()), None)
+        if on_the_way is not None:
+            link = os.readlink(candidate / on_the_way).encode()
+            if _base_entry(task, on_the_way) != ("link", link) and lane_ran:
+                entry = (f"{on_the_way} (a {label} lane ran in this run and this link, on "
+                         f"the way to a lane's files, is new or changed since the run's "
+                         "base commit)")
+                if entry not in found:
+                    found.append(entry)
+            continue
         path = candidate / relative
         if not path.is_symlink() and not path.is_file():
             continue
@@ -273,8 +291,9 @@ def validate(
         if carried:
             whose = " and ".join(
                 _native.PROJECT_LABEL[agent] for agent, relatives in _native.PROJECT_FILES.items()
-                if any(item.startswith(relative + " ") for item in carried
-                       for relative in relatives))
+                if any(relative == item.split(" ", 1)[0]
+                       or relative.startswith(item.split(" ", 1)[0] + "/")
+                       for item in carried for relative in relatives))
             raise ValueError(
                 f"candidate commit carries a lane's own {whose} project configuration, which "
                 "is not part of the work: " + "; ".join(carried) + ". Take those paths out "
