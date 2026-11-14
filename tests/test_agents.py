@@ -95,7 +95,8 @@ def test_claude_ollama_is_native_claude_code_on_the_loopback_server(tmp_path: Pa
 def test_a_plan_lane_never_admits_an_api_key() -> None:
     claude = agents.harness("claude")
     assert "ANTHROPIC_API_KEY" not in claude.admitted_env("plan")
-    assert "ANTHROPIC_API_KEY" in claude.admitted_env("metered")
+    with pytest.raises(ValueError):
+        claude.admitted_env("metered")
     assert "META_API_KEY" not in agents.harness("muse").admitted_env("plan")
     assert "CURSOR_API_KEY" not in agents.harness("cursor-agent").admitted_env("plan")
     with pytest.raises(ValueError):
@@ -118,10 +119,13 @@ def test_lane_setup_writes_only_admitted_variables(tmp_path: Path) -> None:
         "kindex": {"command": SERVER["command"], "args": SERVER["args"], "env": SERVER["env"]}}
     assert "--strict-mcp-config" not in setup.argv
     assert "--setting-sources" not in setup.argv
-    metered = agents.prepare_lane("claude", billing="metered", home=tmp_path / "m" / "home",
-                                  model="", kindex_record=RECORD,
-                                  env_file=tmp_path / "m" / "creds.env", environ=environ)
-    assert metered.argv and "sk-should-not-travel" in (tmp_path / "m" / "creds.env").read_text()
+    rejected_file = tmp_path / "m" / "creds.env"
+    with pytest.raises(ValueError):
+        agents.prepare_lane("claude", billing="metered", home=tmp_path / "m" / "home",
+                            model="", kindex_record=RECORD,
+                            env_file=rejected_file, environ=environ)
+    assert not rejected_file.exists()
+
 
 
 def test_muse_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
@@ -610,3 +614,23 @@ def test_claude_preflight_never_falls_back_to_an_ambient_account(
     with pytest.raises(lane_agent.PreflightRefused):
         lane_agent.preflight("claude", environ=supplied)
     assert not marker.exists(), "preflight probed the ambient account instead of refusing"
+
+
+@pytest.mark.parametrize("command", ["lane-setup", "seat-env", "credential-env"])
+def test_native_claude_setup_refuses_metered_before_writing_credentials(
+    tmp_path: Path, command: str,
+) -> None:
+    """Setup cannot advertise or persist a route the native runtime forbids."""
+    env_file = tmp_path / "credentials.env"
+    argv = [sys.executable, str(REPO / "harness" / "agents.py"), command,
+            "--agent", "claude", "--billing", "metered"]
+    if command != "credential-env":
+        argv += ["--env-file", str(env_file)]
+    if command == "lane-setup":
+        argv += ["--home", str(tmp_path / "lane-home")]
+    sentinel = "synthetic-not-a-real-api-key"
+    environ = {**os.environ, "HOME": str(tmp_path), "ANTHROPIC_API_KEY": sentinel}
+    result = subprocess.run(argv, env=environ, capture_output=True, text=True, check=False)
+    assert result.returncode != 0, "native Claude setup incorrectly admitted metered billing"
+    assert not env_file.exists(), "rejected setup must not persist credentials"
+    assert sentinel not in result.stdout + result.stderr
