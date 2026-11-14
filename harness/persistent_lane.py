@@ -858,7 +858,10 @@ def run_terminal(
     ``bind_by_mark`` is set for a program whose hooks also report sessions this lane did
     not start (Codex reports its own background agents). The lane's conversation is then
     the one whose prompt report carries the launch message's mark, and a start report alone
-    binds nothing.
+    binds nothing. Once bound, the binding stands for the life of the session: a later
+    start report from another session is counted and otherwise ignored, where for a
+    program that reports only its own session it would mean the operator had switched
+    conversations and would stop deliveries.
 
     ``queue_command`` is given when the program has a command of its own for handing a
     message to a running session (Codex: ``codex queue``). A later message is then given by
@@ -1051,8 +1054,13 @@ def run_terminal(
             # Another conversation in this terminal (the operator cleared or switched it) is
             # not this seat's: it neither confirms nor ends anything.
             state["unbound_events"] += 1
-            if kind == "SessionStart":
+            if kind == "SessionStart" and not bind_by_mark:
+                # In a program that reports only its own session, another start in this
+                # terminal means the operator cleared or switched the conversation.
                 state["observed_session_id"] = str(row.get("session_id") or "")
+            # Where other sessions report through the same hooks (bind_by_mark), a foreign
+            # start is that program's own background work. The lane's binding stands and
+            # nothing is concluded from the report.
             return
         state.pop("observed_session_id", None)
         state["last_native_event"] = {"event": kind, "at": time.time()}
@@ -1103,6 +1111,17 @@ def run_terminal(
             if not matched:
                 matched = [(key, "body") for key in submitted
                            if reported and reported == bodies.get(key)]
+            if not matched:
+                # A message handed to the program's own queue whose outcome was left
+                # unknown (the command timed out or failed) is settled by the session
+                # itself: a later report carrying that message's mark and exactly what was
+                # given is the receipt. Nothing weaker settles it, and an unknown message
+                # is never given again either way.
+                matched = [(key, "exact") for key, record in deliveries.items()
+                           if record.get("state") == "unknown"
+                           and record.get("via") == "provider-queue"
+                           and record.get("token") in tokens
+                           and reported and reported == record.get("typed_sha256")]
             if len(matched) == 1:
                 identifier, how = matched[0]
                 deliveries[identifier] = dict(
@@ -1115,6 +1134,9 @@ def run_terminal(
                     "not acceptance or completion",
                     **({"generation": row["generation"]}
                        if isinstance(row.get("generation"), str) else {}),
+                    # Settled late: its queue command's outcome had been left unknown.
+                    **({"settled_from": "unknown"}
+                       if deliveries[identifier].get("state") == "unknown" else {}),
                 )
                 state["current_message_id"] = identifier
                 if identifier != "initial" and slot not in {"validator", "orchestrator"}:
@@ -1256,14 +1278,17 @@ def run_terminal(
                     queue_command(state["session_id"], typed), stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, timeout=30, env=queue_env)
                 said = (done.stdout.strip() or done.stderr.strip())[:300]
-                failed = done.returncode != 0
+                # The command must succeed and must itself name this lane's session as
+                # the one it queued for; anything else is not known to have reached it.
+                failed = done.returncode != 0 or state["session_id"] not in said
             except (OSError, subprocess.SubprocessError) as error:
                 said, failed = str(error)[:300], True
             deliveries[identifier] = dict(
-                deliveries[identifier], queue_said=said,
+                deliveries[identifier], queue_said=said, queue_target=state["session_id"],
                 **({"state": "unknown", "last_state": "submitted",
-                    "detail": "the program's queue command did not succeed; whether it "
-                              "took the message is not known and it is not given again"}
+                    "detail": "the program's queue command did not succeed, or did not "
+                              "name this lane's session; whether the message was taken is "
+                              "not known and it is not given again"}
                    if failed else {}))
             save()
             return

@@ -404,11 +404,17 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
 - **Which session is the lane's.** Codex's hooks also report sessions the lane did not
   start (a background memory-writing agent of Codex's own was seen). The lane binds to the
   session whose prompt report carries the launch mark, not to the first start report.
+  That binding then stands: a later start report from another session is counted and
+  ignored, and does not stop deliveries.
 - **Later messages go through `codex queue`.** Nothing is typed. The wrapper runs
   `codex queue --thread <session> --message <text>`; the delivery is `submitted`
   (`via: provider-queue`) from before the command runs and `observed` only when Codex's
   prompt hook reports the mark. Codex's "Queued message …" answer is kept as `queue_said`
-  and is not a receipt. A queue command that fails leaves the delivery `unknown`.
+  and is not a receipt. The command must exit 0 and must itself name the lane's session
+  as the one it queued for; otherwise the delivery is `unknown` and is never given again.
+  An `unknown` delivery is settled only by Codex itself: a later prompt report carrying
+  that message's mark and exactly what was given makes it `observed` (`settled_from:
+  unknown`).
 - **Reports.** `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, in Claude Code's
   names. A prompt's report and its turn's stop share a turn id, and the stop carries the
   reply text, so a lane's done line is visible.
