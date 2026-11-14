@@ -154,8 +154,9 @@ a stub shaped by that evidence.
   configuration allows (`~/.cursor/cli-config.json`). A launch prints all of this as "this
   start asks you" and records it as `start_requires`.
 - **The one rule the Factory adds.** Cursor's documented per-server permission is a project
-  rule: `.cursor/cli.json` with `permissions.allow: ["Mcp(lane-kindex:*)"]`. It covers the
-  tools of the lane's own Kindex server and nothing else. That server is named `lane-kindex`
+  rule: `.cursor/cli.json` with `permissions.allow: ["Mcp(lane-kindex:*)"]` and an empty
+  `permissions.deny`, which Cursor's schema requires to be present (real Cursor refused to
+  start without it). It covers the tools of the lane's own Kindex server and nothing else. That server is named `lane-kindex`
   rather than `kindex` so the rule cannot match a server of the operator's.
 - **Where lane configuration goes.** Cursor offers one lane-scoped place: the project files
   `.cursor/hooks.json`, `.cursor/mcp.json` and `.cursor/cli.json` in its workspace. The

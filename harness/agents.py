@@ -638,9 +638,11 @@ class CursorAgent(Harness):
         _write(home / "cursor-mcp.json", json.dumps({"mcpServers": servers}))
         if servers:
             # Cursor's documented per-server rule (cli/reference/permissions): the lane's
-            # own server's tools, and nothing of the operator's.
+            # own server's tools, and nothing of the operator's. Cursor's schema for this
+            # file requires both lists; real Cursor (2026.11.13) refuses to start on a
+            # project file without `deny`. The empty list denies nothing.
             _write(home / "cursor-cli.json", json.dumps(
-                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)"]}}))
+                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)"], "deny": []}}))
         return LaneSetup()
 
 
